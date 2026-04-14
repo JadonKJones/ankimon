@@ -26,7 +26,7 @@ from aqt.theme import theme_manager
 from ..functions.pokedex_functions import find_details_move
 
 from ..utils import give_item, daily_item_list, get_item_price, get_item_description
-from ..resources import items_path, user_path, pokemon_tm_learnset_path
+from ..resources import items_path, user_path, pokemon_tm_learnset_path, itembag_path
 
 # Daily Rotating Items Pool
 DAILY_ITEMS_POOL = daily_item_list()
@@ -296,6 +296,18 @@ class PokemonShopManager:
 
         return section_frame
 
+    def _get_inventory(self):
+        """Reads the itembag_path and returns a dictionary of {item_name: quantity}."""
+        if not os.path.isfile(itembag_path):
+            return {}
+        try:
+            with open(itembag_path, "r", encoding="utf-8") as f:
+                itembag = json.load(f)
+            return {item.get("item"): item.get("quantity", 0) for item in itembag}
+        except Exception as e:
+            self.logger.warning(f"Failed to read inventory: {e}")
+            return {}
+
     def _create_retro_item_frame(self, item, section_color, is_tm=False):
         """Create a theme-aware retro-styled item frame with tooltip for description."""
         colors = self._get_theme_colors()
@@ -379,38 +391,63 @@ class PokemonShopManager:
         layout.addLayout(info_layout)
         layout.addStretch()
 
+        # Check inventory for owned status
+        inventory = self._get_inventory()
+        owned_quantity = inventory.get(item["name"], 0)
+
         # Buy button with theme-aware styling
-        buy_button = QPushButton("BUY")
+        button_text = "BUY"
+        if is_tm and owned_quantity > 0:
+            button_text = "OWNED"
+        elif not is_tm and owned_quantity > 0:
+            button_text = f"BUY (x{owned_quantity})"
+
+        buy_button = QPushButton(button_text)
         buy_font = QFont(self.early_gameboy_font)
         buy_font.setPointSize(8)
         buy_button.setFont(buy_font)
         buy_button.setFixedHeight(35)
-        buy_button.setFixedWidth(buy_button.sizeHint().width())
+        # Adjust width dynamically based on text length with padding
+        buy_button.setFixedWidth(buy_button.fontMetrics().boundingRect(button_text).width() + 20)
 
-        buy_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {section_color};
-                color: {colors["text_primary"]};
-                border: 2px solid {colors["text_primary"]};
-                border-radius: 6px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {colors["button_hover"]};
-                color: {section_color};
-                border: 2px solid {section_color};
-            }}
-            QPushButton:pressed {{
-                background-color: {colors["border"]};
-            }}
-        """)
+        if is_tm and owned_quantity > 0:
+            buy_button.setEnabled(False)
+            buy_button.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {colors["frame_bg"]};
+                    color: {colors["text_secondary"]};
+                    border: 2px solid {colors["border"]};
+                    border-radius: 6px;
+                    font-weight: bold;
+                }}
+            """)
+        else:
+            buy_button.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {section_color};
+                    color: {colors["text_primary"]};
+                    border: 2px solid {colors["text_primary"]};
+                    border-radius: 6px;
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{
+                    background-color: {colors["button_hover"]};
+                    color: {section_color};
+                    border: 2px solid {section_color};
+                }}
+                QPushButton:pressed {{
+                    background-color: {colors["border"]};
+                }}
+            """)
 
         if is_tm:
             buy_button.clicked.connect(
-                lambda checked, item=item: self.buy_item(item, item.get("item_type"))
+                lambda checked, item=item, btn=buy_button: self.buy_item(item, item.get("item_type"), btn)
             )
         else:
-            buy_button.clicked.connect(lambda checked, item=item: self.buy_item(item))
+            buy_button.clicked.connect(
+                lambda checked, item=item, btn=buy_button: self.buy_item(item, item.get("item_type"), btn)
+            )
 
         layout.addWidget(buy_button)
 
@@ -469,7 +506,7 @@ class PokemonShopManager:
 
         return all_tms
 
-    def buy_item(self, item, item_type: Union[str, None] = None):
+    def buy_item(self, item, item_type: Union[str, None] = None, button: QPushButton = None):
         """Handle item purchase with theme-aware retro-style messages."""
         colors = self._get_theme_colors()
 
@@ -526,6 +563,26 @@ class PokemonShopManager:
             msg.exec()
 
             give_item(item["name"], item_type)
+
+            if button:
+                if item_type == "TM" or item.get("item_type") == "TM":
+                    button.setText("OWNED")
+                    button.setEnabled(False)
+                    button.setStyleSheet(f"""
+                        QPushButton {{
+                            background-color: {colors["frame_bg"]};
+                            color: {colors["text_secondary"]};
+                            border: 2px solid {colors["border"]};
+                            border-radius: 6px;
+                            font-weight: bold;
+                        }}
+                    """)
+                else:
+                    inventory = self._get_inventory()
+                    owned_quantity = inventory.get(item["name"], 0)
+                    button_text = f"BUY (x{owned_quantity})"
+                    button.setText(button_text)
+                    button.setFixedWidth(button.fontMetrics().boundingRect(button_text).width() + 20)
         except Exception as e:
             self.logger.log_and_showinfo("error", f"Failed to purchase item: {e}")
 
