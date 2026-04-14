@@ -565,7 +565,7 @@ class PokemonShopManager:
             give_item(item["name"], item_type)
 
             if button:
-                if item_type == "TM":
+                if item_type == "TM" or item.get("item_type") == "TM":
                     button.setText("OWNED")
                     button.setEnabled(False)
                     button.setStyleSheet(f"""
