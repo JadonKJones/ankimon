@@ -71,6 +71,7 @@ def _lookup_move_data(attack: str):
 
 
 def PokemonCollectionDetails(
+    pokemon: dict,
     name: str,
     level: int,
     id: int,
@@ -358,6 +359,7 @@ def PokemonCollectionDetails(
         qconnect(
             trade_pokemon_button.clicked,
             lambda: PokemonTrade(
+                pokemon,
                 name,
                 id,
                 level,
@@ -370,6 +372,7 @@ def PokemonCollectionDetails(
                 shiny,
                 logger,
                 refresh_callback,
+                mw
             ),
         )
         rename_button = QPushButton("Rename Pokemon")
