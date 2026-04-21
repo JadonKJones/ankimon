@@ -174,23 +174,9 @@ class PokemonTrade:
 
     def __init__(self, pokemon, name, id, level, ability, iv, ev, gender, attacks, individual_id, shiny, logger, refresh_callback, parent_window=None):
         self.pokemon = pokemon
-        self.name = name # No need
-        self.id = id # No need
-        self.level = level # No need
-        self.ability = ability # No need
-        self.iv = iv # No need
-        self.ev = ev # No need
-        self.gender = gender # No need
-        self.attacks = attacks # No need
-        self.individual_id = individual_id 
-        self.shiny = shiny # No need
         self.refresh_callback = refresh_callback
         self.logger = logger
         self.parent_window = parent_window # No need?
-        self.mainpokemon_path = mainpokemon_path # Wir haben doch den Modulimport dafür?!
-        self.mypokemon_path = mypokemon_path # Wir haben doch den Modulimport dafür?!
-        self.moves_file_path = moves_file_path # Wir haben doch den Modulimport dafür?!
-        self.pokedex_path = pokedex_path # Wir haben doch den Modulimport dafür?!
         self.check_and_trade()
 
     ### Utility Functions ###
@@ -274,7 +260,7 @@ class PokemonTrade:
         parts = code2.split(',')
         if len(parts) > 0 and parts[0].isdigit():
             incoming_id = int(parts[0])
-            if incoming_id == self.id:
+            if incoming_id == self.pokemon.get('id'):
                 showWarning("You cannot trade with a Pokémon of the same species (ID) as the one you're trading away!")
                 return
 
@@ -357,7 +343,7 @@ class PokemonTrade:
             parts = code.split(',')
             if len(parts) > 0 and parts[0].isdigit():
                 incoming_id = int(parts[0])
-                if incoming_id == self.id:
+                if incoming_id == self.pokemon.get('id'):
                     showWarning("You cannot trade with a Pokémon of the same species (ID) as the one you're trading away!")
                     return
             self.confirm_trade(parent_window)
@@ -375,15 +361,11 @@ class PokemonTrade:
         If the code is less than 4 digits long, return early since sprite path can't be determined by only three parts
         If the code contains any Non-Integer, return image of substitute plush
         """
+        from ..functions.sprite_functions import SUBSTITUTE_PATH
+        
         parts = code.split(',')
-        if len(parts) < 4:
-            return "", ""
-
-        if not all([isinstance(part.isdigit(), int) for part in parts]):
-            return (
-                ":/icons/pokeball.png",
-                "Their Pokemon"
-            )
+        if len(parts) < 4 or not all(part.isdigit() for part in parts):
+            return SUBSTITUTE_PATH, "Their Pokemon"
 
         sprite: str = self._get_sprite_from_code(parts)
         name: str = self._get_pokemon_name_by_id(parts[0])
@@ -392,7 +374,7 @@ class PokemonTrade:
 
     def _get_sprite_from_code(self, parts) -> str:
         """
-        Returns the sprite path based on the given code, e.g.: [312, 32, 1, 0, ...] based on the first 4 digits
+        Returns the pokemon sprite path based on the given code, e.g.: [312, 32, 1, 0, ...] based off on the first 4 digits
         """
         # TODO: Make the sprite lookup work, even when less then 4 digits have been entered (by using defaults) – This requires not instant lookup
 
@@ -405,7 +387,7 @@ class PokemonTrade:
 
     def _get_pokemon_name_by_id(self, pokemon_id):
         try:
-            with open(self.pokedex_path, 'r', encoding='utf-8') as file:
+            with open(pokedex_path, 'r', encoding='utf-8') as file:
                 pokedex = json.load(file)
                 for details in pokedex.values():
                     if details.get('num') == pokemon_id:
@@ -440,7 +422,7 @@ class PokemonTrade:
         msg = QMessageBox(parent_window)
         msg.setIcon(QMessageBox.Icon.Question)
         msg.setWindowTitle("Confirm Trade")
-        msg.setText(f"Are you sure you want to trade your {self.name} for {name}?")
+        msg.setText(f"Are you sure you want to trade your {self.pokemon.get('name')} for {name}?")
         msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         result = msg.exec()
         if result == QMessageBox.StandardButton.Yes:
@@ -454,7 +436,7 @@ class PokemonTrade:
                 showWarning("Code is incomplete.")
                 return
             incoming_id = numbers[0]
-            if incoming_id == self.id:
+            if incoming_id == self.pokemon.get('id'):
                 showWarning("You cannot trade with a Pokémon of the same species (ID) as the one you're trading away!")
                 return
             self.process_trade(numbers)
@@ -525,12 +507,12 @@ class PokemonTrade:
         return int((((2 * base_hp + iv_value + ev_value) * level) / 100) + level + 10)
 
     def find_move_by_num(self, move_num):
-        with open(self.moves_file_path, 'r', encoding='utf-8') as file:
+        with open(moves_file_path, 'r', encoding='utf-8') as file:
             moves_data = json.load(file)
             return next((move for move in moves_data.values() if move.get('num') == move_num), {"name": "Unknown Move"})
 
     def find_move_by_name(self, move_name):
-        with open(self.moves_file_path, 'r', encoding='utf-8') as file:
+        with open(moves_file_path, 'r', encoding='utf-8') as file:
             moves_data = json.load(file)
             move = next((move for move in moves_data.values() if move.get('name').lower() == move_name.lower()), None)
             if move:
@@ -540,7 +522,7 @@ class PokemonTrade:
 
     def find_pokemon_by_id(self, pokemon_id):
         try:
-            with open(self.pokedex_path, 'r', encoding='utf-8') as file:
+            with open(pokedex_path, 'r', encoding='utf-8') as file:
                 pokedex = json.load(file)
                 for details in pokedex.values():
                     if details.get('num') == pokemon_id:
@@ -553,11 +535,11 @@ class PokemonTrade:
 
     def replace_pokemon(self, new_pokemon):
         try:
-            with open(self.mypokemon_path, 'r+') as file:
+            with open(mypokemon_path, 'r+') as file:
                 pokemon_list = json.load(file)
 
                 for idx, pokemon in enumerate(pokemon_list):
-                    if pokemon.get("individual_id") == self.individual_id:
+                    if pokemon.get("individual_id") == self.pokemon.get('individual_id'):
                         pokemon_list[idx] = new_pokemon
                         break
                 else:
@@ -597,7 +579,7 @@ class PokemonTrade:
         return ','.join([str(self.find_move_by_name(attack)) for attack in self.pokemon['attacks']])
 
     def _find_move_by_name(self, move_name):
-        with open(self.moves_file_path, 'r', encoding='utf-8') as file:
+        with open(moves_file_path, 'r', encoding='utf-8') as file:
             moves_data = json.load(file)
             move = next((move for move in moves_data.values() if move.get('name').lower() == move_name.lower()), None)
             if move:

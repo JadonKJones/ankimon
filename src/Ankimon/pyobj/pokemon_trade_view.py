@@ -25,11 +25,6 @@ class PokemonTradeView():
     Any issues during trade will be presented to the user by this view class
     """
 
-    
-    # The pokemon sprite size to display during trade code enter
-    # TODO: Check if we need the sprite size – For rescaling the screen, this kind of looks bad
-    PKMN_SPRITE_SIZE = QSize(64, 64)
-
     def __init__(self, controller: 'PokemonTrade', parent_window=None):
         self.controller = controller
         self.parent_window = parent_window
@@ -104,7 +99,6 @@ class PokemonTradeView():
         my_pokemon_sprite_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         my_pokemon_sprite_label = QLabel()
-        my_pokemon_sprite_label.setMaximumSize(self.PKMN_SPRITE_SIZE)
         my_pokemon_sprite_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sprite_collection.update({'my_pokemon_sprite_label' : my_pokemon_sprite_label})
         
@@ -130,7 +124,6 @@ class PokemonTradeView():
         their_pokemon_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         their_pokemon_sprite_label = QLabel()
-        their_pokemon_sprite_label.setMaximumSize(self.PKMN_SPRITE_SIZE)
         their_pokemon_sprite_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sprite_collection.update({'their_pokemon_sprite_label' : their_pokemon_sprite_label})
 
@@ -233,7 +226,7 @@ class PokemonTradeView():
 
     def _update_pokemon_sprite_label(self, pkmn_sprite: str, sprite_label: QLabel):
         """
-        Update the pokemon sprite based on the given QLabel by wrapping it in using a QMovie instance
+        Update the pokemon sprite based on the given QLabel.
         The pokemon to update is determined by the given label.
         
         Args:
@@ -249,7 +242,7 @@ class PokemonTradeView():
     
     def _update_pokemon_name_label(self, pkmn_name: str, name_label: QLabel):
         """
-        Update the pokemon name label determined based on the given string.
+        Update the pokemon name label based on the given string.
         The label to update is determined by the given name_label
 
         Args:
@@ -257,56 +250,3 @@ class PokemonTradeView():
             name_label (QLabel): The label to place the name in
         """
         name_label.setText(pkmn_name)
-
-    def update_other_pokemon_sprite(self, code):
-        from PyQt6.QtGui import QMovie
-        try:
-            parts = code.split(',')
-            self.other_pokemon_sprite_label.clear()
-            self.other_pokemon_sprite_label.setPixmap(QPixmap())
-            self.other_pokemon_name_label.setText("")
-            if len(parts) > 0 and parts[0].isdigit():
-                pokemon_id = int(parts[0])
-                other_gender = "M"
-                other_shiny = False
-                if len(parts) > 2:
-                    gender_map = {"0": "M", "1": "F", "2": "N"}
-                    other_gender = gender_map.get(parts[2], "M")
-                
-                sprite_path = get_sprite_path(side="front", sprite_type="gif", id=pokemon_id, shiny=other_shiny, gender=other_gender)
-                
-                if hasattr(self, '_other_pokemon_movie') and self._other_pokemon_movie is not None:
-                    self._other_pokemon_movie.stop()
-                    self._other_pokemon_movie.deleteLater()
-                    self._other_pokemon_movie = None
-                other_pokemon_movie = QMovie(sprite_path)
-                self._other_pokemon_movie = other_pokemon_movie
-                
-                def set_other_frame():
-                    frame = other_pokemon_movie.currentImage()
-                    if not frame.isNull():
-                        scaled = QPixmap.fromImage(frame).scaled(self.PKMN_SPRITE_SIZE, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                        self.other_pokemon_sprite_label.setPixmap(scaled)
-                other_pokemon_movie.frameChanged.connect(lambda _: set_other_frame())
-                self.other_pokemon_sprite_label.setMovie(other_pokemon_movie)
-                other_pokemon_movie.start()
-                set_other_frame()
-                name = self.get_pokemon_name_by_id(pokemon_id)
-                self.other_pokemon_name_label.setText(name if name else "Unknown Pokémon")
-            else:
-                self.other_pokemon_sprite_label.setPixmap(QPixmap(":/icons/pokeball.png").scaled(QSize(64, 64), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-                self.other_pokemon_name_label.setText("")
-        except Exception:
-            self.other_pokemon_sprite_label.setPixmap(QPixmap(":/icons/pokeball.png").scaled(QSize(64, 64), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-            self.other_pokemon_name_label.setText("")
-
-    def get_pokemon_name_by_id(self, pokemon_id):
-        try:
-            with open(self.pokedex_path, 'r', encoding='utf-8') as file:
-                pokedex = json.load(file)
-                for details in pokedex.values():
-                    if details.get('num') == pokemon_id:
-                        return details.get('name', str(pokemon_id))
-        except Exception as e:
-            show_warning_with_traceback(parent=self.parent_window, exception=e, message=f"An error occurred while getting the Pokémon name for ID {pokemon_id}.")
-        return str(pokemon_id)
