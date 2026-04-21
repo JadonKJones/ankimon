@@ -518,7 +518,7 @@ class PokemonTrade:
             if move:
                 return move['num']
             else:
-                return int(33)
+                return 33
 
     def find_pokemon_by_id(self, pokemon_id):
         try:
@@ -585,4 +585,4 @@ class PokemonTrade:
             if move:
                 return move['num']
             else:
-                return int(33)
+                return 33
