@@ -169,14 +169,15 @@ class PokemonTrade:
     # TODO: Explain when incremented
     TRADE_VERSION = "02"
 
-    # TODO: Explain what this is
-    _trade_view: 'PokemonTradeView'
-
     def __init__(self, pokemon, logger, refresh_callback, parent_window=None):
         self.pokemon = pokemon
         self.refresh_callback = refresh_callback
         self.logger = logger
         self.parent_window = parent_window # No need?
+
+        # TODO: Explain what this is
+        _trade_view: 'PokemonTradeView' = None
+
         self.check_and_trade()
 
     ### Utility Functions ###
@@ -221,19 +222,26 @@ class PokemonTrade:
         return self.pokemon.get("individual_id") == main_pokemon.get("individual_id") 
         
     """
-    Hier könnte noch ein Fehler existieren. Wenn ich in der PC Collection mein main Pokemon auswähle und dann in die description gehe und bspw. 
-    Attacken ändere oder ein Item vergebe, wird das nach dem Pokemon Traade verloren gehen (da das main Pokemon nicht nochmal geupdated wurde).
+    TODO: Hier könnte noch ein Fehler existieren. Wenn ich in der PC Collection mein main Pokemon auswähle und dann in die description gehe und bspw. 
+    Attacken ändere oder ein Item vergebe, wird das nach dem Pokemon Trade verloren gehen (da das main Pokemon nicht nochmal geupdated wurde).
     Das sollte aber nicht im Pokemon Trade passieren, sondern im PokemonPC
     """
+
+    def _validate_trade_code(code: int):
+        pass
+        
+        #if(type(code) not int):
+        #    raise TypeError("Expected and int")
 
     ### Check if Trading is possible ###
 
     def check_and_trade(self):
         """
         Check if Trading is possible.
+        - Validate that the pokemon to trade is not the users main Pokemon
 
         """
-        pokemon_data = self._load_mainpokemon_data()
+        pokemon_data = self._load_mainpokemon_data() #TODO: Check if another module does this
         #print("Self Pokemon:", self.pokemon)
         #print("Loaded Pokemon Data:", pokemon_data)
         #print(self._match_main_pokemon(pokemon_data))
@@ -242,12 +250,15 @@ class PokemonTrade:
             self.logger.log_and_showinfo("warning", "You can't trade your Main Pokémon!\nPlease pick a different Main Pokémon.")
             return
         
-        PokemonTradeView(
+        self._trade_view = PokemonTradeView(
             self,
             self.parent_window
-        ).open_trade_code_window()
+        )
+        self._trade_view.open_trade_code_window()
 
-    def generate_password(pokemon: dict) -> str:
+    def generate_password(self) -> str:
+        codes = self._trade_view.code_collection
+        print(codes)
         pass
 
     def generate_and_show_passwords(self, window):
