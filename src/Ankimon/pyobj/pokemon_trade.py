@@ -172,7 +172,7 @@ class PokemonTrade:
     # TODO: Explain what this is
     _trade_view: 'PokemonTradeView'
 
-    def __init__(self, pokemon, name, id, level, ability, iv, ev, gender, attacks, individual_id, shiny, logger, refresh_callback, parent_window=None):
+    def __init__(self, pokemon, logger, refresh_callback, parent_window=None):
         self.pokemon = pokemon
         self.refresh_callback = refresh_callback
         self.logger = logger

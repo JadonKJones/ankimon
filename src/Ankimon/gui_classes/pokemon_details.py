@@ -360,16 +360,6 @@ def PokemonCollectionDetails(
             trade_pokemon_button.clicked,
             lambda: PokemonTrade(
                 pokemon,
-                name,
-                id,
-                level,
-                ability,
-                iv,
-                ev,
-                gender,
-                attacks,
-                individual_id,
-                shiny,
                 logger,
                 refresh_callback,
                 mw
