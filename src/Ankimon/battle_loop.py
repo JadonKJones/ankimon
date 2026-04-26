@@ -100,8 +100,10 @@ def on_review_card(*args):
             if not check_for_badge(achievements, 6):
                 receive_badge(6, achievements)
 
-        if total_reviews == settings_obj.get("battle.daily_average"):
-            settings_obj.set("trainer.cash", settings_obj.get("trainer.cash") + 200)
+        cash_interval = int(settings_obj.get("trainer.cash_reward_interval"))
+        cash_amount = int(settings_obj.get("trainer.cash_reward_amount"))
+        if total_reviews % cash_interval == 0:
+            settings_obj.set("trainer.cash", settings_obj.get("trainer.cash") + cash_amount)
             trainer_card.cash = settings_obj.get("trainer.cash")
 
         if battle_sounds == True and ankimon_tracker_obj.general_card_count_for_battle == 1:

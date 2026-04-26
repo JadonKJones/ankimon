@@ -67,6 +67,8 @@ DEFAULT_CONFIG = {
     "trainer.sprite": "ash",
     "trainer.id": 0,
     "trainer.cash": 0,
+    "trainer.cash_reward_amount": 100,
+    "trainer.cash_reward_interval": 10,
     "trainer.level": 0,
     "trainer.xp": 0,
 }

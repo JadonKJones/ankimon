@@ -363,7 +363,7 @@ class SettingsWindow(QMainWindow):
                     "Volume",
                 ]
             },
-            "Study": {"settings": ["Goal of Daily Average Cards", "Card Max Time"]},
+            "Study": {"settings": ["Goal of Daily Average Cards", "Card Max Time", "Cash Reward Per Interval", "Cards Per Cash Reward"]},
             "Generations": {
                 "settings": [
                     "Generation 1",
