@@ -24,7 +24,6 @@ from aqt.utils import showWarning
 from aqt import mw
 from aqt.theme import theme_manager
 
-
 # create_rounded_pixmap function remains the same
 def create_rounded_pixmap(source_pixmap, radius):
     if source_pixmap.isNull():
@@ -330,6 +329,7 @@ class SettingsWindow(QMainWindow):
                         "settings": [
                             "Key for Defeat",
                             "Key for Catching",
+                            "Key for Team Cycling",
                             "Key for Opening/Closing Ankimon",
                             "Allow Choosing Moves",
                         ]
@@ -488,7 +488,10 @@ class SettingsWindow(QMainWindow):
                 widget.setVisible(is_expanded)
 
     def on_save(self) -> Union[int, str]:
-        # Update self.config from the current state of all UI widgets
+        # Refresh self.config with latest values before modifying
+        self.config = self.load_config()
+
+        # Update the self.config with values from the UI widgets
         for key, widget in self.input_widgets.items():
             original_value = self.original_config.get(key)
 
@@ -532,6 +535,18 @@ class SettingsWindow(QMainWindow):
 
         # Now that self.config is up-to-date, call the save callback
         self.save_config_callback(self.config)
+
+        # Refresh reviewer UI to pick up new hotkey
+        try:
+            from ..reviewer_ui import setup_reviewer_ui
+            setup_reviewer_ui(
+                self.config.get("controls.catch_key", "6"),
+                self.config.get("controls.defeat_key", "5"),
+                self.config.get("controls.pokemon_buttons", True),
+                self.config.get("controls.team_cycle_key", "9"),
+            )
+        except Exception as e:
+            print(f"Ankimon: Failed to refresh hotkeys: {e}")
 
         # The rest is for showing the confirmation message
         excluded_patterns = {

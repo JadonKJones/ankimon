@@ -8,6 +8,7 @@
     "controls.pokemon_buttons": "Show Pokémon Buttons",
     "controls.defeat_key": "Key for Defeat",
     "controls.catch_key": "Key for Catching",
+    "controls.team_cycle_key": "Key for Team Cycling",
     "controls.key_for_opening_closing_ankimon": "Key for Opening/Closing Ankimon",
     "controls.allow_to_choose_moves": "Allow Choosing Moves",
     
@@ -53,5 +54,4 @@
     "misc.show_tip_on_startup": "Show Tip of the Day On Startup",
     "misc.developer_mode": "Developer Mode",
     "trainer.name": "Trainer Name"
-
 }
