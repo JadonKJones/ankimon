@@ -530,6 +530,50 @@ class SettingsWindow(QMainWindow):
             elif isinstance(widget, QButtonGroup):
                 self.config[key] = widget.checkedButton().text() == "Enabled"
 
+        # --- Enforce bounds for cash rewards ---
+        has_adjustments = False
+        adjustment_msg = ""
+
+        # 1. Validate Interval
+        if "trainer.cash_reward_interval" in self.config:
+            orig_val = self.config["trainer.cash_reward_interval"]
+            if isinstance(orig_val, int):
+                new_val = max(5, min(250, orig_val))
+                if new_val != orig_val:
+                    self.config["trainer.cash_reward_interval"] = new_val
+                    has_adjustments = True
+                    adjustment_msg += f"- Reward Interval: Adjusted to {new_val} (Range: 5-250)\n"
+
+        # 2. Validate Amount & Cheat Threshold
+        if "trainer.cash_reward_amount" in self.config:
+            orig_amount = self.config["trainer.cash_reward_amount"]
+            if isinstance(orig_amount, int):
+                # Hard bounds
+                new_amount = max(10, min(2000, orig_amount))
+                
+                # Cheat Threshold: Max 100¥ per card
+                interval = self.config.get("trainer.cash_reward_interval", 10)
+                max_allowed = interval * 100
+                if new_amount > max_allowed:
+                    new_amount = max_allowed
+                    has_adjustments = True
+                    adjustment_msg += f"- Reward Amount: Capped at {new_amount}¥ to maintain the 100:1 ratio limit.\n"
+                elif new_amount != orig_amount:
+                    has_adjustments = True
+                    adjustment_msg += f"- Reward Amount: Adjusted to {new_amount}¥ (Range: 10-2,000)\n"
+                
+                self.config["trainer.cash_reward_amount"] = new_amount
+
+        if has_adjustments:
+            # Update UI widgets to reflect capped values
+            for key in ["trainer.cash_reward_interval", "trainer.cash_reward_amount"]:
+                if key in self.input_widgets and isinstance(self.input_widgets[key], QLineEdit):
+                    self.input_widgets[key].setText(str(self.config[key]))
+
+            QMessageBox.warning(self, "Settings Adjusted", 
+                              f"Some values were adjusted to stay within fair play bounds:\n\n{adjustment_msg}")
+
+
         # Now that self.config is up-to-date, call the save callback
         self.save_config_callback(self.config)
 
