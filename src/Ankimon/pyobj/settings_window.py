@@ -488,6 +488,9 @@ class SettingsWindow(QMainWindow):
                 widget.setVisible(is_expanded)
 
     def on_save(self) -> Union[int, str]:
+        # Refresh self.config with latest values before modifying
+        self.config = self.load_config()
+        
         # Update self.config from the current state of all UI widgets
         for key, widget in self.input_widgets.items():
             original_value = self.original_config.get(key)
