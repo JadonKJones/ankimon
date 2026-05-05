@@ -297,9 +297,15 @@ def check_min_generate_level(name):
     is_legendary = (species_id in encounter_data.LEGENDARY) or (actual_id in encounter_data.LEGENDARY)
     is_ultra = (species_id in encounter_data.ULTRA) or (actual_id in encounter_data.ULTRA)
     is_starter = (species_id in encounter_data.STARTERS) or (actual_id in encounter_data.STARTERS)
+    is_mega = (species_id in encounter_data.MEGA) or (actual_id in encounter_data.MEGA)
+    is_gmax = (species_id in encounter_data.GMAX) or (actual_id in encounter_data.GMAX)
 
     if is_mythical:
         min_level = max(min_level, 75)
+    elif is_gmax:
+        min_level = max(min_level, 65)
+    elif is_mega:
+        min_level = max(min_level, 60)
     elif is_legendary:
         min_level = max(min_level, 50)
     elif is_ultra:
@@ -411,8 +417,8 @@ def generate_random_pokemon(
     for i in range(start_idx, len(TIER_ORDER)):
         current_tier = TIER_ORDER[i]
         
-        # Try up to 50 times to find a valid pokemon in THIS tier
-        for _ in range(50):
+        # Try up to 75 times to find a valid pokemon in THIS tier
+        for _ in range(75):
             pokemon_id = get_random_pokemon_in_tier(current_tier)
             name = search_pokedex_by_id(pokemon_id)
             if not name or name == "Pokémon not found":
