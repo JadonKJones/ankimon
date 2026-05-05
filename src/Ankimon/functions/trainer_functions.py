@@ -78,6 +78,11 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
     evolution_triggered = False
 
     pokemon = db.get_pokemon(xp_share_individual_id)
+    if not pokemon:
+        # Fixed: if pokemon not found in current DB (e.g. after account swap), skip sharing
+        mw.logger.log("warning", f"XP Share target {xp_share_individual_id} not found in current database.")
+        return exp
+        
     current_level = int(pokemon['level'])  # MODIFIED: Use local variable for level
     if pokemon.get('held_item') == "lucky-egg":
         exp = int(exp * 1.5) # Multiply by 1.5 if pokemon holds lucky egg

@@ -107,8 +107,16 @@ def PokemonCollectionDetails(
 ):
     # Create a layout for the details panel
     try:
-        lang_name = get_pokemon_diff_lang_name(int(id), language).capitalize()
-        lang_desc = get_pokemon_descriptions(int(id), language)
+        # For Mega/Gmax forms, the species CSV has no entry — use pretty name instead
+        if any(f in name.lower() for f in ['mega', 'gmax']):
+            from ..functions.pokedex_functions import get_pretty_name_for_name, search_pokedex
+            lang_name = get_pretty_name_for_name(name)
+            # Use species_id for description since descriptions CSV only has base species
+            desc_id = search_pokedex(name.lower().replace(" ", "").replace("-", ""), "species_id") or id
+            lang_desc = get_pokemon_descriptions(int(desc_id), language)
+        else:
+            lang_name = get_pokemon_diff_lang_name(int(id), language).capitalize()
+            lang_desc = get_pokemon_descriptions(int(id), language)
         description = lang_desc
         layout = QVBoxLayout()
         typelayout = QHBoxLayout()
@@ -117,7 +125,7 @@ def PokemonCollectionDetails(
         pkmnimage_label = QLabel()
         pkmnpixmap = QPixmap()
         pkmnimage_path = get_sprite_path(
-            "front", "gif" if gif_in_collection else "png", id, shiny, gender
+            "front", "gif" if gif_in_collection else "png", id, shiny, gender, name
         )
 
         if gif_in_collection:

@@ -108,7 +108,16 @@ check_and_show_changelog(online_connectivity, ssh, no_more_news)
 # --- Battle loop ---
 from .battle_loop import on_review_card, init_battle_state
 init_battle_state(collected_pokemon_ids)
-gui_hooks.reviewer_did_answer_card.append(on_review_card)
+
+def _ankimon_review_proxy(*args, **kwargs):
+    """Persistent proxy that always calls the current battle loop."""
+    from .battle_loop import on_review_card
+    return on_review_card(*args, **kwargs)
+
+# Register the proxy only once on mw to prevent duplicates across reloads
+if not hasattr(mw, "_ankimon_review_proxy"):
+    mw._ankimon_review_proxy = _ankimon_review_proxy
+    gui_hooks.reviewer_did_answer_card.append(mw._ankimon_review_proxy)
 
 # --- Menu ---
 create_menu_actions(
@@ -169,6 +178,7 @@ setup_reviewer_ui(
     settings_obj.get("controls.catch_key"),
     settings_obj.get("controls.defeat_key"),
     settings_obj.get("controls.pokemon_buttons"),
+    settings_obj.get("controls.team_cycle_key", "9"),
 )
 
 from .discord_integration import setup_discord_hooks

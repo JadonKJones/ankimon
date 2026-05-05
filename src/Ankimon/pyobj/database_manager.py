@@ -318,6 +318,14 @@ class AnkimonDB:
         cursor.execute(query, parameters)
         return cursor
 
+    def switch_database(self, db_filename: str):
+        """Closes the current connection and opens a new database file."""
+        self.close()
+        self.db_path = user_path / db_filename
+        self._connection = None
+        self._setup_database()
+        self._log("info", f"Switched database to {db_filename}")
+
     def get_pokemons_by_individual_ids(self, ids: List[str]) -> List[Dict[str, Any]]:
         """Retrieves multiple pokemon by their individual_ids."""
         if not ids:
@@ -353,10 +361,17 @@ class AnkimonDB:
         cursor.execute("UPDATE captured_pokemon SET is_main = 0 WHERE is_main = 1")
         
         # Save/update this pokemon and set as main
-        cursor.execute(
-            "INSERT OR REPLACE INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 1, ?)",
-            (individual_id, obfuscated_data)
-        )
+        cursor.execute("SELECT 1 FROM captured_pokemon WHERE individual_id = ?", (individual_id,))
+        if cursor.fetchone():
+            cursor.execute(
+                "UPDATE captured_pokemon SET is_main = 1, data = ? WHERE individual_id = ?",
+                (obfuscated_data, individual_id)
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 1, ?)",
+                (individual_id, obfuscated_data)
+            )
         conn.commit()
         return True
 

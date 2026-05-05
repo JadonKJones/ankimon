@@ -40,7 +40,7 @@ from ..pyobj.InfoLogger import ShowInfoLogger
 
 from ..pyobj.settings import Settings
 from ..functions.sprite_functions import get_sprite_path
-from ..utils import load_custom_font, get_tier_by_id
+from ..utils import load_custom_font, get_tier_by_id, is_alive
 from ..resources import icon_path, items_path, csv_file_items_cost, poke_evo_path
 from ..business import calculate_cp_from_dict
 
@@ -59,6 +59,8 @@ def clear_layout(layout):
     Args:
         layout (QLayout): The layout to be cleared. Can contain widgets and/or nested layouts.
     """
+    if not is_alive(layout):
+        return
     while layout.count():
         item = layout.takeAt(0)
         widget = item.widget()
@@ -443,7 +445,7 @@ class PokemonPC(QDialog):
         self.tier_combo = QComboBox()
         self.tier_combo.addItem("All tiers")
         self.tier_combo.addItems(
-            ["Normal", "Legendary", "Mythical", "Baby", "Ultra", "Fossil", "Starter"]
+            ["Normal", "Legendary", "Mythical", "Baby", "Ultra", "Fossil", "Starter", "Mega", "Gmax"]
         )
         self.tier_combo.setCurrentIndex(prev_idx)
         self.tier_combo.currentIndexChanged.connect(lambda: self.go_to_box(0))
@@ -474,54 +476,29 @@ class PokemonPC(QDialog):
         self.filter_shiny.stateChanged.connect(lambda: self.go_to_box(0))
         # Sorting options
         sort_label = QLabel("Sort by:")
+        
+        prev_sort = self.selected_sort_key if hasattr(self, 'selected_sort_key') else "Date"
+        self.sort_combo = QComboBox()
+        sort_options = [
+            "Date", "ID", "Name", "Level", "CP", "IV (Total)", "EV (Total)",
+            "HP", "Attack", "Defense", "Sp. Atk", "Sp. Def", "Speed"
+        ]
+        self.sort_combo.addItems(sort_options)
+        
+        # Set current index based on previous selection
+        index = self.sort_combo.findText(prev_sort)
+        if index >= 0:
+            self.sort_combo.setCurrentIndex(index)
+        else:
+            self.sort_combo.setCurrentText("Date")
+            
+        self.sort_combo.currentTextChanged.connect(self.on_sort_changed)
 
-        # Radio buttons for mutually exclusive sorting
-        self.sort_group = QButtonGroup(self)
-        self.sort_by_id = QRadioButton("ID")
-        self.sort_by_name = QRadioButton("Name")
-        self.sort_by_level = QRadioButton("Level")
-        self.sort_by_cp = QRadioButton("CP")
-        self.sort_by_iv = QRadioButton("IV")
-        self.sort_by_ev = QRadioButton("EV")
-        self.sort_by_date = QRadioButton("Date")
-
-        self.sort_group.addButton(self.sort_by_id)
-        self.sort_group.addButton(self.sort_by_name)
-        self.sort_group.addButton(self.sort_by_level)
-        self.sort_group.addButton(self.sort_by_cp)
-        self.sort_group.addButton(self.sort_by_iv)
-        self.sort_group.addButton(self.sort_by_ev)
-        self.sort_group.addButton(self.sort_by_date)
-
-        if self.selected_sort_key == "ID":
-            self.sort_by_id.setChecked(True)
-        elif self.selected_sort_key == "Name":
-            self.sort_by_name.setChecked(True)
-        elif self.selected_sort_key == "Level":
-            self.sort_by_level.setChecked(True)
-        elif self.selected_sort_key == "CP":
-            self.sort_by_cp.setChecked(True)
-        elif self.selected_sort_key == "IV":
-            self.sort_by_iv.setChecked(True)
-        elif self.selected_sort_key == "EV":
-            self.sort_by_ev.setChecked(True)
-        else:  # Date is the default
-            self.sort_by_date.setChecked(True)
-
-        # Connect signals
-        self.sort_group.buttonClicked.connect(self.on_sort_button_clicked)
-
-        sort_radio_layout = QHBoxLayout()
-        sort_radio_layout.addWidget(sort_label)
-        sort_radio_layout.addWidget(self.sort_by_id)
-        sort_radio_layout.addWidget(self.sort_by_name)
-        sort_radio_layout.addWidget(self.sort_by_level)
-        sort_radio_layout.addWidget(self.sort_by_cp)
-        sort_radio_layout.addWidget(self.sort_by_iv)
-        sort_radio_layout.addWidget(self.sort_by_ev)
-        sort_radio_layout.addWidget(self.sort_by_date)
-        sort_radio_widget = QWidget()
-        sort_radio_widget.setLayout(sort_radio_layout)
+        sort_combo_layout = QHBoxLayout()
+        sort_combo_layout.addWidget(sort_label)
+        sort_combo_layout.addWidget(self.sort_combo)
+        sort_combo_widget = QWidget()
+        sort_combo_widget.setLayout(sort_combo_layout)
 
         # Checkboxes for other options
         is_checked = self.desc_sort.isChecked() if self.desc_sort is not None else False
@@ -545,7 +522,7 @@ class PokemonPC(QDialog):
         checkboxes_widget.setLayout(checkboxes_layout)
 
         filters_layout.addWidget(checkboxes_widget, 2, 0, 1, 5)
-        filters_layout.addWidget(sort_radio_widget, 3, 0, 1, 5)
+        filters_layout.addWidget(sort_combo_widget, 3, 0, 1, 5)
         parent_layout.addLayout(filters_layout)
 
     def setup_details_panel(self, background_color):
@@ -565,7 +542,7 @@ class PokemonPC(QDialog):
         """
         Clears and rebuilds the grid.
         """
-        if self.pokemon_grid is None:
+        if not is_alive(self.pokemon_grid):
             return
 
         clear_layout(self.pokemon_grid)
@@ -612,6 +589,7 @@ class PokemonPC(QDialog):
                     pokemon["id"],
                     pokemon.get("shiny", False),
                     pokemon["gender"],
+                    pokemon.get("name"),
                 )
                 pokemon_button = PokemonSlotButton("")
                 pokemon_button.setFixedSize(self.slot_size, self.slot_size)
@@ -791,7 +769,9 @@ class PokemonPC(QDialog):
             "rowid as original_index, json_extract(data, '$.nickname') as nickname, "
             "json_extract(data, '$.gender') as gender, json_extract(data, '$.is_favorite') as is_favorite, "
             "json_extract(data, '$.held_item') as held_item, "
-            "json_extract(data, '$.iv') as iv_json, json_extract(data, '$.ev') as ev_json "
+            "json_extract(data, '$.captured_date') as captured_date, "
+            "json_extract(data, '$.iv') as iv_json, json_extract(data, '$.ev') as ev_json, "
+            "json_extract(data, '$.base_stats') as base_stats_json, json_extract(data, '$.nature') as nature "
             "FROM captured_pokemon WHERE 1=1"
         ]
         params = []
@@ -846,9 +826,23 @@ class PokemonPC(QDialog):
                     params.extend([start_id, end_id])
 
         # Sorting
-        sort_key_str = self.selected_sort_key.lower() if hasattr(self, 'selected_sort_key') else "date"
+        sort_key_raw = self.selected_sort_key if hasattr(self, 'selected_sort_key') else "Date"
+        sort_key_str = sort_key_raw.lower()
         reverse = self.desc_sort is not None and self.desc_sort.isChecked()
         direction = "DESC" if reverse else "ASC"
+
+        # Determine if we use SQL sorting or Python sorting
+        use_python_sort = False
+        stat_map = {
+            "hp": "hp",
+            "attack": "atk",
+            "defense": "def",
+            "sp. atk": "spa",
+            "sp. def": "spd",
+            "speed": "spe"
+        }
+        
+        target_stat = stat_map.get(sort_key_str)
 
         if sort_key_str == "date":
             order_clause = f"ORDER BY original_index {direction}"
@@ -859,10 +853,18 @@ class PokemonPC(QDialog):
         elif sort_key_str == "id":
             order_clause = f"ORDER BY pokedex_id {direction}"
         elif sort_key_str == "cp":
-            order_clause = f"ORDER BY CAST(json_extract(data, '$.cp') AS REAL) {direction}"
-        else:
-            # For IV/EV or default, sort by original_index first, then override in Python if needed
+            order_clause = f"ORDER BY CAST(json_extract(data, '$.cp') AS REAL) {direction}"    
+        elif sort_key_str in ["iv (total)", "ev (total)", "iv", "ev"]:
+            # Fallback for legacy keys if they appear
+            use_python_sort = True
             order_clause = f"ORDER BY original_index {direction}"
+        elif target_stat:
+            use_python_sort = True
+            order_clause = f"ORDER BY original_index {direction}"
+        else:
+            # Default to Date
+            order_clause = f"ORDER BY original_index {direction}"
+            
 
         query = " ".join(query_parts) + " " + order_clause
 
@@ -883,16 +885,33 @@ class PokemonPC(QDialog):
                     "held_item": row["held_item"],
                 }
                 
-                # Pre-calculate sums for sorting if needed
-                if sort_key_str in ["iv", "ev"]:
-                    stats_json = row[f"{sort_key_str}_json"]
-                    stats_dict = json.loads(stats_json) if stats_json else {}
-                    p["_sort_value"] = sum(stats_dict.values()) if isinstance(stats_dict, dict) else sum(stats_dict) if isinstance(stats_dict, list) else 0
-                
+                # Pre-calculate sums/stats for sorting if needed
+                if use_python_sort:
+                    if "iv" in sort_key_str or "ev" in sort_key_str:
+                        key = "iv" if "iv" in sort_key_str else "ev"
+                        stats_json = row[f"{key}_json"]
+                        stats_dict = json.loads(stats_json) if stats_json else {}
+                        p["_sort_value"] = sum(stats_dict.values()) if isinstance(stats_dict, dict) else sum(stats_dict) if isinstance(stats_dict, list) else 0                
+                    elif target_stat:
+                        # Individual Stat sorting
+                        level = row["level"]
+                        nature = row["nature"] or "serious"
+                        
+                        iv_dict = json.loads(row["iv_json"]) if row["iv_json"] else {}
+                        ev_dict = json.loads(row["ev_json"]) if row["ev_json"] else {}
+                        base_stats_dict = json.loads(row["base_stats_json"]) if row["base_stats_json"] else {}
+                        
+                        # Use PokemonObject's calculation logic
+                        base_val = base_stats_dict.get(target_stat, 1)
+                        iv_val = iv_dict.get(target_stat, 0)
+                        ev_val = ev_dict.get(target_stat, 0)
+                        
+                        p["_sort_value"] = PokemonObject.calc_stat(target_stat, base_val, level, iv_val, ev_val, nature)
+
                 results.append(p)
                 
-            # Perform Python sorting for IV/EV
-            if sort_key_str in ["iv", "ev"]:
+            # Perform Python sorting
+            if use_python_sort:
                 results.sort(key=lambda x: x.get("_sort_value", 0), reverse=reverse)
             
             return results
@@ -901,8 +920,8 @@ class PokemonPC(QDialog):
                 self.logger.log("error", f"Error fetching filtered pokemon: {e}")
             return []
 
-    def on_sort_button_clicked(self, button):
-        self.selected_sort_key = button.text()
+    def on_sort_changed(self, text):
+        self.selected_sort_key = text
         self.go_to_box(0)
 
     def show_actions_submenu(self, button: QPushButton, pokemon: dict[str, Any]):

@@ -98,7 +98,19 @@ class PokemonObject:
         self.current_hp = current_hp or 15
 
         self.is_favorite = is_favorite
+
         self.captured_date = captured_date
+
+    @property
+    def display_name(self) -> str:
+        """Returns the nickname if present, otherwise the official pretty name."""
+        if self.nickname:
+            return self.nickname
+        try:
+            from ..functions.pokedex_functions import get_pretty_name_for_name
+            return get_pretty_name_for_name(self.name)
+        except:
+            return self.name.title()
 
     @classmethod
     def calc_stat(
@@ -289,7 +301,7 @@ class PokemonObject:
         return hp
 
     def get_sprite_path(self, side, sprite_type):
-        return get_sprite_path(side, sprite_type, self.id, self.shiny, self.gender)
+        return get_sprite_path(side, sprite_type, self.id, self.shiny, self.gender, self.name)
 
     def to_engine_format(self):
         from ..poke_engine.helpers import normalize_name
@@ -424,6 +436,7 @@ class PokemonObject:
             'accuracy': 0,
             'evasion': 0
             }
+        self.volatile_status = set()
 
     def give_held_item(self, held_item: str) -> None:
         """

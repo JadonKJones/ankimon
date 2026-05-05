@@ -209,17 +209,6 @@ def create_menu_actions(
     rate_action.triggered.connect(rate_addon_url)
     mw.pokemenu.addAction(rate_action)
 
-    # Update Ankimon
-    def _open_update_dialog():
-        from .pyobj.update_dialog import UpdateDialog
-        dialog = UpdateDialog(parent=mw)
-        dialog.exec()
-
-    update_action = QAction(mw.translator.translate("ankimon_update_button"), mw)
-    update_action.setMenuRole(QAction.MenuRole.NoRole)
-    update_action.triggered.connect(_open_update_dialog)
-    help_menu.addAction(update_action)
-
     # Version
     version_action = QAction(mw.translator.translate("ankimon_version_button"), mw)
     version_action.setMenuRole(QAction.MenuRole.NoRole)
@@ -231,6 +220,20 @@ def create_menu_actions(
     config_action.triggered.connect(settings_window.show_window)
     # Show the Settings window
     mw.pokemenu.addAction(config_action)
+
+    # Switch Account Action
+    from .singletons import swap_ankimon_account
+    switch_account_action = QAction("Switch Account (DEV/Normal)", mw)
+    switch_account_action.setMenuRole(QAction.MenuRole.NoRole)
+    switch_account_action.triggered.connect(swap_ankimon_account)
+    mw.pokemenu.addAction(switch_account_action)
+
+    # Restart Ankimon Action
+    from .reloader import restart_ankimon
+    restart_action = QAction("Restart Ankimon", mw)
+    restart_action.setMenuRole(QAction.MenuRole.NoRole)
+    restart_action.triggered.connect(restart_ankimon)
+    mw.pokemenu.addAction(restart_action)
 
     if debug is True:
         tracker_window_action = QAction(mw.translator.translate("ankimon_tracker_button"), mw)
