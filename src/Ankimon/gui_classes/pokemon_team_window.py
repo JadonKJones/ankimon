@@ -80,7 +80,14 @@ class PokemonTeamDialog(QDialog):
 
         # XP Share selection
         self.xp_share_selected_individual_id = None
+        
+        xp_share_info_layout = QHBoxLayout()
+        self.xp_share_sprite_label = QLabel()
         self.xp_share_label = QLabel("XP Share: None")
+        xp_share_info_layout.addWidget(self.xp_share_sprite_label)
+        xp_share_info_layout.addWidget(self.xp_share_label)
+        xp_share_info_layout.addStretch()
+        
         xp_share_button = QPushButton("Choose Pokémon with XP Share")
         xp_share_button.clicked.connect(self.choose_xp_share_pokemon)
 
@@ -88,13 +95,19 @@ class PokemonTeamDialog(QDialog):
         xp_share_pokemon_individual_id = self.settings.get("trainer.xp_share")
         if xp_share_pokemon_individual_id:
             self.xp_share_selected_individual_id = xp_share_pokemon_individual_id
-            # Find the name for display
+            # Find the name and sprite for display
             for pokemon in self.my_pokemon:
                 if pokemon['individual_id'] == xp_share_pokemon_individual_id:
                     self.xp_share_label.setText(f"XP Share: {pokemon['name']} (Level {pokemon['level']})")
+                    sprite_path = get_sprite_path(
+                        "front", "png", pokemon['id'], pokemon.get('shiny', False), pokemon.get('gender', 'N'), pokemon['name']
+                    )
+                    pixmap = QPixmap(sprite_path)
+                    if not pixmap.isNull():
+                        self.xp_share_sprite_label.setPixmap(pixmap.scaled(30, 30, Qt.AspectRatioMode.KeepAspectRatio))
                     break
 
-        layout.addWidget(self.xp_share_label)
+        layout.addLayout(xp_share_info_layout)
         layout.addWidget(xp_share_button)
 
         # OK Button
@@ -360,6 +373,9 @@ class PokemonTeamDialog(QDialog):
             if xp_share_pokemon_individual_id == pokemon_individual_id:
                 # Remove XP Share from the Pokémon if it exists
                 self.settings.set("trainer.xp_share", None)
+                self.xp_share_selected_individual_id = None
+                self.xp_share_label.setText("XP Share: None")
+                self.xp_share_sprite_label.clear()
 
             # Remove the Pokémon from the team slot
             self.team_pokemon[slot] = None
@@ -537,7 +553,16 @@ class PokemonTeamDialog(QDialog):
             pokemon = next((p for p in self.my_pokemon if p['individual_id'] == selected_individual_id), None)
             if pokemon:
                 self.xp_share_label.setText(f"XP Share: {pokemon['name']} (Level {pokemon['level']})")
+                sprite_path = get_sprite_path(
+                    "front", "png", pokemon['id'], pokemon.get('shiny', False), pokemon.get('gender', 'N'), pokemon['name']
+                )
+                pixmap = QPixmap(sprite_path)
+                if not pixmap.isNull():
+                    self.xp_share_sprite_label.setPixmap(pixmap.scaled(30, 30, Qt.AspectRatioMode.KeepAspectRatio))
+                else:
+                    self.xp_share_sprite_label.clear()
         else:
             self.xp_share_label.setText("XP Share: None")
+            self.xp_share_sprite_label.clear()
     
         dialog.accept()

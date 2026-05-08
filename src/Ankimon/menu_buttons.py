@@ -84,6 +84,7 @@ def create_menu_actions(
     pokemon_pc: PokemonPC,
     backup_manager: BackupManager,
 ):
+    from .singletons import get_pokedex_window, get_pokemon_pc
     actions = []
 
     if database_complete:
@@ -91,7 +92,7 @@ def create_menu_actions(
         pokemon_pc_action = QAction("Pokémon PC", mw)
         pokemon_pc_action.setMenuRole(QAction.MenuRole.NoRole)
         collection_menu.addAction(pokemon_pc_action)
-        qconnect(pokemon_pc_action.triggered, pokemon_pc.show)
+        qconnect(pokemon_pc_action.triggered, lambda: get_pokemon_pc().show())
 
         # Ankimon Window
         ankimon_window_action = QAction(mw.translator.translate("open_ankimon_window_button"), mw)
@@ -124,30 +125,36 @@ def create_menu_actions(
         # Showdown Teambuilder
         pokemon_showdown_action = QAction(mw.translator.translate("open_showdown_teambuilder_button"), mw)
         pokemon_showdown_action.setMenuRole(QAction.MenuRole.NoRole)
-        qconnect(pokemon_showdown_action.triggered, open_team_builder)
+        qconnect(pokemon_showdown_action.triggered, lambda: open_team_builder())
         export_menu.addAction(pokemon_showdown_action)
 
         # Export to Showdown
         export_main_to_showdown = QAction(mw.translator.translate("export_main_pokemon_button"), mw)
         export_main_to_showdown.setMenuRole(QAction.MenuRole.NoRole)
-        qconnect(export_main_to_showdown.triggered, export_to_pkmn_showdown)
+        qconnect(export_main_to_showdown.triggered, lambda: export_to_pkmn_showdown())
         export_menu.addAction(export_main_to_showdown)
 
         export_all_to_showdown = QAction(mw.translator.translate("export_all_pokemon_button"), mw)
         export_all_to_showdown.setMenuRole(QAction.MenuRole.NoRole)
-        qconnect(export_all_to_showdown.triggered, export_all_pkmn_showdown)
+        qconnect(export_all_to_showdown.triggered, lambda: export_all_pkmn_showdown())
         export_menu.addAction(export_all_to_showdown)
 
         # Flexing Collection
         flex_pokecoll_action = QAction(mw.translator.translate("export_all_pokemon_to_pokepaste_button"), mw)
         flex_pokecoll_action.setMenuRole(QAction.MenuRole.NoRole)
-        qconnect(flex_pokecoll_action.triggered, flex_pokemon_collection)
+        qconnect(flex_pokecoll_action.triggered, lambda: flex_pokemon_collection())
         export_menu.addAction(flex_pokecoll_action)
 
         pokedex_action = QAction(mw.translator.translate("open_pokedex_button"), mw)
         pokedex_action.setMenuRole(QAction.MenuRole.NoRole)
-        qconnect(pokedex_action.triggered, pokedex_window.show)
+        qconnect(pokedex_action.triggered, lambda: get_pokedex_window().show())
         collection_menu.addAction(pokedex_action)
+
+        from .singletons import get_pokedex_v2_window
+        pokedex_v2_action = QAction("Open Pokédex (V2)", mw)
+        pokedex_v2_action.setMenuRole(QAction.MenuRole.NoRole)
+        qconnect(pokedex_v2_action.triggered, lambda: get_pokedex_v2_window().show())
+        collection_menu.addAction(pokedex_v2_action)
 
     # Backup Manager
     backup_manager_action = QAction("Backup Manager", mw)

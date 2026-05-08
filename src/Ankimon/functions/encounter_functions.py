@@ -142,16 +142,16 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
             percentages[tier] = (percentages[tier] / total) * 100 if total > 0 else 0 
 
     #MODIFIED FOR TESTING: Fixed percentages, no level or review restrictions.
-    percentages = {
-            "Baby": 0,
-            "Normal": 10,
-            "Starter": 0,
-            "Legendary": 90,
-            "Mythical": 0,
-            "Ultra": 0,
-            "Mega": 0,
-            "Gmax": 0,
-        }
+    """     percentages = {
+                "Baby": 0,
+                "Normal": 10,
+                "Starter": 0,
+                "Legendary": 0,
+                "Mythical": 0,
+                "Ultra": 0,
+                "Mega": 50,
+                "Gmax": 40,
+            } """
 
     # Cache the result
     _percentages_cache['percentages'] = percentages
@@ -606,6 +606,20 @@ def new_pokemon(
     reviewer = Container()
     reviewer.web = mw.reviewer.web
     reviewer_obj.update_life_bar(reviewer, 0, 0)
+
+    # Track as seen in Pokedex
+    if hasattr(mw, 'ankimon_db'):
+        if hasattr(mw.ankimon_db, 'mark_as_seen'):
+            mw.ankimon_db.mark_as_seen(pkmn_id)
+        else:
+            # Fallback tracking if not restarted
+            try:
+                seen_ids = mw.ankimon_db.get_user_data("pokedex_seen", [])
+                if not isinstance(seen_ids, list): seen_ids = []
+                if pkmn_id not in seen_ids:
+                    seen_ids.append(pkmn_id)
+                    mw.ankimon_db.set_user_data("pokedex_seen", seen_ids)
+            except: pass
 
     return pokemon
 

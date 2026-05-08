@@ -648,7 +648,7 @@ PREREQUISITES = {
     487: {483, 484},       # Giratina requires Dialga + Palkia
     483: {480, 481, 482},  # Dialga requires Uxie + Mesprit + Azelf
     484: {480, 481, 482},  # Palkia requires Uxie + Mesprit + Azelf
-    493: {480, 481, 482, 483, 484, 487}, # Arceus requires Lake Trio + Dialga + Palkia + Giratina
+    493: {487},            # Arceus requires Lake Trio + Dialga + Palkia + Giratina
     490: {489},            # Phione requires Manaphy
     486: {894, 895, 377, 378, 379}, # Regigigas requires Eleki + Drago + Regi Trio
     
@@ -668,7 +668,7 @@ PREREQUISITES = {
     890: {888, 889},       # Eternatus requires Zacian + Zamazenta
     896: {898},            # Glastrier requires Calyrex
     897: {898},            # Spectrier requires Calyrex
-    905: {641, 642, 645},  # Enamorus requires Tornadus + Thundurus + Landorus
+    905: {645},            # Enamorus requires Tornadus + Thundurus + Landorus
     
     # Generation 9
     1025: {1014, 1015, 1016}, # Pecharunt requires Loyal Three

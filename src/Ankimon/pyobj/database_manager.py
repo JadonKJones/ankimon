@@ -674,13 +674,29 @@ class AnkimonDB:
         cursor = self.execute("SELECT key, value FROM user_data")
         result = {}
         for row in cursor.fetchall():
-            key = row["key"]
-            val = row["value"]
+            key = row[0]
+            val = row[1]
             try:
                 result[key] = json.loads(val)
             except:
                 result[key] = val
         return result
+
+    # --- Pokedex Seen Tracking ---
+
+    def mark_as_seen(self, pokedex_id: int):
+        """Marks a Pokémon ID as seen in the user_data."""
+        seen_ids = self.get_seen_ids()
+        if pokedex_id not in seen_ids:
+            seen_ids.add(pokedex_id)
+            self.set_user_data("pokedex_seen", list(seen_ids))
+
+    def get_seen_ids(self) -> set:
+        """Retrieves the set of seen Pokémon IDs."""
+        data = self.get_user_data("pokedex_seen", [])
+        if isinstance(data, list):
+            return set(data)
+        return set()
 
     # --- Config Operations (replaces config.obf) ---
 
