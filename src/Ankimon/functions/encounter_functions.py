@@ -266,9 +266,19 @@ def generate_random_pokemon(
     min_allowed_pokemon_lvl = check_min_generate_level(
         str(name.lower())
     )  # Gets the minimum allowed level for that pokemon given its stage of evolution
+
+    iteration_count = 0
+    max_iterations = 100
     while (not check_id_ok(pokemon_id)) or (
         wild_pokemon_lvl < min_allowed_pokemon_lvl
     ):  # We keep drawing a random pokemon until we find a valid one
+        iteration_count += 1
+        if iteration_count >= max_iterations:
+            pokemon_id = 19  # Fallback to Rattata
+            tier = "common"
+            name = search_pokedex_by_id(pokemon_id)
+            break
+
         pokemon_id, tier = choose_random_pkmn_from_tier()
         name = search_pokedex_by_id(pokemon_id)
         min_allowed_pokemon_lvl = check_min_generate_level(

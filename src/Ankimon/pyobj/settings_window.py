@@ -229,8 +229,8 @@ class SettingsWindow(QMainWindow):
             true_radio.setChecked(value)
             false_radio.setChecked(not value)
             button_group = QButtonGroup(self)
-            button_group.addButton(true_radio)
-            button_group.addButton(false_radio)
+            button_group.addButton(true_radio, 1)
+            button_group.addButton(false_radio, 0)
             h_layout.addWidget(true_radio)
             h_layout.addWidget(false_radio)
             layout.addWidget(radio_container)
@@ -528,7 +528,22 @@ class SettingsWindow(QMainWindow):
                 else:
                     self.config[key] = str(new_text)
             elif isinstance(widget, QButtonGroup):
-                self.config[key] = widget.checkedButton().text() == "Enabled"
+                self.config[key] = widget.checkedId() == 1
+
+        # Check if all generations are disabled
+        gen_keys = [f"misc.gen{i}" for i in range(1, 10)]
+        if all(not self.config.get(key, True) for key in gen_keys):
+            self.config["misc.gen1"] = True
+            if "misc.gen1" in self.input_widgets:
+                # Update the UI button to match the enforced config
+                btn_group = self.input_widgets["misc.gen1"]
+                if isinstance(btn_group, QButtonGroup):
+                    btn_group.button(1).setChecked(True)
+            QMessageBox.warning(
+                self,
+                "Warning",
+                "At least one generation must be enabled. Generation 1 has been re-enabled automatically.",
+            )
 
         # Now that self.config is up-to-date, call the save callback
         self.save_config_callback(self.config)
