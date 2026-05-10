@@ -853,7 +853,8 @@ class PokemonPC(QDialog):
         elif sort_key_str == "id":
             order_clause = f"ORDER BY pokedex_id {direction}"
         elif sort_key_str == "cp":
-            order_clause = f"ORDER BY CAST(json_extract(data, '$.cp') AS REAL) {direction}"    
+            use_python_sort = True
+            order_clause = f"ORDER BY original_index {direction}"
         elif sort_key_str in ["iv (total)", "ev (total)", "iv", "ev"]:
             # Fallback for legacy keys if they appear
             use_python_sort = True
@@ -907,6 +908,18 @@ class PokemonPC(QDialog):
                         ev_val = ev_dict.get(target_stat, 0)
                         
                         p["_sort_value"] = PokemonObject.calc_stat(target_stat, base_val, level, iv_val, ev_val, nature)
+                    elif sort_key_str == "cp":
+                        # Re-calculate CP for sorting to ensure it uses the new formula
+                        iv_dict = json.loads(row["iv_json"]) if row["iv_json"] else {}
+                        ev_dict = json.loads(row["ev_json"]) if row["ev_json"] else {}
+                        base_stats_dict = json.loads(row["base_stats_json"]) if row["base_stats_json"] else {}
+                        
+                        p["_sort_value"] = calculate_cp_from_dict({
+                            "level": row["level"],
+                            "iv": iv_dict,
+                            "ev": ev_dict,
+                            "base_stats": base_stats_dict
+                        })
 
                 results.append(p)
                 
@@ -1231,6 +1244,13 @@ class PokemonPC(QDialog):
         for i, pokemon in enumerate(pokemon_list):
             if not isinstance(pokemon, dict):
                 continue
+
+            # Always recalculate CP to ensure it matches the current formula in business.py
+            old_cp = pokemon.get("cp")
+            new_cp = calculate_cp_from_dict(pokemon)
+            if old_cp != new_cp:
+                needs_update = True
+                pokemon_list[i]["cp"] = new_cp
 
             for key, default_generator in default_values.items():
                 if key not in pokemon:

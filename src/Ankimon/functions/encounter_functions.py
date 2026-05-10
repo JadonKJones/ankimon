@@ -142,7 +142,7 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
             percentages[tier] = (percentages[tier] / total) * 100 if total > 0 else 0 
 
     #MODIFIED FOR TESTING: Fixed percentages, no level or review restrictions.
-    """     percentages = {
+    percentages = {
                 "Baby": 0,
                 "Normal": 10,
                 "Starter": 0,
@@ -151,7 +151,7 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
                 "Ultra": 0,
                 "Mega": 50,
                 "Gmax": 40,
-            } """
+            } 
 
     # Cache the result
     _percentages_cache['percentages'] = percentages
@@ -327,9 +327,14 @@ def check_id_ok(id_num: Union[int, list[int]]):
         return False
 
     # Mega/Gmax forms have actual_ids >= 10000, which fall outside
-    # the normal gen ranges. Always allow them through.
+    # the normal gen ranges. Resolve to base species for generation check.
     if id_num >= 10000:
-        return True
+        name = search_pokedex_by_id(id_num)
+        species_id = safe_int(search_pokedex(name, "species_id"))
+        if species_id > 0:
+            id_num = species_id
+        else:
+            return True # Fallback if species_id not found
 
     generation = 0
     for gen, max_id in gen_ids.items():
@@ -417,8 +422,8 @@ def generate_random_pokemon(
     for i in range(start_idx, len(TIER_ORDER)):
         current_tier = TIER_ORDER[i]
         
-        # Try up to 75 times to find a valid pokemon in THIS tier
-        for _ in range(75):
+        # Try up to 500 times to find a valid pokemon in THIS tier
+        for _ in range(500):
             pokemon_id = get_random_pokemon_in_tier(current_tier)
             name = search_pokedex_by_id(pokemon_id)
             if not name or name == "Pokémon not found":

@@ -420,26 +420,27 @@ POKEMON_TIERS = {
   1022,  # iron-boulder
   1023,  # iron-crown
   1024,  # terapagos
-  1025,  # pecharunt
 ]
 ,
   "Mythical": [
   # Gen 1
-  151,        # Mew
+  151,                       # Mew
   # Gen 2
-  251,        # Celebi
+  251,                       # Celebi
   # Gen 3
-  385, 386,   # Jirachi, Deoxys
+  385, 386,                  # Jirachi, Deoxys
   # Gen 4
   489, 490, 491, 492, 493,   # Phione, Manaphy, Darkrai, Shaymin, Arceus
   # Gen 5
   494, 647, 648, 649,        # Victini, Keldeo, Meloetta, Genesect
   # Gen 6
-  719, 720, 721,             # Diancie, Hoopa, Volcanion
+  719, 720, 721,              # Diancie, Hoopa, Volcanion
   # Gen 7
   801, 802, 807, 808, 809,   # Magearna, Marshadow, Zeraora, Meltan, Melmetal
   # Gen 8
-  893                        # Zarude
+  893,                        # Zarude
+  # Gen 9
+  1025,                       # Pecharunt
 ]
 ,
   "Ultra": [

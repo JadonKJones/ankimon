@@ -26,7 +26,7 @@ from .pyobj.trainer_card import TrainerCard
 from .pyobj.settings_window import SettingsWindow
 from .pyobj.test_window import TestWindow
 from .pyobj.ankimon_shop import PokemonShopManager
-from .pokedex.pokedex_obj import Pokedex
+# Removed old Pokedex import
 from .pyobj.achievement_window import AchievementWindow
 from .pyobj.ankimon_tracker_window import AnkimonTrackerWindow
 from .pyobj.backup_manager import BackupManager
@@ -75,7 +75,6 @@ def create_menu_actions(
     logger: ShowInfoLogger,
     settings_window: SettingsWindow,
     shop_manager: PokemonShopManager,
-    pokedex_window: Pokedex,
     ankimon_key,
     join_discord_url: Callable,
     open_leaderboard_url: Callable,
@@ -84,7 +83,7 @@ def create_menu_actions(
     pokemon_pc: PokemonPC,
     backup_manager: BackupManager,
 ):
-    from .singletons import get_pokedex_window, get_pokemon_pc
+    from .singletons import get_ankidex_window, get_pokemon_pc
     actions = []
 
     if database_complete:
@@ -145,16 +144,11 @@ def create_menu_actions(
         qconnect(flex_pokecoll_action.triggered, lambda: flex_pokemon_collection())
         export_menu.addAction(flex_pokecoll_action)
 
-        pokedex_action = QAction(mw.translator.translate("open_pokedex_button"), mw)
-        pokedex_action.setMenuRole(QAction.MenuRole.NoRole)
-        qconnect(pokedex_action.triggered, lambda: get_pokedex_window().show())
-        collection_menu.addAction(pokedex_action)
-
-        from .singletons import get_pokedex_v2_window
-        pokedex_v2_action = QAction("Open Pokédex (V2)", mw)
-        pokedex_v2_action.setMenuRole(QAction.MenuRole.NoRole)
-        qconnect(pokedex_v2_action.triggered, lambda: get_pokedex_v2_window().show())
-        collection_menu.addAction(pokedex_v2_action)
+        from .singletons import get_ankidex_window
+        ankidex_action = QAction("Ankidex", mw)
+        ankidex_action.setMenuRole(QAction.MenuRole.NoRole)
+        qconnect(ankidex_action.triggered, lambda: get_ankidex_window().show())
+        collection_menu.addAction(ankidex_action)
 
     # Backup Manager
     backup_manager_action = QAction("Backup Manager", mw)

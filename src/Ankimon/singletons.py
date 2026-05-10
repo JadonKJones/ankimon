@@ -25,8 +25,7 @@ from .pyobj.test_window import TestWindow
 from .pyobj.achievement_window import AchievementWindow
 from .pyobj.ankimon_tracker_window import AnkimonTrackerWindow
 from .pyobj.ankimon_shop import PokemonShopManager
-from .pokedex.pokedex_obj import Pokedex
-from .pokedex_v2.pokedex_v2_obj import PokedexV2
+from .ankidex.ankidex_obj import Ankidex
 from .pyobj.reviewer_obj import Reviewer_Manager
 from .pyobj.evolution_window import EvoWindow
 from .pyobj.starter_window import StarterWindow
@@ -38,7 +37,6 @@ from .gui_entities import (
     Credits,
     TableWidget,
     IDTableWidget,
-    Pokedex_Widget,
     Version_Dialog,
 )
 from .functions.update_main_pokemon import update_main_pokemon
@@ -159,26 +157,17 @@ mw.achievement_bag = achievement_bag
 ankimon_tracker_window = getattr(mw, "ankimon_tracker_window", None) or AnkimonTrackerWindow(tracker=ankimon_tracker_obj)
 mw.ankimon_tracker_window = ankimon_tracker_window
 
-# Pokedex
-pokedex_window = getattr(mw, "pokedex_window", None)
-def get_pokedex_window():
-    global pokedex_window
-    if not is_alive(pokedex_window):
-        pokedex_window = Pokedex(addon_dir, ankimon_tracker=ankimon_tracker_obj)
-        mw.pokedex_window = pokedex_window
-    return pokedex_window
-
-# Pokedex V2
-pokedex_v2_window = getattr(mw, "pokedex_v2_window", None)
-def get_pokedex_v2_window():
-    global pokedex_v2_window
-    if not is_alive(pokedex_v2_window):
-        pokedex_v2_window = PokedexV2(addon_dir, ankimon_tracker=ankimon_tracker_obj)
-        mw.pokedex_v2_window = pokedex_v2_window
-    return pokedex_v2_window
+# Ankidex
+ankidex_window = getattr(mw, "ankidex_window", None)
+def get_ankidex_window():
+    global ankidex_window
+    if not is_alive(ankidex_window):
+        ankidex_window = Ankidex(addon_dir, ankimon_tracker=ankimon_tracker_obj)
+        mw.ankidex_window = ankidex_window
+    return ankidex_window
 
 # Initialize initially
-get_pokedex_window()
+get_ankidex_window()
 
 evo_window = getattr(mw, "evo_window", None) or EvoWindow(
     logger, settings_obj, main_pokemon, translator, reviewer_obj, test_window, achievements,
@@ -210,7 +199,6 @@ get_pokemon_pc()
 
 # UI Utilities
 eff_chart = TableWidget()
-pokedex = Pokedex_Widget()
 gen_id_chart = IDTableWidget()
 license = License()
 credits = Credits()
@@ -261,8 +249,8 @@ def swap_ankimon_account():
         if hasattr(mw, "item_window") and is_alive(mw.item_window):
             mw.item_window.renewWidgets()
 
-        if hasattr(mw, "pokedex_v2_window") and is_alive(mw.pokedex_v2_window):
-            mw.pokedex_v2_window.update_ui_data()
+        if hasattr(mw, "ankidex_window") and is_alive(mw.ankidex_window):
+            mw.ankidex_window.update_ui_data()
 
         # If in reviewer, force HUD update
         if hasattr(mw, "reviewer") and mw.reviewer and hasattr(mw, "reviewer_obj"):
