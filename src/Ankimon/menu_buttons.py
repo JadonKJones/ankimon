@@ -83,7 +83,7 @@ def create_menu_actions(
     pokemon_pc: PokemonPC,
     backup_manager: BackupManager,
 ):
-    from .singletons import get_ankidex_window, get_pokemon_pc
+    from .singletons import get_ankidex_window, get_pokemon_pc, get_pokemon_vault
     actions = []
 
     if database_complete:
@@ -92,6 +92,12 @@ def create_menu_actions(
         pokemon_pc_action.setMenuRole(QAction.MenuRole.NoRole)
         collection_menu.addAction(pokemon_pc_action)
         qconnect(pokemon_pc_action.triggered, lambda: get_pokemon_pc().show())
+
+        # Pokémon Vault (Beta)
+        pokemon_vault_action = QAction("Pokémon Vault (Beta)", mw)
+        pokemon_vault_action.setMenuRole(QAction.MenuRole.NoRole)
+        collection_menu.addAction(pokemon_vault_action)
+        qconnect(pokemon_vault_action.triggered, lambda: get_pokemon_vault().show())
 
         # Ankimon Window
         ankimon_window_action = QAction(mw.translator.translate("open_ankimon_window_button"), mw)

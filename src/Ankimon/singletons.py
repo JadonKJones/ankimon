@@ -31,6 +31,7 @@ from .pyobj.evolution_window import EvoWindow
 from .pyobj.starter_window import StarterWindow
 from .pyobj.item_window import ItemWindow
 from .pyobj.pc_box import PokemonPC
+from .gui_classes.pokemon_vault import PokemonVaultWindow
 from .pyobj.database_manager import get_db
 from .gui_entities import (
     License,
@@ -197,6 +198,18 @@ def get_pokemon_pc():
 # Initialize initially
 get_pokemon_pc()
 
+# Pokemon Vault (Beta)
+pokemon_vault = getattr(mw, "pokemon_vault", None)
+def get_pokemon_vault():
+    global pokemon_vault
+    if not is_alive(pokemon_vault):
+        pokemon_vault = PokemonVaultWindow(
+            logger=logger, translator=translator, reviewer_obj=reviewer_obj,
+            test_window=test_window, settings=settings_obj, main_pokemon=mw.main_pokemon,
+        )
+        mw.pokemon_vault = pokemon_vault
+    return pokemon_vault
+
 # UI Utilities
 eff_chart = TableWidget()
 gen_id_chart = IDTableWidget()
@@ -251,6 +264,9 @@ def swap_ankimon_account():
 
         if hasattr(mw, "ankidex_window") and is_alive(mw.ankidex_window):
             mw.ankidex_window.update_ui_data()
+        
+        if hasattr(mw, "pokemon_vault") and is_alive(mw.pokemon_vault):
+            mw.pokemon_vault.refresh_gui()
 
         # If in reviewer, force HUD update
         if hasattr(mw, "reviewer") and mw.reviewer and hasattr(mw, "reviewer_obj"):

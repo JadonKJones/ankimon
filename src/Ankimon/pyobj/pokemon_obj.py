@@ -103,14 +103,23 @@ class PokemonObject:
 
     @property
     def display_name(self) -> str:
-        """Returns the nickname if present, otherwise the official pretty name."""
-        if self.nickname:
-            return self.nickname
+        """Returns the nickname if present and not redundant, otherwise the official pretty name."""
         try:
             from ..functions.pokedex_functions import get_pretty_name_for_name
-            return get_pretty_name_for_name(self.name)
+            pretty_name = get_pretty_name_for_name(self.name)
+            
+            if self.nickname:
+                # Check if the nickname is just a variation of the internal name or pretty name
+                def normalize(s):
+                    return str(s).lower().replace(" ", "").replace("-", "").replace("'", "")
+                
+                norm_nick = normalize(self.nickname)
+                if norm_nick != normalize(self.name) and norm_nick != normalize(pretty_name):
+                    return self.nickname
+                    
+            return pretty_name
         except:
-            return self.name.title()
+            return self.nickname if self.nickname else self.name.title()
 
     @classmethod
     def calc_stat(

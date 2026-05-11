@@ -424,13 +424,23 @@ def get_pretty_name_for_name(pokemon_name):
     """Get the official pretty name (e.g. Mega Venusaur) from an internal name."""
     try:
         pokedex_data = _load_pokedex_cache()
-        internal_name = str(pokemon_name).lower().replace(" ", "").replace("-", "")
+        # Use aggressive normalization (isalnum) to match cache keys
+        internal_name = "".join(c for c in str(pokemon_name).lower() if c.isalnum())
+        
         if internal_name in pokedex_data:
-            raw_name = pokedex_data[internal_name].get("name", pokemon_name.capitalize())
+            raw_name = pokedex_data[internal_name].get("name", pokemon_name.title())
             return format_lore_name(raw_name)
+            
+        # Fallback: try removing common suffixes if direct match fails
+        for suffix in ["-mega", "-gmax", "-alola", "-galar", "-hisui", "-paldea"]:
+            if suffix in pokemon_name.lower():
+                base_name = pokemon_name.lower().replace(suffix, "").replace("-", "")
+                if base_name in pokedex_data:
+                    raw_base = pokedex_data[base_name].get("name", base_name.capitalize())
+                    return format_lore_name(pokemon_name.title())
     except:
         pass
-    return pokemon_name.capitalize()
+    return format_lore_name(str(pokemon_name).replace("-", " ").title())
 
 def get_mainpokemon_evo(pokemon_name):
     pokedex_data = _load_pokedex_cache()  # Use cache instead of file I/O

@@ -205,7 +205,8 @@ def PokemonCollectionDetails(
         # Avoid redundant "Name (Name)" display
         # We check if nickname is empty, matches the formatted species name, or matches the raw internal name
         def normalize_name(s):
-            return str(s).lower().replace(" ", "").replace("-", "")
+            if not s: return ""
+            return "".join(c for c in str(s).lower() if c.isalnum())
             
         base_display_name = lang_name  # Already formatted by format_lore_name
         shiny_star = " ⭐ " if shiny else ""
