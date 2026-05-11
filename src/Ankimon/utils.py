@@ -559,7 +559,13 @@ def get_item_description(item_name, language_id):
         return None
 
 
+_FONT_CACHE = {}
+
 def load_custom_font(font_size, language):
+    cache_key = (font_size, language)
+    if cache_key in _FONT_CACHE:
+        return _FONT_CACHE[cache_key]
+
     if language == 1:
         font_file = "pkmn_w.ttf"
         font_file_path = font_path / font_file
@@ -575,13 +581,15 @@ def load_custom_font(font_size, language):
         font_file = "Early GameBoy.ttf"
         font_size = int((font_size * 2) / 5)
 
-    # Register the custom font with its file path
-    QFontDatabase.addApplicationFont(str(font_path / font_file))
+    # Register the custom font with its file path if not already added
+    font_id = QFontDatabase.addApplicationFont(str(font_path / font_file))
+    
     custom_font = QFont(
         font_name
     )  # Use the font family name you specified in the font file
     custom_font.setPointSize(int(font_size))  # Adjust the font size as needed
 
+    _FONT_CACHE[cache_key] = custom_font
     return custom_font
 
 

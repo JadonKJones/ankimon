@@ -107,15 +107,15 @@ def PokemonCollectionDetails(
 ):
     # Create a layout for the details panel
     try:
-        # For Mega/Gmax forms, the species CSV has no entry — use pretty name instead
-        if any(f in name.lower() for f in ['mega', 'gmax']):
+        # For Mega/Gmax and Regional forms, the species CSV often has no entry or is hyphenated — use pretty name instead
+        if any(f in name.lower() for f in ['mega', 'gmax', 'alola', 'galar', 'hisui', 'paldea']):
             from ..functions.pokedex_functions import get_pretty_name_for_name, search_pokedex
             lang_name = get_pretty_name_for_name(name)
             # Use species_id for description since descriptions CSV only has base species
             desc_id = search_pokedex(name.lower().replace(" ", "").replace("-", ""), "species_id") or id
             lang_desc = get_pokemon_descriptions(int(desc_id), language)
         else:
-            lang_name = get_pokemon_diff_lang_name(int(id), language).capitalize()
+            lang_name = get_pokemon_diff_lang_name(int(id), language)
             lang_desc = get_pokemon_descriptions(int(id), language)
         description = lang_desc
         layout = QVBoxLayout()
@@ -123,24 +123,35 @@ def PokemonCollectionDetails(
         attackslayout = QVBoxLayout()
         # Display the Pokémon image
         pkmnimage_label = QLabel()
-        pkmnpixmap = QPixmap()
         pkmnimage_path = get_sprite_path(
             "front", "gif" if gif_in_collection else "png", id, shiny, gender, name
         )
 
+        global _SCALED_PIXMAP_CACHE
+        if "_SCALED_PIXMAP_CACHE" not in globals():
+            _SCALED_PIXMAP_CACHE = {}
+
         if gif_in_collection:
             pkmnimage_label = MovieSplashLabel(pkmnimage_path)
         else:
-            if not pkmnpixmap.load(str(pkmnimage_path)):
-                logger.log_and_showinfo(
-                    "warning", f"Failed to load Pokémon image: {pkmnimage_path}"
-                )
-            max_width = 150
-            original_width = pkmnpixmap.width()
-            original_height = pkmnpixmap.height()
-            new_width = max_width
-            new_height = (original_height * max_width) // original_width
-            pkmnpixmap = pkmnpixmap.scaled(new_width, new_height)
+            cache_key = (str(pkmnimage_path), shiny, gender)
+            if cache_key in _SCALED_PIXMAP_CACHE:
+                pkmnpixmap = _SCALED_PIXMAP_CACHE[cache_key]
+            else:
+                pkmnpixmap = QPixmap()
+                if not pkmnpixmap.load(str(pkmnimage_path)):
+                    logger.log_and_showinfo(
+                        "warning", f"Failed to load Pokémon image: {pkmnimage_path}"
+                    )
+                max_width = 150
+                original_width = pkmnpixmap.width()
+                if original_width > 0:
+                    original_height = pkmnpixmap.height()
+                    new_width = max_width
+                    new_height = (original_height * max_width) // original_width
+                    pkmnpixmap = pkmnpixmap.scaled(new_width, new_height, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                    _SCALED_PIXMAP_CACHE[cache_key] = pkmnpixmap
+            
             pkmnimage_label.setPixmap(pkmnpixmap)
 
         # Load and set type icons
@@ -180,12 +191,37 @@ def PokemonCollectionDetails(
         namefont = load_custom_font(30, language)
         namefont.setUnderline(True)
 
-        if nickname is None:
-            capitalized_name = f"{lang_name.capitalize()} {' ⭐ ' if shiny else ''}"
+        # Better name and dex number logic
+        from ..functions.pokedex_functions import search_pokedex
+        
+        # Resolve species_id for the [No. XXX] display
+        # We use the internal 'name' to look up the species_id because forms share dex numbers
+        lookup_name = name.lower().replace(" ", "").replace("-", "")
+        species_id = search_pokedex(lookup_name, "species_id")
+        if not species_id:
+            species_id = id
+            
+        dex_prefix = f"[No. {str(species_id).zfill(3)}] "
+        # Avoid redundant "Name (Name)" display
+        # We check if nickname is empty, matches the formatted species name, or matches the raw internal name
+        def normalize_name(s):
+            return str(s).lower().replace(" ", "").replace("-", "")
+            
+        base_display_name = lang_name  # Already formatted by format_lore_name
+        shiny_star = " ⭐ " if shiny else ""
+        
+        is_redundant = (
+            not nickname or 
+            not str(nickname).strip() or 
+            normalize_name(nickname) == normalize_name(base_display_name) or
+            normalize_name(nickname) == normalize_name(name)
+        )
+        
+        if is_redundant:
+            capitalized_name = f"{dex_prefix}{base_display_name}{shiny_star}"
         else:
-            capitalized_name = (
-                f"{nickname} {' ⭐ ' if shiny else ''} ({lang_name.capitalize()})"
-            )
+            capitalized_name = f"{dex_prefix}{nickname}{shiny_star} ({base_display_name})"
+
         if (
             language == 11
             or language == 12
@@ -244,7 +280,8 @@ def PokemonCollectionDetails(
             {"base_stats": _cp_stats, "iv": iv, "ev": ev, "level": level}
         )
 
-        name_label = QLabel(f"{capitalized_name} - {gender_symbol}")
+        display_full_name = f"{capitalized_name} - {gender_symbol}" if gender_symbol else capitalized_name
+        name_label = QLabel(display_full_name)
         name_label.setFont(namefont)
         description_label = QLabel(description_txt)
         level_label = QLabel(lvl)

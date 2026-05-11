@@ -376,24 +376,58 @@ def search_pokedex_by_id(species_id):
     id_index = _load_pokedex_id_index()  # Use index for O(1) lookup instead of O(n)
     return id_index.get(safe_int(species_id), "Pokémon not found")
 
+def format_lore_name(name: str) -> str:
+    """Transform internal hyphenated names into lore-accurate ones (e.g. Venusaur-Mega -> Mega Venusaur)."""
+    if not name or not isinstance(name, str):
+        return name
+        
+    # Order matters: check more specific ones first
+    if "-Mega-X" in name:
+        return "Mega " + name.replace("-Mega-X", " X")
+    if "-Mega-Y" in name:
+        return "Mega " + name.replace("-Mega-Y", " Y")
+    if "-Mega-Z" in name:
+        return "Mega " + name.replace("-Mega-Z", " Z")
+    
+    replacements = {
+        "-Mega": "Mega ",
+        "-Gmax": "Gigantamax ",
+        "-Alola": "Alolan ",
+        "-Galar": "Galarian ",
+        "-Paldea": "Paldean ",
+        "-Hisui": "Hisuian ",
+        "-Primal": "Primal ",
+        "-Origin": "Origin ",
+        "-Therian": "Therian ",
+    }
+    
+    for suffix, prefix in replacements.items():
+        if suffix in name:
+            base = name.replace(suffix, "")
+            return prefix + base
+            
+    return name
+
 def get_pretty_name_for_id(species_id):
-    """Get the official pretty name (e.g. Venusaur-Mega) for an ID."""
+    """Get the official pretty name (e.g. Mega Venusaur) for an ID."""
     try:
         pokedex_data = _load_pokedex_cache()
         internal_name = search_pokedex_by_id(species_id)
         if internal_name in pokedex_data:
-            return pokedex_data[internal_name].get("name", internal_name.capitalize())
+            raw_name = pokedex_data[internal_name].get("name", internal_name.capitalize())
+            return format_lore_name(raw_name)
     except:
         pass
     return "Pokémon not found"
 
 def get_pretty_name_for_name(pokemon_name):
-    """Get the official pretty name (e.g. Venusaur-Mega) from an internal name."""
+    """Get the official pretty name (e.g. Mega Venusaur) from an internal name."""
     try:
         pokedex_data = _load_pokedex_cache()
         internal_name = str(pokemon_name).lower().replace(" ", "").replace("-", "")
         if internal_name in pokedex_data:
-            return pokedex_data[internal_name].get("name", pokemon_name.capitalize())
+            raw_name = pokedex_data[internal_name].get("name", pokemon_name.capitalize())
+            return format_lore_name(raw_name)
     except:
         pass
     return pokemon_name.capitalize()
@@ -467,7 +501,7 @@ def get_pokemon_diff_lang_name(pokemon_id: int, language: int):
     # Look up the name
     name = names_cache.get((pokemon_id, language))
     if name:
-        return name
+        return format_lore_name(name)
         
     # If not found and it's a form ID (>= 10000), fall back to species ID
     if pokemon_id >= 10000:
@@ -476,7 +510,7 @@ def get_pokemon_diff_lang_name(pokemon_id: int, language: int):
         if species_id:
             name = names_cache.get((species_id, language))
             if name:
-                return name
+                return format_lore_name(name)
 
     return "No Translation in this language"
 

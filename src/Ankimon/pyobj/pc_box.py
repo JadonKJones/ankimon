@@ -140,6 +140,15 @@ class PokemonPC(QDialog):
             self.on_resize_timeout
         )  # Debounce resize events to avoid excessive refreshes during window resizing
 
+        # PERFORMANCE: Database result caching
+        self._pokemon_cache = None
+        self._last_filter_state = None
+        
+        # LIVE SEARCH: Timer for debouncing
+        self.search_timer = QTimer()
+        self.search_timer.setSingleShot(True)
+        self.search_timer.timeout.connect(lambda: self.go_to_box(0))
+
         self.main_layout = QHBoxLayout()  # Main horizontal layout for split panels
         self.details_layout = QVBoxLayout()  # Layout for details panel
         self.details_widget = QWidget()  # Widget to hold details
@@ -159,6 +168,7 @@ class PokemonPC(QDialog):
         self.sort_by_date = None
         self.sort_group = None
         self.selected_sort_key = "Date"
+        self.sort_combo = None
         self.desc_sort = None  # Sort by descending order
         self.current_stats_tab_index = 0  # Remember selected tab (Stats/IV/EV)
 
@@ -398,7 +408,11 @@ class PokemonPC(QDialog):
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Search Pokémon (by nickname, name)")
         self.search_edit.setText(prev_text)
+        
+        # LIVE SEARCH: Trigger refresh after 300ms of inactivity
+        self.search_edit.textChanged.connect(lambda: self.search_timer.start(300))
         self.search_edit.returnPressed.connect(lambda: self.go_to_box(0))
+        
         search_button = QPushButton("Search")
         search_button.clicked.connect(lambda: self.go_to_box(0))
         # Type filtering
@@ -692,11 +706,13 @@ class PokemonPC(QDialog):
 
     def refresh_gui(self):
         """
-        Refreshes the entire graphical user interface by rebuilding its structure
-        and then populating the grid.
+        Refreshes the user interface by populating the grid.
+        Avoids calling create_gui() to prevent full layout rebuilds.
         """
-        self.create_gui()
-        self.refresh_pokemon_grid()
+        if not self.layout():
+            self.create_gui()
+        else:
+            self.refresh_pokemon_grid()
         self.layout().invalidate()
         self.layout().activate()
 
@@ -762,7 +778,27 @@ class PokemonPC(QDialog):
         return pixmap
 
     def fetch_filtered_pokemon(self) -> list:
-        """Dynamically builds a SQL query to filter and sort Pokemon, fetching only the lightweight stub data needed for the grid."""
+        """
+        Dynamically builds a SQL query to filter and sort Pokemon, fetching only the lightweight stub data needed for the grid.
+        Results are cached to improve performance when navigating boxes or selecting Pokémon.
+        """
+        # Build current filter state for cache check
+        current_state = {
+            "db": mw.ankimon_db.db_path.name,
+            "search": self.search_edit.text() if self.search_edit else "",
+            "type": self.type_combo.currentText() if self.type_combo else "All types",
+            "gen": self.generation_combo.currentText() if self.generation_combo else "All gens",
+            "tier": self.tier_combo.currentText() if self.tier_combo else "All tiers",
+            "shiny": self.filter_shiny.isChecked() if self.filter_shiny else False,
+            "favorite": self.filter_favorites.isChecked() if self.filter_favorites else False,
+            "holding": self.filter_is_holding_item.isChecked() if self.filter_is_holding_item else False,
+            "sort": self.sort_combo.currentText() if self.sort_combo else "Date",
+            "desc": self.desc_sort.isChecked() if self.desc_sort else False
+        }
+
+        if self._pokemon_cache is not None and self._last_filter_state == current_state:
+            return self._pokemon_cache
+
         # Base query mapping direct virtual columns where available
         query_parts = [
             "SELECT individual_id, name, level, pokedex_id as id, shiny as shiny, "
@@ -927,6 +963,10 @@ class PokemonPC(QDialog):
             if use_python_sort:
                 results.sort(key=lambda x: x.get("_sort_value", 0), reverse=reverse)
             
+            # Cache the result
+            self._pokemon_cache = results
+            self._last_filter_state = current_state
+            
             return results
         except Exception as e:
             if self.logger:
@@ -1022,36 +1062,64 @@ class PokemonPC(QDialog):
         else:
             raise ValueError("Could not get the stats information of the Pokémon")
 
-        self.pokemon_details_layout = PokemonCollectionDetails(
-            name=pokemon["name"],
-            level=pokemon["level"],
-            id=pokemon["id"],
-            shiny=pokemon.get("shiny", False),
-            ability=pokemon["ability"],
-            type=pokemon["type"],
-            detail_stats=detail_stats,
-            attacks=pokemon["attacks"],
-            base_experience=pokemon["base_experience"],
-            growth_rate=pokemon["growth_rate"],
-            ev=pokemon["ev"],
-            iv=pokemon["iv"],
-            gender=pokemon["gender"],
-            nickname=pokemon.get("nickname"),
-            individual_id=pokemon.get("individual_id"),
-            pokemon_defeated=pokemon.get("pokemon_defeated", 0),
-            everstone=pokemon.get("everstone", False),
-            captured_date=pokemon.get("captured_date", "Missing"),
-            language=int(self.settings.get("misc.language")),
-            gif_in_collection=self.gif_in_collection,
-            remove_levelcap=self.settings.get("misc.remove_level_cap"),
-            logger=self.logger,
-            refresh_callback=self.refresh_gui,
-            initial_tab_index=self.current_stats_tab_index,
-            tab_changed_callback=self.on_stats_tab_changed,
-            nature=pokemon.get("nature", "serious"),
-            base_stats=pokemon.get("base_stats"),
-        )
-        self.refresh_gui()
+        # Optimization: Instead of refreshing the entire GUI, we only swap the details widget
+        if is_alive(self.details_widget):
+            # Capture the index and stretch of the current details widget
+            idx = self.main_layout.indexOf(self.details_widget)
+            stretch = self.main_layout.stretch(idx) if idx != -1 else 2
+            
+            # Remove and delete the old widget
+            self.main_layout.removeWidget(self.details_widget)
+            self.details_widget.deleteLater()
+            
+            # Build new layout
+            self.pokemon_details_layout = PokemonCollectionDetails(
+                name=pokemon["name"],
+                level=pokemon["level"],
+                id=pokemon["id"],
+                shiny=pokemon.get("shiny", False),
+                ability=pokemon["ability"],
+                type=pokemon["type"],
+                detail_stats=detail_stats,
+                attacks=pokemon["attacks"],
+                base_experience=pokemon["base_experience"],
+                growth_rate=pokemon["growth_rate"],
+                ev=pokemon["ev"],
+                iv=pokemon["iv"],
+                gender=pokemon["gender"],
+                nickname=pokemon.get("nickname"),
+                individual_id=pokemon.get("individual_id"),
+                pokemon_defeated=pokemon.get("pokemon_defeated", 0),
+                everstone=pokemon.get("everstone", False),
+                captured_date=pokemon.get("captured_date", "Missing"),
+                language=int(self.settings.get("misc.language")),
+                gif_in_collection=self.gif_in_collection,
+                remove_levelcap=self.settings.get("misc.remove_level_cap"),
+                logger=self.logger,
+                refresh_callback=self.refresh_gui,
+                initial_tab_index=self.current_stats_tab_index,
+                tab_changed_callback=self.on_stats_tab_changed,
+                nature=pokemon.get("nature", "serious"),
+                base_stats=pokemon.get("base_stats"),
+            )
+            
+            # Create new details widget
+            self.details_widget = QWidget()
+            self.details_widget.setLayout(self.pokemon_details_layout)
+            self.details_widget.setMinimumWidth(470)
+            bg_color = self.theme_vars.get("background_color", "transparent")
+            self.details_widget.setStyleSheet(f"background-color: {bg_color};")
+            
+            # Re-add to the main layout at the same position
+            if idx != -1:
+                self.main_layout.insertWidget(idx, self.details_widget, stretch)
+            else:
+                self.main_layout.addWidget(self.details_widget, 2)
+            
+            self.details_widget.show()
+        else:
+            # Fallback for unexpected state
+            self.refresh_gui()
 
     def on_stats_tab_changed(self, index: int):
         """Callback to remember which tab (Stats/IV/EV) is selected."""
