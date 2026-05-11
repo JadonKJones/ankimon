@@ -122,10 +122,6 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
             "Mythical": 75,
         }
         
-        for tier in ["Starter", "Ultra", "Legendary", "Mythical", "Mega", "Gmax"]:
-                if main_pokemon.level < level_thresholds.get(tier, float("inf")):
-                    percentages[tier] = 0
-
         # Example modification based on trainer level
         if trainer_level:
             adjustment = 5
@@ -135,6 +131,10 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
                         percentages[tier] = max(percentages[tier] - adjustment, 0)
                     else:
                         percentages[tier] = percentages.get(tier, 0) + adjustment
+
+        for tier in ["Starter", "Ultra", "Legendary", "Mythical", "Mega", "Gmax"]:
+                if main_pokemon.level < level_thresholds.get(tier, float("inf")):
+                    percentages[tier] = 0
 
         # Normalize percentages to ensure they sum to 100
         total = sum(percentages.values())
