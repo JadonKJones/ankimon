@@ -189,15 +189,21 @@ class MoveManagerWidget(QWidget):
                 border: 1px solid #1e40af;
                 border-radius: 6px;
                 margin-top: 12px;
-                padding: 4px;
+                padding: 4px 8px;
+                text-align: center;
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3b82f6, stop:1 #2563eb);
                 border-color: #3b82f6;
+                margin-top: 12px;
+                padding: 4px 8px;
+                text-align: center;
             }
             QPushButton:pressed {
                 background: #1e40af;
-                padding-top: 5px;
+                margin-top: 12px;
+                padding: 5px 8px 3px 8px;
+                text-align: center;
             }
         """)
         self.tm_btn.clicked.connect(self.on_tm_clicked)
@@ -612,6 +618,10 @@ class PokemonPC(QDialog):
             - Connects UI elements to their corresponding interaction handlers.
         """
         self.setWindowTitle("Pokémon PC")
+        
+        # Make the window non-modal (floating) and add maximize/minimize buttons
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowMinimizeButtonHint)
+        self.setWindowModality(Qt.WindowModality.NonModal)
 
         # Determine theme based on Anki's night mode
         is_dark_mode = theme_manager.night_mode  # Correctly checks Anki's theme
@@ -1017,10 +1027,77 @@ class PokemonPC(QDialog):
             self.details_widget.setStyleSheet(f"background-color: {background_color};")
             self.main_container_layout.addWidget(self.details_widget, 2) # Details takes 2/5
         else:
-            # Ensure the panel is collapsed if no pokemon is selected
-            self.details_widget = QWidget()
-            self.details_widget.hide()
-            self.main_container_layout.addWidget(self.details_widget, 2)
+            self._show_placeholder_details()
+
+    def _show_placeholder_details(self):
+        """Shows a beautiful placeholder state in the details panel when no Pokémon is selected."""
+        if is_alive(self.details_widget):
+            self.main_container_layout.removeWidget(self.details_widget)
+            self.details_widget.deleteLater()
+
+        self.details_widget = QWidget()
+        self.details_widget.setMinimumWidth(470)
+        self.details_widget.setMinimumHeight(700) # Match height of detailed view to prevent jumping
+        self.details_widget.setObjectName("detailsPlaceholder")
+
+        
+        # Theme-aware styling
+        is_dark_mode = theme_manager.night_mode
+        if is_dark_mode:
+            bg_color = "#002B5A" 
+            text_color = "#94a3b8"
+        else:
+            bg_color = "#CCE5FF"
+            text_color = "#003A70"
+            
+        self.details_widget.setStyleSheet(f"""
+            #detailsPlaceholder {{
+                background-color: {bg_color};
+                border-left: 1px solid {self.theme_vars.get("button_border", "#6A73D9")};
+                border-radius: 12px;
+                margin: 8px;
+            }}
+        """)
+        
+        layout = QVBoxLayout(self.details_widget)
+        layout.setContentsMargins(40, 20, 40, 20)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Pokéball Icon (Central Element)
+        icon_label = QLabel()
+        pixmap = QPixmap(str(icon_path))
+        if not pixmap.isNull():
+            scaled_pixmap = pixmap.scaled(180, 180, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            icon_label.setPixmap(scaled_pixmap)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Main Prompt
+        prompt_label = QLabel("Choose a Pokémon to view its stats")
+        prompt_label.setWordWrap(True)
+        prompt_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        prompt_label.setStyleSheet(f"""
+            color: {text_color};
+            font-size: 20px;
+            font-weight: 800;
+            margin-top: 25px;
+            font-family: 'Segoe UI', Roboto, sans-serif;
+        """)
+        
+        # Subtext / Summary
+        count = getattr(self, "_total_pokemon_count", 0)
+        summary_label = QLabel(f"PC Inventory: {count} Pokémon")
+        summary_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        summary_label.setStyleSheet("color: #64748b; font-size: 13px; font-style: italic; margin-top: 10px;")
+        
+        # Add to layout with spacing
+        layout.addStretch(1)
+        layout.addWidget(icon_label)
+        layout.addWidget(prompt_label)
+        layout.addWidget(summary_label)
+        layout.addStretch(1)
+        
+        self.main_container_layout.addWidget(self.details_widget, 2)
+
 
     def refresh_pokemon_grid(self):
         """
@@ -1228,6 +1305,9 @@ class PokemonPC(QDialog):
             self.create_gui()
         else:
             self.refresh_pokemon_grid()
+            # If no Pokémon is selected (e.g. after account swap), refresh the placeholder
+            if self._selected_individual_id is None:
+                self._show_placeholder_details()
         self.layout().invalidate()
         self.layout().activate()
 
@@ -1567,14 +1647,12 @@ class PokemonPC(QDialog):
     def show_pokemon_details(self, pokemon_stub):
         """
         Displays detailed information about a specific Pokémon in the right-hand details panel.
-
-        The method prepares detailed stats by merging base stats or stats with experience points,
-        then updates the `self.details_layout` with a `PokemonCollectionDetails` layout.
-
-        Args:
-            pokemon_stub (dict): A lightweight dictionary containing the pokemon's `individual_id`.
+        Only the header and footer parts animate; the stats box stays persistent for smooth bar sliding.
         """
-        pokemon = mw.ankimon_db.get_pokemon(pokemon_stub['individual_id'])
+        individual_id = pokemon_stub.get('individual_id')
+        is_same_pokemon = (individual_id is not None and individual_id == getattr(self, "_selected_individual_id", None))
+        
+        pokemon = mw.ankimon_db.get_pokemon(individual_id)
         if not pokemon:
             return
 
@@ -1585,99 +1663,179 @@ class PokemonPC(QDialog):
         else:
             raise ValueError("Could not get the stats information of the Pokémon")
 
-        # Optimization: Instead of refreshing the entire GUI, we only swap the details widget
-        if is_alive(self.details_widget):
-            # Remove and delete the old widget
-            self.main_container_layout.removeWidget(self.details_widget)
-            self.details_widget.deleteLater()
+        # Optimization: We use persistent QStackedWidgets for flicker-free transitions
+        needs_full_rebuild = (
+            not is_alive(self.details_widget) or 
+            self.details_widget.objectName() == "detailsPlaceholder" or
+            not hasattr(self, "header_stack")
+        )
+
+
+        if needs_full_rebuild:
+            if is_alive(self.details_widget):
+                self.main_container_layout.removeWidget(self.details_widget)
+                self.details_widget.deleteLater()
             
-            # Build new layout
-            self.pokemon_details_layout = PokemonCollectionDetails(
-                name=pokemon["name"],
-                level=pokemon["level"],
-                id=pokemon["id"],
-                shiny=pokemon.get("shiny", False),
-                ability=pokemon["ability"],
-                type=pokemon["type"],
-                detail_stats=detail_stats,
-                attacks=pokemon["attacks"],
-                base_experience=pokemon["base_experience"],
-                growth_rate=pokemon["growth_rate"],
-                ev=pokemon["ev"],
-                iv=pokemon["iv"],
-                gender=pokemon["gender"],
-                nickname=pokemon.get("nickname"),
-                individual_id=pokemon.get("individual_id"),
-                pokemon_defeated=pokemon.get("pokemon_defeated", 0),
-                everstone=pokemon.get("everstone", False),
-                captured_date=pokemon.get("captured_date", "Missing"),
-                language=int(self.settings.get("misc.language")),
-                gif_in_collection=self.gif_in_collection,
-                remove_levelcap=self.settings.get("misc.remove_level_cap"),
-                logger=self.logger,
-                refresh_callback=lambda: (self.refresh_gui(), self.show_pokemon_details(pokemon_stub)),
-                initial_tab_index=self.current_stats_tab_index,
-                tab_changed_callback=self.on_stats_tab_changed,
-                nature=pokemon.get("nature", "serious"),
-                base_stats=pokemon.get("base_stats"),
-            )
-            
-            # Create new details widget
+            # Create persistent details container
             self.details_widget = QWidget()
-            self.details_widget.setLayout(self.pokemon_details_layout)
+            self.details_widget.setObjectName("persistentDetails")
             self.details_widget.setMinimumWidth(470)
+            self.details_container_layout = QVBoxLayout(self.details_widget)
+            self.details_container_layout.setContentsMargins(0, 0, 0, 0)
+            self.details_container_layout.setSpacing(0)
             
-            # Re-add to the main container layout
+            from PyQt6.QtWidgets import QStackedWidget, QGraphicsOpacityEffect
+            self.header_stack = QStackedWidget()
+            self.stats_stack = QStackedWidget()
+            self.footer_stack = QStackedWidget()
+            
+            # Lock the heights to prevent window jumping
+            self.header_stack.setMinimumHeight(380)
+            self.stats_stack.setFixedHeight(220)
+            self.footer_stack.setMinimumHeight(90)
+
+            
+            self.details_container_layout.addWidget(self.header_stack)
+            self.details_container_layout.addWidget(self.stats_stack)
+            self.details_container_layout.addWidget(self.footer_stack)
+            
+            # Setup opacity effects for header ONLY
+            self.header_opacity = QGraphicsOpacityEffect(self.header_stack)
+            self.header_stack.setGraphicsEffect(self.header_opacity)
+            
             self.main_container_layout.addWidget(self.details_widget, 2)
-            
-            # Selection indicator
-            self._selected_individual_id = pokemon.get("individual_id")
-            self._refresh_slot_selection()
 
-            # --- Post-processing: Move Manager (Improvement B) ---
-            self._integrate_move_manager(pokemon)
-            
-            # --- Post-processing: Nature Indicators (Improvement G) ---
-            self._apply_nature_indicators(pokemon)
 
-            self.details_widget.show()
+        # Get previous stats for sliding bar animation
+        old_stats = getattr(self, "_last_pokemon_stats", None)
+
+        # Build new widgets from components
+        h_widget, stats_tabs, f_widget, current_stats = PokemonCollectionDetails(
+            name=pokemon["name"],
+            level=pokemon["level"],
+            id=pokemon["id"],
+            shiny=pokemon.get("shiny", False),
+            ability=pokemon["ability"],
+            type=pokemon["type"],
+            detail_stats=detail_stats,
+            attacks=pokemon["attacks"],
+            base_experience=pokemon["base_experience"],
+            growth_rate=pokemon["growth_rate"],
+            ev=pokemon["ev"],
+            iv=pokemon["iv"],
+            gender=pokemon["gender"],
+            nickname=pokemon.get("nickname"),
+            individual_id=pokemon.get("individual_id"),
+            pokemon_defeated=pokemon.get("pokemon_defeated", 0),
+            everstone=pokemon.get("everstone", False),
+            captured_date=pokemon.get("captured_date", "Missing"),
+            language=int(self.settings.get("misc.language")),
+            gif_in_collection=self.gif_in_collection,
+            remove_levelcap=self.settings.get("misc.remove_level_cap"),
+            logger=self.logger,
+            refresh_callback=lambda: (self.refresh_gui(), self.show_pokemon_details(pokemon_stub)),
+            initial_tab_index=self.current_stats_tab_index,
+            tab_changed_callback=self.on_stats_tab_changed,
+            nature=pokemon.get("nature", "serious"),
+            base_stats=pokemon.get("base_stats"),
+            old_stats=old_stats,
+        )
+        
+        self._last_pokemon_stats = current_stats
+        
+        # Update Stacks (Zero Flicker Swap)
+        def swap_stack_widget(stack, new_widget):
+            old_widget = stack.currentWidget()
+            stack.addWidget(new_widget)
+            stack.setCurrentWidget(new_widget)
+            if old_widget:
+                stack.removeWidget(old_widget)
+                old_widget.deleteLater()
+
+        # 1. Update Header
+        swap_stack_widget(self.header_stack, h_widget)
+        
+        # 2. Update Stats (No fade)
+        swap_stack_widget(self.stats_stack, stats_tabs)
+        
+        # 3. Update Footer
+        swap_stack_widget(self.footer_stack, f_widget)
+        
+        # --- Post-processing: Move Manager (Improvement B) ---
+        self._integrate_move_manager(pokemon)
+        
+        # --- Post-processing: Nature Indicators (Improvement G) ---
+        self._apply_nature_indicators(pokemon)
+
+        # Set initial state for animation
+        if not is_same_pokemon:
+            self.header_opacity.setOpacity(0.0)
+            
+        self.details_widget.show()
+
+        # Force layout recalculation
+        self.details_container_layout.activate()
+
+        # Animation Handling
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+        
+        if not is_same_pokemon:
+            # Header Animation
+            self.header_fade = QPropertyAnimation(self.header_opacity, b"opacity")
+            self.header_fade.setDuration(400)
+            self.header_fade.setStartValue(0.0)
+            self.header_fade.setEndValue(1.0)
+            self.header_fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self.header_fade.start()
         else:
-            # Fallback for unexpected state
-            self.refresh_gui()
+            self.header_opacity.setOpacity(1.0)
+
+            
+        # Selection indicator
+        self._selected_individual_id = pokemon.get("individual_id")
+        self._refresh_slot_selection()
 
     def _integrate_move_manager(self, pokemon):
         # Traverse layout to find TopR_layout_Box
-        # From PokemonCollectionDetails: layout -> first_layout (QHBoxLayout) -> TopR_layout_Box (QVBoxLayout)
         try:
-            main_layout = self.details_widget.layout()
-            # first_layout is usually at index 1 (0 is name_label)
-            first_layout_item = main_layout.itemAt(1)
-            if first_layout_item and first_layout_item.layout():
-                first_layout = first_layout_item.layout()
-                # TopR_layout_Box is at index 1 of first_layout
-                top_r_item = first_layout.itemAt(1)
-                if top_r_item and top_r_item.layout():
-                    top_r_layout = top_r_item.layout()
-                    
-                    # Hide old buttons and label
-                    for i in range(top_r_layout.count()):
-                        item = top_r_layout.itemAt(i)
-                        if item and item.widget():
-                            item.widget().hide()
+            # NEW STRUCTURE: header_stack -> currentWidget (h_widget) -> layout -> first_layout -> TopR_layout_Box
+            h_widget = self.header_stack.currentWidget()
+            if h_widget:
+                h_layout = h_widget.layout()
+                # h_layout -> name_label (index 0), first_layout (index 1)
+                if h_layout and h_layout.count() > 1:
+                    first_layout_item = h_layout.itemAt(1)
+                    if first_layout_item and first_layout_item.layout():
+                        first_layout = first_layout_item.layout()
+                        # TopR_widget is at index 1 of first_layout (a QWidget wrapping TopR_layout_Box)
+                        top_r_item = first_layout.itemAt(1)
+                        if top_r_item and top_r_item.widget():
+                            top_r_layout = top_r_item.widget().layout()
+
                     
                     # Add new Move Manager
                     def _save_pokemon(data):
                         mw.ankimon_db.save_pokemon(data)
                         self.show_pokemon_details(pokemon)
 
-                    self.move_manager = MoveManagerWidget(
+                    # Initialize FIRST (this might be slightly heavy)
+                    new_move_manager = MoveManagerWidget(
                         individual_id=pokemon["individual_id"],
                         pkmn_id=pokemon["id"],
                         logger=self.logger,
                         save_fn=_save_pokemon,
                         parent=self.details_widget
                     )
+                    self.move_manager = new_move_manager
+
+                    # Hide old buttons and label ONLY after the new one is ready
+                    for i in range(top_r_layout.count()):
+                        item = top_r_layout.itemAt(i)
+                        if item and item.widget():
+                            item.widget().hide()
+                    
                     top_r_layout.addWidget(self.move_manager)
+
         except Exception as e:
             self.logger.log("error", f"Error integrating move manager: {e}")
 
@@ -1690,24 +1848,34 @@ class PokemonPC(QDialog):
             return
 
         try:
-            # Find stats_tabs (QTabWidget)
-            stats_tabs = self.details_widget.findChild(QTabWidget)
-            if stats_tabs:
+            # Use the persistent stack to find the active stats tab widget
+            stats_tabs = self.stats_stack.currentWidget()
+            if stats_tabs and isinstance(stats_tabs, QTabWidget):
+                # The first tab is typically the "Base Stats" or "Stats" page
                 stats_widget = stats_tabs.widget(0)
                 labels = stats_widget.findChildren(QLabel)
+
                 for label in labels:
                     # Strip any previously applied indicators before matching
                     raw_text = label.text()
                     clean_text = raw_text.replace(" ▲", "").replace(" ▼", "").replace(":", "").strip()
+                    clean_text_lower = clean_text.lower()
+                    
                     stat_key = None
-                    if clean_text in DISPLAY_TO_STAT_KEY:
-                        stat_key = DISPLAY_TO_STAT_KEY[clean_text]
-                    else:
-                        # Fallback for substring match
+                    # First try exact match in lower case
+                    for k, v in DISPLAY_TO_STAT_KEY.items():
+                        if k.lower() == clean_text_lower:
+                            stat_key = v
+                            break
+                    
+                    if not stat_key:
+                        # Fallback for substring match (e.g. "Sp. Atk" in "Special-attack" or vice versa)
                         for k, v in DISPLAY_TO_STAT_KEY.items():
-                            if k in clean_text:
+                            kl = k.lower()
+                            if kl in clean_text_lower or clean_text_lower in kl:
                                 stat_key = v
                                 break
+
 
                     if stat_key:
                         if stat_key == boosted:
@@ -1889,6 +2057,7 @@ class PokemonPC(QDialog):
 
         is_migration_needed = any(
             key not in pokemon
+
             for pokemon in pokemon_list
             if isinstance(pokemon, dict)
             for key in default_keys

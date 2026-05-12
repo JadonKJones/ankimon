@@ -104,8 +104,12 @@ def PokemonCollectionDetails(
     tab_changed_callback=None,
     nature: str = "serious",
     base_stats: dict = None,
+    old_stats: dict = None,
 ):
-    # Create a layout for the details panel
+    # Create the layouts
+    header_layout = QVBoxLayout()
+    footer_layout = QVBoxLayout()
+    
     try:
         # For Mega/Gmax and Regional forms, the species CSV often has no entry or is hyphenated — use pretty name instead
         if any(f in name.lower() for f in ['mega', 'gmax', 'alola', 'galar', 'hisui', 'paldea']):
@@ -118,7 +122,6 @@ def PokemonCollectionDetails(
             lang_name = get_pokemon_diff_lang_name(int(id), language)
             lang_desc = get_pokemon_descriptions(int(id), language)
         description = lang_desc
-        layout = QVBoxLayout()
         typelayout = QHBoxLayout()
         attackslayout = QVBoxLayout()
         # Display the Pokémon image
@@ -240,30 +243,21 @@ def PokemonCollectionDetails(
         ability_txt = f" Ability: {ability.capitalize()}"
         nature_display = (nature or "serious").strip().title()
         nature_txt = f" Nature: {nature_display}"
-        type_txt = f" Type:"
-        stats_list = []
-        for key, val in detail_stats.items():
-            if key not in ("hp", "atk", "def", "spa", "spd", "spe"):
-                continue
-            stat = PokemonObject.calc_stat(key, val, level, iv[key], ev[key], nature)
-            stats_list.append(stat)
-        stats_list.append(detail_stats.get("xp", 0))
-        stats_txt = f"Stats:\n Hp: {stats_list[0]}\n Attack: {stats_list[1]}\n Defense: {stats_list[2]}\n Special-attack: {stats_list[3]}\n Special-defense: {stats_list[4]}\n Speed: {stats_list[5]}\n XP: {stats_list[6]}"
+        _stats_dict = {}
+        for key in ("hp", "atk", "def", "spa", "spd", "spe"):
+            if key in detail_stats:
+                _stats_dict[key] = PokemonObject.calc_stat(
+                    key, detail_stats[key], level, iv[key], ev[key], nature
+                )
+        _stats_dict["xp"] = detail_stats.get("xp", 0)
+
+        stats_txt = f"Stats:\n Hp: {_stats_dict.get('hp', 0)}\n Attack: {_stats_dict.get('atk', 0)}\n Defense: {_stats_dict.get('def', 0)}\n Special-attack: {_stats_dict.get('spa', 0)}\n Special-defense: {_stats_dict.get('spd', 0)}\n Speed: {_stats_dict.get('spe', 0)}\n XP: {_stats_dict['xp']}"
         attacks_txt = "MOVES:"
         for attack in attacks:
             attacks_txt += f"\n{attack.capitalize()}"
 
-        _stats_dict = {
-            "hp": stats_list[0],
-            "atk": stats_list[1],
-            "def": stats_list[2],
-            "spa": stats_list[3],
-            "spd": stats_list[4],
-            "spe": stats_list[5],
-            "xp": stats_list[6],
-        }
         CompleteTable_layout = PokemonDetailsStats(
-            _stats_dict, growth_rate, level, remove_levelcap, language
+            _stats_dict, growth_rate, level, remove_levelcap, language, old_stats
         )
 
         if gender == "M":
@@ -312,9 +306,11 @@ def PokemonCollectionDetails(
         pokemon_defeated_label.setFont(custom_font)
         captured_date_label.setFont(custom_font)
 
+
         if gif_in_collection is False:
             pkmnimage_label.setFixedHeight(100)
         pkmnimage_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         level_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cp_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -332,11 +328,14 @@ def PokemonCollectionDetails(
         nature_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         nature_label.setFixedWidth(230)
         attacks_label.setFixedWidth(230)
-        attacks_label.setFixedHeight(70)
+        attacks_label.setFixedHeight(80)
+
 
         first_layout = QHBoxLayout()
         TopL_layout_Box = QVBoxLayout()
         TopR_layout_Box = QVBoxLayout()
+        TopR_layout_Box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         typelayout_widget = QWidget()
         TopL_layout_Box.addWidget(level_label)
         TopL_layout_Box.addWidget(cp_label)
@@ -381,18 +380,54 @@ def PokemonCollectionDetails(
             lambda: tm_attack_details_window(id, individual_id, attacks, logger, refresh_callback),
         )
 
+        # Pin padding across ALL button states so Anki's hover theme never shifts the geometry
+        _BTN_STYLE = (
+            "QPushButton {"
+            "  min-width: 230px; max-width: 230px;"
+            "  padding: 4px 8px;"
+            "  text-align: center;"
+            "}"
+            "QPushButton:hover {"
+            "  padding: 4px 8px;"   # identical padding — no layout reflow on hover
+            "}"
+            "QPushButton:pressed {"
+            "  padding: 4px 8px;"
+            "}"
+        )
+        for btn in [attacks_details_button, remember_attacks_details_button,
+                    forget_attacks_details_button, tm_attacks_details_button]:
+            btn.setFixedWidth(230)
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            btn.setStyleSheet(_BTN_STYLE)
+
         TopR_layout_Box.addWidget(attacks_label)
+        TopR_layout_Box.setAlignment(attacks_label, Qt.AlignmentFlag.AlignHCenter)
         TopR_layout_Box.addWidget(attacks_details_button)
+        TopR_layout_Box.setAlignment(attacks_details_button, Qt.AlignmentFlag.AlignHCenter)
         TopR_layout_Box.addWidget(remember_attacks_details_button)
+        TopR_layout_Box.setAlignment(remember_attacks_details_button, Qt.AlignmentFlag.AlignHCenter)
         TopR_layout_Box.addWidget(forget_attacks_details_button)
+        TopR_layout_Box.setAlignment(forget_attacks_details_button, Qt.AlignmentFlag.AlignHCenter)
         TopR_layout_Box.addWidget(tm_attacks_details_button)
+        TopR_layout_Box.setAlignment(tm_attacks_details_button, Qt.AlignmentFlag.AlignHCenter)
 
-        first_layout.addLayout(TopL_layout_Box)
-        first_layout.addLayout(TopR_layout_Box)
+        TopR_widget = QWidget()
+        TopR_widget.setLayout(TopR_layout_Box)
+        TopR_widget.setFixedWidth(240)
 
-        layout.addWidget(name_label)
-        layout.addLayout(first_layout)
-        layout.addWidget(description_label)
+        first_layout.addLayout(TopL_layout_Box, 1)
+        first_layout.addWidget(TopR_widget)
+
+
+
+
+        # Create container widgets for split parts
+        header_widget = QWidget()
+        header_layout = QVBoxLayout(header_widget)
+        header_layout.addWidget(name_label)
+        header_layout.addLayout(first_layout)
+        header_layout.addWidget(description_label)
+
 
         # Create tabbed widget for Stats / IV / EV
         stats_tabs = QTabWidget()
@@ -421,7 +456,7 @@ def PokemonCollectionDetails(
         if tab_changed_callback:
             stats_tabs.currentChanged.connect(tab_changed_callback)
 
-        layout.addWidget(stats_tabs)
+
 
         free_pokemon_button = QPushButton("Release Pokemon")
         qconnect(
@@ -470,19 +505,24 @@ def PokemonCollectionDetails(
         rename_button.adjustSize()
         rename_layout.addWidget(rename_button, 0)
 
-        layout.addLayout(actions_layout)
-        layout.addLayout(rename_layout)
+        # Create container footer widget
+        footer_widget = QWidget()
+        footer_layout = QVBoxLayout(footer_widget)
+        footer_layout.addLayout(actions_layout)
+        footer_layout.addLayout(rename_layout)
 
-        return layout
+        # Return the split components and the newly calculated stats dict
+        return header_widget, stats_tabs, footer_widget, _stats_dict
 
     except Exception as e:
         show_warning_with_traceback(
             exception=e, message="Error occured in Pokemon Details Button:"
         )
-        return QVBoxLayout()
+        # Return empty structures on error
+        return QWidget(), QWidget(), QWidget(), {}
 
 
-def PokemonDetailsStats(detail_stats, growth_rate, level, remove_levelcap, language):
+def PokemonDetailsStats(detail_stats, growth_rate, level, remove_levelcap, language, old_stats=None):
     CompleteTable_layout = QVBoxLayout()
     CompleteTable_layout.addSpacing(15)
     # Stat colors
@@ -536,17 +576,24 @@ def PokemonDetailsStats(detail_stats, growth_rate, level, remove_levelcap, langu
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
         # Create a bar item
-        bar_item2 = QLabel()
+        if old_stats and stat in old_stats:
+            old_val = old_stats[stat]
+            if stat == "xp":
+                experience = int(find_experience_for_level(growth_rate, level, True))
+                old_val_mapped = int((int(old_val) / int(experience)) * max_width_stat_item)
+            else:
+                old_val_mapped = int(max_width_stat_item * (1 - exp(-old_val / max_width_stat_item)))
+        else:
+            old_val_mapped = 0
+
         if stat == "xp":
             experience = int(find_experience_for_level(growth_rate, level, True))
-            value = int((int(value) / int(experience)) * max_width_stat_item)
+            new_val_mapped = int((int(value) / int(experience)) * max_width_stat_item)
         else:
-            value = int(max_width_stat_item * (1 - exp(-value / max_width_stat_item)))
-        pixmap2 = createStatBar(stat_colors.get(stat), value)
-        # Convert the QPixmap to an QIcon
-        icon = QIcon(pixmap2)
-        # Set the QIcon as the background for the QLabel
-        bar_item2.setPixmap(pixmap2)
+            new_val_mapped = int(max_width_stat_item * (1 - exp(-value / max_width_stat_item)))
+            
+        bar_item2 = AnimatedStatBar(stat_colors.get(stat), old_val_mapped, new_val_mapped)
+        
         layout_row = QHBoxLayout()
         layout_row.setContentsMargins(0, 0, 0, 0)  # Tight layout
         layout_row.addStretch()  # Add stretch padding at start (Centers the content)
@@ -556,34 +603,58 @@ def PokemonDetailsStats(detail_stats, growth_rate, level, remove_levelcap, langu
         layout_row.addWidget(bar_item2)
         layout_row.addStretch()  # Ensure alignment logic is identical
         stat_item2.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        bar_item2.setAlignment(Qt.AlignmentFlag.AlignCenter)
         CompleteTable_layout.addLayout(layout_row)
 
     return CompleteTable_layout
 
 
+from PyQt6.QtCore import QPropertyAnimation, pyqtProperty, QEasingCurve
+
+class AnimatedStatBar(QWidget):
+    def __init__(self, color: QColor, old_value: float, new_value: float, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(200, 10)
+        self._color = color if color else QColor(128, 128, 128)
+        self._current_value = float(old_value)
+        self.new_value = float(new_value)
+
+        # Ensure values don't exceed max width
+        if self._current_value > 200: self._current_value = 200
+        if self.new_value > 200: self.new_value = 200
+
+        self.animation = QPropertyAnimation(self, b"current_value")
+        self.animation.setDuration(800)  # 800ms for a smooth slide
+        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.animation.setStartValue(self._current_value)
+        self.animation.setEndValue(self.new_value)
+        self.animation.start()
+
+    @pyqtProperty(float)
+    def current_value(self):
+        return self._current_value
+
+    @current_value.setter
+    def current_value(self, val):
+        self._current_value = val
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Background bar
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 200))  # Semi-transparent black
+        painter.drawRoundedRect(0, 0, 200, 10, 3, 3)
+        
+        # Foreground colored bar
+        painter.setBrush(self._color)
+        painter.drawRoundedRect(0, 0, int(self._current_value), 10, 3, 3)
+
 def createStatBar(color, value):
-    pixmap = QPixmap(200, 10)
-    pixmap.fill(QColor(0, 0, 0, 0))  # RGBA where A (alpha) is 0 for full transparency
-
-    # Default to gray if color is None
-    if color is None:
-        color = QColor(128, 128, 128)  # Gray
-
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-    # Draw bar in the background
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor(0, 0, 0, 200))  # Semi-transparent black
-    painter.drawRoundedRect(0, 0, 200, 10, 3, 3)
-
-    # Draw the colored bar based on the value
-    painter.setBrush(color)  # Now color is guaranteed to be a valid QColor
-    painter.drawRoundedRect(0, 0, value, 10, 3, 3)
-
-    painter.end()  # Important: end the painter to avoid memory leaks
-    return pixmap
+    # Fallback for non-animated uses if any exist elsewhere, though we'll update PokemonDetailsStats
+    bar = AnimatedStatBar(color, value, value)
+    return bar
 
 
 def create_iv_ev_tab_layout(

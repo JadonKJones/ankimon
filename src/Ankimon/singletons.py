@@ -246,6 +246,9 @@ def swap_ankimon_account():
 
         # Refresh windows if they are open
         if hasattr(mw, "pokemon_pc") and is_alive(mw.pokemon_pc):
+            # Reset selection because IDs change between databases
+            mw.pokemon_pc._selected_individual_id = None
+            mw.pokemon_pc.pokemon_details_layout = None
             mw.pokemon_pc.refresh_gui()
         
         if hasattr(mw, "item_window") and is_alive(mw.item_window):
