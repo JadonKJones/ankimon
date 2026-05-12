@@ -123,8 +123,23 @@ class MoveManagerWidget(QWidget):
             type_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
             type_chip.setStyleSheet("border-radius: 4px; font-size: 9px; font-weight: bold; color: white;")
             
-            name_label = QLabel("— empty —")
-            name_label.setStyleSheet("font-size: 12px; color: #475569; font-style: italic;")
+            name_label = QPushButton("— empty —")
+            name_label.setFlat(True)
+            name_label.setCursor(Qt.CursorShape.PointingHandCursor)
+            name_label.setStyleSheet("""
+                QPushButton { 
+                    text-align: left; 
+                    font-size: 12px; 
+                    color: #475569; 
+                    font-style: italic; 
+                    border: none; 
+                    padding: 4px 8px; 
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background-color: #1e293b;
+                }
+            """)
             
             forget_btn = QPushButton("✕")
             forget_btn.setFixedSize(24, 24)
@@ -153,6 +168,7 @@ class MoveManagerWidget(QWidget):
             
             forget_btn.clicked.connect(lambda checked, idx=i: self.on_forget_clicked(idx))
             learn_btn.clicked.connect(lambda checked, idx=i: self.on_learn_clicked(idx))
+            name_label.clicked.connect(lambda checked, idx=i: self.on_learn_clicked(idx))
 
         # Add TM button
         self.tm_btn = QPushButton(" LEARN FROM TMs")
@@ -213,7 +229,21 @@ class MoveManagerWidget(QWidget):
                 move = attacks[i]
                 slot["move"] = move
                 slot["name_label"].setText(format_move_name(move))
-                slot["name_label"].setStyleSheet("font-size: 12px; color: #e6edf3;")
+                slot["name_label"].setStyleSheet("""
+                    QPushButton { 
+                        text-align: left; 
+                        font-size: 12px; 
+                        color: #e6edf3; 
+                        font-weight: 600; 
+                        border: none; 
+                        padding: 4px 8px; 
+                        border-radius: 4px;
+                    } 
+                    QPushButton:hover { 
+                        color: #60a5fa; 
+                        background-color: #1e293b;
+                    }
+                """)
                 slot["forget_btn"].setVisible(len(attacks) > 1)
                 slot["learn_btn"].setText("⤵")
                 slot["learn_btn"].setVisible(bool(all_moves))
@@ -227,7 +257,7 @@ class MoveManagerWidget(QWidget):
             else:
                 slot["move"] = None
                 slot["name_label"].setText("— empty —")
-                slot["name_label"].setStyleSheet("font-size: 12px; color: #475569; font-style: italic;")
+                slot["name_label"].setStyleSheet("QPushButton { text-align: left; font-size: 12px; color: #475569; font-style: italic; border: none; padding: 0; }")
                 slot["forget_btn"].hide()
                 slot["learn_btn"].setText("＋")
                 slot["learn_btn"].setVisible(bool(all_moves))
@@ -312,7 +342,7 @@ class MoveManagerWidget(QWidget):
         
         pretty_name = species_name if is_redundant else f"{nickname} ({species_name})"
         
-        dialog = MovePickerDialog(pretty_name, all_moves, current_moves, self)
+        dialog = MovePickerDialog(pretty_name, all_moves, current_moves, self, force_show_current=True)
         if dialog.exec():
             new_move = dialog.get_selected_move()
             if new_move:
@@ -525,7 +555,7 @@ class PokemonPC(QDialog):
         self.sort_by_level = None
         self.sort_by_date = None
         self.sort_group = None
-        self.selected_sort_key = "Date"
+        self.selected_sort_key = "CP"
         self.sort_combo = None
         self.desc_sort = None  # Sort by descending order
         self.current_stats_tab_index = 0  # Remember selected tab (Stats/IV/EV)
@@ -821,6 +851,15 @@ class PokemonPC(QDialog):
         self.on_window_close()
         event.accept()
 
+    def showEvent(self, event):
+        """
+        Triggered when the PC box is shown.
+        Refreshes the grid to ensure newly caught Pokémon are visible.
+        """
+        super().showEvent(event)
+        # We call refresh_pokemon_grid which uses the cache-detection logic (count check)
+        self.refresh_pokemon_grid()
+
     def setup_filters_layout(self, parent_layout):
         """
         Build and attach filter/sort controls below the PC grid.
@@ -946,7 +985,7 @@ class PokemonPC(QDialog):
         sort_combo_widget.setLayout(sort_combo_layout)
 
         # Checkboxes for other options
-        is_checked = self.desc_sort.isChecked() if self.desc_sort is not None else False
+        is_checked = self.desc_sort.isChecked() if self.desc_sort is not None else True
         self.desc_sort = QCheckBox("Descending")
         self.desc_sort.setChecked(is_checked)
         self.desc_sort.stateChanged.connect(lambda: self.go_to_box(0))
@@ -1258,12 +1297,12 @@ class PokemonPC(QDialog):
         Dynamically builds a SQL query to filter and sort Pokemon, fetching only the lightweight stub data needed for the grid.
         Results are cached to improve performance when navigating boxes or selecting Pokémon.
         """
-        if self._total_pokemon_count == 0:
-            try:
-                cursor = mw.ankimon_db.execute("SELECT COUNT(*) FROM captured_pokemon")
-                self._total_pokemon_count = cursor.fetchone()[0]
-            except Exception:
-                pass
+        # Always fetch latest count to detect DB changes
+        try:
+            cursor = mw.ankimon_db.execute("SELECT COUNT(*) FROM captured_pokemon")
+            self._total_pokemon_count = cursor.fetchone()[0]
+        except Exception:
+            pass
 
         # Build current filter state for cache check
         current_state = {
@@ -1276,7 +1315,8 @@ class PokemonPC(QDialog):
             "favorite": self.filter_favorites.isChecked() if self.filter_favorites else False,
             "holding": self.filter_is_holding_item.isChecked() if self.filter_is_holding_item else False,
             "sort": self.sort_combo.currentText() if self.sort_combo else "Date",
-            "desc": self.desc_sort.isChecked() if self.desc_sort else False
+            "desc": self.desc_sort.isChecked() if self.desc_sort else False,
+            "count": self._total_pokemon_count # Force refresh if count changes
         }
 
         if self._pokemon_cache is not None and self._last_filter_state == current_state:

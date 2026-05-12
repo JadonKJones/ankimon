@@ -252,6 +252,7 @@ class PokemonTeamDialog(QDialog):
         sort_label = QLabel("Sort by:")
         sort_combo = QComboBox()
         sort_combo.addItems(["Name (A-Z)", "Level (High-Low)", "Pokédex ID", "CP (High-Low)"])
+        sort_combo.setCurrentIndex(3)
         search_layout.addWidget(sort_label)
         search_layout.addWidget(sort_combo)
 
@@ -450,6 +451,7 @@ class PokemonTeamDialog(QDialog):
         sort_label = QLabel("Sort by:")
         sort_combo = QComboBox()
         sort_combo.addItems(["Name (A-Z)", "Level (High-Low)", "Pokédex ID", "CP (High-Low)"])
+        sort_combo.setCurrentIndex(3)
         search_layout.addWidget(sort_label)
         search_layout.addWidget(sort_combo)
 

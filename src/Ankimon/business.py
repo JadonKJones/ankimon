@@ -88,7 +88,7 @@ def calculate_cpm(level: int) -> float:
     level ceiling. Asymptotes just below ``1.2`` — the approximate max
     CPM in Pokemon GO — but is smooth and defined for any Anki level.
     """
-    return 1.2 * (1 - math.exp(-max(level, 1) / 85))
+    return 3.5 * (1 - math.exp(-max(level, 1) / 85))
 
 
 def pokemon_go_raw_stats(base_stats: dict, iv: dict, ev: dict):
