@@ -5,20 +5,20 @@ from aqt import mw
 
 from ..resources import pkmnimgfolder, pokedex_path
 
+from .pokedex_functions import _load_pokedex_cache, safe_int
+
 SUBSTITUTE_PATH = f"{pkmnimgfolder}/front_default/substitute.png"
 
 
 def _get_pokemon_id_from_pokedex(pokemon_name):
     """Get the sprite ID for a Pokémon form from pokedex (handles Mega/Gmax forms)."""
     try:
-        with open(pokedex_path, "r", encoding="utf-8") as f:
-            pokedex = json.load(f)
+        pokedex = _load_pokedex_cache()
         
         pokemon_key = pokemon_name.lower().replace(" ", "").replace("-", "")
         if pokemon_key in pokedex:
             pdata = pokedex[pokemon_key]
             # Ensure we return an integer ID
-            from .pokedex_functions import safe_int
             return safe_int(pdata.get("actual_id")) or safe_int(pdata.get("num"))
     except Exception as e:
         mw.logger.log("debug", f"Error looking up pokemon ID in pokedex: {e}")

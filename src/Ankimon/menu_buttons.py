@@ -36,6 +36,7 @@ from .gui_entities import (
     Credits,
     TableWidget,
     IDTableWidget,
+    NatureTableWidget,
     Version_Dialog,
 )
 
@@ -64,6 +65,7 @@ def create_menu_actions(
     flex_pokemon_collection: Callable,
     eff_chart: TableWidget,
     gen_id_chart: IDTableWidget,
+    nature_chart: NatureTableWidget,
     credits: Credits,
     license: License,
     open_help_window: Callable,
@@ -167,6 +169,12 @@ def create_menu_actions(
     gen_and_poke_chart_action.setMenuRole(QAction.MenuRole.NoRole)
     gen_and_poke_chart_action.triggered.connect(gen_id_chart.show_gen_chart)
     help_menu.addAction(gen_and_poke_chart_action)
+
+    # Nature chart
+    nature_chart_action = QAction(mw.translator.translate("nature_chart_button"), mw)
+    nature_chart_action.setMenuRole(QAction.MenuRole.NoRole)
+    nature_chart_action.triggered.connect(nature_chart.show_nature_chart)
+    help_menu.addAction(nature_chart_action)
 
     # Join Discord
     join_discord_action = QAction(mw.translator.translate("join_discord_button"), mw)

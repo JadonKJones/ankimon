@@ -238,6 +238,8 @@ def PokemonCollectionDetails(
         description_txt = f"Description: \n {description_formated}"
         lvl = f" Level: {level}"
         ability_txt = f" Ability: {ability.capitalize()}"
+        nature_display = (nature or "serious").strip().title()
+        nature_txt = f" Nature: {nature_display}"
         type_txt = f" Type:"
         stats_list = []
         for key, val in detail_stats.items():
@@ -301,6 +303,8 @@ def PokemonCollectionDetails(
         type_label = QLabel("Type:")
         type_label.setFont(custom_font)
         ability_label.setFont(custom_font)
+        nature_label = QLabel(nature_txt)
+        nature_label.setFont(custom_font)
         attacks_label.setFont(custom_font)
         description_label.setFont(
             load_custom_font(15 if language != 1 else 20, language)
@@ -325,6 +329,8 @@ def PokemonCollectionDetails(
 
         level_label.setFixedWidth(230)
         ability_label.setFixedWidth(230)
+        nature_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nature_label.setFixedWidth(230)
         attacks_label.setFixedWidth(230)
         attacks_label.setFixedHeight(70)
 
@@ -349,6 +355,7 @@ def PokemonCollectionDetails(
         typelayout_widget.setFixedWidth(230)
         TopL_layout_Box.addWidget(typelayout_widget)
         TopL_layout_Box.addWidget(ability_label)
+        TopL_layout_Box.addWidget(nature_label)
         TopL_layout_Box.addWidget(captured_date_label)
         TopL_layout_Box.addWidget(pokemon_defeated_label)
 
@@ -359,19 +366,19 @@ def PokemonCollectionDetails(
         qconnect(
             remember_attacks_details_button.clicked,
             lambda: remember_attack_details_window(
-                individual_id, attacks, all_attacks, logger
+                individual_id, attacks, all_attacks, logger, refresh_callback
             ),
         )
         forget_attacks_details_button = QPushButton("Forget Attacks")
         qconnect(
             forget_attacks_details_button.clicked,
-            lambda: forget_attack_details_window(individual_id, attacks, logger),
+            lambda: forget_attack_details_window(individual_id, attacks, logger, refresh_callback),
         )
 
         tm_attacks_details_button = QPushButton("Learn attacks from TMs")
         qconnect(
             tm_attacks_details_button.clicked,
-            lambda: tm_attack_details_window(id, individual_id, attacks, logger),
+            lambda: tm_attack_details_window(id, individual_id, attacks, logger, refresh_callback),
         )
 
         TopR_layout_Box.addWidget(attacks_label)
@@ -843,7 +850,7 @@ def attack_details_window(attacks):
     window.exec()
 
 
-def remember_attack_details_window(individual_id, attack_set, all_attacks, logger):
+def remember_attack_details_window(individual_id, attack_set, all_attacks, logger, refresh_callback):
     window = QDialog()
     window.setWindowIcon(QIcon(str(icon_path)))
     outer_layout = QVBoxLayout(window)
@@ -875,7 +882,7 @@ def remember_attack_details_window(individual_id, attack_set, all_attacks, logge
         qconnect(
             remember_attack_button.clicked,
             lambda checked, a=attack: remember_attack(
-                individual_id, attack_set, a, logger
+                individual_id, attack_set, a, logger, refresh_callback
             ),
         )
         attack_layout.addWidget(remember_attack_button)
@@ -890,7 +897,7 @@ def remember_attack_details_window(individual_id, attack_set, all_attacks, logge
 
 
 def forget_attack_details_window(
-    individual_id: int, attack_set: list[str], logger: "InfoLogger.ShowInfoLogger"
+    individual_id: int, attack_set: list[str], logger: "InfoLogger.ShowInfoLogger", refresh_callback
 ) -> None:
     """
     Creates a window that will allow the user to erase moves from a Pokemon.
@@ -935,7 +942,7 @@ def forget_attack_details_window(
         qconnect(
             forget_attack_button.clicked,
             lambda checked, a=attack: forget_attack(
-                individual_id, attack_set, a, logger
+                individual_id, attack_set, a, logger, refresh_callback
             ),
         )
         attack_layout.addWidget(forget_attack_button)
@@ -950,7 +957,7 @@ def forget_attack_details_window(
 
 
 def remember_attack(
-    individual_id: str, attacks: list[str], new_attack: str, logger: ShowInfoLogger
+    individual_id: str, attacks: list[str], new_attack: str, logger: ShowInfoLogger, refresh_callback=None
 ):
     """Learn a new attack using database."""
     db = mw.ankimon_db
@@ -992,6 +999,9 @@ def remember_attack(
     if main_pokemon and main_pokemon.get("individual_id") == individual_id:
         main_pokemon["attacks"] = attacks
         db.save_main_pokemon(main_pokemon)
+    
+    if refresh_callback:
+        refresh_callback()
 
 
 def forget_attack(
@@ -999,6 +1009,7 @@ def forget_attack(
     attacks: list[str],
     attack_to_forget: str,
     logger: ShowInfoLogger,
+    refresh_callback=None,
 ) -> None:
     """Forget a move using database."""
     db = mw.ankimon_db
@@ -1030,110 +1041,75 @@ def forget_attack(
         main_pokemon["attacks"] = attacks
         db.save_main_pokemon(main_pokemon)
 
+    if refresh_callback:
+        refresh_callback()
+
 
 def tm_attack_details_window(
     id: int,
     individual_id: str,
     current_pokemon_moveset: list[str],
     logger: ShowInfoLogger,
+    refresh_callback,
 ) -> None:
     """
     Creates a window that will allow the user to learn TM moves.
-
-    Args:
-        id (int): The Pokemon's identifier.
-        individual_id (str): The Pokemon's unique identifier.
-        current_pokemon_moveset (list[str]): The moves that the Pokemon currently knows.
-        logger: Logger object that can log info and display windows containing messages.
-
-    Returns:
-        None
     """
-    window = QDialog()
-    window.setWindowIcon(QIcon(str(icon_path)))
-    layout = QHBoxLayout()
-    window.setWindowTitle("Learn TM Move")  # Optional: Set a window title
-    # Outer layout contains everything
-    outer_layout = QVBoxLayout(window)
-
-    # Create a scroll area that will contain our main layout
-    scroll_area = QScrollArea()
-    scroll_area.setWidgetResizable(True)
-
-    # Main widget that contains the content
-    content_widget = QWidget()
-    layout = QHBoxLayout(content_widget)  # The main layout is now set on this widget
-
-    # HTML content
-    html_content = remember_attack_details_window_template
-    from pathlib import Path
-
-    with open(pokemon_tm_learnset_path, "r") as f:
-        pokemon_tm_learnset = json.load(f)
-
-    pokemon_name = search_pokedex_by_id(id)
-    tm_learnset = pokemon_tm_learnset.get(
-        pokemon_name, []
-    )  # TMs that can be learnt by the Pokemon
+    from ..pyobj.move_picker import MovePickerDialog
     
-    # Get owned TMs from database
+    # 1. Get species/base name for TM lookup
+    internal_name = search_pokedex_by_id(id)
+    if not internal_name:
+        logger.log_and_showinfo("error", f"Could not find Pokémon data for ID: {id}")
+        return
+        
+    base_name = internal_name.split("-")[0].lower()
+    internal_name = internal_name.lower()
+    
+    # 2. Load TM learnsets
+    try:
+        with open(pokemon_tm_learnset_path, "r", encoding="utf-8") as f:
+            tm_learnsets = json.load(f)
+    except Exception as e:
+        logger.log_and_showinfo("error", f"Failed to load TM learnsets: {e}")
+        return
+
+    # 3. Get valid TMs for this species (check specific form then base species)
+    valid_tms = tm_learnsets.get(internal_name) or tm_learnsets.get(base_name)
+    if not valid_tms:
+        logger.log_and_showinfo("info", f"This Pokémon cannot learn any moves from TMs.")
+        return
+        
+    # 4. Get owned TMs from DB
     db = mw.ankimon_db
     all_items = db.get_all_items()
-    owned_tms = [item["item_name"] for item in all_items if (item.get("extra_data") or {}).get("type") == "TM"]
-    attack_set = [tm for tm in tm_learnset if tm in owned_tms]
-
-    # Loop through the list of attacks and add them to the HTML content
-    for attack in attack_set:
-        move = find_details_move(attack) or _lookup_move_data(attack)
-        display_name = format_move_name(attack)
-
-        html_content += f"""
-        <tr>
-          <td class="move-name">{display_name}</td>
-          <td><img src="{type_icon_path(move["type"])}" alt="{move["type"]}"/></td>
-          <td><img src="{move_category_path(move["category"].lower())}" alt="{move["category"]}"/></td>
-          <td class="basePower">{move["basePower"]}</td>
-          <td class="no-accuracy">{move["accuracy"]}</td>
-          <td>{move["pp"]}</td>
-          <td>{move["shortDesc"]}</td>
-        </tr>
-        """
-
-    html_content += remember_attack_details_window_template_end
-
-    # Create a QLabel to display the HTML content
-    label = QLabel(html_content)
-    label.setAlignment(
-        Qt.AlignmentFlag.AlignLeft
-    )  # Align the label's content to the top
-    label.setScaledContents(True)  # Enable scaling of the pixmap
-    attack_layout = QVBoxLayout()
-    for attack in attack_set:
-        move = find_details_move(attack)
-        learn_attack_button = QPushButton(f"Learn {attack}")  # add Details to Moves
-        learn_attack_button.clicked.connect(
-            lambda checked, a=attack: (
-                remember_attack(  # We can use "remember_attack()" because the process is the same
-                    individual_id, current_pokemon_moveset, a, logger
-                )
-            )
-        )
-        attack_layout.addWidget(learn_attack_button)
-    attack_layout_widget = QWidget()
-    attack_layout_widget.setLayout(attack_layout)
-    # Add the label and button layout widget to the main layout
-    layout.addWidget(label)
-    layout.addWidget(attack_layout_widget)
-
-    # Set the main widget with content as the scroll area's widget
-    scroll_area.setWidget(content_widget)
-
-    # Add the scroll area to the outer layout
-    outer_layout.addWidget(scroll_area)
-
-    window.setLayout(outer_layout)
-    window.resize(1000, 400)  # Optional: Set a default size for the window
-    window.exec()
+    owned_tm_moves = [
+        item["item_name"] 
+        for item in all_items 
+        if (item.get("extra_data") or {}).get("type") == "TM"
+    ]
+    
+    # 5. Filter valid TMs by ownership
+    learnable_tm_moves = [move for move in valid_tms if move in owned_tm_moves]
+    if not learnable_tm_moves:
+        logger.log_and_showinfo("info", "You don't own any TMs that this Pokémon can learn.")
+        return
+        
+    # 6. UI: Use MovePickerDialog
+    pkmn_data = db.get_pokemon(individual_id)
+    nickname = pkmn_data.get("nickname") if pkmn_data else None
+    raw_name = pkmn_data.get("name") if pkmn_data else internal_name
+    from ..functions.pokedex_functions import get_pretty_name_for_name
+    species_name = get_pretty_name_for_name(raw_name)
+    
+    title = f"TM Learning: {nickname if nickname else species_name}"
+    dialog = MovePickerDialog(title, learnable_tm_moves, current_pokemon_moveset, mw)
+    dialog.setWindowTitle("Learn from TMs")
+    
+    if dialog.exec():
+        new_move = dialog.get_selected_move()
+        if new_move:
+            remember_attack(individual_id, current_pokemon_moveset, new_move, logger, refresh_callback)
 
 
 def rename_pkmn(

@@ -53,6 +53,14 @@ from ..singletons import (
     pokemon_pc,
 )
 
+ALL_NATURES = [
+    "Hardy", "Lonely", "Brave", "Adamant", "Naughty",
+    "Bold", "Docile", "Relaxed", "Impish", "Lax",
+    "Timid", "Hasty", "Serious", "Jolly", "Naive",
+    "Modest", "Mild", "Quiet", "Bashful", "Rash",
+    "Calm", "Gentle", "Sassy", "Careful", "Quirky"
+]
+
 
 # === PERFORMANCE FIX: Cache percentage calculations ===
 _percentages_cache = {
@@ -142,7 +150,7 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
             percentages[tier] = (percentages[tier] / total) * 100 if total > 0 else 0 
 
     #MODIFIED FOR TESTING: Fixed percentages, no level or review restrictions.
-    percentages = {
+    """percentages = {
                 "Baby": 0,
                 "Normal": 10,
                 "Starter": 0,
@@ -151,7 +159,7 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
                 "Ultra": 0,
                 "Mega": 50,
                 "Gmax": 40,
-            } 
+            } """
 
     # Cache the result
     _percentages_cache['percentages'] = percentages
@@ -495,6 +503,7 @@ def generate_random_pokemon(
     # mu = 31 * (1 - math.exp(-ankimon_tracker_obj.total_reviews / tau))  # At total reviews > 3 * tau, we get mu ~= 31
     # iv = {stat: iv_rand_gauss(mu=mu, sigma=5) for stat in stat_names}  # The higher the number of reviews, the higher the IVs
     iv = {stat: random.randint(0, 31) for stat in stat_names}
+    nature = random.choice(ALL_NATURES)
     final_stats = base_stats
 
     ankimon_tracker_obj.pokemon_encounter = 0  # 0: Start of Battle: 1: Current Battle
@@ -518,6 +527,7 @@ def generate_random_pokemon(
         tier,
         ev_yield,
         is_shiny,
+        nature,
     )
 
 def new_pokemon(
@@ -563,6 +573,7 @@ def new_pokemon(
         tier,
         ev_yield,
         is_shiny,
+        nature,
     ) = generate_random_pokemon(main_pokemon.level, ankimon_tracker_obj)
     pokemon_data = {
         "name": name,
@@ -577,6 +588,7 @@ def new_pokemon(
         "ev": ev,
         "iv": iv,
         "gender": gender,
+        "nature": nature,
         "battle_status": battle_status,
         "battle_stats": battle_stats,
         "stat_stages": {

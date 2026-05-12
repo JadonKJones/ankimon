@@ -48,6 +48,7 @@ poke_species_path = addon_dir / "user_files" / "data_files" / "pokemon_species.c
 eff_chart_html_path = addon_dir / "addon_files" / "eff_chart_html.html"
 effectiveness_chart_file_path = addon_dir / "addon_files" / "eff_chart.json"
 table_gen_id_html_path = addon_dir / "addon_files" / "table_gen_id.html"
+nature_chart_html_path = addon_dir / "addon_files" / "nature_chart.html"
 icon_path = addon_dir / "addon_files" / "pokeball.png"
 sound_list_path = addon_dir / "addon_files" / "sound_list.json"
 badges_list_path = addon_dir / "addon_files" / "badges.json"

@@ -37,6 +37,7 @@ from .gui_entities import (
     Credits,
     TableWidget,
     IDTableWidget,
+    NatureTableWidget,
     Version_Dialog,
 )
 from .functions.update_main_pokemon import update_main_pokemon
@@ -200,6 +201,7 @@ get_pokemon_pc()
 # UI Utilities
 eff_chart = TableWidget()
 gen_id_chart = IDTableWidget()
+nature_chart = NatureTableWidget()
 license = License()
 credits = Credits()
 version_dialog = Version_Dialog()

@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QRadioButton,
     QButtonGroup,
+    QStyle,
 )
 from PyQt6.QtCore import QSize, pyqtSignal, QTimer
 from PyQt6.QtGui import QIcon, QFont, QAction, QMovie, QCloseEvent, QResizeEvent
@@ -35,14 +36,371 @@ from ..pyobj.reviewer_obj import Reviewer_Manager
 from ..pyobj.test_window import TestWindow
 from ..pyobj.translator import Translator
 from ..pyobj.collection_dialog import MainPokemon
-from ..gui_classes.pokemon_details import PokemonCollectionDetails
+from ..gui_classes.pokemon_details import PokemonCollectionDetails, remember_attack
 from ..pyobj.InfoLogger import ShowInfoLogger
+from ..pyobj.move_picker import MovePickerDialog
 
 from ..pyobj.settings import Settings
 from ..functions.sprite_functions import get_sprite_path
-from ..utils import load_custom_font, get_tier_by_id, is_alive
-from ..resources import icon_path, items_path, csv_file_items_cost, poke_evo_path
+from ..utils import load_custom_font, get_tier_by_id, is_alive, format_move_name, format_pokemon_name
+from ..resources import icon_path, items_path, csv_file_items_cost, poke_evo_path, pokemon_tm_learnset_path
 from ..business import calculate_cp_from_dict
+from ..functions.pokedex_functions import find_details_move, get_all_pokemon_moves, format_lore_name, get_pretty_name_for_name, search_pokedex_by_id
+from ..functions.gui_functions import type_icon_path, move_category_path
+
+MOVE_TYPE_COLORS = {
+    "Normal":"#A8A878","Fire":"#F08030","Water":"#6890F0","Electric":"#F8D030",
+    "Grass":"#78C850","Ice":"#98D8D8","Fighting":"#C03028","Poison":"#A040A0",
+    "Ground":"#E0C068","Flying":"#A890F0","Psychic":"#F85888","Bug":"#A8B820",
+    "Rock":"#B8A038","Ghost":"#705898","Dragon":"#7038F8","Dark":"#705848",
+    "Steel":"#B8B8D0","Fairy":"#EE99AC",
+}
+
+NATURE_EFFECTS = {
+    "Hardy":    ("", ""),       "Docile":  ("", ""),
+    "Serious":  ("", ""),       "Bashful": ("", ""),
+    "Quirky":   ("", ""),       # neutral natures
+    "Lonely":   ("attack", "defense"),
+    "Brave":    ("attack", "speed"),
+    "Adamant":  ("attack", "special-attack"),
+    "Naughty":  ("attack", "special-defense"),
+    "Bold":     ("defense", "attack"),
+    "Relaxed":  ("defense", "speed"),
+    "Impish":   ("defense", "special-attack"),
+    "Lax":      ("defense", "special-defense"),
+    "Timid":    ("speed", "attack"),
+    "Hasty":    ("speed", "defense"),
+    "Jolly":    ("speed", "special-attack"),
+    "Naive":    ("speed", "special-defense"),
+    "Modest":   ("special-attack", "attack"),
+    "Mild":     ("special-attack", "defense"),
+    "Quiet":    ("special-attack", "speed"),
+    "Rash":     ("special-attack", "special-defense"),
+    "Calm":     ("special-defense", "attack"),
+    "Gentle":   ("special-defense", "defense"),
+    "Sassy":    ("special-defense", "speed"),
+    "Careful":  ("special-defense", "special-attack"),
+}
+
+STAT_KEY_TO_DISPLAY = {
+    "hp": "HP", "attack": "Attack", "defense": "Defense",
+    "special-attack": "Sp. Atk", "special-defense": "Sp. Def", "speed": "Speed",
+}
+DISPLAY_TO_STAT_KEY = {v: k for k, v in STAT_KEY_TO_DISPLAY.items()}
+
+from PyQt6.QtWidgets import QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QTabWidget
+from PyQt6.QtGui import QColor
+
+
+class MoveManagerWidget(QWidget):
+    def __init__(self, individual_id, pkmn_id, logger, save_fn, parent=None):
+        super().__init__(parent)
+        self.individual_id = individual_id
+        self.pkmn_id = pkmn_id
+        self.logger = logger
+        self.save_fn = save_fn
+        self.full_data = None
+        self.setup_ui()
+        self.refresh()
+
+    def setup_ui(self):
+        self.layout = QVBoxLayout(self)
+        self.layout.setSpacing(6)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.header = QLabel("MOVES")
+        self.header.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: bold; letter-spacing: 1px;")
+        self.layout.addWidget(self.header)
+        
+        self.slots = []
+        for i in range(4):
+            slot_container = QWidget()
+            slot_layout = QHBoxLayout(slot_container)
+            slot_layout.setContentsMargins(0, 2, 0, 2)
+            
+            type_chip = QLabel("---")
+            type_chip.setFixedSize(42, 18)
+            type_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            type_chip.setStyleSheet("border-radius: 4px; font-size: 9px; font-weight: bold; color: white;")
+            
+            name_label = QLabel("— empty —")
+            name_label.setStyleSheet("font-size: 12px; color: #475569; font-style: italic;")
+            
+            forget_btn = QPushButton("✕")
+            forget_btn.setFixedSize(24, 24)
+            forget_btn.setFlat(True)
+            
+            learn_btn = QPushButton("＋")
+            learn_btn.setFixedSize(24, 24)
+            learn_btn.setFlat(True)
+            
+            slot_layout.addWidget(type_chip)
+            slot_layout.addWidget(name_label)
+            slot_layout.addStretch()
+            slot_layout.addWidget(forget_btn)
+            slot_layout.addWidget(learn_btn)
+            
+            self.layout.addWidget(slot_container)
+            self.slots.append({
+                "container": slot_container,
+                "layout": slot_layout,
+                "type_chip": type_chip,
+                "name_label": name_label,
+                "forget_btn": forget_btn,
+                "learn_btn": learn_btn,
+                "move": None
+            })
+            
+            forget_btn.clicked.connect(lambda checked, idx=i: self.on_forget_clicked(idx))
+            learn_btn.clicked.connect(lambda checked, idx=i: self.on_learn_clicked(idx))
+
+        # Add TM button
+        self.tm_btn = QPushButton(" LEARN FROM TMs")
+        tm_icon_path = items_path / "Bag_TM_normal_SV_Sprite.png"
+        if tm_icon_path.exists():
+            self.tm_btn.setIcon(QIcon(str(tm_icon_path)))
+            self.tm_btn.setIconSize(QSize(18, 18))
+            
+        self.tm_btn.setMinimumHeight(32)
+        self.tm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tm_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2563eb, stop:1 #1d4ed8);
+                color: #f8fafc;
+                font-size: 11px;
+                font-weight: 800;
+                letter-spacing: 0.5px;
+                border: 1px solid #1e40af;
+                border-radius: 6px;
+                margin-top: 12px;
+                padding: 4px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3b82f6, stop:1 #2563eb);
+                border-color: #3b82f6;
+            }
+            QPushButton:pressed {
+                background: #1e40af;
+                padding-top: 5px;
+            }
+        """)
+        self.tm_btn.clicked.connect(self.on_tm_clicked)
+        self.layout.addWidget(self.tm_btn)
+
+    def _fetch_full(self, individual_id):
+        try:
+            cursor = mw.ankimon_db.execute("SELECT data FROM captured_pokemon WHERE individual_id = ?", (individual_id,))
+            row = cursor.fetchone()
+            if row:
+                data = json.loads(row[0])
+                # Ensure all_attacks is fetched
+                if "all_attacks" not in data:
+                    from ..functions.pokedex_functions import get_all_pokemon_moves
+                    data["all_attacks"] = get_all_pokemon_moves(data.get("name"), data.get("level"))
+                return data
+        except Exception:
+            pass
+        return {}
+
+    def refresh(self):
+        self.full_data = self._fetch_full(self.individual_id)
+        attacks = self.full_data.get("attacks", [])
+        all_moves = self.full_data.get("all_attacks", []) or self.full_data.get("learnable_moves", [])
+        
+        for i in range(4):
+            slot = self.slots[i]
+            if i < len(attacks):
+                move = attacks[i]
+                slot["move"] = move
+                slot["name_label"].setText(format_move_name(move))
+                slot["name_label"].setStyleSheet("font-size: 12px; color: #e6edf3;")
+                slot["forget_btn"].setVisible(len(attacks) > 1)
+                slot["learn_btn"].setText("⤵")
+                slot["learn_btn"].setVisible(bool(all_moves))
+                
+                move_data = find_details_move(move)
+                m_type = move_data.get("type", "Normal")
+                color = MOVE_TYPE_COLORS.get(m_type, "#777")
+                slot["type_chip"].setText(m_type.upper())
+                slot["type_chip"].setStyleSheet(f"background-color: {color}; border-radius: 4px; font-size: 9px; font-weight: bold; color: white;")
+                slot["type_chip"].show()
+            else:
+                slot["move"] = None
+                slot["name_label"].setText("— empty —")
+                slot["name_label"].setStyleSheet("font-size: 12px; color: #475569; font-style: italic;")
+                slot["forget_btn"].hide()
+                slot["learn_btn"].setText("＋")
+                slot["learn_btn"].setVisible(bool(all_moves))
+                slot["type_chip"].hide()
+
+        if not all_moves:
+            if not hasattr(self, "no_moves_label"):
+                self.no_moves_label = QLabel("No learnable moves data")
+                self.no_moves_label.setStyleSheet("color: #64748b; font-size: 11px; font-style: italic;")
+                self.layout.addWidget(self.no_moves_label)
+        elif hasattr(self, "no_moves_label"):
+            self.no_moves_label.setParent(None)
+            del self.no_moves_label
+
+    def on_forget_clicked(self, idx):
+        move = self.slots[idx]["move"]
+        if not move: return
+        
+        # Confirmation UI
+        slot_container = self.slots[idx]["container"]
+        old_layout = self.slots[idx]["layout"]
+        
+        conf_widget = QWidget()
+        conf_layout = QHBoxLayout(conf_widget)
+        conf_layout.setContentsMargins(0, 0, 0, 0)
+        
+        label = QLabel(f"Forget {move.capitalize()}?")
+        label.setStyleSheet("font-size: 11px; font-weight: bold;")
+        
+        yes_btn = QPushButton("Yes")
+        yes_btn.setFixedSize(40, 22)
+        yes_btn.setStyleSheet("font-size: 10px;")
+        
+        no_btn = QPushButton("No")
+        no_btn.setFixedSize(40, 22)
+        no_btn.setStyleSheet("font-size: 10px;")
+        
+        conf_layout.addWidget(label)
+        conf_layout.addStretch()
+        conf_layout.addWidget(yes_btn)
+        conf_layout.addWidget(no_btn)
+        
+        # Swap layouts
+        slot_container.hide()
+        self.layout.insertWidget(idx + 1, conf_widget) # +1 because of header
+        
+        def on_yes():
+            attacks = self.full_data.get("attacks", [])
+            if move in attacks:
+                attacks.remove(move)
+                self.full_data["attacks"] = attacks
+                self.save_fn(self.full_data)
+                self.refresh()
+            conf_widget.setParent(None)
+            slot_container.show()
+            
+        def on_no():
+            conf_widget.setParent(None)
+            slot_container.show()
+            
+        yes_btn.clicked.connect(on_yes)
+        no_btn.clicked.connect(on_no)
+
+    def on_learn_clicked(self, idx):
+        all_moves = self.full_data.get("all_attacks", []) or self.full_data.get("learnable_moves", [])
+        current_moves = self.full_data.get("attacks", [])
+        
+        nickname = self.full_data.get("nickname")
+        raw_name = self.full_data.get("name")
+        species_name = get_pretty_name_for_name(raw_name)
+        
+        def normalize_n(s):
+            if not s: return ""
+            return "".join(c for c in str(s).lower() if c.isalnum())
+            
+        is_redundant = (
+            not nickname or 
+            not str(nickname).strip() or 
+            normalize_n(nickname) == normalize_n(species_name) or
+            normalize_n(nickname) == normalize_n(raw_name)
+        )
+        
+        pretty_name = species_name if is_redundant else f"{nickname} ({species_name})"
+        
+        dialog = MovePickerDialog(pretty_name, all_moves, current_moves, self)
+        if dialog.exec():
+            new_move = dialog.get_selected_move()
+            if new_move:
+                attacks = self.full_data.get("attacks", [])
+                if idx < len(attacks):
+                    attacks[idx] = new_move
+                else:
+                    attacks.append(new_move)
+                self.full_data["attacks"] = attacks
+                self.save_fn(self.full_data)
+                self.refresh()
+
+    def on_tm_clicked(self):
+        # 1. Get species/base name for TM lookup
+        internal_name = search_pokedex_by_id(self.pkmn_id)
+        if not internal_name:
+            self.logger.log_and_showinfo("error", f"Could not find Pokémon data for ID: {self.pkmn_id}")
+            return
+            
+        # Normalize: strip hyphens and everything after the first hyphen to try base species
+        # e.g. "venusaur-mega" -> "venusaur"
+        base_name = internal_name.split("-")[0].lower()
+        internal_name = internal_name.lower()
+        
+        # 2. Load TM learnsets
+        try:
+            with open(pokemon_tm_learnset_path, "r", encoding="utf-8") as f:
+                tm_learnsets = json.load(f)
+        except Exception as e:
+            self.logger.log_and_showinfo("error", f"Failed to load TM learnsets: {e}")
+            return
+
+        # 3. Get valid TMs for this species (check specific form then base species)
+        valid_tms = tm_learnsets.get(internal_name) or tm_learnsets.get(base_name)
+        if not valid_tms:
+            self.logger.log_and_showinfo("info", f"This Pokémon cannot learn any moves from TMs.")
+            return
+            
+        # 4. Get owned TMs from DB
+        all_items = mw.ankimon_db.get_all_items()
+        owned_tm_moves = [
+            item["item_name"] 
+            for item in all_items 
+            if (item.get("extra_data") or {}).get("type") == "TM"
+        ]
+        
+        # 5. Filter valid TMs by ownership
+        learnable_tm_moves = [move for move in valid_tms if move in owned_tm_moves]
+        if not learnable_tm_moves:
+            self.logger.log_and_showinfo("info", "You don't own any TMs that this Pokémon can learn.")
+            return
+            
+        # 6. UI: Use MovePickerDialog
+        nickname = self.full_data.get("nickname")
+        raw_name = self.full_data.get("name")
+        species_name = get_pretty_name_for_name(raw_name)
+        
+        def normalize_n(s):
+            if not s: return ""
+            return "".join(c for c in str(s).lower() if c.isalnum())
+            
+        is_redundant = (
+            not nickname or 
+            not str(nickname).strip() or 
+            normalize_n(nickname) == normalize_n(species_name) or
+            normalize_n(nickname) == normalize_n(raw_name)
+        )
+        
+        pretty_name = species_name if is_redundant else f"{nickname} ({species_name})"
+        title = f"TM Learning: {pretty_name}"
+        
+        current_moves = self.full_data.get("attacks", [])
+        dialog = MovePickerDialog(title, learnable_tm_moves, current_moves, self)
+        dialog.setWindowTitle("Learn from TMs")
+        
+        if dialog.exec():
+            new_move = dialog.get_selected_move()
+            if new_move:
+                self.learn_move_from_tm(new_move)
+
+    def learn_move_from_tm(self, move_name):
+        remember_attack(
+            self.individual_id,
+            self.full_data.get("attacks", []),
+            move_name,
+            self.logger,
+            refresh_callback=lambda: self.save_fn(mw.ankimon_db.get_pokemon(self.individual_id))
+        )
 
 
 def format_item_name(item_name: str) -> str:
@@ -171,6 +529,13 @@ class PokemonPC(QDialog):
         self.sort_combo = None
         self.desc_sort = None  # Sort by descending order
         self.current_stats_tab_index = 0  # Remember selected tab (Stats/IV/EV)
+        
+        self._selected_individual_id = None
+        self._total_pokemon_count = 0
+        
+        # Splitter persistence keys
+        self.GEOMETRY_KEY = "ankimon.pc_box.geometry"
+        self.SPLITTER_KEY = "ankimon.pc_box.splitter"
 
         # Subscribe to theme change hook to update UI dynamically
         gui_hooks.theme_did_change.append(self.on_theme_change)
@@ -182,6 +547,7 @@ class PokemonPC(QDialog):
         self.curr_box_label = None
 
         self.create_gui()
+        self._restore_geometry()
         self.refresh_pokemon_grid()
 
     def on_theme_change(self):
@@ -318,7 +684,13 @@ class PokemonPC(QDialog):
         if self.layout():
             clear_layout(self.layout())
         else:
-            self.setLayout(self.main_layout)
+            self.main_layout = QHBoxLayout(self)
+        
+        self.main_container = QWidget()
+        self.main_container_layout = QHBoxLayout(self.main_container)
+        self.main_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.addWidget(self.main_container)
+        
         pokemon_list = self.fetch_filtered_pokemon()
         max_box_idx = (len(pokemon_list) - 1) // (self.n_rows * self.n_cols)
 
@@ -381,14 +753,73 @@ class PokemonPC(QDialog):
         self.pokemon_grid.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.scroll_area.setWidget(self.grid_container)
 
+        self.count_label = QLabel("", self)
+        self.count_label.setObjectName("countLabel")
+        self.count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        collection_layout.addWidget(self.count_label)
+        
         collection_layout.addWidget(self.scroll_area, 1)
         self.setup_filters_layout(collection_layout)
 
         collection_widget = QWidget()
         collection_widget.setLayout(collection_layout)
-        self.main_layout.addWidget(collection_widget, 1)
-
+        self.main_container_layout.addWidget(collection_widget, 3) # Grid takes 3/5
+        
         self.setup_details_panel(background_color)
+        
+        self._apply_qss()
+
+    def _apply_qss(self):
+        self.setStyleSheet(self.styleSheet() + """
+            #countLabel {
+                font-size: 11px;
+                color: #94a3b8;
+                padding: 2px 8px 4px 8px;
+                letter-spacing: 0.3px;
+            }
+            
+            /* Unselected slot */
+            QPushButton#pokemonSlot {
+                border-radius: 5px;
+            }
+
+            /* Selected slot */
+            QPushButton#pokemonSlot[selected="true"] {
+                border: 2px solid #60a5fa;
+                background: rgba(96, 165, 250, 0.12);
+                border-radius: 8px;
+            }
+
+            /* Selected slot hover */
+            QPushButton#pokemonSlot[selected="true"]:hover {
+                background: rgba(96, 165, 250, 0.20);
+                border-color: #93c5fd;
+            }
+        """)
+
+    def _restore_geometry(self):
+        import base64
+        try:
+            geo = mw.pm.profile.get(self.GEOMETRY_KEY)
+            if geo:
+                self.restoreGeometry(QByteArray(base64.b64decode(geo)))
+        except Exception:
+            pass
+
+    def closeEvent(self, event: QCloseEvent):
+        import base64
+        try:
+            mw.pm.profile[self.GEOMETRY_KEY] = base64.b64encode(bytes(self.saveGeometry())).decode()
+        except Exception:
+            pass
+        
+        for attr in ("resize_timer", "search_timer"):
+            t = getattr(self, attr, None)
+            if t and t.isActive():
+                t.stop()
+        
+        self.on_window_close()
+        event.accept()
 
     def setup_filters_layout(self, parent_layout):
         """
@@ -545,12 +976,12 @@ class PokemonPC(QDialog):
             self.details_widget.setLayout(self.pokemon_details_layout)
             self.details_widget.setMinimumWidth(470)  # Ensure it's visible
             self.details_widget.setStyleSheet(f"background-color: {background_color};")
-            self.main_layout.addWidget(self.details_widget, 2)
+            self.main_container_layout.addWidget(self.details_widget, 2) # Details takes 2/5
         else:
             # Ensure the panel is collapsed if no pokemon is selected
             self.details_widget = QWidget()
             self.details_widget.hide()
-            self.main_layout.addWidget(self.details_widget, 0)
+            self.main_container_layout.addWidget(self.details_widget, 2)
 
     def refresh_pokemon_grid(self):
         """
@@ -562,7 +993,8 @@ class PokemonPC(QDialog):
         clear_layout(self.pokemon_grid)
         self.gif_in_collection = self.settings.get("gui.gif_in_collection")
 
-        pokemon_list = self.fetch_filtered_pokemon()
+        self._filtered_pokemon = self.fetch_filtered_pokemon()
+        pokemon_list = self._filtered_pokemon
         max_box_idx = max(0, (len(pokemon_list) - 1) // (self.n_rows * self.n_cols))
 
         if self.current_box_idx > max_box_idx:
@@ -576,6 +1008,8 @@ class PokemonPC(QDialog):
                     total=max_box_idx + 1,
                 )
             )
+        
+        self._update_count_label()
 
         start_index = self.current_box_idx * self.n_rows * self.n_cols
         pokemon_list_slice = pokemon_list[
@@ -606,6 +1040,7 @@ class PokemonPC(QDialog):
                     pokemon.get("name"),
                 )
                 pokemon_button = PokemonSlotButton("")
+                pokemon_button.setObjectName("pokemonSlot")
                 pokemon_button.setFixedSize(self.slot_size, self.slot_size)
 
                 bg = (
@@ -618,8 +1053,13 @@ class PokemonPC(QDialog):
                     if pokemon.get("is_favorite")
                     else theme_vars["hover_color"]
                 )
+                # Store base colours so _refresh_slot_selection can build the full sheet
+                pokemon_button._base_bg = bg
+                pokemon_button._hover_bg = h_bg
+                pokemon_button._border = border
                 pokemon_button.setStyleSheet(
-                    f"QPushButton {{ background-color: {bg}; border: 1px solid {border}; border-radius: 5px; }} QPushButton:hover {{ background-color: {h_bg}; }}"
+                    f"QPushButton {{ background-color: {bg}; border: 1px solid {border}; border-radius: 5px; }}"
+                    f" QPushButton:hover {{ background-color: {h_bg}; }}"
                 )
 
                 # Connect signals
@@ -633,6 +1073,7 @@ class PokemonPC(QDialog):
                         pb, pkmn
                     )
                 )
+                pokemon_button._individual_id = pokemon["individual_id"]
                 self.pokemon_grid.addWidget(
                     pokemon_button, row, col, alignment=Qt.AlignmentFlag.AlignCenter
                 )
@@ -655,6 +1096,40 @@ class PokemonPC(QDialog):
                     pokemon_button.setIconSize(
                         QSize(self.slot_size - 10, self.slot_size - 10)
                     )
+        self._update_count_label()
+        self._refresh_slot_selection()
+
+    def _update_count_label(self):
+        shown = len(self._filtered_pokemon) if hasattr(self, '_filtered_pokemon') else 0
+        total = self._total_pokemon_count
+        if hasattr(self, 'count_label'):
+            self.count_label.setText(f"Showing {shown:,} / {total:,} Pokémon")
+
+    def _refresh_slot_selection(self):
+        for i in range(self.pokemon_grid.count()):
+            item = self.pokemon_grid.itemAt(i)
+            if not item: continue
+            widget = item.widget()
+            if isinstance(widget, PokemonSlotButton):
+                pkmn_id = getattr(widget, "_individual_id", None)
+                is_selected = (pkmn_id == self._selected_individual_id)
+                bg     = getattr(widget, "_base_bg",  "transparent")
+                h_bg   = getattr(widget, "_hover_bg", "transparent")
+                border = getattr(widget, "_border",   "#888")
+                if is_selected:
+                    sheet = (
+                        f"QPushButton {{ background-color: {bg}; border: 3px solid #ffffff;"
+                        f" border-radius: 8px; }}"
+                        f" QPushButton:hover {{ background-color: rgba(255,255,255,0.15);"
+                        f" border-color: #f0f0f0; }}"
+                    )
+                else:
+                    sheet = (
+                        f"QPushButton {{ background-color: {bg}; border: 1px solid {border};"
+                        f" border-radius: 5px; }}"
+                        f" QPushButton:hover {{ background-color: {h_bg}; }}"
+                    )
+                widget.setStyleSheet(sheet)
 
     def navigate_box(self, delta):
         """
@@ -709,6 +1184,7 @@ class PokemonPC(QDialog):
         Refreshes the user interface by populating the grid.
         Avoids calling create_gui() to prevent full layout rebuilds.
         """
+        self._pokemon_cache = None  # Invalidate database cache
         if not self.layout():
             self.create_gui()
         else:
@@ -782,6 +1258,13 @@ class PokemonPC(QDialog):
         Dynamically builds a SQL query to filter and sort Pokemon, fetching only the lightweight stub data needed for the grid.
         Results are cached to improve performance when navigating boxes or selecting Pokémon.
         """
+        if self._total_pokemon_count == 0:
+            try:
+                cursor = mw.ankimon_db.execute("SELECT COUNT(*) FROM captured_pokemon")
+                self._total_pokemon_count = cursor.fetchone()[0]
+            except Exception:
+                pass
+
         # Build current filter state for cache check
         current_state = {
             "db": mw.ankimon_db.db_path.name,
@@ -1064,12 +1547,8 @@ class PokemonPC(QDialog):
 
         # Optimization: Instead of refreshing the entire GUI, we only swap the details widget
         if is_alive(self.details_widget):
-            # Capture the index and stretch of the current details widget
-            idx = self.main_layout.indexOf(self.details_widget)
-            stretch = self.main_layout.stretch(idx) if idx != -1 else 2
-            
             # Remove and delete the old widget
-            self.main_layout.removeWidget(self.details_widget)
+            self.main_container_layout.removeWidget(self.details_widget)
             self.details_widget.deleteLater()
             
             # Build new layout
@@ -1096,7 +1575,7 @@ class PokemonPC(QDialog):
                 gif_in_collection=self.gif_in_collection,
                 remove_levelcap=self.settings.get("misc.remove_level_cap"),
                 logger=self.logger,
-                refresh_callback=self.refresh_gui,
+                refresh_callback=lambda: (self.refresh_gui(), self.show_pokemon_details(pokemon_stub)),
                 initial_tab_index=self.current_stats_tab_index,
                 tab_changed_callback=self.on_stats_tab_changed,
                 nature=pokemon.get("nature", "serious"),
@@ -1107,19 +1586,113 @@ class PokemonPC(QDialog):
             self.details_widget = QWidget()
             self.details_widget.setLayout(self.pokemon_details_layout)
             self.details_widget.setMinimumWidth(470)
-            bg_color = self.theme_vars.get("background_color", "transparent")
-            self.details_widget.setStyleSheet(f"background-color: {bg_color};")
             
-            # Re-add to the main layout at the same position
-            if idx != -1:
-                self.main_layout.insertWidget(idx, self.details_widget, stretch)
-            else:
-                self.main_layout.addWidget(self.details_widget, 2)
+            # Re-add to the main container layout
+            self.main_container_layout.addWidget(self.details_widget, 2)
             
+            # Selection indicator
+            self._selected_individual_id = pokemon.get("individual_id")
+            self._refresh_slot_selection()
+
+            # --- Post-processing: Move Manager (Improvement B) ---
+            self._integrate_move_manager(pokemon)
+            
+            # --- Post-processing: Nature Indicators (Improvement G) ---
+            self._apply_nature_indicators(pokemon)
+
             self.details_widget.show()
         else:
             # Fallback for unexpected state
             self.refresh_gui()
+
+    def _integrate_move_manager(self, pokemon):
+        # Traverse layout to find TopR_layout_Box
+        # From PokemonCollectionDetails: layout -> first_layout (QHBoxLayout) -> TopR_layout_Box (QVBoxLayout)
+        try:
+            main_layout = self.details_widget.layout()
+            # first_layout is usually at index 1 (0 is name_label)
+            first_layout_item = main_layout.itemAt(1)
+            if first_layout_item and first_layout_item.layout():
+                first_layout = first_layout_item.layout()
+                # TopR_layout_Box is at index 1 of first_layout
+                top_r_item = first_layout.itemAt(1)
+                if top_r_item and top_r_item.layout():
+                    top_r_layout = top_r_item.layout()
+                    
+                    # Hide old buttons and label
+                    for i in range(top_r_layout.count()):
+                        item = top_r_layout.itemAt(i)
+                        if item and item.widget():
+                            item.widget().hide()
+                    
+                    # Add new Move Manager
+                    def _save_pokemon(data):
+                        mw.ankimon_db.save_pokemon(data)
+                        self.show_pokemon_details(pokemon)
+
+                    self.move_manager = MoveManagerWidget(
+                        individual_id=pokemon["individual_id"],
+                        pkmn_id=pokemon["id"],
+                        logger=self.logger,
+                        save_fn=_save_pokemon,
+                        parent=self.details_widget
+                    )
+                    top_r_layout.addWidget(self.move_manager)
+        except Exception as e:
+            self.logger.log("error", f"Error integrating move manager: {e}")
+
+    def _apply_nature_indicators(self, pokemon):
+        # Normalize to Title Case so lowercase DB values (e.g. "adamant") match
+        raw_nature = pokemon.get("nature", "serious") or "serious"
+        nature = raw_nature.strip().title()
+        boosted, lowered = NATURE_EFFECTS.get(nature, ("", ""))
+        if not boosted and not lowered:
+            return
+
+        try:
+            # Find stats_tabs (QTabWidget)
+            stats_tabs = self.details_widget.findChild(QTabWidget)
+            if stats_tabs:
+                stats_widget = stats_tabs.widget(0)
+                labels = stats_widget.findChildren(QLabel)
+                for label in labels:
+                    # Strip any previously applied indicators before matching
+                    raw_text = label.text()
+                    clean_text = raw_text.replace(" ▲", "").replace(" ▼", "").replace(":", "").strip()
+                    stat_key = None
+                    if clean_text in DISPLAY_TO_STAT_KEY:
+                        stat_key = DISPLAY_TO_STAT_KEY[clean_text]
+                    else:
+                        # Fallback for substring match
+                        for k, v in DISPLAY_TO_STAT_KEY.items():
+                            if k in clean_text:
+                                stat_key = v
+                                break
+
+                    if stat_key:
+                        if stat_key == boosted:
+                            label.setText(f"{clean_text} ▲")
+                            label.setStyleSheet("color: #4ade80; font-weight: bold;")
+                        elif stat_key == lowered:
+                            label.setText(f"{clean_text} ▼")
+                            label.setStyleSheet("color: #f87171; font-weight: bold;")
+        except Exception as e:
+            self.logger.log("error", f"Error applying nature indicators: {e}")
+            
+    def _update_count_label(self):
+        if not hasattr(self, "count_label") or not is_alive(self.count_label):
+            return
+        
+        shown = len(self._filtered_pokemon) if hasattr(self, "_filtered_pokemon") else 0
+        
+        # Get total count
+        try:
+            cursor = mw.ankimon_db.execute("SELECT COUNT(*) FROM captured_pokemon")
+            total = cursor.fetchone()[0]
+        except Exception:
+            total = shown
+            
+        self.count_label.setText(f"Showing {shown} / {total} Pokémon")
 
     def on_stats_tab_changed(self, index: int):
         """Callback to remember which tab (Stats/IV/EV) is selected."""
