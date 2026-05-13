@@ -42,6 +42,7 @@
     "misc.gen7": "Include Pokémon from Generation 7.",
     "misc.gen8": "Include Pokémon from Generation 8.",
     "misc.gen9": "Include Pokémon from Generation 9.",
+    "misc.active_region": "Controls regional encounter behavior. When set to 'No Region', all regional variants have a 7% chance to appear. Selecting a specific region provides a 30% encounter boost (40% for Hisui) for that region's Pokémon and ensures their regional forms appear in the boosted pool. Note: Both the base species' and the form's introduction generations must be enabled for a variant to appear.",
     "misc.remove_level_cap": "Allow leveling beyond set level cap.",
   "misc.language": "Select language ID for Pokémon names and descriptions. [1: Japanese (Hir & Kata), 2: Japanese (Roomaji), 3: Korean, 4: Chinese (Traditional), 5: French, 6: German, 7: Spanish, 8: Italian, 9: English, 10: Czech, 11: Japanese, 12: Chinese (Simplified), 13: Portuguese (Brazil), 14: Spanish (Latin America)]",
     "misc.ssh": "Enable SSH if encountering connectivity issues (like Eduroam restrictions).",

@@ -98,6 +98,12 @@ class Ankidex(QDialog):
         for uid in unavail:
             if uid in encounterable_ids:
                 encounterable_ids.remove(uid)
+
+        # Add encounterable regional form IDs for the active region
+        from ..functions.encounter_data import REGIONAL_FORMS
+        active_region = mw.settings_obj.get("misc.active_region")
+        if active_region and active_region in REGIONAL_FORMS:
+            encounterable_ids.update(REGIONAL_FORMS[active_region])
         
         # Add Fossils back (they are in UNAVAILABLE because they aren't wild, but are obtainable)
         fossils = [

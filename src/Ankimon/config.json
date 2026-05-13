@@ -41,6 +41,7 @@
     "misc.gen7": false,
     "misc.gen8": false,
     "misc.gen9": false,
+    "misc.active_region": null,
     "misc.remove_level_cap": false,
     "misc.leaderboard": false,
     "misc.language": 9,

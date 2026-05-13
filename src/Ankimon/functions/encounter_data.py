@@ -456,6 +456,8 @@ MEGA = [
     10074,  # glaliemega             (species=362)
     10075,  # dianciemega            (species=719)
     10076,  # metagrossmega          (species=376)
+    10077,  # kyogreprimal           (species=382)
+    10078,  # groudonprimal          (species=383)
     10079,  # rayquazamega           (species=384)
     10087,  # cameruptmega           (species=323)
     10088,  # lopunnymega            (species=428)
@@ -558,32 +560,8 @@ UNAVAILABLE = [
     697, 698, 699,   # tyrantrum, amaura, aurorus
     880, 881, 882,   # dracozolt, arctozolt, dracovish
     883,             # arctovish
-    # Alolan Forms
-    10091, 10092, 10093, # rattataalola, raticatealola, raticatealolatotem
-    10099, 10100, 10101, # pikachualola, raichualola, sandshrewalola
-    10102, 10103, 10104, # sandslashalola, vulpixalola, ninetalesalola
-    10105, 10106, 10107, # diglettalola, dugtrioalola, meowthalola
-    10108, 10109, 10110, # persianalola, geodudealola, graveleralola
-    10111, 10112, 10113, # golemalola, grimeralola, mukalola
-    10114, 10115, 10149, # exeggutoralola, marowakalola, marowakalolatotem
-    # Galarian Forms
-    10161, 10162, 10163, # meowthgalar, ponytagalar, rapidashgalar
-    10164, 10165, 10166, # slowpokegalar, slowbrogalar, farfetchdgalar
-    10167, 10168, 10169, # weezinggalar, mrmimegalar, articunogalar
-    10170, 10171, 10172, # zapdosgalar, moltresgalar, slowkinggalar
-    10173, 10174, 10175, # corsolagalar, zigzagoongalar, linoonegalar
-    10176, 10177, 10178, # darumakagalar, darmanitangalar, darmanitangalarzen
-    10179, 10180,    # yamaskgalar, stunfiskgalar
-    # Hisuian Forms
-    10229, 10230, 10231, # growlithehisui, arcaninehisui, voltorbhisui
-    10232, 10233, 10234, # electrodehisui, typhlosionhisui, qwilfishhisui
-    10235, 10236, 10237, # sneaselhisui, samurotthisui, lilliganthisui
-    10238, 10239, 10240, # zoruahisui, zoroarkhisui, braviaryhisui
-    10241, 10242, 10243, # sliggoohisui, goodrahisui, avalugghisui
-    10244,           # decidueyehisui
-    # Paldean Forms
-    10250, 10251, 10252, # taurospaldeacombat, taurospaldeablaze, taurospaldeaaqua
-    10253,           # wooperpaldea
+    # Alolan Forms (10093 = raticatealolatotem, 10149 = marowakalolatotem: stay UNAVAILABLE)
+    10093, 10149,    # raticatealolatotem, marowakalolatotem
     # Special & Battle-Only Forms
     10117, 10120, 10121, # greninjaash, zygardecomplete, gumshoostotem
     10122, 10128, 10129, # vikavolttotem, lurantistotem, salazzletotem
@@ -603,7 +581,7 @@ UNAVAILABLE = [
     10025, 10026, 10027, # meowsticf, aegislashblade, pumpkaboosmall
     10028, 10029, 10030, # pumpkaboolarge, pumpkaboosuper, gourgeistsmall
     10031, 10032, 10061, # gourgeistlarge, gourgeistsuper, floetteeternal
-    10077, 10078, 10080, # kyogreprimal, groudonprimal, pikachurockstar
+    10080,               # pikachurockstar
     10081, 10082, 10083, # pikachubelle, pikachupopstar, pikachuphd
     10084, 10085, 10086, # pikachulibre, pikachucosplay, hoopaunbound
     10094, 10095, 10096, # pikachuoriginal, pikachuhoenn, pikachusinnoh
@@ -629,6 +607,67 @@ UNAVAILABLE = [
 ]
 
 # =============================================================
+# REGIONAL FORMS
+# Maps region name -> list of encounterable regional form actual_ids.
+# Totem variants (10093, 10149) are intentionally excluded.
+# =============================================================
+REGIONAL_FORMS: dict[str, list[int]] = {
+    "alola": [
+        10091, 10092, 10099,  # rattata-alola, raticate-alola, pikachu-alola-cap
+        10100, 10101, 10102,  # raichu-alola, sandshrew-alola, sandslash-alola
+        10103, 10104, 10105,  # vulpix-alola, ninetales-alola, diglett-alola
+        10106, 10107, 10108,  # dugtrio-alola, meowth-alola, persian-alola
+        10109, 10110, 10111,  # geodude-alola, graveler-alola, golem-alola
+        10112, 10113, 10114,  # grimer-alola, muk-alola, exeggutor-alola
+        10115,                # marowak-alola
+    ],
+    "galar": [
+        10161, 10162, 10163,  # meowth-galar, ponyta-galar, rapidash-galar
+        10164, 10165, 10166,  # slowpoke-galar, slowbro-galar, farfetchd-galar
+        10167, 10168, 10169,  # weezing-galar, mr-mime-galar, articuno-galar
+        10170, 10171, 10172,  # zapdos-galar, moltres-galar, slowking-galar
+        10173, 10174, 10175,  # corsola-galar, zigzagoon-galar, linoone-galar
+        10176, 10177, 10178,  # darumaka-galar, darmanitan-galar-standard, darmanitan-galar-zen
+        10179, 10180,         # yamask-galar, stunfisk-galar
+    ],
+    "hisui": [
+        10229, 10230, 10231,  # growlithe-hisui, arcanine-hisui, voltorb-hisui
+        10232, 10233, 10234,  # electrode-hisui, typhlosion-hisui, qwilfish-hisui
+        10235, 10236, 10237,  # sneasel-hisui, samurott-hisui, lilligant-hisui
+        10238, 10239, 10240,  # zorua-hisui, zoroark-hisui, braviary-hisui
+        10241, 10242, 10243,  # sliggoo-hisui, goodra-hisui, avalugg-hisui
+        10244,                # decidueye-hisui
+    ],
+    "paldea": [
+        10250, 10251, 10252,  # tauros-paldea-combat-breed, tauros-paldea-blaze-breed, tauros-paldea-aqua-breed
+        10253,                # wooper-paldea
+    ],
+}
+
+# Maps forme string (as it appears in pokedex.json) -> required intro gen number
+REGIONAL_FORME_GEN: dict[str, int] = {
+    "Alola":  7,
+    "Galar":  8,
+    "Hisui":  8,
+    "Paldea": 9,
+}
+
+# Flat reverse map: actual_id -> region string
+REGIONAL_FORM_REGION: dict[int, str] = {
+    aid: region for region, aids in REGIONAL_FORMS.items() for aid in aids
+}
+
+# species_id -> {region_name -> [actual_id, ...]}
+# Multiple variants per species+region supported (e.g. Tauros-Paldea x3).
+# Built once at module load by _build_regional_lookup().
+REGIONAL_FORM_LOOKUP: dict[int, dict[str, list[int]]] = {}
+
+
+# REGIONAL_FORM_LOOKUP is populated at import time by
+# _build_regional_lookup() in functions/encounter_functions.py.
+
+
+# =============================================================
 # PREREQUISITE CHAINS (partly from encounter.txt)
 # Key   = Pokémon species_id that requires prerequisites.
 # Value = set of species_ids that must ALL be in the player's collection.
@@ -643,6 +682,8 @@ PREREQUISITES = {
     
     # Generation 3
     384: {382, 383},       # Rayquaza requires Kyogre + Groudon
+    10077: {382},          # Primal Kyogre requires Kyogre
+    10078: {383},          # Primal Groudon requires Groudon
     
     # Generation 4
     487: {483, 484},       # Giratina requires Dialga + Palkia

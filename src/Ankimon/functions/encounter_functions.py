@@ -52,6 +52,7 @@ from ..singletons import (
     ankimon_db,
     pokemon_pc,
 )
+from . import encounter_data
 
 ALL_NATURES = [
     "Hardy", "Lonely", "Brave", "Adamant", "Naughty",
@@ -60,6 +61,41 @@ ALL_NATURES = [
     "Modest", "Mild", "Quiet", "Bashful", "Rash",
     "Calm", "Gentle", "Sassy", "Careful", "Quirky"
 ]
+
+
+def _build_regional_lookup() -> None:
+    """Populates encounter_data.REGIONAL_FORM_LOOKUP from pokedex.json.
+
+    Maps species_id -> {region -> [actual_id, ...]} for all encounterable
+    regional forms. Called once at module import. Silently no-ops if
+    pokedex.json is unavailable (e.g. first-run before data files exist).
+    """
+    import os
+    from . import encounter_data
+    try:
+        pokedex_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "user_files", "data_files", "pokedex.json"
+        )
+        with open(pokedex_path, "r", encoding="utf-8") as f:
+            pokedex = json.load(f)
+        aid_to_sid: dict[int, int] = {
+            v["actual_id"]: v["species_id"]
+            for v in pokedex.values()
+            if "actual_id" in v and "species_id" in v
+        }
+        for region, aids in encounter_data.REGIONAL_FORMS.items():
+            for aid in aids:
+                sid = aid_to_sid.get(aid)
+                if sid is None:
+                    continue
+                region_map = encounter_data.REGIONAL_FORM_LOOKUP.setdefault(sid, {})
+                region_map.setdefault(region, []).append(aid)
+    except Exception as e:
+        print(f"[Ankimon] Warning: Could not build regional form lookup: {e}")
+
+
+_build_regional_lookup()
 
 
 # === PERFORMANCE FIX: Cache percentage calculations ===
@@ -157,9 +193,9 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
                 "Legendary": 0,
                 "Mythical": 0,
                 "Ultra": 0,
-                "Mega": 50,
-                "Gmax": 40,
-            } """
+                "Mega": 90,
+                "Gmax": 0,
+            }"""
 
     # Cache the result
     _percentages_cache['percentages'] = percentages
@@ -202,7 +238,7 @@ def get_random_pokemon_in_tier(tier):
         return 1
 
     return random.choice(id_data) if id_data else 1
-
+    #return 52
 
 def _player_owns_base_form(actual_id: int, collected_ids: set) -> bool:
     """Return True if the player owns the base species of this Mega/Gmax form."""
@@ -338,11 +374,37 @@ def check_id_ok(id_num: Union[int, list[int]]):
     # the normal gen ranges. Resolve to base species for generation check.
     if id_num >= 10000:
         name = search_pokedex_by_id(id_num)
+        if not name or name == "Pokémon not found":
+            return True  # fallback
+
         species_id = safe_int(search_pokedex(name, "species_id"))
-        if species_id > 0:
-            id_num = species_id
-        else:
-            return True # Fallback if species_id not found
+        gen_config = [settings_obj.get(f"misc.gen{i}") for i in range(1, 10)]
+
+        # Check base species generation
+        base_gen = 0
+        for gen, max_id in gen_ids.items():
+            if species_id <= max_id:
+                base_gen = int(gen.split("_")[1])
+                break
+        if base_gen == 0:
+            return True  # fallback
+        if not gen_config[base_gen - 1]:
+            return False  # base gen disabled
+
+        # For regional forms, also require the form's intro gen to be enabled
+        from . import encounter_data
+        if id_num in encounter_data.REGIONAL_FORM_REGION:
+            forme = search_pokedex(name, "forme") or ""
+            intro_gen = None
+            for f_name, g in encounter_data.REGIONAL_FORME_GEN.items():
+                if f_name in forme:
+                    intro_gen = g
+                    break
+            
+            if intro_gen and not gen_config[intro_gen - 1]:
+                return False  # regional form's intro gen disabled
+
+        return True
 
     generation = 0
     for gen, max_id in gen_ids.items():
@@ -353,6 +415,66 @@ def check_id_ok(id_num: Union[int, list[int]]):
             return gen_config[generation - 1]
 
     return False
+
+
+def get_regional_substitute(species_id: int, region: str = None) -> "int | None":
+    """
+    Returns a regional form actual_id for the given species and region, or None.
+    If region is None, returns any valid regional variant from any region.
+    """
+    from . import encounter_data
+    
+    eligible = []
+    lookup = encounter_data.REGIONAL_FORM_LOOKUP.get(species_id, {})
+    
+    if region:
+        options = lookup.get(region, [])
+        for v in options:
+            if check_id_ok(v):
+                eligible.append(v)
+    else:
+        for reg_variants in lookup.values():
+            for v in reg_variants:
+                if check_id_ok(v):
+                    eligible.append(v)
+                    
+    if eligible:
+        return random.choice(eligible)
+    return None
+
+def get_boosted_gens_for_region(region: str) -> list[int]:
+    mapping = {
+        "kanto": [1], "johto": [2], "hoenn": [3], "sinnoh": [4],
+        "unova": [5], "kalos": [6], "alola": [7], "galar": [8],
+        "paldea": [9], "hisui": [4, 8]
+    }
+    return mapping.get(region, [])
+
+def get_boosted_pool_chance(region: str) -> float:
+    return 0.40 if region == "hisui" else 0.30
+
+def get_base_species_gen(actual_id: int) -> int:
+    species_id = actual_id
+    if actual_id >= 10000:
+        name = search_pokedex_by_id(actual_id)
+        if name and name != "Pokémon not found":
+            species_id = safe_int(search_pokedex(name, "species_id")) or actual_id
+
+    for gen, max_id in gen_ids.items():
+        if species_id <= max_id:
+            return int(gen.split("_")[1])
+    return 0
+
+def get_all_pokemon_in_tier(tier: str) -> list[int]:
+    if tier == "Normal": return encounter_data.NORMAL
+    if tier == "Baby": return encounter_data.BABY
+    if tier == "Ultra": return encounter_data.ULTRA
+    if tier == "Legendary": return encounter_data.LEGENDARY
+    if tier == "Mythical": return encounter_data.MYTHICAL
+    if tier == "Mega": return encounter_data.MEGA
+    if tier == "Gmax": return encounter_data.GMAX
+    if tier == "Starter": return encounter_data.STARTERS
+    return []
 
 
 def generate_random_pokemon(
@@ -430,9 +552,9 @@ def generate_random_pokemon(
     for i in range(start_idx, len(TIER_ORDER)):
         current_tier = TIER_ORDER[i]
         
-        # Try up to 500 times to find a valid pokemon in THIS tier
-        for _ in range(500):
-            pokemon_id = get_random_pokemon_in_tier(current_tier)
+        tier_ids = get_all_pokemon_in_tier(current_tier)
+        full_pool = []
+        for pokemon_id in tier_ids:
             name = search_pokedex_by_id(pokemon_id)
             if not name or name == "Pokémon not found":
                 continue
@@ -454,18 +576,61 @@ def generate_random_pokemon(
             if not _meets_prerequisites(pokemon_id, collected_ids):
                 continue
                 
-            # If we reached here, the pokemon is valid!
-            selected_pokemon_id = pokemon_id
-            selected_tier = current_tier
-            break
+            full_pool.append(pokemon_id)
             
-        if selected_pokemon_id:
-            break
+        if not full_pool:
+            continue
+
+        active_region = settings_obj.get("misc.active_region")
+        boosted_pool = []
+
+        if active_region:
+            boosted_gens = get_boosted_gens_for_region(active_region)
+            
+            for pid in full_pool:
+                if get_base_species_gen(pid) in boosted_gens:
+                    if pid not in boosted_pool:
+                        boosted_pool.append(pid)
+                
+                # Add eligible regional variants for the active region
+                options = encounter_data.REGIONAL_FORM_LOOKUP.get(pid, {}).get(active_region, [])
+                for opt in options:
+                    if check_id_ok(opt) and opt not in boosted_pool:
+                        boosted_pool.append(opt)
+
+        if active_region and boosted_pool:
+            chance = get_boosted_pool_chance(active_region)
+            if random.random() < chance:
+                selected_pokemon_id = random.choice(boosted_pool)
+            else:
+                selected_pokemon_id = random.choice(full_pool)
+        else:
+            selected_pokemon_id = random.choice(full_pool)
+
+        selected_tier = current_tier
+        break
             
     # Final fallback if somehow everything failed (e.g. settings restrict all IDs)
     if not selected_pokemon_id:
         selected_pokemon_id = 19 # Rattata
         selected_tier = "Normal"
+
+    # --- Regional form resolution ---
+    # Apply 7%-per-variant resolution for base species.
+    if selected_pokemon_id < 10000:
+        region_forms = encounter_data.REGIONAL_FORM_LOOKUP.get(selected_pokemon_id, {})
+        num_eligible = 0
+        for variants in region_forms.values():
+            for v in variants:
+                if check_id_ok(v):
+                    num_eligible += 1
+        
+        if num_eligible > 0:
+            if random.random() < 0.07 * num_eligible:
+                sub = get_regional_substitute(selected_pokemon_id)
+                if sub:
+                    selected_pokemon_id = sub
+    # --- End form resolution ---
 
     pokemon_id = selected_pokemon_id
     tier = selected_tier
@@ -1026,13 +1191,14 @@ def handle_enemy_faint(
 
     name_lower = enemy_pokemon.name.lower()
     forme = search_pokedex(name_lower, "forme")
-    is_mega = (forme and "mega" in str(forme).lower()) or "mega" in name_lower
-    is_gmax = (forme and "gmax" in str(forme).lower()) or "gmax" in name_lower or "gigantamax" in name_lower
+    from . import encounter_data
+    is_mega = (enemy_pokemon.id in encounter_data.MEGA)
+    is_gmax = (enemy_pokemon.id in encounter_data.GMAX)
     
     is_special = (
         enemy_pokemon.tier in ["Ultra", "Legendary", "Mythical", "Starter"] or
         is_mega or
-        is_gmax
+        is_gmax 
     )
     
     should_catch_always = settings_obj.get("battle.automatic_catch_special", True) and is_special

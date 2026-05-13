@@ -92,6 +92,34 @@ window.initializeAnkidex = async function(data) {
     applyFiltersAndRender(collectionChanged);
 };
 
+function formatLoreName(name) {
+    if (!name || typeof name !== 'string') return name;
+    
+    if (name.includes("-Mega-X")) return "Mega " + name.replace("-Mega-X", "") + " X";
+    if (name.includes("-Mega-Y")) return "Mega " + name.replace("-Mega-Y", "") + " Y";
+    if (name.includes("-Mega-Z")) return "Mega " + name.replace("-Mega-Z", "") + " Z";
+    
+    const replacements = {
+        "-Mega": "Mega ",
+        "-Gmax": "Gigantamax ",
+        "-Alola": "Alolan ",
+        "-Galar": "Galarian ",
+        "-Paldea": "Paldean ",
+        "-Hisui": "Hisuian ",
+        "-Primal": "Primal ",
+        "-Origin": "Origin ",
+        "-Therian": "Therian "
+    };
+    
+    for (const [suffix, prefix] of Object.entries(replacements)) {
+        if (name.includes(suffix)) {
+            return prefix + name.replace(suffix, "");
+        }
+    }
+    
+    return name;
+}
+
 function getVisibilityState(id) {
     if (state.collection.owned.has(id)) return 2; // CAUGHT
     if (state.collection.seen.has(id)) return 1;  // SEEN
@@ -765,7 +793,7 @@ function renderGrid() {
             
             const displayId = getDisplayId(p);
             card.querySelector('.card-id').textContent = `#${displayId.toString().padStart(4, '0')}`;
-            card.querySelector('.card-name').textContent = visState >= 1 ? p.name : '???';
+            card.querySelector('.card-name').textContent = visState >= 1 ? formatLoreName(p.name) : '???';
             
             const sprite = card.querySelector('.card-sprite img');
             sprite.src = getSpritePath(id);
@@ -820,7 +848,7 @@ function selectPokemon(id, cardElement = null) {
     if (scrollArea) scrollArea.scrollTop = 0;
     const displayId = getDisplayId(p);
     document.getElementById('det-id').textContent = `#${displayId.toString().padStart(4, '0')}`;
-    document.getElementById('det-name').textContent = visState >= 1 ? p.name : '???';
+    document.getElementById('det-name').textContent = visState >= 1 ? formatLoreName(p.name) : '???';
     const sprite = document.getElementById('det-sprite');
     sprite.src = getSpritePath(id);
     sprite.onerror = () => handleSpriteError(sprite, id, p.species_id);
@@ -888,7 +916,7 @@ function selectPokemon(id, cardElement = null) {
 
 function renderBriefing(p, id, visState, displayId) {
     document.getElementById('briefing-id').textContent = `#${displayId.toString().padStart(4, '0')}`;
-    document.getElementById('briefing-name').textContent = visState >= 1 ? p.name : '???';
+    document.getElementById('briefing-name').textContent = visState >= 1 ? formatLoreName(p.name) : '???';
     
     const sprite = document.getElementById('briefing-sprite');
     sprite.src = getSpritePath(id);
@@ -934,7 +962,7 @@ function renderBriefing(p, id, visState, displayId) {
         badgeEl.textContent = 'Available';
         badgeEl.classList.add('available');
         summaryEl.textContent = 'All requirements met. This target is unlocked and ready for encounter.';
-        const targetName = visState >= 1 ? p.name : '???';
+        const targetName = visState >= 1 ? formatLoreName(p.name) : '???';
         nextStepEl.textContent = `Encounter and catch ${targetName}.`;
     } else if (caughtCount > 0) {
         badgeEl.textContent = 'In Progress';
@@ -948,7 +976,7 @@ function renderBriefing(p, id, visState, displayId) {
             const mId = missingReqs[0];
             const m = state.fullSpeciesMap[mId];
             const mVis = getVisibilityState(mId);
-            const mName = (m && mVis >= 1) ? m.name : '???';
+            const mName = (m && mVis >= 1) ? formatLoreName(m.name) : '???';
             nextStepEl.textContent = `Catch ${mName} next.`;
         } else {
             nextStepEl.textContent = `Catch ${missingReqs.length} more requirements.`;
@@ -962,7 +990,7 @@ function renderBriefing(p, id, visState, displayId) {
         const mId = firstMissing;
         const m = state.fullSpeciesMap[mId];
         const mVis = getVisibilityState(mId);
-        const mName = (m && mVis >= 1) ? m.name : '???';
+        const mName = (m && mVis >= 1) ? formatLoreName(m.name) : '???';
         
         if (isOR) {
             nextStepEl.textContent = `Catch any one of the alternative requirements to unlock.`;
@@ -976,7 +1004,7 @@ function renderBriefing(p, id, visState, displayId) {
         summaryEl.textContent = isEncounterable 
             ? 'No requirements. This target is available.' 
             : 'This target is currently restricted by level or region progress.';
-        nextStepEl.textContent = isEncounterable ? `Find ${p.name} in the wild.` : 'Continue your journey.';
+        nextStepEl.textContent = isEncounterable ? `Find ${formatLoreName(p.name)} in the wild.` : 'Continue your journey.';
     }
 
 
@@ -1021,7 +1049,7 @@ function renderBriefing(p, id, visState, displayId) {
             
             row.innerHTML = `
                 <img id="briefing-req-sprite-${reqId}" class="req-sprite" style="${rFilter}">
-                <div class="req-name">${rVisState >= 1 ? rp.name : '???'}</div>
+                <div class="req-name">${rVisState >= 1 ? formatLoreName(rp.name) : '???'}</div>
                 <div class="req-status ${statusClass}">${statusText}</div>
             `;
             const reqImg = row.querySelector('.req-sprite');
@@ -1112,7 +1140,13 @@ function renderForms(p) {
     const formsContainer = document.getElementById('det-forms');
     const formsSection = document.getElementById('det-forms-section');
     formsContainer.innerHTML = '';
-    const forms = state.allPokemon.filter(x => x.species_id === p.species_id && (state.collection.encounterable.has(x.actual_id) || state.collection.owned.has(x.actual_id)));
+    const forms = state.allPokemon.filter(x => 
+        x.species_id === p.species_id && (
+            state.collection.encounterable.has(x.actual_id) || 
+            state.collection.owned.has(x.actual_id) ||
+            (x.forme && ["Alola", "Galar", "Hisui", "Paldea"].some(r => x.forme.includes(r)))
+        )
+    );
     if (forms.length <= 1) { formsSection.classList.add('hidden'); return; }
     formsSection.classList.remove('hidden');
     forms.forEach(form => {
@@ -1183,7 +1217,7 @@ function renderEvolution(p) {
         el.innerHTML = `
             <img class="evo-sprite" style="${filter}">
             <div class="evo-info">
-                <span class="evo-name">${visState >= 1 ? node.name : '???'}</span>
+                <span class="evo-name">${visState >= 1 ? formatLoreName(node.name) : '???'}</span>
                 <div style="display: flex; gap: 8px; align-items: center;">
                     <span class="evo-id">${formattedId}</span>
                     ${evoCondition}
@@ -1209,7 +1243,13 @@ function toggleDrawer(id, cardElement) {
     }
     closeDrawer();
     const speciesId = state.speciesMap[id].species_id;
-    const forms = state.allPokemon.filter(x => x.species_id === speciesId && (state.collection.encounterable.has(x.actual_id) || state.collection.owned.has(x.actual_id)));
+    const forms = state.allPokemon.filter(x => 
+        x.species_id === speciesId && (
+            state.collection.encounterable.has(x.actual_id) || 
+            state.collection.owned.has(x.actual_id) ||
+            (x.forme && ["Alola", "Galar", "Hisui", "Paldea"].some(r => x.forme.includes(r)))
+        )
+    );
     if (forms.length <= 1) return;
     const template = document.getElementById('drawer-template');
     const clone = template.content.cloneNode(true);
@@ -1337,7 +1377,7 @@ function renderRequirements(p) {
         item.className = `prereq-item ${isCaught ? 'caught' : 'locked'}`;
         
         const reqPokemon = state.fullSpeciesMap[reqId];
-        const name = reqPokemon ? reqPokemon.name : "???";
+        const name = reqPokemon ? formatLoreName(reqPokemon.name) : "???";
         const formattedId = '#' + reqId.toString().padStart(4, '0');
         item.title = isCaught ? name : "Requirement Locked";
         

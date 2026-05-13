@@ -217,14 +217,14 @@ class Reviewer_Manager:
             hud_html += '<div id="xp-bar" class="Ankimon"></div>'
             hud_html += '<div id="xp_text" class="Ankimon">XP</div>'
 
-        # For Mega/Gmax forms, the species CSV has no entry — use display_name instead
-        if hasattr(self.enemy_pokemon, 'name') and any(f in self.enemy_pokemon.name.lower() for f in ['mega', 'gmax']):
-            enemy_lang_name = self.enemy_pokemon.display_name
-        else:
-            enemy_lang_name = (get_pokemon_diff_lang_name(int(self.enemy_pokemon.id), int(self.settings.get('misc.language'))).capitalize())
+        # Use the smart display_name property which handles translations, regional forms, megas, and gmax
+        enemy_lang_name = self.enemy_pokemon.display_name
         if self.enemy_pokemon.shiny is True:
             enemy_lang_name += " ⭐ "
-        name_display_text = f"{enemy_lang_name} LvL: {self.enemy_pokemon.level}"
+        # Format: [#ID] Name (Gen X) LvL: Y
+        pokedex_id = getattr(self.enemy_pokemon, 'pokedex_id', self.enemy_pokemon.id)
+        generation = getattr(self.enemy_pokemon, 'generation', 1)
+        name_display_text = f"[#{pokedex_id}] {enemy_lang_name} (Gen {generation}) LvL: {self.enemy_pokemon.level}"
         name_display_text += self.get_boost_values_string(self.enemy_pokemon, display_neutral_boost=False)
         hud_html += f'<div id="name-display" class="Ankimon">{name_display_text}</div>'
 
@@ -254,16 +254,13 @@ class Reviewer_Manager:
                          f'<img src="{main_pkmn_sprite_url}" alt="MyPokeImage" {my_poke_html_attributes}>'
                          f'</div>')
 
-            # For Mega/Gmax forms, the species CSV has no entry — use display_name instead
-            if hasattr(self.main_pokemon, 'name') and any(f in self.main_pokemon.name.lower() for f in ['mega', 'gmax']):
-                main_lang_name = self.main_pokemon.display_name
-            else:
-                main_lang_name = (get_pokemon_diff_lang_name(int(self.main_pokemon.id), int(self.settings.get('misc.language'))).capitalize())
-            if str(main_lang_name) == 'No translation in this language':
-                main_lang_name = 'RESTART ANKI NOW' 
+            main_lang_name = self.main_pokemon.display_name
             if self.main_pokemon.shiny:
                 main_lang_name += " ⭐ "
-            main_name_display_text = f"{main_lang_name} LvL: {self.main_pokemon.level}"
+            # Format: [#ID] Name (Gen X) LvL: Y
+            main_pokedex_id = getattr(self.main_pokemon, 'pokedex_id', self.main_pokemon.id)
+            main_generation = getattr(self.main_pokemon, 'generation', 1)
+            main_name_display_text = f"[#{main_pokedex_id}] {main_lang_name} (Gen {main_generation}) LvL: {self.main_pokemon.level}"
             main_name_display_text += self.get_boost_values_string(self.main_pokemon, display_neutral_boost=False)
             hud_html += f'<div id="myname-display" class="Ankimon">{main_name_display_text}</div>'
             hud_html += f'<div id="myhp-display" class="Ankimon">HP: {int(self.main_pokemon.hp)}/{int(self.main_pokemon.max_hp)}</div>'

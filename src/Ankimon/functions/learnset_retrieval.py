@@ -34,8 +34,8 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
     pokemon_name = pokemon_name.lower().replace("-", "").replace(" ", "").replace("'", "").replace(".", "")
     pokemon_learnset = learnsets.get(pokemon_name, {}).get("learnset", {})
     
-    # Fallback to base form for Mega/Gigantamax if no learnset found
-    if not pokemon_learnset and ("mega" in pokemon_name or "gmax" in pokemon_name):
+    # Fallback to base form for Mega/Gigantamax/Primal if no learnset found
+    if not pokemon_learnset and any(x in pokemon_name for x in ["mega", "gmax", "primal"]):
         # Use pokedex to find the base form via species_id
         from .pokedex_functions import _load_pokedex_cache, search_pokedex_by_id, search_pokedex
         pokedex_data = _load_pokedex_cache()

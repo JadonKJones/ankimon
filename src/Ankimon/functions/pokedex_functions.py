@@ -516,11 +516,20 @@ def get_pokemon_diff_lang_name(pokemon_id: int, language: int):
     # If not found and it's a form ID (>= 10000), fall back to species ID
     if pokemon_id >= 10000:
         internal_name = search_pokedex_by_id(pokemon_id)
-        species_id = safe_int(search_pokedex(internal_name, "species_id"))
+        # Load pokedex data to get the raw name with suffix (e.g. Meowth-Alola)
+        pokedex_data = _load_pokedex_cache()
+        info = pokedex_data.get(internal_name, {})
+        raw_pokedex_name = info.get("name", "")
+        
+        species_id = safe_int(info.get("species_id"))
         if species_id:
-            name = names_cache.get((species_id, language))
-            if name:
-                return format_lore_name(name)
+            base_lang_name = names_cache.get((species_id, language))
+            if base_lang_name:
+                # If we have a hyphenated name, reconstruct with translated base
+                if "-" in raw_pokedex_name:
+                    suffix = raw_pokedex_name[raw_pokedex_name.find("-"):]
+                    return format_lore_name(base_lang_name + suffix)
+                return format_lore_name(base_lang_name)
 
     return "No Translation in this language"
 

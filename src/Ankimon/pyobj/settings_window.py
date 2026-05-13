@@ -12,6 +12,7 @@ from aqt.qt import (
     QMainWindow,
     QScrollArea,
     QButtonGroup,
+    QComboBox,
     QMessageBox,
     QPixmap,
     QPainter,
@@ -204,7 +205,7 @@ class SettingsWindow(QMainWindow):
         return {}
 
     def _create_setting(self, key, layout):
-        value = self.config[key]
+        value = self.config.get(key)
         friendly_name = self.friendly_names[key]
         description = self.descriptions.get(key, "No description available.")
 
@@ -219,6 +220,37 @@ class SettingsWindow(QMainWindow):
         layout.addWidget(description_label)
         created_widgets.extend([label, description_label])
 
+        if key == "misc.active_region":
+            region_options = [
+                (None,     "No Region"),
+                ("kanto",  "Kanto (Gen 1)"),
+                ("johto",  "Johto (Gen 2)"),
+                ("hoenn",  "Hoenn (Gen 3)"),
+                ("sinnoh", "Sinnoh (Gen 4)"),
+                ("unova",  "Unova (Gen 5)"),
+                ("kalos",  "Kalos (Gen 6)"),
+                ("alola",  "Alola (Gen 7)"),
+                ("galar",  "Galar (Gen 8)"),
+                ("hisui",  "Hisui (Gen 8)"),
+                ("paldea", "Paldea (Gen 9)"),
+            ]
+            combo = QComboBox()
+            for val, label in region_options:
+                combo.addItem(label, userData=val)
+            # Set current selection from config
+            current = self.config.get(key)  # may be None or a region string
+            for i, (val, _) in enumerate(region_options):
+                if val == current:
+                    combo.setCurrentIndex(i)
+                    break
+            combo.currentIndexChanged.connect(
+                lambda idx, k=key, opts=region_options: self.config.update({k: opts[idx][0]})
+            )
+            self.input_widgets[key] = combo
+            layout.addWidget(combo)
+            created_widgets.append(combo)
+            return created_widgets, friendly_name, description
+
         if isinstance(value, bool):
             radio_container = QWidget()
             h_layout = QHBoxLayout(radio_container)
@@ -230,6 +262,8 @@ class SettingsWindow(QMainWindow):
             button_group = QButtonGroup(self)
             button_group.addButton(true_radio)
             button_group.addButton(false_radio)
+            if key.startswith("misc.gen"):
+                button_group.buttonClicked.connect(lambda: self._on_gen_toggled())
             h_layout.addWidget(true_radio)
             h_layout.addWidget(false_radio)
             layout.addWidget(radio_container)
@@ -367,6 +401,7 @@ class SettingsWindow(QMainWindow):
             "Study": {"settings": ["Goal of Daily Average Cards", "Card Max Time", "Cash Reward Per Interval", "Cards Per Cash Reward"]},
             "Generations": {
                 "settings": [
+                    "Active Region",
                     "Generation 1",
                     "Generation 2",
                     "Generation 3",
@@ -463,6 +498,59 @@ class SettingsWindow(QMainWindow):
                     if is_enabled_btn == bool(value):
                         button.setChecked(True)
                         break
+            elif isinstance(widget, QComboBox):
+                current = self.config.get(key)
+                for i in range(widget.count()):
+                    if widget.itemData(i) == current:
+                        widget.setCurrentIndex(i)
+                        break
+                
+                # Smart disabling of region options based on generation settings
+                if key == "misc.active_region":
+                    self._refresh_region_dropdown(widget)
+
+    def _on_gen_toggled(self):
+        # Sync config with current UI state for generations
+        for k, w in self.input_widgets.items():
+            if k.startswith("misc.gen") and isinstance(w, QButtonGroup):
+                self.config[k] = w.checkedButton().text() == "Enabled"
+        
+        # Refresh the region dropdown
+        region_combo = self.input_widgets.get("misc.active_region")
+        if region_combo:
+            self._refresh_region_dropdown(region_combo)
+
+    def _refresh_region_dropdown(self, combo):
+        region_to_gen = {
+            "kanto": "misc.gen1",
+            "johto": "misc.gen2",
+            "hoenn": "misc.gen3",
+            "sinnoh": "misc.gen4",
+            "unova": "misc.gen5",
+            "kalos": "misc.gen6",
+            "alola": "misc.gen7",
+            "galar": "misc.gen8",
+            "hisui": "misc.gen8",
+            "paldea": "misc.gen9",
+        }
+        model = combo.model()
+        current_region = combo.itemData(combo.currentIndex())
+        
+        should_reset = False
+        for i in range(combo.count()):
+            val = combo.itemData(i)
+            if val in region_to_gen:
+                gen_key = region_to_gen[val]
+                is_gen_enabled = self.config.get(gen_key, True)
+                if not is_gen_enabled:
+                    model.item(i).setEnabled(False)
+                    if val == current_region:
+                        should_reset = True
+                else:
+                    model.item(i).setEnabled(True)
+        
+        if should_reset:
+            combo.setCurrentIndex(0) # Reset to "None (All Regions)"
 
     def _on_search_changed(self, text):
         search_term = text.lower().strip()
@@ -550,6 +638,8 @@ class SettingsWindow(QMainWindow):
                     self.config[key] = str(new_text)
             elif isinstance(widget, QButtonGroup):
                 self.config[key] = widget.checkedButton().text() == "Enabled"
+            elif isinstance(widget, QComboBox):
+                self.config[key] = widget.currentData()
 
         # --- Enforce bounds for cash rewards ---
         has_adjustments = False

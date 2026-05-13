@@ -105,8 +105,13 @@ class PokemonObject:
     def display_name(self) -> str:
         """Returns the nickname if present and not redundant, otherwise the official pretty name."""
         try:
-            from ..functions.pokedex_functions import get_pretty_name_for_name
-            pretty_name = get_pretty_name_for_name(self.name)
+            from ..functions.pokedex_functions import get_pokemon_diff_lang_name
+            # Access language setting via mw if available
+            lang = 9
+            if mw and hasattr(mw, 'settings_obj'):
+                lang = int(mw.settings_obj.get("misc.language", 9))
+            
+            pretty_name = get_pokemon_diff_lang_name(self.id, lang)
             
             if self.nickname:
                 # Check if the nickname is just a variation of the internal name or pretty name
@@ -120,6 +125,72 @@ class PokemonObject:
             return pretty_name
         except:
             return self.nickname if self.nickname else self.name.title()
+
+    @property
+    def pokedex_id(self) -> int:
+        """Returns the base species Pokédex ID."""
+        try:
+            from ..functions.pokedex_functions import search_pokedex_by_id, search_pokedex, safe_int
+            actual_id = int(self.id)
+            if actual_id >= 10000:
+                internal_name = search_pokedex_by_id(actual_id)
+                if internal_name and internal_name != "Pokémon not found":
+                    sid = safe_int(search_pokedex(internal_name, "species_id"))
+                    if sid:
+                        return sid
+            return actual_id
+        except:
+            return getattr(self, 'id', 1)
+
+    @property
+    def generation(self) -> int:
+        """Returns the generation in which this Pokémon (or form) was introduced."""
+        try:
+            from ..functions.pokedex_functions import search_pokedex_by_id, search_pokedex
+            from ..const import gen_ids
+            from ..functions import encounter_data
+            
+            actual_id = int(self.id)
+            
+            # 1. Check for regional form intro gen first
+            if actual_id >= 10000:
+                internal_name = search_pokedex_by_id(actual_id)
+                if internal_name and internal_name != "Pokémon not found":
+                    forme = search_pokedex(internal_name, "forme") or ""
+                    # Check if the forme string is in our regional gen map
+                    intro_gen = encounter_data.REGIONAL_FORME_GEN.get(forme)
+                    if intro_gen:
+                        return intro_gen
+            
+            # 2. Fallback to base species generation
+            species_id = self.pokedex_id
+            
+            # Sort by max_id to ensure we match the lowest possible gen
+            sorted_gens = sorted(gen_ids.items(), key=lambda x: x[1])
+            for gen_key, max_val in sorted_gens:
+                if species_id <= max_val:
+                    # Parse "gen_1" -> 1
+                    try:
+                        return int(gen_key.split("_")[1])
+                    except:
+                        continue
+            
+            # If ID is beyond known gens, return the last gen
+            if sorted_gens:
+                return int(sorted_gens[-1][0].split("_")[1])
+            return 1
+        except:
+            # Emergency fallback based on common ID ranges if imports fail
+            sid = getattr(self, 'id', 1)
+            if sid <= 151: return 1
+            if sid <= 251: return 2
+            if sid <= 386: return 3
+            if sid <= 493: return 4
+            if sid <= 649: return 5
+            if sid <= 721: return 6
+            if sid <= 809: return 7
+            if sid <= 905: return 8
+            return 9
 
     @classmethod
     def calc_stat(
