@@ -34,8 +34,14 @@ const state = {
     evolutionNote: "",    // Note from Python
     abilities: {},        // ability_id -> description
     prerequisites: {},    // target_id -> [required_ids]
+    regionalData: {
+        boosts: {},
+        forms: {}
+    },
     fullSpeciesMap: {},   // actual_id -> all species objects
-    mapDirty: false       // Flag to force map refresh
+    mapDirty: false,      // Flag to force map refresh
+    isInitializing: false, // Guard against concurrent initializations
+    mapRendered: false    // Track if map has been rendered at least once
 };
 
 // Configuration
@@ -59,6 +65,11 @@ const TYPES = [
 
 // Entry point called from Python
 window.initializeAnkidex = async function(data) {
+    if (state.isInitializing) {
+        console.log("Ankidex already initializing, skipping redundant call.");
+        return;
+    }
+    state.isInitializing = true;
     console.log("Initializing Ankidex with collection data...");
     
     state.collection.owned = new Set(data.owned);
@@ -67,6 +78,7 @@ window.initializeAnkidex = async function(data) {
     state.collection.encounterable = new Set(data.encounterable || []);
     state.evolutionNote = data.evolutionNote || "";
     state.prerequisites = data.prerequisites || {};
+    state.regionalData = data.regional_data || { boosts: {}, forms: {} };
     // Apply Preferences
     if (data.prefs) {
         state.ui.viewMode = data.prefs.viewMode || 'grid';
@@ -90,6 +102,7 @@ window.initializeAnkidex = async function(data) {
     renderSidebarFilters();
     updateGlobalProgress();
     applyFiltersAndRender(collectionChanged);
+    state.isInitializing = false;
 };
 
 function formatLoreName(name) {
@@ -360,7 +373,8 @@ const mapState = {
     panStartX: 0,
     panStartY: 0,
     collapseCompleted: false,
-    activeMapFilter: 'all'
+    activeMapFilter: 'all',
+    lineElements: [] // Cache for performance
 };
 
 // Zooming features removed per user request
@@ -406,10 +420,18 @@ function setupMapDragging() {
         mapState.panStartX = canvas.scrollLeft;
         mapState.panStartY = canvas.scrollTop;
         canvas.style.cursor = 'grabbing';
+        
+        // Disable pointer events on nodes while dragging to boost performance
+        const nodesContainer = document.getElementById('discovery-nodes');
+        if (nodesContainer) nodesContainer.style.pointerEvents = 'none';
     });
     window.addEventListener('mouseup', () => {
         mapState.isDragging = false;
         canvas.style.cursor = '';
+        
+        // Re-enable pointer events
+        const nodesContainer = document.getElementById('discovery-nodes');
+        if (nodesContainer) nodesContainer.style.pointerEvents = 'auto';
     });
     canvas.addEventListener('mousemove', e => {
         if (!mapState.isDragging) return;
@@ -705,6 +727,11 @@ function updatePanelVisibility() {
 
 function switchMode(mode) {
     state.ui.activeMode = mode;
+    if (mode === 'discovery') {
+        state.ui.selectedPokemonId = null;
+        document.querySelectorAll('.pokemon-card.selected').forEach(c => c.classList.remove('selected'));
+        document.querySelectorAll('.discovery-node.selected').forEach(c => c.classList.remove('selected'));
+    }
 }
 
 function getDisplayId(p) {
@@ -897,13 +924,13 @@ function selectPokemon(id, cardElement = null) {
             descEl.textContent = state.flavor[p.actual_id];
         } else if (p.forme && (p.forme.includes('Mega') || p.forme.includes('Gmax'))) {
             const formType = p.forme.includes('Mega') ? 'Mega Evolution' : 'Gigantamaxing';
-            descEl.textContent = `${p.name} Research: The energy of ${formType} has surged through this specimen, drastically enhancing its natural power and altering its physiological structure for peak combat performance.`;
+            descEl.textContent = `${p.name} Research: The energy of ${formType} has surged through this Pokémon, drastically enhancing its natural power and altering its physiological structure for peak combat performance.`;
         } else {
             descEl.textContent = state.flavor[p.species_id] || "Behavioral data is still being compiled.";
         }
         descEl.style.opacity = '1';
     } else if (visState === 1) {
-        descEl.textContent = "Data restricted until specimen is captured.";
+        descEl.textContent = "Data restricted until Pokémon is captured.";
         descEl.style.opacity = '0.5';
     } else {
         descEl.textContent = "No data available.";
@@ -1133,6 +1160,44 @@ function renderBriefing(p, id, visState, displayId) {
         contextList.appendChild(terminal);
     }
 
+    // 4. Render Encounter Hints
+    const hintsSection = document.getElementById('briefing-hints-section');
+    const hintTextEl = document.getElementById('briefing-hint-text');
+    
+    if (reqsMet && isEncounterable) {
+        const boostedRegions = [];
+        
+        // Find generation
+        const genInfo = GEN_RANGES.find(g => p.species_id >= g.start && p.species_id <= g.end);
+        const genId = genInfo ? genInfo.id : null;
+        
+        // Check regional form boost
+        const formRegion = state.regionalData.forms[id];
+        if (formRegion) boostedRegions.push(formRegion);
+        
+        // Check generation boosts
+        if (genId) {
+            Object.entries(state.regionalData.boosts).forEach(([region, gens]) => {
+                if (gens.includes(genId) && !boostedRegions.includes(region)) {
+                    boostedRegions.push(region);
+                }
+            });
+        }
+        
+        if (boostedRegions.length > 0) {
+            const regionTags = boostedRegions.map(r => `<span class="hint-region-tag">${r}</span>`).join(' or ');
+            let hintHtml = `Field reports indicate higher encounter rates in ${regionTags}.`;
+            if (!isOwned) {
+                hintHtml += ` Consider traveling there to capture this Pokémon.`;
+            }
+            hintTextEl.innerHTML = hintHtml;
+            hintsSection.classList.remove('hidden');
+        } else {
+            hintsSection.classList.add('hidden');
+        }
+    } else {
+        hintsSection.classList.add('hidden');
+    }
 
 }
 
@@ -1325,7 +1390,7 @@ function renderAbilities(p, visState) {
         } else {
             const descEl = document.createElement("div");
             descEl.className = "ability-desc";
-            descEl.textContent = "Detailed data restricted to captured specimens.";
+            descEl.textContent = "Detailed data restricted to captured Pokémon.";
             descEl.style.opacity = "0.5";
             item.appendChild(descEl);
         }
@@ -1679,17 +1744,21 @@ function renderDiscoveryMap() {
         nodesFragment.appendChild(el);
     });
 
-    // Bulk update to minimize layout thrashing and eliminate the "flash"
-    container.innerHTML = '';
-    svg.innerHTML = '';
-    container.appendChild(nodesFragment);
-    svg.appendChild(svgFragment);
+    // Atomic update using replaceChildren to eliminate "white flash"
+    container.replaceChildren(nodesFragment);
+    svg.replaceChildren(svgFragment);
 
     updateMapProgress(nodes, chains, finalTargets);
 
-    // Apply view state immediately instead of using a timeout
-    resetMapView();
+    // Only reset view on the very first render to preserve scroll/zoom
+    if (!state.mapRendered) {
+        resetMapView();
+        state.mapRendered = true;
+    }
     applyMapFilter();
+
+    // Cache line elements for hover performance
+    mapState.lineElements = Array.from(document.querySelectorAll('.discovery-line'));
 }
 
 let lastMapPct = -1;
@@ -1797,8 +1866,9 @@ function getChainIds(id) {
 }
 
 function highlightChain(id) {
+    if (mapState.isDragging) return;
     const chainIds = getChainIds(id);
-    document.querySelectorAll('.discovery-line').forEach(line => {
+    mapState.lineElements.forEach(line => {
         const src = parseInt(line.dataset.src);
         const dst = parseInt(line.dataset.dst);
         // Only highlight if both ends are part of the connected chain
@@ -1811,8 +1881,9 @@ function highlightChain(id) {
 }
 
 function previewChain(id) {
+    if (mapState.isDragging) return;
     const chainIds = getChainIds(id);
-    document.querySelectorAll('.discovery-line').forEach(line => {
+    mapState.lineElements.forEach(line => {
         const src = parseInt(line.dataset.src);
         const dst = parseInt(line.dataset.dst);
         if (chainIds.has(src) && chainIds.has(dst)) {
@@ -1825,7 +1896,7 @@ function clearChainPreview() {
     const selectedId = state.ui.selectedPokemonId;
     const selectedChain = selectedId ? getChainIds(selectedId) : new Set();
     
-    document.querySelectorAll('.discovery-line').forEach(line => {
+    mapState.lineElements.forEach(line => {
         const src = parseInt(line.dataset.src);
         const dst = parseInt(line.dataset.dst);
         if (!selectedChain.has(src) || !selectedChain.has(dst)) {

@@ -1271,6 +1271,55 @@ body {
     z-index: 1;
 }
 
+.callout-body {
+    font-size: 0.9rem;
+    color: var(--text-bright);
+    line-height: 1.4;
+    font-weight: 500;
+}
+
+/* ---- Briefing Hints ---- */
+.briefing-hint-card {
+    background: rgba(63, 185, 80, 0.08);
+    border: 1px solid rgba(63, 185, 80, 0.3);
+    border-radius: 8px;
+    padding: 12px 16px;
+    position: relative;
+    overflow: hidden;
+}
+
+.briefing-hint-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 3px;
+    height: 100%;
+    background: var(--accent-green);
+}
+
+.hint-header {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    color: var(--accent-green);
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+    font-weight: 700;
+}
+
+.hint-body {
+    font-size: 0.85rem;
+    color: var(--text-main);
+    line-height: 1.4;
+}
+
+.hint-region-tag {
+    color: var(--accent-green);
+    font-weight: 700;
+    text-transform: capitalize;
+}
+
 .evo-disclaimer {
     margin-top: 16px;
     font-size: 0.75rem;
@@ -1419,12 +1468,14 @@ body {
     flex-direction: column;
     gap: 8px;
     pointer-events: none;
+    transform: translateZ(0);
+    will-change: transform;
 }
 
 .overlay-zoom-btn {
     width: 40px;
     height: 40px;
-    background: rgba(13, 17, 23, 0.85);
+    background: rgba(13, 17, 23, 0.95);
     border: 1px solid var(--border-main);
     color: var(--text-bright);
     border-radius: 8px;
@@ -1436,7 +1487,6 @@ body {
     cursor: pointer;
     pointer-events: auto;
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    backdrop-filter: blur(8px);
     box-shadow: 0 4px 12px rgba(0,0,0,0.3);
 }
 
@@ -1462,14 +1512,15 @@ body {
     top: 24px;
     right: 24px;
     z-index: 1000;
-    background: rgba(13, 17, 23, 0.85);
+    background: rgba(13, 17, 23, 0.95);
     border: 1px solid var(--border-main);
     border-radius: 12px;
     padding: 16px;
     width: 280px;
-    backdrop-filter: blur(10px);
     box-shadow: 0 10px 30px rgba(0,0,0,0.5);
     pointer-events: auto;
+    transform: translateZ(0);
+    will-change: transform;
 }
 
 .map-progress-header {
@@ -1533,6 +1584,7 @@ body {
         linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
         linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
     background-size: 60px 60px;
+    contain: paint;
 }
 
 .map-canvas-area:active { cursor: grabbing; }
@@ -1551,6 +1603,8 @@ body {
     pointer-events: none;
     z-index: 1;
     overflow: visible;
+    transform: translateZ(0);
+    backface-visibility: hidden;
 }
 
 .discovery-nodes {
@@ -1559,6 +1613,8 @@ body {
     left: 0;
     z-index: 10;
     pointer-events: none;
+    transform: translateZ(0);
+    backface-visibility: hidden;
 }
 
 .discovery-tier-labels {

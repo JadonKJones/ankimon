@@ -143,6 +143,14 @@ class Ankidex(QDialog):
                 "sortMode": mw.settings_obj.get("ankidex.sortMode", mw.settings_obj.get("pokedex_v2.sortMode", "id-asc")),
                 "spriteMode": mw.settings_obj.get("ankidex.spriteMode", mw.settings_obj.get("pokedex_v2.spriteMode", "static")),
             },
+            "regional_data": {
+                "boosts": {
+                    "kanto": [1], "johto": [2], "hoenn": [3], "sinnoh": [4],
+                    "unova": [5], "kalos": [6], "alola": [7], "galar": [8],
+                    "paldea": [9], "hisui": [4, 8]
+                },
+                "forms": encounter_data.REGIONAL_FORM_REGION
+            },
             "evolutionNote": "In Ankimon, evolutions are currently supported through level progression only."
         }
 
@@ -162,8 +170,7 @@ class Ankidex(QDialog):
         self.webview.page().runJavaScript(js_code)
 
     def show(self, *args):
-        # Update data before showing
-        self.update_ui_data()
+        # Removed redundant update_ui_data() as it's called by showEvent()
         super().show()
 
     def showEvent(self, event):
