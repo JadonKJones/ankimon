@@ -6,7 +6,7 @@ import hashlib # Point 4: Add import for hashlib
 from pathlib import Path
 from typing import Optional
 
-from ..resources import user_path
+from ..resources import user_path_sprites
 from ..gui_entities import AgreementDialog
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QProgressBar, QLabel, QPushButton, QMessageBox
@@ -314,7 +314,7 @@ class DownloadDialog(QDialog):
             "https://huggingface.co/datasets/h0tp/ankimon/resolve/main/sprites.zip",
             "https://github.com/Unlucky-Life/ankimon/releases/download/sprites-v1.43/sprites.zip"
         ]
-        self.dest_dir_path = Path(user_path)
+        self.dest_dir_path = Path(user_path_sprites)
         self._flag_file_path = self.dest_dir_path / "download_complete.flag"
 
 
