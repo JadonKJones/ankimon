@@ -1,42 +1,44 @@
 # Executive Overview: Ankimon Repository
 
-## 1. What This Repository Appears to Be
-Ankimon is a Python-based Anki add-on (using PyQt6 and QtWebEngine) that gamifies spaced-repetition flashcards by integrating a full-fledged Pokémon RPG loop. Answering flashcards correctly triggers attacks, heals, and state changes in a battle between the user's active Pokémon and wild encounters. It features persistence via SQLite, dynamic UI injection into Anki's reviewer window, and a complex embedded battle engine (`poke_engine`).
+## 1. What This Repository Appears To Be
+Ankimon is a highly complex, event-driven Python application operating as an Anki add-on. It bridges the spaced-repetition software domain with a complete Pokémon RPG gameloop. By hooking into Anki's review cycle (specifically `reviewer_did_answer_card`), it triggers combat turns within a deeply integrated battle engine (`poke_engine`). The repository demonstrates a monolithic architecture where Anki's UI is manipulated via injected JavaScript/HTML, while a centralized SQLite database manages persistent state tracking captured Pokémon, items, and trainer progression.
 
 ## 2. How It Likely Starts
-**Directly evidenced by:** `src/Ankimon/__init__.py` and `src/Ankimon/startup.py`.
-The add-on initializes when Anki loads it.
-1. `__init__.py` runs first, importing singletons (`singletons.py`).
-2. `singletons.py` instantiates the database manager (`AnkimonDB`), settings, and global state objects (`PokemonObject` for main and enemy).
-3. `run_startup_sequence()` in `startup.py` executes, checking file integrity, running DB migrations from legacy JSON, and initializing the first enemy.
-4. Hooks are registered via `aqt.gui_hooks`, primarily binding `on_review_card` to `reviewer_did_answer_card`.
+The startup sequence is explicitly defined and anchored in the repository entrypoints:
+*   **Directly evidenced by:** `src/Ankimon/__init__.py`. When Anki loads the `src/Ankimon/` directory as an add-on, Python executes `__init__.py`.
+*   **Initialization Flow:**
+    1.  Singleton Initialization: `from .singletons import ...` instantiates the database, settings, global tracking objects, and mock/starting Pokémon states.
+    2.  Infrastructure Checks: `ensure_ankimon_infrastructure()` creates necessary directories (`user_files/data_files`).
+    3.  Database Migration: `run_startup_sequence()` in `startup.py` calls `show_migration_dialog_if_needed()`, aggressively attempting to move legacy JSON data (`mypokemon.json`) into the new SQLite format.
+    4.  Hook Binding: `register_card_hooks()`, `setup_reviewer_ui()`, and `setupHooks()` attach Ankimon's execution paths to Anki's internal lifecycle events.
 
 ## 3. Major Subsystems
-*   **Core Orchestration**: `__init__.py` and `singletons.py` tie the system together.
-*   **Anki Integration**: `card_hooks.py` and `hooks.py` interface with Anki's review cycle.
-*   **Battle Logic (Domain)**: `battle_loop.py` serves as the glue between Anki and the battle engine. `poke_engine/` is the core simulation logic, isolated as an independent submodule. Bridge logic exists in `ankimon_hooks_to_poke_engine.py`.
-*   **UI/HUD**: `reviewer_iframe.py` and `user_files/web/ankimon_hud_portal.js` handle injecting the visual battle representation into Anki. PyQt6 dialogs (`gui_classes/`, `pyobj/`) handle menus like Pokedex, PC Box, and Settings.
-*   **Persistence**: `pyobj/database_manager.py` (SQLite) is the definitive storage backend.
+*   **The Orchestrator Layer**: Consists of `__init__.py`, `singletons.py`, and `startup.py`. Responsibilities include wiring the application to the host process (Anki) and maintaining the globally accessible state context.
+*   **The Gameloop Controller**: Located primarily in `battle_loop.py` and `ankimon_tracker.py`. Responsibilities include reacting to card reviews, managing timers, calculating experience multipliers, and deciding when a combat turn should occur.
+*   **The Domain Logic Engine (`poke_engine/`)**: A massive, isolated submodule handling the pure mathematics of Pokémon battles. It is completely decoupled from Anki. Responsibilities include calculating damage (`damage_calculator.py`), managing turn evaluation (`evaluate.py`), and managing volatile state (`objects.py`).
+*   **The Persistence Adapter**: Encapsulated in `pyobj/database_manager.py`. Responsibilities include bridging the gap between in-memory `PokemonObject` representations and the physical SQLite file (`ankimon.db`).
+*   **The UI Surface**: A hybrid of native PyQt6 Dialogs (e.g., `gui_classes/pokemon_team_window.py`) and injected web views (`user_files/web/ankimon_hud_portal.js`, `functions/reviewer_iframe.py`). Responsibilities include rendering the visual state of the game without breaking Anki's native rendering logic.
 
 ## 4. State and Persistence at a Glance
-**State**: In-memory state is heavily reliant on singletons (`main_pokemon`, `enemy_pokemon`, `ankimon_tracker_obj`) initialized in `singletons.py`.
-**Persistence**: State is flushed to a SQLite database (`ankimon.db`) managed by `AnkimonDB`. This is a recent migration from legacy JSON files (`mypokemon.json`, `mainpokemon.json`).
+*   **State:** The application's active state is highly mutable and localized in global variables, specifically `main_pokemon` and `enemy_pokemon` housed in `singletons.py`.
+*   **Persistence:** The definitive source of truth is the SQLite database. However, there is a recognized latency between mutating an in-memory `PokemonObject` and persisting it via `AnkimonDB.save_pokemon()`. Synchronization occurs aggressively at key lifecycle events (e.g., capturing a pokemon, ending a battle, closing Anki).
 
 ## 5. Integration Boundaries
-*   **Anki App**: `aqt` module dependencies (`mw`, `gui_hooks`).
-*   **PokeAPI / Showdown**: Evidence suggests external integrations for sprites and showdown exports (`export_to_pkmn_showdown`).
-*   **Discord**: Rich presence integration via `discord_integration.py`.
+*   **Anki Framework Boundary:** Exists primarily within `hooks.py`, `card_hooks.py`, and `reviewer_ui.py`. This is where the application depends on `aqt` and `anki` modules.
+*   **Battle Simulation Boundary:** Exists at `functions/ankimon_hooks_to_poke_engine.py`. This single file acts as the translation layer between Ankimon's data models and `poke_engine`'s data models.
+*   **Web Asset Boundary:** Exists between the Python backend and the injected JavaScript (`ankimon_hud_portal.js`), relying on Anki's `setWebExports` to serve local assets securely.
 
 ## 6. Top Risks
-1.  **Singleton Mutability**: Global state in `singletons.py` is mutated widely. Desync between in-memory `PokemonObject` and `ankimon.db` is a high risk if saves are missed.
-2.  **Hook Recursion/Performance**: Heavy logic inside `on_review_card` can lag Anki's review interface.
-3.  **UI Injection Fragility**: Injecting CSS/JS via `ankimon_hud_portal.js` into Anki's webview is sensitive to Anki version updates.
+*   **State Desynchronization:** Because global instances are modified dynamically throughout the Gameloop Controller layer, failing to call the Persistence Adapter before application exit results in guaranteed data loss.
+*   **Performance Bottlenecking the Review Cycle:** The gameloop executes synchronously during `reviewer_did_answer_card`. If `poke_engine` calculations or database writes block this thread, Anki's core functionality (rapid card reviewing) degrades to an unacceptable user experience.
+*   **Circular Dependency Fragility:** The massive reliance on `singletons.py` means adding new imports across the codebase frequently results in `ImportError: cannot import name`.
 
 ## 7. What to Read First
-1.  `src/Ankimon/__init__.py` (Entrypoint wiring)
-2.  `src/Ankimon/singletons.py` (Global state map)
-3.  `src/Ankimon/battle_loop.py` (Core gameloop execution)
-4.  `src/Ankimon/pyobj/database_manager.py` (Data storage layer)
+Future agents must familiarize themselves with these files to understand the core control flow before attempting implementation changes:
+1.  `src/Ankimon/__init__.py` - to understand the boundaries.
+2.  `src/Ankimon/singletons.py` - to understand the state landscape.
+3.  `src/Ankimon/battle_loop.py` - to understand the event loop.
+4.  `src/Ankimon/pyobj/database_manager.py` - to understand data mutation safely.
 
 ## 8. Ranked List of the Top 15 Most Important Files
 1. `src/Ankimon/__init__.py`
