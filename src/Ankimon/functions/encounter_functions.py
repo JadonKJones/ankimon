@@ -71,7 +71,7 @@ def _build_regional_lookup() -> None:
     pokedex.json is unavailable (e.g. first-run before data files exist).
     """
     import os
-    from . import encounter_data
+    
     try:
         pokedex_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -185,7 +185,7 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
         for tier in percentages:
             percentages[tier] = (percentages[tier] / total) * 100 if total > 0 else 0 
 
-    #MODIFIED FOR TESTING: Fixed percentages, no level or review restrictions.
+    #MODIFIED FOR TESTING: Fixed percentages, review restrictions.
     """percentages = {
                 "Baby": 0,
                 "Normal": 10,
@@ -216,7 +216,7 @@ def clear_encounter_cache():
     }
 
 def get_random_pokemon_in_tier(tier):
-    from . import encounter_data
+    
 
     if tier == "Normal":
         id_data = encounter_data.NORMAL
@@ -238,7 +238,6 @@ def get_random_pokemon_in_tier(tier):
         return 1
 
     return random.choice(id_data) if id_data else 1
-    #return 52
 
 def _player_owns_base_form(actual_id: int, collected_ids: set) -> bool:
     """Return True if the player owns the base species of this Mega/Gmax form."""
@@ -257,7 +256,7 @@ def _meets_prerequisites(pokemon_id: int, collected_ids: set) -> bool:
     Prerequisite chains are defined in encounter_data.PREREQUISITES.
     Handles forms by checking the species_id prerequisites.
     """
-    from . import encounter_data
+    
     check_id = pokemon_id
     if pokemon_id >= 10000:
         name = search_pokedex_by_id(pokemon_id)
@@ -321,7 +320,7 @@ def choose_random_pkmn_from_tier():
 
 
 def check_min_generate_level(name):
-    from . import encounter_data
+    
 
     evoType = search_pokedex(name.lower(), "evoType")
     evoLevel = search_pokedex(name.lower(), "evoLevel")
@@ -392,7 +391,7 @@ def check_id_ok(id_num: Union[int, list[int]]):
             return False  # base gen disabled
 
         # For regional forms, also require the form's intro gen to be enabled
-        from . import encounter_data
+        
         if id_num in encounter_data.REGIONAL_FORM_REGION:
             forme = search_pokedex(name, "forme") or ""
             intro_gen = None
@@ -422,7 +421,7 @@ def get_regional_substitute(species_id: int, region: str = None) -> "int | None"
     Returns a regional form actual_id for the given species and region, or None.
     If region is None, returns any valid regional variant from any region.
     """
-    from . import encounter_data
+    
     
     eligible = []
     lookup = encounter_data.REGIONAL_FORM_LOOKUP.get(species_id, {})
@@ -534,7 +533,7 @@ def generate_random_pokemon(
 
     # FALLBACK HIERARCHY
     # If a rolled tier fails, try the next one in the list.
-    TIER_ORDER = ["Mythical", "Legendary", "Mega", "Gmax", "Ultra", "Starter", "Normal", "Baby"]
+    TIER_ORDER = ["Mythical", "Mega", "Legendary", "Gmax", "Ultra", "Starter", "Normal", "Baby"]
     
     selected_pokemon_id = None
     selected_tier = None
@@ -952,7 +951,39 @@ def save_main_pokemon_progress(
         mainpkmndata["stats"] = main_pokemon.stats
         mainpkmndata["xp"] = int(main_pokemon.xp)
         mainpkmndata["level"] = int(main_pokemon.level)
-        ev_yield = limit_ev_yield(mainpkmndata["ev"], enemy_pokemon.ev_yield)
+        # Clone raw EV yield to avoid mutating the in-memory enemy template
+        raw_ev_yield = enemy_pokemon.ev_yield.copy()
+        
+        # Normalize keys to the standard long form expected by limit_ev_yield
+        normalized_yield = {
+            "hp": raw_ev_yield.get("hp", 0),
+            "attack": raw_ev_yield.get("attack", 0) + raw_ev_yield.get("atk", 0),
+            "defense": raw_ev_yield.get("defense", 0) + raw_ev_yield.get("def", 0),
+            "special-attack": raw_ev_yield.get("special-attack", 0) + raw_ev_yield.get("spa", 0),
+            "special-defense": raw_ev_yield.get("special-defense", 0) + raw_ev_yield.get("spd", 0),
+            "speed": raw_ev_yield.get("speed", 0) + raw_ev_yield.get("spe", 0),
+        }
+
+        held_item = mainpkmndata.get("held_item", main_pokemon.held_item)
+
+        # Apply EV-boosting held items
+        if held_item == "macho-brace":
+            for stat in normalized_yield:
+                normalized_yield[stat] *= 2
+        else:
+            power_item_mapping = {
+                "power-weight": "hp",
+                "power-bracer": "attack",
+                "power-belt": "defense",
+                "power-lens": "special-attack",
+                "power-band": "special-defense",
+                "power-anklet": "speed",
+            }
+            if held_item in power_item_mapping:
+                stat_to_boost = power_item_mapping[held_item]
+                normalized_yield[stat_to_boost] += 8
+
+        ev_yield = limit_ev_yield(mainpkmndata["ev"], normalized_yield)
         mainpkmndata["ev"]["hp"] += ev_yield["hp"]
         mainpkmndata["ev"]["atk"] += ev_yield["attack"]
         mainpkmndata["ev"]["def"] += ev_yield["defense"]
@@ -1191,7 +1222,7 @@ def handle_enemy_faint(
 
     name_lower = enemy_pokemon.name.lower()
     forme = search_pokedex(name_lower, "forme")
-    from . import encounter_data
+    
     is_mega = (enemy_pokemon.id in encounter_data.MEGA)
     is_gmax = (enemy_pokemon.id in encounter_data.GMAX)
     

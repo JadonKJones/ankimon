@@ -98,37 +98,37 @@ class Settings:
             except Exception as e:
                 print(f"Ankimon: Error loading config from database: {e}")
         
-        # # If no config in database, fall back to config.obf for migration
-        # if not config:
-        #     obfuscated_config_path = user_path / "config.obf"
-        #     if obfuscated_config_path.is_file():
-        #         try:
-        #             from ..pyobj.ankimon_sync import AnkimonDataSync
-        #             sync_handler = AnkimonDataSync()
-        #             
-        #             with open(obfuscated_config_path, "r", encoding="utf-8") as f:
-        #                 obfuscated_str = f.read()
-        #             config = sync_handler._deobfuscate_data(obfuscated_str)
-        #             
-        #             # Migration: remove legacy keys
-        #             if "items" in config and isinstance(config["items"], list):
-        #                 del config["items"]
-        #             if "trainer.team" in config:
-        #                 del config["trainer.team"]
-        #             
-        #             self._apply_type_coercion(config)
-        #             
-        #             # Migrate config to database
-        #             if hasattr(mw, 'ankimon_db') and mw.ankimon_db is not None:
-        #                 try:
-        #                     mw.ankimon_db.save_all_config(config)
-        #                     print("Ankimon: Migrated config from config.obf to database")
-        #                 except Exception as e:
-        #                     print(f"Ankimon: Failed to migrate config to database: {e}")
-        #                     
-        #         except Exception as e:
-        #             print(f"Ankimon: Error loading config from config.obf: {e}. Falling back to default config.")
-        #             config = {}
+        # If no config in database, fall back to config.obf for migration
+        if not config:
+            obfuscated_config_path = user_path / "config.obf"
+            if obfuscated_config_path.is_file():
+                try:
+                    from ..pyobj.ankimon_sync import AnkimonDataSync
+                    sync_handler = AnkimonDataSync()
+                    
+                    with open(obfuscated_config_path, "r", encoding="utf-8") as f:
+                        obfuscated_str = f.read()
+                    config = sync_handler._deobfuscate_data(obfuscated_str)
+                    
+                    # Migration: remove legacy keys
+                    if "items" in config and isinstance(config["items"], list):
+                        del config["items"]
+                    if "trainer.team" in config:
+                        del config["trainer.team"]
+                    
+                    self._apply_type_coercion(config)
+                    
+                    # Migrate config to database
+                    if hasattr(mw, 'ankimon_db') and mw.ankimon_db is not None:
+                        try:
+                            mw.ankimon_db.save_all_config(config)
+                            print("Ankimon: Migrated config from config.obf to database")
+                        except Exception as e:
+                            print(f"Ankimon: Failed to migrate config to database: {e}")
+                            
+                except Exception as e:
+                    print(f"Ankimon: Error loading config from config.obf: {e}. Falling back to default config.")
+                    config = {}
 
         # Ensure all default settings are present
         modified = False

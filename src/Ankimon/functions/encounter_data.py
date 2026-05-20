@@ -32,7 +32,7 @@ LEGENDARY = [
     888, 889, 890,  # zacian, zamazenta, eternatus
     891, 892, 894,  # kubfu, urshifu-single-strike, regieleki
     895, 896, 897,  # regidrago, glastrier, spectrier
-    898,            # calyrex
+    898, 905,       # calyrex, enamorus-incarnate
     # Generation 9
     1001, 1002, 1003,  # wo-chien, chien-pao, ting-lu
     1004, 1007, 1008,  # chi-yu, koraidon, miraidon
@@ -334,7 +334,7 @@ NORMAL = [
     884, 885, 886,	# duraludon, dreepy, drakloak
     887, 899, 900,	# dragapult, wyrdeer, kleavor
     901, 902, 903,	# ursaluna, basculegion-male, sneasler
-    904, 905,	# overqwil, enamorus-incarnate
+    904,	        # overqwil
     # Generation 9
     915, 916, 917,	# lechonk, oinkologne, tarountula
     918, 919, 920,	# spidops, nymble, lokix
@@ -603,7 +603,7 @@ UNAVAILABLE = [
     10259, 10260, 10261, # tatsugiristretchy, squawkabillyblue, squawkabillyyellow
     10262, 10263, 10272, # squawkabillywhite, gimmighoulroaming, ursalunabloodmoon
     10273, 10274, 10275, # ogerponwellspringtera, ogerponhearthflametera, ogerponcornerstonetera
-    10276, 10277,    # terapagosterastal, terapagosstellar
+    10276, 10277, 10178, # terapagosterastal, terapagosstellar, darmanitan-galar-zen
 ]
 
 # =============================================================
@@ -627,8 +627,8 @@ REGIONAL_FORMS: dict[str, list[int]] = {
         10167, 10168, 10169,  # weezing-galar, mr-mime-galar, articuno-galar
         10170, 10171, 10172,  # zapdos-galar, moltres-galar, slowking-galar
         10173, 10174, 10175,  # corsola-galar, zigzagoon-galar, linoone-galar
-        10176, 10177, 10178,  # darumaka-galar, darmanitan-galar-standard, darmanitan-galar-zen
-        10179, 10180,         # yamask-galar, stunfisk-galar
+        10176, 10177, 10179,  # darumaka-galar, darmanitan-galar-standard, yamask-galar
+        10180,                # stunfisk-galar
     ],
     "hisui": [
         10229, 10230, 10231,  # growlithe-hisui, arcanine-hisui, voltorb-hisui
@@ -682,8 +682,6 @@ PREREQUISITES = {
     
     # Generation 3
     384: {382, 383},       # Rayquaza requires Kyogre + Groudon
-    10077: {382},          # Primal Kyogre requires Kyogre
-    10078: {383},          # Primal Groudon requires Groudon
     
     # Generation 4
     487: {483, 484},       # Giratina requires Dialga + Palkia
