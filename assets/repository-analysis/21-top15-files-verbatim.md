@@ -1,5 +1,5 @@
 [1]. src/Ankimon/__init__.py
-Why this file is critical: Primary entrypoint configuring Anki hooks and initializing the addon lifecycle.
+Why this file is critical: Primary entrypoint configuring Anki hooks.
 
 # -*- coding: utf-8 -*-
 
@@ -181,7 +181,7 @@ setup_discord_hooks()
 ---
 
 [2]. src/Ankimon/singletons.py
-Why this file is critical: Central repository for all global application state and major singleton instances.
+Why this file is critical: Central repository for all global application state.
 
 """
 singletons.py
@@ -1675,7 +1675,7 @@ def get_db(logger=None) -> AnkimonDB:
 ---
 
 [5]. src/Ankimon/startup.py
-Why this file is critical: Handles initial bootstrap processes like migrations, asset checks, and first-run setup.
+Why this file is critical: Handles initial bootstrap processes like migrations, asset checks.
 
 import json
 import random
@@ -1820,7 +1820,7 @@ def _check_starter():
 ---
 
 [6]. src/Ankimon/card_hooks.py
-Why this file is critical: Directly interfaces with Anki's card review hooks to trigger gameloop events.
+Why this file is critical: Directly interfaces with Anki's card review hooks.
 
 import aqt
 from aqt import gui_hooks, mw, utils
@@ -1871,7 +1871,2498 @@ def register_card_hooks():
 
 ---
 
-[7]. src/Ankimon/pyobj/pokemon_obj.py
+[7]. src/Ankimon/functions/ankimon_hooks_to_poke_engine.py
+Why this file is critical: Acts as the crucial bridge translating Ankimon state objects into poke_engine simulation state.
+
+import random
+from collections import defaultdict
+import copy
+import traceback
+from typing import Union
+
+from ..poke_engine import constants
+from ..singletons import ankimon_tracker_obj, settings_obj
+import math
+
+from ..poke_engine.battle import Move
+from ..poke_engine.objects import Pokemon, State, StateMutator, Side
+from ..poke_engine.helpers import normalize_name
+from ..poke_engine.find_state_instructions import get_all_state_instructions
+from ..pyobj.error_handler import show_warning_with_traceback
+
+def reset_stat_boosts(pokemon: Pokemon) -> Pokemon:
+    """
+    Resets all stat boosts of a given Pokemon to zero.
+
+    Args:
+        pokemon (Pokemon): The Pokemon whose stat boosts will be reset.
+
+    Returns:
+        Pokemon: The same Pokemon object with all stat boosts reset to zero.
+    """
+    pokemon.attack_boost = 0
+    pokemon.defense_boost = 0
+    pokemon.special_attack_boost = 0
+    pokemon.special_defense_boost = 0
+    pokemon.speed_boost = 0
+    pokemon.accuracy_boost = 0
+    pokemon.evasion_boost = 0
+    return pokemon
+
+def reset_side(pokemon: Pokemon, side_conditions: Union[dict, None]=None) -> Side:
+    """
+    Resets and returns a new Side object for the given Pokemon with default or provided side conditions.
+
+    If no side conditions are provided, a default set with all conditions initialized to zero is used.
+
+    Args:
+        pokemon (Pokemon): The active Pokemon for the side.
+        side_conditions (Union[dict, None], optional): A dictionary of side conditions to apply.
+            If None, defaults to all conditions set to zero.
+
+    Returns:
+        Side: A new Side object with the specified active Pokemon, an empty reserve,
+              default wish and future sight settings, and the given or default side conditions.
+    """
+    if side_conditions is None:
+        side_conditions = defaultdict(int, {
+            'stealthrock': 0,
+            'spikes': 0,
+            'toxicspikes': 0,
+            'tailwind': 0,
+            'reflect': 0,
+            'lightscreen': 0,
+            'auroraveil': 0,
+            'protect': 0,
+        })
+    side = Side(
+        active=pokemon,
+        reserve={},
+        wish=(0, 0),
+        side_conditions=side_conditions,
+        future_sight=(0, 0),
+    )
+    return side
+
+def simulate_battle_with_poke_engine(
+    main_pokemon: Pokemon,
+    enemy_pokemon: Pokemon,
+    main_move: str,
+    enemy_move: str,
+    mutator_full_reset: int,
+    state: Union[State, None]=None,
+    ):
+    """
+    Simulates a battle between two Pokémon using the poke-engine if available.
+    The function selects the Pokémon moves (either provided or random), handles state changes,
+    and applies battle instructions based on the current battle state. The function then
+    computes and returns the battle results, including damage dealt, missed moves,
+    and the updated battle state.
+
+    Args:
+        main_pokemon (Pokemon): The user's active Pokémon.
+        enemy_pokemon (Pokemon): The opponent's active Pokémon.
+        main_move (str or None): The move chosen by the user's Pokémon. If None, a random move will be selected.
+        enemy_move (str or None): The move chosen by the opponent's Pokémon. If None, a random move will be selected.
+        new_state (State): The current battle state, including the Pokémon's stats, field conditions, etc.
+        mutator_full_reset (int): A flag controlling whether the battle state should be reset.
+
+    Returns:
+        tuple: A tuple containing:
+            - battle_info (dict): A dictionary with the battle header and instructions for each Pokémon move.
+            - new_state (State): The updated battle state after the battle simulation.
+            - dmg_from_enemy_move (int): The damage dealt to the user's Pokémon by the enemy.
+            - dmg_from_user_move (int): The damage dealt to the enemy's Pokémon by the user.
+            - mutator_full_reset (int): The flag indicating if the battle state was reset.
+
+    Raises:
+        Exception: If any unexpected error occurs during the simulation, the traceback will be printed.
+
+    Notes:
+        - If no moves are provided for the Pokémon, a random move is selected.
+        - The outcome of the battle is determined based on probability, with weights reflecting typical battle mechanics.
+        - The function prints a summary of the battle result, including damage dealt and whether any moves missed.
+        - The state mutator is applied to update the battle state after the moves are resolved.
+    """
+
+    # If no move is provided, use a random move
+    if main_move is None and main_pokemon.attacks:
+        main_move = random.choice(main_pokemon.attacks)
+    if enemy_move is None and enemy_pokemon.attacks:
+        enemy_move = random.choice(enemy_pokemon.attacks)
+    if not main_move:
+        main_move = "Splash"
+    if not enemy_move:
+        enemy_move = "Splash"
+
+
+    if (state is not None) and (state.user.active.id != main_pokemon.name.lower()):
+        mutator_full_reset = 1 # reset AFTER Pokemon is changed !
+    if mutator_full_reset not in (0, 1):
+        mutator_full_reset = 1
+
+    try:
+        main_move_normalized = normalize_name(main_move)
+        enemy_move_normalized = normalize_name(enemy_move)
+
+
+        # Store only the chosen outcome
+        battle_header = {
+            'user': {
+                'name': main_pokemon.name,
+                'level': main_pokemon.level,
+                'move': main_move
+            },
+            'opponent': {
+                'name': enemy_pokemon.name,
+                'level': enemy_pokemon.level,
+                'move': enemy_move
+            }
+        }
+
+        # Create Pokemon objects
+        main_pokemon_poke_engine = main_pokemon.to_poke_engine_Pokemon()
+        enemy_pokemon_poke_engine = enemy_pokemon.to_poke_engine_Pokemon()
+
+        # Default side_conditions with all needed keys
+        side_conditions = defaultdict(int, {
+            'stealthrock': 0,
+            'spikes': 0,
+            'toxicspikes': 0,
+            'tailwind': 0,
+            'reflect': 0,
+            'lightscreen': 0,
+            'auroraveil': 0,
+            'protect': 0,
+        })
+
+        if state is None:
+            state = State(
+                user=reset_side(main_pokemon_poke_engine),
+                opponent=reset_side(enemy_pokemon_poke_engine),
+                weather=None,
+                field=None,
+                trick_room=False,
+                )
+        else:
+            if mutator_full_reset == 0:  # Combat is ongoing
+                pass
+            elif mutator_full_reset == 1:  # Reset both sides of the fight
+                state.user.active = reset_stat_boosts(state.user.active)
+                state.user = reset_side(main_pokemon_poke_engine)
+                state.opponent = reset_side(enemy_pokemon_poke_engine)
+
+                # Reset battle_status and volatile_status for both engine state Pokémon
+                if hasattr(state.user.active, 'battle_status'):
+                    state.user.active.battle_status = 'fighting'
+                if hasattr(state.user.active, 'volatile_status'):
+                    state.user.active.volatile_status = set()
+                if hasattr(state.opponent.active, 'battle_status'):
+                    state.opponent.active.battle_status = 'fighting'
+                if hasattr(state.opponent.active, 'volatile_status'):
+                    state.opponent.active.volatile_status = set()
+                # Clear Future Sight state on reset - NEW
+                if hasattr(state.user, 'future_sight'):
+                    state.user.future_sight = (0, 0)
+                if hasattr(state.opponent, 'future_sight'):
+                    state.opponent.future_sight = (0, 0)
+
+                # Also reset the main_pokemon and enemy_pokemon Python objects
+                main_pokemon.battle_status = 'fighting'
+                main_pokemon.volatile_status = set()
+                enemy_pokemon.battle_status = 'fighting'
+                enemy_pokemon.volatile_status = set()
+
+                state.weather = None # Reset weather to None
+                state.field = None # Reset field to None
+                state.trick_room = False # Reset trick room to None
+
+            else:
+                raise ValueError(f"Wrong mutator_full_reset encountered : {mutator_full_reset}")
+
+        mutator = StateMutator(state)
+
+        if state.opponent.active.hp == 0:
+            main_move = "Splash"
+            enemy_move = "Splash"
+
+        # Get all possible outcomes
+        transpose_instructions = get_all_state_instructions(
+            mutator, main_move_normalized, enemy_move_normalized
+        )
+
+        # Randomly select ONE outcome from possible outcomes, using probability weights for the outcomes in actual Pokemon battles
+        # e.g. if P(outcome 1):P(outcome 2) = 20% : 80%, then 20% chance to pick outcome 1 (picks randomly)
+        weights = [outcome.percentage for outcome in transpose_instructions]
+        chosen_outcome = random.choices(transpose_instructions, weights=weights, k=1)[0]
+
+
+        if settings_obj.get("battle.review_based_damage"):
+            instrs = []
+            for instr in chosen_outcome.instructions:
+                if instr[0] == constants.DAMAGE and instr[1] == constants.OPPONENT:
+                    modified_instr = (instr[0], instr[1], math.floor(instr[2] * ankimon_tracker_obj.multiplier)) + instr[3:]
+                    instrs.append(modified_instr)
+                else:
+                    instrs.append(instr)
+        else:
+            instrs = chosen_outcome.instructions
+
+        user_hp_before = int(state.user.active.hp)
+        opponent_hp_before = int(state.opponent.active.hp)
+
+        # --- Debugging: State changes BEFORE applying instructions
+        state_before = copy.deepcopy(mutator.state)
+        mutator.apply(instrs)
+        state_after = mutator.state
+        battle_info_changes = diff_states(state_before, state_after)
+        print_state_changes(battle_info_changes)
+        # --- End Debugging
+
+        # Save changes from State to Pokemon objects (enhanced for volatile status)
+        main_pokemon.hp = state.user.active.hp
+        main_pokemon.current_hp = state.user.active.hp
+        enemy_pokemon.hp = state.opponent.active.hp
+        enemy_pokemon.current_hp = state.opponent.active.hp
+
+        main_pokemon.stat_stages = {
+            'atk': state.user.active.attack_boost,
+            'def': state.user.active.defense_boost,
+            'spa': state.user.active.special_attack_boost,
+            'spd': state.user.active.special_defense_boost,
+            'spe': state.user.active.speed_boost,
+            'accuracy': state.user.active.accuracy_boost,
+            'evasion': state.user.active.evasion_boost
+        }
+
+        # Save volatile status from poke-engine state to Pokemon object - NEW
+        if hasattr(state.user.active, 'volatile_status'):
+            main_pokemon.volatile_status = state.user.active.volatile_status.copy()
+        elif not hasattr(main_pokemon, 'volatile_status'):
+            main_pokemon.volatile_status = set()
+
+
+        # Same for enemy Pokemon
+        enemy_pokemon.stat_stages = {
+            'atk': state.opponent.active.attack_boost,
+            'def': state.opponent.active.defense_boost,
+            'spa': state.opponent.active.special_attack_boost,
+            'spd': state.opponent.active.special_defense_boost,
+            'spe': state.opponent.active.speed_boost,
+            'accuracy': state.opponent.active.accuracy_boost,
+            'evasion': state.opponent.active.evasion_boost
+        }
+
+        # Save volatile status for enemy - NEW
+        if hasattr(state.opponent.active, 'volatile_status'):
+            enemy_pokemon.volatile_status = state.opponent.active.volatile_status.copy()
+        elif not hasattr(enemy_pokemon, 'volatile_status'):
+            enemy_pokemon.volatile_status = set()
+
+        new_state = copy.deepcopy(state)
+
+        mutator_full_reset = 0 # preserve battle state - until something else changes this value
+
+        user_hp_after = int(new_state.user.active.hp)
+        opponent_hp_after = int(new_state.opponent.active.hp)
+
+        dmg_from_user_move = int(opponent_hp_before - opponent_hp_after)
+        dmg_from_enemy_move = int(user_hp_before - user_hp_after)
+
+        # Reference to the founder and creator of Ankimon, Unlucky-life.
+        # Unlucky, we are very proud of you for your work. You are a legend.
+        # It's been a pleasure being part of this journey. -- h0tp (and friends)
+
+        if int(chosen_outcome.percentage) == 0:
+            unlucky_life = 1
+        else:
+            unlucky_life = int(chosen_outcome.percentage)
+
+        # On a serious note, the function above is the CHANCE that the chosen_outcome was picked out of ALL
+        # the choices in transpose_instructions, based on factors like accuracy rate, the chance to
+        # inflict a certain status (like sleep or paralyze), etc.
+
+        battle_effects = []
+        for instr in instrs:
+            battle_effects.append(list(instr))  # Convert tuples to lists
+
+        battle_info = {
+            'battle_header': battle_header,
+            'instructions': battle_effects,
+            'state': new_state
+            }
+
+        print(f"{unlucky_life * 100}% chance: {battle_effects}")
+        return battle_info, new_state, dmg_from_enemy_move, dmg_from_user_move, mutator_full_reset, battle_info_changes
+
+    except Exception as e:
+        show_warning_with_traceback(exception=e, message="Error simulating battle:")
+
+def diff_states(state_before, state_after, path="", changes=None):
+    """
+    Recursively compare two state objects and return a list of changed attributes.
+    Returns changes in format: {'key': path, 'before': value_before, 'after': value_after}
+    """
+    if changes is None:
+        changes = []
+
+    # Handle None cases
+    if state_before is None and state_after is None:
+        return changes
+    if state_before is None or state_after is None:
+        changes.append({
+            'key': path or 'root',
+            'before': state_before,
+            'after': state_after
+        })
+        return changes
+
+    # Handle primitive types (int, float, str, bool)
+    if isinstance(state_before, (int, float, str, bool)) or isinstance(state_after, (int, float, str, bool)):
+        if state_before != state_after:
+            changes.append({
+                'key': path or 'root',
+                'before': state_before,
+                'after': state_after
+            })
+        return changes
+
+    # Handle sets
+    if isinstance(state_before, set) or isinstance(state_after, set):
+        if state_before != state_after:
+            changes.append({
+                'key': path or 'root',
+                'before': state_before,
+                'after': state_after
+            })
+        return changes
+
+    # Handle tuples
+    if isinstance(state_before, tuple) or isinstance(state_after, tuple):
+        if state_before != state_after:
+            changes.append({
+                'key': path or 'root',
+                'before': state_before,
+                'after': state_after
+            })
+        return changes
+
+    # Handle lists
+    if isinstance(state_before, list) and isinstance(state_after, list):
+        # Compare list lengths and elements
+        if len(state_before) != len(state_after):
+            changes.append({
+                'key': f"{path}.length" if path else 'length',
+                'before': len(state_before),
+                'after': len(state_after)
+            })
+
+        # Compare elements up to the shorter length
+        min_len = min(len(state_before), len(state_after))
+        for i in range(min_len):
+            new_path = f"{path}[{i}]" if path else f"[{i}]"
+            diff_states(state_before[i], state_after[i], new_path, changes)
+
+        # Handle extra elements in longer list
+        if len(state_before) > min_len:
+            for i in range(min_len, len(state_before)):
+                new_path = f"{path}[{i}]" if path else f"[{i}]"
+                changes.append({
+                    'key': new_path,
+                    'before': state_before[i],
+                    'after': None
+                })
+        elif len(state_after) > min_len:
+            for i in range(min_len, len(state_after)):
+                new_path = f"{path}[{i}]" if path else f"[{i}]"
+                changes.append({
+                    'key': new_path,
+                    'before': None,
+                    'after': state_after[i]
+                })
+        return changes
+
+    # Handle dictionaries
+    if isinstance(state_before, dict) and isinstance(state_after, dict):
+        all_keys = set(state_before.keys()) | set(state_after.keys())
+        for key in all_keys:
+            new_path = f"{path}.{key}" if path else str(key)
+            before_val = state_before.get(key, None)
+            after_val = state_after.get(key, None)
+            diff_states(before_val, after_val, new_path, changes)
+        return changes
+
+    # Handle custom objects - check if they're the same type
+    if type(state_before) != type(state_after):
+        changes.append({
+            'key': path or 'root',
+            'before': state_before,
+            'after': state_after
+        })
+        return changes
+
+    # Custom class: recurse into attributes (__dict__ and __slots__ on the class)
+    attrs = set()
+    for obj in (state_before, state_after):
+        # __dict__ attributes
+        if hasattr(obj, "__dict__"):
+            attrs.update(vars(obj).keys())
+        # __slots__ attributes (check on the class)
+        if hasattr(obj.__class__, "__slots__"):
+            for slot in obj.__class__.__slots__:
+                attrs.add(slot)
+
+    if attrs:
+        for attr in attrs:
+            before_val = getattr(state_before, attr, None)
+            after_val = getattr(state_after, attr, None)
+            new_path = f"{path}.{attr}" if path else attr
+            diff_states(before_val, after_val, new_path, changes)
+
+    return changes
+
+
+def print_state_changes(changes):
+    """
+    Print state changes in a clean format: key: before -> after
+    """
+    if not changes:
+        return
+
+    for change in changes:
+        key = change['key']
+        before = change['before']
+        after = change['after']
+        print(f"{key}: {before} -> {after}")
+
+
+
+---
+
+[8]. src/Ankimon/poke_engine/evaluate.py
+Why this file is critical: Entrypoint for evaluating a combat turn within the poke_engine.
+
+from . import constants
+from .data import effectiveness
+
+
+class Scoring:
+    POKEMON_ALIVE_STATIC = 75
+    POKEMON_HP = 100  # 100 points for 100% hp, 0 points for 0% hp. This is in addition to being alive
+    POKEMON_HIDDEN = 10
+    POKEMON_BOOSTS = {
+        constants.ATTACK: 15,
+        constants.DEFENSE: 15,
+        constants.SPECIAL_ATTACK: 15,
+        constants.SPECIAL_DEFENSE: 15,
+        constants.SPEED: 25,
+        constants.ACCURACY: 3,
+        constants.EVASION: 3
+    }
+
+    POKEMON_BOOST_DIMINISHING_RETURNS = {
+        -6: -3.3,
+        -5: -3.15,
+        -4: -3,
+        -3: -2.5,
+        -2: -2,
+        -1: -1,
+        0: 0,
+        1: 1,
+        2: 2,
+        3: 2.5,
+        4: 3,
+        5: 3.15,
+        6: 3.30,
+    }
+
+    POKEMON_STATIC_STATUSES = {
+        constants.FROZEN: -40,
+        constants.SLEEP: -25,
+        constants.PARALYZED: -25,
+        constants.TOXIC: -30,
+        constants.POISON: -10,
+        None: 0
+    }
+
+    MATCHUP_BONUS = 20
+
+    @staticmethod
+    def BURN(burn_multiplier):
+        return -25*burn_multiplier
+
+    POKEMON_VOLATILE_STATUSES = {
+        constants.LEECH_SEED: -30,
+        constants.SUBSTITUTE: 40,
+        constants.CONFUSION: -20
+    }
+
+    STATIC_SCORED_SIDE_CONDITIONS = {
+        constants.REFLECT: 20,
+        constants.STICKY_WEB: -25,
+        constants.LIGHT_SCREEN: 20,
+        constants.AURORA_VEIL: 40,
+        constants.SAFEGUARD: 5,
+        constants.TAILWIND: 7,
+    }
+
+    POKEMON_COUNT_SCORED_SIDE_CONDITIONS = {
+        constants.STEALTH_ROCK: -10,
+        constants.SPIKES: -7,
+        constants.TOXIC_SPIKES: -7,
+    }
+
+
+def evaluate_pokemon(pkmn):
+    score = 0
+    if pkmn.hp <= 0:
+        return score
+
+    score += Scoring.POKEMON_ALIVE_STATIC
+    score += Scoring.POKEMON_HP * (float(pkmn.hp) / pkmn.maxhp)
+
+    # boosts have diminishing returns
+    score += Scoring.POKEMON_BOOST_DIMINISHING_RETURNS[pkmn.attack_boost] * Scoring.POKEMON_BOOSTS[constants.ATTACK]
+    score += Scoring.POKEMON_BOOST_DIMINISHING_RETURNS[pkmn.defense_boost] * Scoring.POKEMON_BOOSTS[constants.DEFENSE]
+    score += Scoring.POKEMON_BOOST_DIMINISHING_RETURNS[pkmn.special_attack_boost] * Scoring.POKEMON_BOOSTS[constants.SPECIAL_ATTACK]
+    score += Scoring.POKEMON_BOOST_DIMINISHING_RETURNS[pkmn.special_defense_boost] * Scoring.POKEMON_BOOSTS[constants.SPECIAL_DEFENSE]
+    score += Scoring.POKEMON_BOOST_DIMINISHING_RETURNS[pkmn.speed_boost] * Scoring.POKEMON_BOOSTS[constants.SPEED]
+    score += Scoring.POKEMON_BOOST_DIMINISHING_RETURNS[pkmn.accuracy_boost] * Scoring.POKEMON_BOOSTS[constants.ACCURACY]
+    score += Scoring.POKEMON_BOOST_DIMINISHING_RETURNS[pkmn.evasion_boost] * Scoring.POKEMON_BOOSTS[constants.EVASION]
+
+    try:
+        score += Scoring.POKEMON_STATIC_STATUSES[pkmn.status]
+    except KeyError:
+        # KeyError only happens when the status is BURN
+        score += Scoring.BURN(pkmn.burn_multiplier)
+
+    for vol_stat in pkmn.volatile_status:
+        try:
+            score += Scoring.POKEMON_VOLATILE_STATUSES[vol_stat]
+        except KeyError:
+            pass
+
+    return round(score)
+
+
+def evaluate(state):
+    score = 0
+
+    number_of_opponent_reserve_revealed = len(state.opponent.reserve) + 1
+    bot_alive_reserve_count = len([p.hp for p in state.user.reserve.values() if p.hp > 0])
+    opponent_alive_reserves_count = len([p for p in state.opponent.reserve.values() if p.hp > 0]) + (6-number_of_opponent_reserve_revealed)
+
+    # evaluate the bot's pokemon
+    score += evaluate_pokemon(state.user.active)
+    for pkmn in state.user.reserve.values():
+        this_pkmn_score = evaluate_pokemon(pkmn)
+        score += this_pkmn_score
+
+    # evaluate the opponent's visible pokemon
+    score -= evaluate_pokemon(state.opponent.active)
+    for pkmn in state.opponent.reserve.values():
+        this_pkmn_score = evaluate_pokemon(pkmn)
+        score -= this_pkmn_score
+
+    # evaluate the side-conditions for the bot
+    for condition, count in state.user.side_conditions.items():
+        if condition in Scoring.STATIC_SCORED_SIDE_CONDITIONS:
+            score += count * Scoring.STATIC_SCORED_SIDE_CONDITIONS[condition]
+        elif condition in Scoring.POKEMON_COUNT_SCORED_SIDE_CONDITIONS:
+            score += count * Scoring.POKEMON_COUNT_SCORED_SIDE_CONDITIONS[condition] * bot_alive_reserve_count
+
+    # evaluate the side-conditions for the opponent
+    for condition, count in state.opponent.side_conditions.items():
+        if condition in Scoring.STATIC_SCORED_SIDE_CONDITIONS:
+            score -= count * Scoring.STATIC_SCORED_SIDE_CONDITIONS[condition]
+        elif condition in Scoring.POKEMON_COUNT_SCORED_SIDE_CONDITIONS:
+            score -= count * Scoring.POKEMON_COUNT_SCORED_SIDE_CONDITIONS[condition] * opponent_alive_reserves_count
+
+    try:
+        matchup_score = Scoring.MATCHUP_BONUS * effectiveness[state.user.active.id][state.opponent.active.id]
+        matchup_score -= Scoring.MATCHUP_BONUS * effectiveness[state.opponent.active.id][state.user.active.id]
+        score += matchup_score
+    except KeyError:
+        pass
+
+    return int(score)
+
+
+---
+
+[9]. src/Ankimon/poke_engine/instruction_generator.py
+Why this file is critical: Translates raw attacks into discrete status and damage instructions inside the engine.
+
+from copy import copy
+
+from . import constants
+import logging
+
+from .damage_calculator import type_effectiveness_modifier
+from .special_effects.abilities.on_switch_in import ability_on_switch_in
+from .special_effects.items.on_switch_in import item_on_switch_in
+from .special_effects.items.end_of_turn import item_end_of_turn
+from .special_effects.abilities.end_of_turn import ability_end_of_turn
+from .special_effects.moves.after_move import after_move
+from .special_effects.moves import move_special_effect
+
+logger = logging.getLogger(__name__)
+
+
+opposite_side = {
+    constants.USER: constants.OPPONENT,
+    constants.OPPONENT: constants.USER
+}
+
+
+same_side_strings = [
+    constants.SELF,
+    constants.ALLY_SIDE
+]
+
+
+opposing_side_strings = [
+    constants.NORMAL,
+    constants.OPPONENT,
+    constants.FOESIDE,
+    constants.ALL_ADJACENT_FOES,
+    constants.ALL_ADJACENT,
+    constants.ALL,
+]
+
+
+accuracy_multiplier_lookup = {
+    -6: 3/9,
+    -5: 3/8,
+    -4: 3/7,
+    -3: 3/6,
+    -2: 3/5,
+    -1: 3/4,
+    0: 3/3,
+    1: 4/3,
+    2: 5/3,
+    3: 6/3,
+    4: 7/3,
+    5: 8/3,
+    6: 9/3
+}
+
+
+
+
+
+def get_instructions_from_move_special_effect(mutator, attacking_side, attacking_pokemon, defending_pokemon, move_name, instructions):
+    if instructions.frozen:
+        return [instructions]
+
+    try:
+        special_logic_move_function = getattr(move_special_effect, move_name)
+    except AttributeError:
+        new_instructions = list()
+    else:
+        mutator.apply(instructions.instructions)
+        new_instructions = special_logic_move_function(mutator, attacking_side, get_side_from_state(mutator.state, attacking_side), attacking_pokemon, defending_pokemon)
+        new_instructions = new_instructions or list()
+        mutator.reverse(instructions.instructions)
+
+    for i in new_instructions:
+        instructions.add_instruction(i)
+
+    return [instructions]
+
+
+def get_instructions_from_volatile_statuses(mutator, volatile_status, attacker, affected_side, first_move, instruction):
+    if instruction.frozen or not volatile_status:
+        return [instruction]
+
+    if affected_side in same_side_strings:
+        affected_side = attacker
+    elif affected_side in opposing_side_strings:
+        affected_side = opposite_side[attacker]
+    else:
+        logger.critical("Invalid affected_side: {}".format(affected_side))
+        return [instruction]
+
+    side = get_side_from_state(mutator.state, affected_side)
+    mutator.apply(instruction.instructions)
+    if volatile_status in side.active.volatile_status:
+        mutator.reverse(instruction.instructions)
+        return [instruction]
+
+    if can_be_volatile_statused(side, volatile_status, first_move) and volatile_status not in side.active.volatile_status:
+        apply_status_instruction = (
+            constants.MUTATOR_APPLY_VOLATILE_STATUS,
+            affected_side,
+            volatile_status
+        )
+        mutator.reverse(instruction.instructions)
+        instruction.add_instruction(apply_status_instruction)
+        if volatile_status == constants.SUBSTITUTE:
+            instruction.add_instruction(
+                (
+                    constants.MUTATOR_DAMAGE,
+                    affected_side,
+                    side.active.maxhp * 0.25
+                )
+            )
+    else:
+        mutator.reverse(instruction.instructions)
+
+    return [instruction]
+
+
+def get_instructions_from_switch(mutator, attacker, switch_pokemon_name, instructions):
+    if attacker not in opposite_side:
+        raise ValueError("attacker parameter must be one of: {}".format(', '.join(opposite_side)))
+
+    attacking_side = get_side_from_state(mutator.state, attacker)
+    defending_side = get_side_from_state(mutator.state, opposite_side[attacker])
+    mutator.apply(instructions.instructions)
+    instruction_additions = remove_volatile_status_and_boosts_instructions(attacking_side, attacker)
+    mutator.apply(instruction_additions)
+
+    for move in filter(lambda x: x[constants.DISABLED] is True and x[constants.CURRENT_PP], attacking_side.active.moves):
+        remove_disabled_instruction = (
+            constants.MUTATOR_ENABLE_MOVE,
+            attacker,
+            move[constants.ID]
+        )
+        mutator.apply_one(remove_disabled_instruction)
+        instruction_additions.append(remove_disabled_instruction)
+
+    if attacking_side.active.ability == 'regenerator' and attacking_side.active.hp:
+        hp_missing = attacking_side.active.maxhp - attacking_side.active.hp
+        regenerator_instruction = (
+            constants.MUTATOR_HEAL,
+            attacker,
+            int(min(1 / 3 * attacking_side.active.maxhp, hp_missing))
+        )
+        mutator.apply_one(regenerator_instruction)
+        instruction_additions.append(regenerator_instruction)
+    elif attacking_side.active.ability == 'naturalcure' and attacking_side.active.status is not None:
+        naturalcure_instruction = (
+            constants.MUTATOR_REMOVE_STATUS,
+            attacker,
+            attacking_side.active.status
+        )
+        mutator.apply_one(naturalcure_instruction)
+        instruction_additions.append(naturalcure_instruction)
+
+    switch_instruction = (
+        constants.MUTATOR_SWITCH,
+        attacker,
+        attacking_side.active.id,
+        switch_pokemon_name
+    )
+    mutator.apply_one(switch_instruction)
+    instruction_additions.append(switch_instruction)
+
+    switch_pkmn = attacking_side.active
+    if switch_pkmn.item != 'heavydutyboots':
+
+        # account for stealth rock damage
+        if attacking_side.side_conditions[constants.STEALTH_ROCK] == 1:
+            multiplier = type_effectiveness_modifier('rock', switch_pkmn.types)
+            stealth_rock_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                min(1 / 8 * multiplier * switch_pkmn.maxhp, switch_pkmn.hp)
+            )
+            mutator.apply_one(stealth_rock_instruction)
+            instruction_additions.append(stealth_rock_instruction)
+
+        # account for spikes damage
+        if attacking_side.side_conditions[constants.SPIKES] > 0 and switch_pkmn.is_grounded():
+            spike_count = attacking_side.side_conditions[constants.SPIKES]
+            spikes_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                min(1 / 8 * spike_count * switch_pkmn.maxhp, switch_pkmn.hp)
+            )
+            mutator.apply_one(spikes_instruction)
+            instruction_additions.append(spikes_instruction)
+
+        # account for stickyweb speed drop
+        if attacking_side.side_conditions[constants.STICKY_WEB] == 1 and switch_pkmn.is_grounded() and switch_pkmn.ability not in constants.IMMUNE_TO_STAT_LOWERING_ABILITIES:
+            sticky_web_instruction = (
+                constants.MUTATOR_UNBOOST,
+                attacker,
+                constants.SPEED,
+                1
+            )
+            mutator.apply_one(sticky_web_instruction)
+            instruction_additions.append(sticky_web_instruction)
+
+        # account for toxic spikes effect
+        if attacking_side.side_conditions[constants.TOXIC_SPIKES] >= 1 and switch_pkmn.is_grounded():
+            toxic_spike_instruction = None
+            if not immune_to_status(mutator.state, switch_pkmn, switch_pkmn, constants.POISON):
+                if attacking_side.side_conditions[constants.TOXIC_SPIKES] == 1:
+                    toxic_spike_instruction = (
+                        constants.MUTATOR_APPLY_STATUS,
+                        attacker,
+                        constants.POISON
+                    )
+                elif attacking_side.side_conditions[constants.TOXIC_SPIKES] == 2:
+                    toxic_spike_instruction = (
+                        constants.MUTATOR_APPLY_STATUS,
+                        attacker,
+                        constants.TOXIC
+                    )
+            elif 'poison' in switch_pkmn.types:
+                toxic_spike_instruction = (
+                    constants.MUTATOR_SIDE_END,
+                    attacker,
+                    constants.TOXIC_SPIKES,
+                    attacking_side.side_conditions[constants.TOXIC_SPIKES]
+                )
+            if toxic_spike_instruction is not None:
+                mutator.apply_one(toxic_spike_instruction)
+                instruction_additions.append(toxic_spike_instruction)
+
+    # account for switch-in abilities
+    ability_switch_in_instructions = ability_on_switch_in(
+        switch_pkmn.ability,
+        mutator.state,
+        attacker,
+        attacking_side.active,
+        opposite_side[attacker],
+        defending_side.active
+    )
+    if ability_switch_in_instructions is not None:
+        for i in ability_switch_in_instructions:
+            mutator.apply_one(i)
+            instruction_additions.append(i)
+
+    # account for switch-in items
+    item_switch_in_instructions = item_on_switch_in(
+        switch_pkmn.item,
+        mutator.state,
+        attacker,
+        attacking_side.active,
+        opposite_side[attacker],
+        defending_side.active
+    )
+    if item_switch_in_instructions is not None:
+        for i in item_switch_in_instructions:
+            mutator.apply_one(i)
+            instruction_additions.append(i)
+
+    mutator.reverse(instruction_additions)
+    mutator.reverse(instructions.instructions)
+    for i in instruction_additions:
+        instructions.add_instruction(i)
+
+    return instructions
+
+
+def get_instructions_from_flinched(mutator, attacker, instruction):
+    """If the attacker has been flinched, freeze the state so that nothing happens"""
+    if attacker not in opposite_side:
+        raise ValueError("attacker parameter must be one of: {}".format(', '.join(opposite_side)))
+
+    side = get_side_from_state(mutator.state, attacker)
+    if constants.FLINCH in side.active.volatile_status:
+        remove_flinch_instruction = (
+            constants.MUTATOR_REMOVE_VOLATILE_STATUS,
+            attacker,
+            constants.FLINCH
+        )
+        mutator.apply_one(remove_flinch_instruction)
+        instruction.add_instruction(remove_flinch_instruction)
+        instruction.frozen = True
+        return instruction
+    else:
+        return instruction
+
+
+def get_instructions_from_statuses_that_freeze_the_state(mutator, attacker, defender, move, opponent_move, instruction):
+    instructions = [instruction]
+    attacker_side = get_side_from_state(mutator.state, attacker)
+    defender_side = get_side_from_state(mutator.state, defender)
+
+    mutator.apply(instruction.instructions)
+
+    if constants.PARALYZED == attacker_side.active.status:
+        fully_paralyzed_instruction = copy(instruction)
+        fully_paralyzed_instruction.update_percentage(constants.FULLY_PARALYZED_PERCENT)
+        fully_paralyzed_instruction.frozen = True
+        instruction.update_percentage(1 - constants.FULLY_PARALYZED_PERCENT)
+        instructions.append(fully_paralyzed_instruction)
+
+    elif constants.SLEEP == attacker_side.active.status:
+        still_asleep_instruction = copy(instruction)
+        still_asleep_instruction.update_percentage(1 - constants.WAKE_UP_PERCENT)
+        still_asleep_instruction.frozen = True
+        instruction.update_percentage(constants.WAKE_UP_PERCENT)
+        instruction.add_instruction(
+            (
+                constants.MUTATOR_REMOVE_STATUS,
+                attacker,
+                constants.SLEEP
+            )
+        )
+        instructions.append(still_asleep_instruction)
+
+    elif constants.FROZEN == attacker_side.active.status:
+        still_frozen_instruction = copy(instruction)
+        instruction.add_instruction(
+            (
+                constants.MUTATOR_REMOVE_STATUS,
+                attacker,
+                constants.FROZEN
+            )
+        )
+        if move[constants.ID] not in constants.THAW_IF_USES and opponent_move.get(constants.ID) not in constants.THAW_IF_HIT_BY and opponent_move.get(constants.TYPE) != 'fire':
+            still_frozen_instruction.update_percentage(1 - constants.THAW_PERCENT)
+            still_frozen_instruction.frozen = True
+            instruction.update_percentage(constants.THAW_PERCENT)
+            instructions.append(still_frozen_instruction)
+
+    if constants.POWDER in move[constants.FLAGS] and ('grass' in defender_side.active.types or defender_side.active.ability == 'overcoat'):
+        instruction.frozen = True
+
+    if move[constants.TYPE] == 'electric' and 'ground' in defender_side.active.types:
+        instruction.frozen = True
+
+    mutator.reverse(instruction.instructions)
+
+    return instructions
+
+
+def get_instructions_from_damage(mutator, defender, damage, accuracy, attacking_move, instruction):
+    attacker = opposite_side[defender]
+    attacker_side = get_side_from_state(mutator.state, attacker)
+    damage_side = get_side_from_state(mutator.state, defender)
+
+    # `damage is None` means that the move does not deal damage
+    # for example, will-o-wisp
+    if instruction.frozen or damage is None:
+        return [instruction]
+
+    crash = attacking_move.get(constants.CRASH)
+    recoil = attacking_move.get(constants.RECOIL)
+    drain = attacking_move.get(constants.DRAIN)
+    move_flags = attacking_move.get(constants.FLAGS, {})
+
+    mutator.apply(instruction.instructions)
+
+    if accuracy is True or "glaiverush" in damage_side.active.volatile_status:
+        accuracy = 100
+    else:
+        accuracy = min(100, accuracy * accuracy_multiplier_lookup[attacker_side.active.accuracy_boost] / accuracy_multiplier_lookup[damage_side.active.evasion_boost])
+    percent_hit = accuracy / 100
+
+    # `damage == 0` means that the move deals damage, but not in this situation
+    # for example: using Return against a Ghost-type
+    # the state must be frozen because any secondary effects must not take place
+    if damage == 0:
+        if crash:
+            crash_percent = crash[0] / crash[1]
+            crash_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                min(int(crash_percent * attacker_side.active.maxhp), attacker_side.active.hp)
+            )
+            mutator.reverse(instruction.instructions)
+            instruction.add_instruction(crash_instruction)
+        else:
+            mutator.reverse(instruction.instructions)
+        instruction.frozen = True
+        return [instruction]
+
+    if defender not in opposite_side:
+        raise ValueError("attacker parameter must be one of: {}".format(', '.join(opposite_side)))
+
+    instructions = []
+    instruction_additions = []
+    move_missed_instruction = copy(instruction)
+    hit_sub = False
+    if percent_hit > 0:
+        if constants.SUBSTITUTE in damage_side.active.volatile_status and constants.SOUND not in move_flags and attacker_side.active.ability != 'infiltrator':
+            hit_sub = True
+            if damage >= damage_side.active.maxhp * 0.25:
+                actual_damage = damage_side.active.maxhp * 0.25
+                instruction_additions.append(
+                    (
+                        constants.MUTATOR_REMOVE_VOLATILE_STATUS,
+                        defender,
+                        constants.SUBSTITUTE
+                    )
+                )
+            else:
+                actual_damage = damage
+        else:
+            # dont drop hp below 0 (min() statement), and dont overheal (max() statement)
+            actual_damage = max(min(damage, damage_side.active.hp), -1*(damage_side.active.maxhp - damage_side.active.hp))
+
+            if damage_side.active.ability == 'sturdy' and damage_side.active.hp == damage_side.active.maxhp:
+                actual_damage -= 1
+
+            instruction_additions.append(
+                (
+                    constants.MUTATOR_DAMAGE,
+                    defender,
+                    actual_damage
+                )
+            )
+
+            if attacker_side.active.ability == "beastboost" and actual_damage == damage_side.active.hp:
+                highest_stat = attacker_side.active.get_highest_stat()
+                if attacker_side.active.get_boost_from_boost_string(highest_stat) < 6:
+                    instruction_additions.append(
+                        (
+                            constants.MUTATOR_BOOST,
+                            attacker,
+                            highest_stat,
+                            1
+                        )
+                    )
+
+        instruction.update_percentage(percent_hit)
+
+        if damage_side.active.hp <= 0:
+            instruction.frozen = True
+
+        if drain:
+            drain_percent = drain[0] / drain[1]
+            drain_instruction = (
+                constants.MUTATOR_HEAL,
+                attacker,
+                min(int(drain_percent * actual_damage), int(attacker_side.active.maxhp - attacker_side.active.hp))
+            )
+            instruction_additions.append(drain_instruction)
+        if recoil:
+            recoil_percent = recoil[0] / recoil[1]
+            recoil_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                min(int(recoil_percent * actual_damage), int(attacker_side.active.hp))
+            )
+            instruction_additions.append(recoil_instruction)
+
+        after_move_instructions = after_move(
+            attacking_move[constants.ID],
+            mutator.state,
+            attacker,
+            defender,
+            attacker_side,
+            damage_side,
+            True,
+            hit_sub
+        )
+        instruction_additions += after_move_instructions
+
+        instructions.append(instruction)
+
+    if percent_hit < 1:
+        move_missed_instruction.frozen = True
+        move_missed_instruction.update_percentage(1 - percent_hit)
+        if crash:
+            crash_percent = crash[0] / crash[1]
+            crash_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                min(int(crash_percent * attacker_side.active.maxhp), attacker_side.active.hp)
+            )
+            move_missed_instruction.add_instruction(crash_instruction)
+
+        if attacker_side.active.item == 'blunderpolicy':
+            blunder_policy_increase_speed_instruction = (
+                constants.MUTATOR_BOOST,
+                attacker,
+                constants.SPEED,
+                2
+            )
+            move_missed_instruction.add_instruction(blunder_policy_increase_speed_instruction)
+
+        after_move_instructions = after_move(
+            attacking_move[constants.ID],
+            mutator.state,
+            attacker,
+            defender,
+            attacker_side,
+            damage_side,
+            False,
+            False
+        )
+        for i in after_move_instructions:
+            move_missed_instruction.add_instruction(i)
+
+        instructions.append(move_missed_instruction)
+
+    mutator.reverse(instruction.instructions)
+    for i in instruction_additions:
+        instruction.add_instruction(i)
+
+    return instructions
+
+
+def get_instructions_from_defenders_ability_after_move(mutator, move, ability_name, attacking_pokemon, attacker_string, instruction):
+    all_instructions = [instruction]
+    if instruction.frozen:
+        return all_instructions
+
+    if attacker_string not in opposite_side:
+        raise ValueError("attacker parameter must be one of: {}".format(', '.join(opposite_side)))
+
+    if (
+        ability_name == "static"
+        and constants.CONTACT in move[constants.FLAGS]
+        and attacking_pokemon.item != "protectivepads"
+    ):
+        return get_instructions_from_status_effects(
+            mutator,
+            attacker_string,
+            constants.PARALYZED,
+            30,
+            instruction
+        )
+    elif (
+        ability_name == "flamebody"
+        and constants.CONTACT in move[constants.FLAGS]
+        and attacking_pokemon.item != "protectivepads"
+    ):
+        return get_instructions_from_status_effects(
+            mutator,
+            attacker_string,
+            constants.BURN,
+            30,
+            instruction
+        )
+
+    return all_instructions
+
+
+def get_instructions_from_side_conditions(mutator, attacker_string, side_string, condition, instruction):
+    if instruction.frozen:
+        return [instruction]
+
+    if attacker_string not in opposite_side:
+        raise ValueError("attacker parameter must be one of: {}".format(', '.join(opposite_side)))
+
+    if side_string in same_side_strings:
+        side_string = attacker_string
+    elif side_string in opposing_side_strings:
+        side_string = opposite_side[attacker_string]
+    else:
+        raise ValueError("Invalid Side String: {}".format(side_string))
+
+    instruction_additions = []
+    side = get_side_from_state(mutator.state, side_string)
+    mutator.apply(instruction.instructions)
+
+    if condition == constants.WISH:
+        if side.wish[0] == 0:
+            instruction_additions.append(
+                (
+                    constants.MUTATOR_WISH_START,
+                    side_string,
+                    side.active.maxhp / 2,
+                    side.wish[1]
+                )
+            )
+
+    else:
+        if condition == constants.SPIKES:
+            max_layers = 3
+        elif condition == constants.TOXIC_SPIKES:
+            max_layers = 2
+        elif condition == constants.AURORA_VEIL:
+            max_layers = 1 if mutator.state.weather in constants.HAIL_OR_SNOW else 0
+        else:
+            max_layers = 1
+
+        if side.side_conditions[condition] < max_layers:
+            instruction_additions.append(
+                (
+                    constants.MUTATOR_SIDE_START,
+                    side_string,
+                    condition,
+                    1
+                )
+            )
+
+    mutator.reverse(instruction.instructions)
+    for i in instruction_additions:
+        instruction.add_instruction(i)
+
+    return [instruction]
+
+
+def get_instructions_from_hazard_clearing_moves(mutator, attacker_string, move, instruction):
+    if instruction.frozen:
+        return [instruction]
+
+    if attacker_string not in opposite_side:
+        raise ValueError("attacker parameter must be one of: {}".format(', '.join(opposite_side)))
+
+    defender_string = opposite_side[attacker_string]
+
+    instruction_additions = []
+    mutator.apply(instruction.instructions)
+
+    attacker_side = get_side_from_state(mutator.state, attacker_string)
+    defender_side = get_side_from_state(mutator.state, defender_string)
+
+    if move[constants.ID] == 'defog':
+        if mutator.state.field is not None:
+            instruction_additions.append(
+                (
+                    constants.MUTATOR_FIELD_END,
+                    mutator.state.field
+                )
+            )
+        for side_condition, amount in attacker_side.side_conditions.items():
+            if amount > 0 and side_condition in constants.DEFOG_CLEARS:
+                instruction_additions.append(
+                    (
+                        constants.MUTATOR_SIDE_END,
+                        attacker_string,
+                        side_condition,
+                        amount
+                    )
+                )
+        for side_condition, amount in defender_side.side_conditions.items():
+            if amount > 0 and side_condition in constants.DEFOG_CLEARS:
+                instruction_additions.append(
+                    (
+                        constants.MUTATOR_SIDE_END,
+                        defender_string,
+                        side_condition,
+                        amount
+                    )
+                )
+
+    # ghost-type misses are dealt with by freezing the state. i.e. this elif will not be reached if the move missed
+    elif move[constants.ID] == "rapidspin" or move[constants.ID] == "mortalspin" or move[constants.ID] == "tidyup":
+        side = get_side_from_state(mutator.state, attacker_string)
+        for side_condition, amount in side.side_conditions.items():
+            if amount > 0 and side_condition in constants.SPIN_TIDYUP_CLEARS:
+                instruction_additions.append(
+                    (
+                        constants.MUTATOR_SIDE_END,
+                        attacker_string,
+                        side_condition,
+                        amount
+                    )
+                )
+    elif move[constants.ID] == constants.COURT_CHANGE:
+        sides = [
+            (constants.USER, mutator.state.user),
+            (constants.OPPONENT, mutator.state.opponent)
+        ]
+        for side_name, side_object in sides:
+            for side_condition in side_object.side_conditions:
+                if side_object.side_conditions[side_condition] and side_condition in constants.COURT_CHANGE_SWAPS:
+                    instruction_additions.append(
+                        (
+                            constants.MUTATOR_SIDE_END,
+                            side_name,
+                            side_condition,
+                            side_object.side_conditions[side_condition]
+                        )
+                    )
+                    instruction_additions.append(
+                        (
+                            constants.MUTATOR_SIDE_START,
+                            opposite_side[side_name],
+                            side_condition,
+                            side_object.side_conditions[side_condition]
+                        )
+                    )
+
+    else:
+        raise ValueError("{} is not a hazard clearing move".format(move[constants.ID]))
+
+    mutator.reverse(instruction.instructions)
+    for i in instruction_additions:
+        instruction.add_instruction(i)
+
+    return [instruction]
+
+
+def get_instructions_from_status_effects(mutator, defender, status, accuracy, instruction):
+    """Returns the possible states from status effects"""
+    if instruction.frozen or status is None:
+        return [instruction]
+
+    if defender not in opposite_side:
+        raise ValueError("attacker parameter must be one of: {}".format(', '.join(opposite_side)))
+
+    instructions = []
+    if accuracy is True:
+        accuracy = 100
+    percent_hit = accuracy / 100
+
+    mutator.apply(instruction.instructions)
+    instruction_additions = []
+    defending_side = get_side_from_state(mutator.state, defender)
+    attacking_side = get_side_from_state(mutator.state, opposite_side[defender])
+
+    if sleep_clause_activated(defending_side, status):
+        mutator.reverse(instruction.instructions)
+        return [instruction]
+
+    if immune_to_status(mutator.state, defending_side.active, attacking_side.active, status):
+        mutator.reverse(instruction.instructions)
+        return [instruction]
+
+    move_missed_instruction = copy(instruction)
+    if percent_hit > 0:
+        move_hit_instruction = (
+            constants.MUTATOR_APPLY_STATUS,
+            defender,
+            status
+        )
+
+        instruction_additions.append(move_hit_instruction)
+        instruction.update_percentage(percent_hit)
+        instructions.append(instruction)
+
+    if percent_hit < 1:
+        move_missed_instruction.frozen = True
+        move_missed_instruction.update_percentage(1 - percent_hit)
+        if attacking_side.active.item == 'blunderpolicy':
+            blunder_policy_increase_speed_instruction = (
+                constants.MUTATOR_BOOST,
+                opposite_side[defender],
+                constants.SPEED,
+                2
+            )
+            move_missed_instruction.add_instruction(blunder_policy_increase_speed_instruction)
+        instructions.append(move_missed_instruction)
+
+    mutator.reverse(instruction.instructions)
+    for i in instruction_additions:
+        instruction.add_instruction(i)
+
+    return instructions
+
+
+def get_instructions_from_boosts(mutator, side_string, boosts, accuracy, instruction):
+    if instruction.frozen or not boosts:
+        return [instruction]
+
+    if side_string not in opposite_side:
+        raise ValueError("attacker parameter must be one of: {}. Value: {}".format(
+            ', '.join(opposite_side),
+            side_string
+        )
+        )
+
+    instructions = []
+    if accuracy is True:
+        accuracy = 100
+    percent_hit = accuracy / 100
+
+    mutator.apply(instruction.instructions)
+    side = get_side_from_state(mutator.state, side_string)
+
+    instruction_additions = []
+    move_missed_instruction = copy(instruction)
+    if percent_hit > 0:
+        for k, v in boosts.items():
+            pkmn_boost = side.active.get_boost_from_boost_string(k)
+            if v > 0:
+                new_boost = pkmn_boost + v
+                if new_boost > constants.MAX_BOOSTS:
+                    new_boost = constants.MAX_BOOSTS
+                boost_instruction = (
+                    constants.MUTATOR_BOOST,
+                    side_string,
+                    k,
+                    new_boost - pkmn_boost
+                )
+                instruction_additions.append(boost_instruction)
+            elif (
+                side.active.ability not in constants.IMMUNE_TO_STAT_LOWERING_ABILITIES and
+                side.active.item not in constants.IMMUNE_TO_STAT_LOWERING_ITEMS
+            ):
+                new_boost = pkmn_boost + v
+                if new_boost < -1 * constants.MAX_BOOSTS:
+                    new_boost = -1 * constants.MAX_BOOSTS
+                boost_instruction = (
+                    constants.MUTATOR_BOOST,
+                    side_string,
+                    k,
+                    new_boost - pkmn_boost
+                )
+                instruction_additions.append(boost_instruction)
+
+        instruction.update_percentage(percent_hit)
+        instructions.append(instruction)
+
+    if percent_hit < 1:
+        move_missed_instruction.update_percentage(1 - percent_hit)
+        instructions.append(move_missed_instruction)
+
+    mutator.reverse(instruction.instructions)
+    for i in instruction_additions:
+        instruction.add_instruction(i)
+
+    return instructions
+
+
+def get_instructions_from_flinching_moves(defender, accuracy, first_move, instruction):
+    if instruction.frozen or not first_move:
+        return [instruction]
+
+    if defender not in opposite_side:
+        raise ValueError("attacker parameter must be one of: {}".format(', '.join(opposite_side)))
+
+    instructions = []
+    if accuracy is True:
+        accuracy = 100
+    percent_hit = accuracy / 100
+
+    if percent_hit > 0:
+        flinched_instruction = copy(instruction)
+        flinch_mutator_instruction = (
+            constants.MUTATOR_APPLY_VOLATILE_STATUS,
+            defender,
+            constants.FLINCH
+        )
+        flinched_instruction.add_instruction(flinch_mutator_instruction)
+        flinched_instruction.update_percentage(percent_hit)
+        instructions.append(flinched_instruction)
+
+    if percent_hit < 1:
+        instruction.update_percentage(1 - percent_hit)
+        instructions.append(instruction)
+
+    return instructions
+
+
+def get_instructions_from_attacker_recovery(mutator, attacker_string, move, instruction):
+    if instruction.frozen:
+        return [instruction]
+
+    mutator.apply(instruction.instructions)
+
+    target = move[constants.HEAL_TARGET]
+    if target in opposing_side_strings:
+        side_string = opposite_side[attacker_string]
+    else:
+        side_string = attacker_string
+
+    pkmn = get_side_from_state(mutator.state, side_string).active
+    try:
+        health_recovered = float(move[constants.HEAL][0] / move[constants.HEAL][1]) * pkmn.maxhp
+    except KeyError:
+        health_recovered = 0
+
+    if health_recovered == 0:
+        mutator.reverse(instruction.instructions)
+        return [instruction]
+
+    final_health = pkmn.hp + health_recovered
+    if final_health > pkmn.maxhp:
+        health_recovered -= (final_health - pkmn.maxhp)
+    elif final_health < 0:
+        health_recovered -= final_health
+
+    heal_instruction = (
+        constants.MUTATOR_HEAL,
+        side_string,
+        health_recovered
+    )
+
+    mutator.reverse(instruction.instructions)
+
+    if health_recovered:
+        instruction.add_instruction(heal_instruction)
+
+    return [instruction]
+
+
+def get_end_of_turn_instructions(mutator, instruction, bot_move, opponent_move, bot_moves_first):
+    # determine which goes first
+    if bot_moves_first:
+        sides = [constants.USER, constants.OPPONENT]
+    else:
+        sides = [constants.OPPONENT, constants.USER]
+
+    mutator.apply(instruction.instructions)
+
+    # weather damage - sand and hail
+    for attacker in sides:
+        side = get_side_from_state(mutator.state, attacker)
+        pkmn = side.active
+
+        if pkmn.ability == 'magicguard' or not pkmn.hp:
+            continue
+
+        if mutator.state.weather == constants.SAND and not any(t in pkmn.types for t in ['steel', 'rock', 'ground']):
+            sand_damage_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                max(0, int(min(pkmn.maxhp * 0.0625, pkmn.hp)))
+            )
+            mutator.apply_one(sand_damage_instruction)
+            instruction.add_instruction(sand_damage_instruction)
+
+        elif mutator.state.weather == constants.HAIL and 'ice' not in pkmn.types and pkmn.ability != 'icebody':
+            ice_damage_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                max(0, int(min(pkmn.maxhp * 0.0625, pkmn.hp)))
+            )
+            mutator.apply_one(ice_damage_instruction)
+            instruction.add_instruction(ice_damage_instruction)
+
+    # futuresight
+    for attacker in sides:
+        side = get_side_from_state(mutator.state, attacker)
+        if side.future_sight[0] == 1:
+            from .damage_calculator import calculate_futuresight_damage
+            damage_dealt = calculate_futuresight_damage(
+                mutator.state,
+                attacker,
+                side.future_sight[1]
+            )[0]
+            if damage_dealt:
+                futuresight_damage_instruction = (
+                    constants.MUTATOR_DAMAGE,
+                    opposite_side[attacker],
+                    damage_dealt
+                )
+                mutator.apply_one(futuresight_damage_instruction)
+                instruction.add_instruction(futuresight_damage_instruction)
+        if side.future_sight[0] > 0:
+            futuresight_decrement_instruction = (
+                constants.MUTATOR_FUTURESIGHT_DECREMENT,
+                attacker,
+            )
+            mutator.apply_one(futuresight_decrement_instruction)
+            instruction.add_instruction(futuresight_decrement_instruction)
+
+    # wish
+    for attacker in sides:
+        side = get_side_from_state(mutator.state, attacker)
+        if side.wish[0] == 1 and 0 < side.active.hp < side.active.maxhp:
+            wish_heal_instruction = (
+                constants.MUTATOR_HEAL,
+                attacker,
+                min(side.wish[1], side.active.maxhp - side.active.hp)
+            )
+            mutator.apply_one(wish_heal_instruction)
+            instruction.add_instruction(wish_heal_instruction)
+        if side.wish[0] > 0:
+            wish_decrement_instruction = (
+                constants.MUTATOR_WISH_DECREMENT,
+                attacker
+            )
+            mutator.apply_one(wish_decrement_instruction)
+            instruction.add_instruction(wish_decrement_instruction)
+
+    # item and ability - they can add one instruction each
+    for attacker in sides:
+        defender = opposite_side[attacker]
+        side = get_side_from_state(mutator.state, attacker)
+        defending_side = get_side_from_state(mutator.state, defender)
+        pkmn = side.active
+        defending_pkmn = defending_side.active
+
+        item_instruction = item_end_of_turn(side.active.item, mutator.state, attacker, pkmn, defender, defending_pkmn)
+        if item_instruction is not None:
+            mutator.apply_one(item_instruction)
+            instruction.add_instruction(item_instruction)
+
+        ability_instruction = ability_end_of_turn(side.active.ability, mutator.state, attacker, pkmn, defender, defending_pkmn)
+        if ability_instruction is not None:
+            mutator.apply_one(ability_instruction)
+            instruction.add_instruction(ability_instruction)
+
+    # poison, toxic, and burn damage
+    for attacker in sides:
+        side = get_side_from_state(mutator.state, attacker)
+        pkmn = side.active
+
+        if pkmn.ability == 'magicguard' or not pkmn.hp:
+            continue
+
+        if constants.TOXIC == pkmn.status and pkmn.ability != 'poisonheal':
+            toxic_count = side.side_conditions[constants.TOXIC_COUNT]
+            toxic_multiplier = (1 / 16) * toxic_count + (1 / 16)
+            toxic_damage = max(0, int(min(pkmn.maxhp * toxic_multiplier, pkmn.hp)))
+
+            toxic_damage_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                toxic_damage
+            )
+            toxic_count_instruction = (
+                constants.MUTATOR_SIDE_START,
+                attacker,
+                constants.TOXIC_COUNT,
+                1
+            )
+            mutator.apply_one(toxic_damage_instruction)
+            mutator.apply_one(toxic_count_instruction)
+
+            instruction.add_instruction(toxic_damage_instruction)
+            instruction.add_instruction(toxic_count_instruction)
+
+        elif constants.BURN == pkmn.status:
+            burn_damage_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                max(0, int(min(pkmn.maxhp * 0.0625, pkmn.hp)))
+            )
+            mutator.apply_one(burn_damage_instruction)
+            instruction.add_instruction(burn_damage_instruction)
+
+        elif constants.POISON == pkmn.status and pkmn.ability != 'poisonheal':
+            poison_damage_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                max(0, int(min(pkmn.maxhp * 0.125, pkmn.hp)))
+            )
+            mutator.apply_one(poison_damage_instruction)
+            instruction.add_instruction(poison_damage_instruction)
+
+    # leechseed sap damage
+    for attacker in sides:
+        defender = opposite_side[attacker]
+        side = get_side_from_state(mutator.state, attacker)
+        defending_side = get_side_from_state(mutator.state, defender)
+        pkmn = side.active
+        defending_pkmn = defending_side.active
+
+        if pkmn.ability == 'magicguard' or not pkmn.hp or not defending_pkmn.hp:
+            continue
+
+        if constants.LEECH_SEED in pkmn.volatile_status:
+            # damage taken
+            damage_sapped = max(0, int(min(pkmn.maxhp * 0.125, pkmn.hp)))
+            sap_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                damage_sapped
+            )
+
+            # heal amount
+            damage_from_full = defending_pkmn.maxhp - defending_pkmn.hp
+            heal_instruction = (
+                constants.MUTATOR_HEAL,
+                defender,
+                min(damage_sapped, damage_from_full)
+            )
+
+            mutator.apply_one(sap_instruction)
+            mutator.apply_one(heal_instruction)
+            instruction.add_instruction(sap_instruction)
+            instruction.add_instruction(heal_instruction)
+
+    # volatile-statuses
+    for attacker in sides:
+        side = get_side_from_state(mutator.state, attacker)
+        pkmn = side.active
+
+        if any(vs in constants.PROTECT_VOLATILE_STATUSES for vs in pkmn.volatile_status):
+            if constants.PROTECT in pkmn.volatile_status:
+                volatile_status_to_remove = constants.PROTECT
+            elif constants.BANEFUL_BUNKER in pkmn.volatile_status:
+                volatile_status_to_remove = constants.BANEFUL_BUNKER
+            elif constants.SPIKY_SHIELD in pkmn.volatile_status:
+                volatile_status_to_remove = constants.SPIKY_SHIELD
+            elif constants.SILK_TRAP in pkmn.volatile_status:
+                volatile_status_to_remove = constants.SILK_TRAP
+            else:
+                # should never happen
+                raise Exception("Pokemon has volatile status that is not caught here: {}".format(pkmn.volatile_status))
+
+            remove_protect_volatile_status_instruction = (
+                constants.MUTATOR_REMOVE_VOLATILE_STATUS,
+                attacker,
+                volatile_status_to_remove
+            )
+            start_protect_side_condition_instruction = (
+                    constants.MUTATOR_SIDE_START,
+                    attacker,
+                    constants.PROTECT,
+                    1
+            )
+            mutator.apply_one(remove_protect_volatile_status_instruction)
+            mutator.apply_one(start_protect_side_condition_instruction)
+            instruction.add_instruction(remove_protect_volatile_status_instruction)
+            instruction.add_instruction(start_protect_side_condition_instruction)
+
+        elif side.side_conditions[constants.PROTECT]:
+            end_protect_side_condition_instruction = (
+                constants.MUTATOR_SIDE_END,
+                attacker,
+                constants.PROTECT,
+                side.side_conditions[constants.PROTECT]
+            )
+            mutator.apply_one(end_protect_side_condition_instruction)
+            instruction.add_instruction(end_protect_side_condition_instruction)
+
+        if constants.ROOST in pkmn.volatile_status:
+            remove_roost_instruction = (
+                constants.MUTATOR_REMOVE_VOLATILE_STATUS,
+                attacker,
+                constants.ROOST,
+            )
+            mutator.apply_one(remove_roost_instruction)
+            instruction.add_instruction(remove_roost_instruction)
+
+        if constants.PARTIALLY_TRAPPED in pkmn.volatile_status:
+            damage_taken = max(0, int(min(pkmn.maxhp * 0.125, pkmn.hp)))
+            partially_trapped_damage_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                damage_taken
+            )
+            mutator.apply_one(partially_trapped_damage_instruction)
+            instruction.add_instruction(partially_trapped_damage_instruction)
+
+        if "saltcure" in pkmn.volatile_status:
+            divisor = 4 if any(t in pkmn.types for t in ["water", "steel"]) else 8
+            damage_taken = max(0, int(min(pkmn.maxhp * (1/divisor), pkmn.hp)))
+            partially_trapped_damage_instruction = (
+                constants.MUTATOR_DAMAGE,
+                attacker,
+                damage_taken
+            )
+            mutator.apply_one(partially_trapped_damage_instruction)
+            instruction.add_instruction(partially_trapped_damage_instruction)
+
+    # disable not used moves if choice-item is held
+    for attacker in sides:
+        side = get_side_from_state(mutator.state, attacker)
+        pkmn = side.active
+
+        if attacker == constants.USER:
+            move = bot_move
+            other_move = opponent_move
+        else:
+            move = opponent_move
+            other_move = bot_move
+
+        try:
+            locking_move = move[constants.SELF][constants.VOLATILE_STATUS] == constants.LOCKED_MOVE
+        except KeyError:
+            locking_move = False
+
+        if (
+            constants.SWITCH_STRING not in move and
+            constants.DRAG not in other_move.get(constants.FLAGS, {}) and
+            move[constants.ID] not in constants.SWITCH_OUT_MOVES and
+            (pkmn.item in constants.CHOICE_ITEMS or locking_move or pkmn.ability == 'gorillatactics')
+        ):
+            move_used = move[constants.ID]
+            for m in filter(
+                lambda x: x[constants.ID] != move_used and not x.get(constants.DISABLED, False),
+                pkmn.moves
+            ):
+                disable_instruction = (
+                    constants.MUTATOR_DISABLE_MOVE,
+                    attacker,
+                    m[constants.ID]
+                )
+                mutator.apply_one(disable_instruction)
+                instruction.add_instruction(disable_instruction)
+
+    mutator.reverse(instruction.instructions)
+
+    return [instruction]
+
+
+def get_instructions_from_drag(mutator, attacking_side_string, move_target, instruction):
+    if instruction.frozen:
+        return [instruction]
+
+    new_instructions = []
+
+    if move_target in same_side_strings:
+        affected_side = get_side_from_state(mutator.state, attacking_side_string)
+        affected_side_string = attacking_side_string
+    elif move_target in opposing_side_strings:
+        affected_side = get_side_from_state(mutator.state, opposite_side[attacking_side_string])
+        affected_side_string = opposite_side[attacking_side_string]
+    else:
+        raise ValueError("Invalid value for move_target: {}".format(move_target))
+
+    mutator.apply(instruction.instructions)
+    alive_reserves = [s.id for s in affected_side.reserve.values() if s.hp > 0]
+    num_reserve_alive = len(alive_reserves)
+    mutator.reverse(instruction.instructions)
+    if num_reserve_alive == 0:
+        return [instruction]
+
+    for pkmn_name in alive_reserves:
+        new_instruction = get_instructions_from_switch(mutator, affected_side_string, pkmn_name, copy(instruction))
+        new_instruction.update_percentage(1 / num_reserve_alive)
+        new_instructions.append(new_instruction)
+
+    return new_instructions
+
+
+def get_instructions_from_boost_reset_moves(mutator, attacking_move, attacking_side_string, instruction):
+    if instruction.frozen:
+        return [instruction]
+
+    attacking_side = get_side_from_state(mutator.state, attacking_side_string)
+    defending_side_string = opposite_side[attacking_side_string]
+    defending_side = get_side_from_state(mutator.state, defending_side_string)
+
+    mutator.apply(instruction.instructions)
+    new_instructions = []
+    if attacking_move[constants.TARGET] in constants.MOVE_TARGET_SELF:
+        new_instructions += remove_volatile_status_and_boosts_instructions(attacking_side, attacking_side_string)
+    if attacking_move[constants.TARGET] in constants.MOVE_TARGET_OPPONENT:
+        new_instructions += remove_volatile_status_and_boosts_instructions(defending_side, defending_side_string)
+    mutator.reverse(instruction.instructions)
+
+    for new_instruction in new_instructions:
+        instruction.add_instruction(new_instruction)
+
+    return [instruction]
+
+
+def remove_volatile_status_and_boosts_instructions(side, side_string):
+    instruction_additions = []
+    for v_status in side.active.volatile_status:
+        instruction_additions.append(
+            (
+                constants.MUTATOR_REMOVE_VOLATILE_STATUS,
+                side_string,
+                v_status
+            )
+        )
+    if side.side_conditions[constants.TOXIC_COUNT]:
+        instruction_additions.append(
+            (
+                constants.MUTATOR_SIDE_END,
+                side_string,
+                constants.TOXIC_COUNT,
+                side.side_conditions[constants.TOXIC_COUNT]
+            ))
+    if side.active.attack_boost:
+        instruction_additions.append(
+            (
+                constants.MUTATOR_UNBOOST,
+                side_string,
+                constants.ATTACK,
+                side.active.attack_boost
+            ))
+    if side.active.defense_boost:
+        instruction_additions.append(
+            (
+                constants.MUTATOR_UNBOOST,
+                side_string,
+                constants.DEFENSE,
+                side.active.defense_boost
+            ))
+    if side.active.special_attack_boost:
+        instruction_additions.append(
+            (
+                constants.MUTATOR_UNBOOST,
+                side_string,
+                constants.SPECIAL_ATTACK,
+                side.active.special_attack_boost
+            ))
+    if side.active.special_defense_boost:
+        instruction_additions.append(
+            (
+                constants.MUTATOR_UNBOOST,
+                side_string,
+                constants.SPECIAL_DEFENSE,
+                side.active.special_defense_boost
+            ))
+    if side.active.speed_boost:
+        instruction_additions.append(
+            (
+                constants.MUTATOR_UNBOOST,
+                side_string,
+                constants.SPEED,
+                side.active.speed_boost
+            ))
+
+    return instruction_additions
+
+
+def get_side_from_state(state, side_string):
+    if side_string == constants.USER:
+        return state.user
+    elif side_string == constants.OPPONENT:
+        return state.opponent
+    else:
+        raise ValueError("Invalid value for `side`")
+
+
+def can_be_volatile_statused(side, volatile_status, first_move):
+    if volatile_status in constants.PROTECT_VOLATILE_STATUSES:
+        if side.side_conditions[constants.PROTECT]:
+            return False
+        elif first_move:
+            return True
+        else:
+            return False
+    if constants.SUBSTITUTE in side.active.volatile_status:
+        return False
+    if volatile_status == constants.SUBSTITUTE and side.active.hp < side.active.maxhp * 0.25:
+        return False
+
+    return True
+
+
+def sleep_clause_activated(side, status):
+    if status == constants.SLEEP:
+        for p in side.reserve.values():
+            if p.status == constants.SLEEP and p.hp > 0:
+                return True
+    return False
+
+
+def immune_to_status(state, defending_pkmn, attacking_pkmn, status):
+    # General status immunity
+    if defending_pkmn.status is not None or defending_pkmn.hp <= 0:
+        return True
+    if constants.SUBSTITUTE in defending_pkmn.volatile_status and attacking_pkmn.ability != 'infiltrator':
+        return True
+    if defending_pkmn.ability == 'shieldsdown' and ((defending_pkmn.hp / defending_pkmn.maxhp) > 0.5):
+        return True
+    if defending_pkmn.ability == 'comatose':
+        return True
+    if state.field == constants.MISTY_TERRAIN and defending_pkmn.is_grounded():
+        return True
+    if defending_pkmn.ability == "purifyingsalt":
+        return True
+    if defending_pkmn.ability == "thermalexchange" and status == constants.BURN:
+        return True
+
+    # Specific status immunity
+    return (
+        status == constants.FROZEN and is_immune_to_freeze(state, defending_pkmn) or
+        status == constants.BURN and is_immune_to_burn(defending_pkmn) or
+        status == constants.SLEEP and is_immune_to_sleep(state, defending_pkmn) or
+        status == constants.PARALYZED and is_immune_to_paralysis(defending_pkmn) or
+        status in [constants.POISON, constants.TOXIC] and is_immune_to_poison(attacking_pkmn, defending_pkmn)
+    )
+
+
+def is_immune_to_freeze(state, pkmn):
+    return (
+        'ice' in pkmn.types or
+        pkmn.ability in constants.IMMUNE_TO_FROZEN_ABILITIES or
+        state.weather == constants.DESOLATE_LAND
+    )
+
+
+def is_immune_to_burn(pkmn):
+    return (
+        'fire' in pkmn.types or
+        pkmn.ability in constants.IMMUNE_TO_BURN_ABILITIES
+    )
+
+
+def is_immune_to_sleep(state, pkmn):
+    return (
+        pkmn.ability in constants.IMMUNE_TO_SLEEP_ABILITIES or
+        state.field == constants.ELECTRIC_TERRAIN and pkmn.is_grounded()
+    )
+
+
+def is_immune_to_poison(attacking, defending):
+    return (
+        any(t in ['poison', 'steel'] for t in defending.types) and not attacking.ability == 'corrosion'  or
+        defending.ability in constants.IMMUNE_TO_POISON_ABILITIES
+    )
+
+
+def is_immune_to_paralysis(pkmn):
+    return (
+        'electric' in pkmn.types or
+        pkmn.ability in constants.IMMUNE_TO_PARALYSIS_ABILITIES
+    )
+
+---
+
+[10]. src/Ankimon/poke_engine/damage_calculator.py
+Why this file is critical: Applies base power, STAB, type multipliers, and RNG for damage.
+
+from copy import copy
+from copy import deepcopy
+
+from . import constants
+from .data import all_move_json
+from .data import pokedex
+
+
+pokemon_type_indicies = {
+    'normal': 0,
+    'fire': 1,
+    'water': 2,
+    'electric': 3,
+    'grass': 4,
+    'ice': 5,
+    'fighting': 6,
+    'poison': 7,
+    'ground': 8,
+    'flying': 9,
+    'psychic': 10,
+    'bug': 11,
+    'rock': 12,
+    'ghost': 13,
+    'dragon': 14,
+    'dark': 15,
+    'steel': 16,
+    'fairy': 17,
+
+    # ??? and typeless are the same thing
+    'typeless': 18,
+    '???': 18,
+}
+
+# Note : I changed the 0s to 1/8. Also, the following matrix seems to be taken from https://pokemondb.net/type
+damage_multipication_array = [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1/2, 1/8, 1, 1, 1/2, 1, 1],
+                              [1, 1/2, 1/2, 1, 2, 2, 1, 1, 1, 1, 1, 2, 1/2, 1, 1/2, 1, 2, 1, 1],
+                              [1, 2, 1/2, 1, 1/2, 1, 1, 1, 2, 1, 1, 1, 2, 1, 1/2, 1, 1, 1, 1],
+                              [1, 1, 2, 1/2, 1/2, 1, 1, 1, 1/8, 2, 1, 1, 1, 1, 1/2, 1, 1, 1, 1],
+                              [1, 1/2, 2, 1, 1/2, 1, 1, 1/2, 2, 1/2, 1, 1/2, 2, 1, 1/2, 1, 1/2, 1, 1],
+                              [1, 1/2, 1/2, 1, 2, 1/2, 1, 1, 2, 2, 1, 1, 1, 1, 2, 1, 1/2, 1, 1],
+                              [2, 1, 1, 1, 1, 2, 1, 1/2, 1, 1/2, 1/2, 1/2, 2, 1/8, 1, 2, 2, 1/2, 1],
+                              [1, 1, 1, 1, 2, 1, 1, 1/2, 1/2, 1, 1, 1, 1/2, 1/2, 1, 1, 1/8, 2, 1],
+                              [1, 2, 1, 2, 1/2, 1, 1, 2, 1, 1/8, 1, 1/2, 2, 1, 1, 1, 2, 1, 1],
+                              [1, 1, 1, 1/2, 2, 1, 2, 1, 1, 1, 1, 2, 1/2, 1, 1, 1, 1/2, 1, 1],
+                              [1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1/2, 1, 1, 1, 1, 1/8, 1/2, 1, 1],
+                              [1, 1/2, 1, 1, 2, 1, 1/2, 1/2, 1, 1/2, 2, 1, 1, 1/2, 1, 2, 1/2, 1/2, 1],
+                              [1, 2, 1, 1, 1, 2, 1/2, 1, 1/2, 2, 1, 2, 1, 1, 1, 1, 1/2, 1, 1],
+                              [1/8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 2, 1, 1/2, 1, 1, 1],
+                              [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1/2, 1/8, 1],
+                              [1, 1, 1, 1, 1, 1, 1/2, 1, 1, 1, 2, 1, 1, 2, 1, 1/2, 1, 1/2, 1],
+                              [1, 1/2, 1/2, 1/2, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1/2, 2, 1],
+                              [1, 1/2, 1, 1, 1, 1, 2, 1/2, 1, 1, 1, 1, 1, 1, 2, 2, 1/2, 1, 1],
+                              [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]
+
+
+SPECIAL_LOGIC_MOVES = {
+    "seismictoss": lambda attacker, defender: [int(attacker.level)] if "ghost" not in defender.types else None,
+    "nightshade": lambda attacker, defender: [int(attacker.level)] if "normal" not in defender.types else None,
+    "superfang": lambda attacker, defender: [int(defender.hp / 2)] if "ghost" not in defender.types else None,
+    "naturesmadness": lambda attacker, defender: [int(defender.hp / 2)],
+    "guardianofalola": lambda attacker, defender: [int(3*defender.hp / 4)],
+    "ruination": lambda attacker, defender: [int(defender.hp / 2)],
+    "finalgambit": lambda attacker, defender: [int(attacker.hp)] if "ghost" not in defender.types else None,
+    "endeavor": lambda attacker, defender: [int(defender.hp - attacker.hp)] if defender.hp > attacker.hp and "ghost" not in defender.types else None,
+    "painsplit": lambda attacker, defender: [defender.hp - (attacker.hp + defender.hp)/2],
+}
+
+
+TERRAIN_DAMAGE_BOOST = 1.3
+
+
+def _calculate_damage(attacker, defender, move, conditions=None, calc_type='average'):
+    # This function assumes the `move` dictionary has already been updated to account for move/item/ability special-effects
+    # You may want to use `calculate_damage`
+
+    acceptable_calc_types = ['average', 'min', 'max', 'min_max', 'min_max_average', 'all']
+    if calc_type not in acceptable_calc_types:
+        raise ValueError("{} is not one of {}".format(calc_type, acceptable_calc_types))
+
+    attacking_move = get_move(move)
+    if attacking_move is None:
+        raise TypeError("Invalid move: {}".format(move))
+
+    attacking_type = attacking_move.get(constants.CATEGORY)
+    if attacking_type == constants.PHYSICAL:
+        attack = constants.ATTACK
+        defense = constants.DEFENSE
+    elif attacking_type == constants.SPECIAL:
+        attack = constants.SPECIAL_ATTACK
+        defense = constants.SPECIAL_DEFENSE
+    else:
+        return None
+
+    try:
+        return SPECIAL_LOGIC_MOVES[attacking_move[constants.ID]](attacker, defender)
+    except KeyError:
+        pass
+
+    if attacking_move[constants.BASE_POWER] == 0:
+        return [0]
+
+    if conditions is None:
+        conditions = {}
+
+    attacking_stats = attacker.calculate_boosted_stats()
+    defending_stats = defender.calculate_boosted_stats()
+
+    if attacker.ability == 'unaware':
+        if defense == constants.DEFENSE:
+            defending_stats[defense] = defender.defense
+        elif defense == constants.SPECIAL_DEFENSE:
+            defending_stats[defense] = defender.special_defense
+    if defender.ability == 'unaware':
+        if attack == constants.ATTACK:
+            attacking_stats[attack] = attacker.attack
+        elif defense == constants.SPECIAL_ATTACK:
+            attacking_stats[attack] = attacker.special_attack
+
+    defending_types = defender.types
+    if attacking_move[constants.ID] == 'thousandarrows' and 'flying' in defending_types:
+        defending_types = copy(defender.types)
+        defending_types.remove('flying')
+    if attacking_move[constants.TYPE] == 'ground' and constants.ROOST in defender.volatile_status:
+        defending_types = copy(defender.types)
+        try:
+            defending_types.remove('flying')
+        except ValueError:
+            pass
+
+    # rock types get 1.5x SPDEF in sand
+    # ice types get 1.5x DEF in snow
+    try:
+        if conditions[constants.WEATHER] == constants.SAND and 'rock' in defender.types:
+            defending_stats[constants.SPECIAL_DEFENSE] = int(defending_stats[constants.SPECIAL_DEFENSE] * 1.5)
+        elif conditions[constants.WEATHER] == constants.SNOW and 'ice' in defender.types:
+            defending_stats[constants.DEFENSE] = int(defending_stats[constants.DEFENSE] * 1.5)
+    except KeyError:
+        pass
+
+    if defender.ability == "tabletsofruin":
+        attacking_stats[constants.ATTACK] *= 0.75
+    elif defender.ability == "vesselofruin":
+        attacking_stats[constants.SPECIAL_ATTACK] *= 0.75
+    if attacker.ability == "swordofruin":
+        defending_stats[constants.DEFENSE] *= 0.75
+    elif attacker.ability == "beadsofruin":
+        defending_stats[constants.SPECIAL_DEFENSE] *= 0.75
+
+    damage = int(int((2 * attacker.level) / 5) + 2) * attacking_move[constants.BASE_POWER]
+    damage = int(damage * attacking_stats[attack] / defending_stats[defense])
+    damage = int(damage / 50) + 2
+    damage *= calculate_modifier(attacker, defender, defending_types, attacking_move, conditions)
+
+    damage_rolls = get_damage_rolls(damage, calc_type)
+
+    return list(set(damage_rolls))
+
+
+def is_super_effective(move_type, defending_pokemon_types):
+    multiplier = type_effectiveness_modifier(move_type, defending_pokemon_types)
+    return multiplier > 1
+
+
+def is_not_very_effective(move_type, defending_pokemon_types):
+    multiplier = type_effectiveness_modifier(move_type, defending_pokemon_types)
+    return multiplier < 1
+
+
+def calculate_modifier(attacker, defender, defending_types, attacking_move, conditions):
+
+    modifier = 1
+    modifier *= type_effectiveness_modifier(attacking_move[constants.TYPE], defending_types)
+    modifier *= weather_modifier(attacking_move, conditions.get(constants.WEATHER))
+    modifier *= stab_modifier(attacker, attacking_move)
+    modifier *= burn_modifier(attacker, attacking_move)
+    modifier *= terrain_modifier(attacker, defender, attacking_move, conditions.get(constants.TERRAIN))
+    modifier *= volatile_status_modifier(attacking_move, attacker, defender)
+
+    if attacker.ability != 'infiltrator':
+        modifier *= light_screen_modifier(attacking_move, conditions.get(constants.LIGHT_SCREEN))
+        modifier *= reflect_modifier(attacking_move, conditions.get(constants.REFLECT))
+        modifier *= aurora_veil_modifier(conditions.get(constants.AURORA_VEIL))
+
+    return modifier
+
+
+def get_move(move):
+    if isinstance(move, dict):
+        return move
+    if isinstance(move, str):
+        return deepcopy(all_move_json.get(move, None))
+    else:
+        return None
+
+
+def get_damage_rolls(damage, calc_type):
+    if calc_type == 'average':
+        damage *= 0.925
+        return [int(damage)]
+    elif calc_type == 'min':
+        return [int(damage * 0.85)]
+    elif calc_type == 'max':
+        return [int(damage)]
+    elif calc_type == 'min_max':
+        return [
+            int(damage * 0.85),
+            int(damage)
+        ]
+    elif calc_type == 'min_max_average':
+        return [
+            int(damage * 0.85),
+            int(damage * 0.925),
+            int(damage)
+        ]
+    elif calc_type == 'all':
+        return [
+            int(damage * 0.85),
+            int(damage * 0.86),
+            int(damage * 0.87),
+            int(damage * 0.88),
+            int(damage * 0.89),
+            int(damage * 0.90),
+            int(damage * 0.91),
+            int(damage * 0.92),
+            int(damage * 0.93),
+            int(damage * 0.94),
+            int(damage * 0.95),
+            int(damage * 0.96),
+            int(damage * 0.97),
+            int(damage * 0.98),
+            int(damage * 0.99),
+            int(damage)
+        ]
+
+
+def type_effectiveness_modifier(attacking_move_type, defending_types):
+    modifier = 1
+    attacking_type_index = pokemon_type_indicies[attacking_move_type]
+    for pkmn_type in defending_types:
+        defending_type_index = pokemon_type_indicies[pkmn_type]
+        modifier *= damage_multipication_array[attacking_type_index][defending_type_index]
+
+    return modifier
+
+
+def weather_modifier(attacking_move, weather):
+    if not isinstance(weather, str):
+        return 1
+
+    if weather == constants.SUN and attacking_move[constants.TYPE] == 'fire':
+        return 1.5
+    elif weather == constants.SUN and attacking_move[constants.TYPE] == 'water':
+        return 0.5
+    elif weather == constants.RAIN and attacking_move[constants.TYPE] == 'water':
+        return 1.5
+    elif weather == constants.RAIN and attacking_move[constants.TYPE] == 'fire':
+        return 0.5
+    elif weather == constants.HEAVY_RAIN and attacking_move[constants.TYPE] == 'fire':
+        return 0
+    elif weather == constants.HEAVY_RAIN and attacking_move[constants.TYPE] == 'water':
+        return 1.5
+    elif weather == constants.DESOLATE_LAND and attacking_move[constants.TYPE] == 'water':
+        return 0
+    elif weather == constants.DESOLATE_LAND and attacking_move[constants.TYPE] == 'fire':
+        return 1.5
+    return 1
+
+
+def stab_modifier(attacking_pokemon, attacking_move):
+    if attacking_move[constants.TYPE] in [t for t in attacking_pokemon.types]:
+        if (
+            attacking_pokemon.terastallized and
+            attacking_pokemon.types[0] in pokedex[attacking_pokemon.id][constants.TYPES]
+        ):
+            return 2
+        else:
+            return 1.5
+
+    elif (
+        attacking_pokemon.terastallized and
+        attacking_move[constants.TYPE] in pokedex[attacking_pokemon.id][constants.TYPES]
+    ):
+        return 1.5
+
+    return 1
+
+
+def burn_modifier(attacking_pokemon, attacking_move):
+    if constants.BURN == attacking_pokemon.status and attacking_move[constants.CATEGORY] == constants.PHYSICAL:
+        return 0.5
+    return 1
+
+
+def light_screen_modifier(attacking_move, light_screen):
+    if light_screen and attacking_move[constants.CATEGORY] == constants.SPECIAL:
+        return 0.5
+    return 1
+
+
+def reflect_modifier(attacking_move, reflect):
+    if reflect and attacking_move[constants.CATEGORY] == constants.PHYSICAL:
+        return 0.5
+    return 1
+
+
+def aurora_veil_modifier(aurora_veil):
+    if aurora_veil:
+        return 0.5
+    return 1
+
+
+def terrain_modifier(attacker, defender, attacking_move, terrain):
+    if terrain == constants.ELECTRIC_TERRAIN and attacking_move[constants.TYPE] == 'electric' and attacker.is_grounded():
+        return TERRAIN_DAMAGE_BOOST
+    elif terrain == constants.GRASSY_TERRAIN and attacking_move[constants.TYPE] == 'grass' and attacker.is_grounded():
+        return TERRAIN_DAMAGE_BOOST
+    elif terrain == constants.GRASSY_TERRAIN and attacking_move[constants.ID] == 'earthquake':
+        return 0.5
+    elif terrain == constants.MISTY_TERRAIN and attacking_move[constants.TYPE] == 'dragon' and defender.is_grounded():
+        return 0.5
+    elif terrain == constants.PSYCHIC_TERRAIN and attacking_move[constants.TYPE] == 'psychic' and attacker.is_grounded():
+        return TERRAIN_DAMAGE_BOOST
+    elif terrain == constants.PSYCHIC_TERRAIN and attacking_move[constants.PRIORITY] > 0 and defender.is_grounded():
+        return 0
+    return 1
+
+
+def volatile_status_modifier(attacking_move, attacker, defender):
+    modifier = 1
+    if 'magnetrise' in defender.volatile_status and attacking_move[constants.TYPE] == 'ground' and attacking_move[constants.ID] != 'thousandarrows':
+        modifier *= 0
+    if 'flashfire' in attacker.volatile_status and attacking_move[constants.TYPE] == 'fire':
+        modifier *= 1.5
+    if 'tarshot' in defender.volatile_status and attacking_move[constants.TYPE] == 'fire':
+        modifier *= 2
+    if 'phantomforce' in defender.volatile_status:
+        modifier *= 0
+    if 'shadowforce' in defender.volatile_status:
+        modifier *= 0
+    if (
+        'dive' in defender.volatile_status and
+        attacker.ability != "noguard" and
+        defender.ability != "noguard" and
+        attacking_move[constants.ID] not in [
+            "surf", "whirlpool"
+        ]
+    ):
+        modifier *= 0
+    if (
+        'dig' in defender.volatile_status and
+        attacker.ability != "noguard" and
+        defender.ability != "noguard" and
+        attacking_move[constants.ID] not in [
+            "earthquake", "magnitude", "fissure"
+        ]
+    ):
+        modifier *= 0
+    if (
+        (
+            "fly" in defender.volatile_status or
+            "bounce" in defender.volatile_status
+        ) and
+        attacker.ability != "noguard" and
+        defender.ability != "noguard" and
+        attacking_move[constants.ID] not in [
+            "gust", "thunder", "twister", "skyuppercut", "hurricane", "thousandarrows", "smackdown"
+        ]
+    ):
+        modifier *= 0
+    if 'glaiverush' in defender.volatile_status:
+        modifier *= 2
+    if any(vs in attacker.volatile_status for vs in ['quarkdriveatk', "protosynthesisatk"]) and attacking_move[constants.CATEGORY] == constants.PHYSICAL:
+        modifier *= 1.3
+    if any(vs in attacker.volatile_status for vs in ['quarkdrivespa', "protosynthesisspa"]) and attacking_move[constants.CATEGORY] == constants.SPECIAL:
+        modifier *= 1.3
+    if any(vs in defender.volatile_status for vs in ['quarkdrivedef', "protosynthesisdef"]) and attacking_move[constants.CATEGORY] == constants.PHYSICAL:
+        modifier *= (1/1.3)
+    if any(vs in defender.volatile_status for vs in ['quarkdrivespd', "protosynthesisspd"]) and attacking_move[constants.CATEGORY] == constants.SPECIAL:
+        modifier *= (1/1.3)
+    return modifier
+
+
+def calculate_damage(state, attacking_side_string, attacking_move, defending_move, calc_type='average'):
+    # a wrapper for `_calculate_damage` that takes into account move/item/ability special-effects
+    from .find_state_instructions import update_attacking_move
+    from .find_state_instructions import user_moves_first
+
+    attacking_move_dict = get_move(attacking_move)
+    if defending_move.startswith(constants.SWITCH_STRING + " "):
+        defending_move_dict = {constants.SWITCH_STRING: defending_move.split(constants.SWITCH_STRING)[-1]}
+    else:
+        defending_move_dict = get_move(defending_move)
+
+    if attacking_side_string == constants.USER:
+        attacking_side = state.user
+        defending_side = state.opponent
+    elif attacking_side_string == constants.OPPONENT:
+        attacking_side = state.opponent
+        defending_side = state.user
+    else:
+        raise ValueError("attacking_side_string must be one of: ['self', 'opponent']")
+
+    conditions = {
+        constants.REFLECT: defending_side.side_conditions[constants.REFLECT],
+        constants.LIGHT_SCREEN: defending_side.side_conditions[constants.LIGHT_SCREEN],
+        constants.AURORA_VEIL: defending_side.side_conditions[constants.AURORA_VEIL],
+        constants.WEATHER: state.weather,
+        constants.TERRAIN: state.field
+    }
+
+    attacker_moves_first = user_moves_first(state, attacking_move_dict, defending_move_dict)
+
+    if constants.CHARGE in attacking_move_dict[constants.FLAGS]:
+        attacking_move_dict = attacking_move_dict.copy()
+        # a charge move doesn't need to charge when only calculating damage
+        attacking_move_dict[constants.FLAGS].pop(constants.CHARGE, None)
+
+    attacking_move_dict = update_attacking_move(
+        attacking_side,
+        attacking_side.active,
+        defending_side.active,
+        attacking_move_dict,
+        defending_move_dict,
+        attacker_moves_first,
+        state.weather,
+        state.field
+    )
+
+    return _calculate_damage(attacking_side.active, defending_side.active, attacking_move_dict, conditions=conditions, calc_type=calc_type)
+
+
+def calculate_futuresight_damage(state, attacking_side_string, future_sight_user, calc_type='average'):
+    if attacking_side_string == constants.USER:
+        attacking_side = state.user
+        defending_side = state.opponent
+    else:
+        attacking_side = state.opponent
+        defending_side = state.user
+
+    if attacking_side.active.id == future_sight_user:
+        attacker = attacking_side.active
+    else:
+        attacker = attacking_side.reserve[future_sight_user]
+
+    defender = defending_side.active
+
+    attacking_move_dict = {
+        "accuracy": 100,
+        "basePower": 120,
+        "category": "special",
+        "flags": {},
+        "id": "futuresight",
+        "name": "Future Sight",
+        "priority": 0,
+        "secondary": False,
+        "target": "normal",
+        "type": "psychic",
+        "pp": 10
+    }
+
+    conditions = {
+        constants.REFLECT: defending_side.side_conditions[constants.REFLECT],
+        constants.LIGHT_SCREEN: defending_side.side_conditions[constants.LIGHT_SCREEN],
+        constants.AURORA_VEIL: defending_side.side_conditions[constants.AURORA_VEIL],
+        constants.WEATHER: state.weather,
+        constants.TERRAIN: state.field
+    }
+
+    return _calculate_damage(
+        attacker,
+        defender,
+        attacking_move_dict,
+        conditions=conditions,
+        calc_type=calc_type
+    )
+
+---
+
+[11]. src/Ankimon/pyobj/pokemon_obj.py
 Why this file is critical: Defines the core data model and state structure for in-memory Pokémon instances.
 
 from typing import Union
@@ -2367,1238 +4858,8 @@ class PokemonEncoder(json.JSONEncoder):
 
 ---
 
-[8]. src/Ankimon/functions/ankimon_hooks_to_poke_engine.py
-Why this file is critical: Acts as the crucial bridge translating Ankimon state objects into poke_engine simulation state.
-
-import random
-from collections import defaultdict
-import copy
-import traceback
-from typing import Union
-
-from ..poke_engine import constants
-from ..singletons import ankimon_tracker_obj, settings_obj
-import math
-
-from ..poke_engine.battle import Move
-from ..poke_engine.objects import Pokemon, State, StateMutator, Side
-from ..poke_engine.helpers import normalize_name
-from ..poke_engine.find_state_instructions import get_all_state_instructions
-from ..pyobj.error_handler import show_warning_with_traceback
-
-def reset_stat_boosts(pokemon: Pokemon) -> Pokemon:
-    """
-    Resets all stat boosts of a given Pokemon to zero.
-
-    Args:
-        pokemon (Pokemon): The Pokemon whose stat boosts will be reset.
-
-    Returns:
-        Pokemon: The same Pokemon object with all stat boosts reset to zero.
-    """
-    pokemon.attack_boost = 0
-    pokemon.defense_boost = 0
-    pokemon.special_attack_boost = 0
-    pokemon.special_defense_boost = 0
-    pokemon.speed_boost = 0
-    pokemon.accuracy_boost = 0
-    pokemon.evasion_boost = 0
-    return pokemon
-
-def reset_side(pokemon: Pokemon, side_conditions: Union[dict, None]=None) -> Side:
-    """
-    Resets and returns a new Side object for the given Pokemon with default or provided side conditions.
-
-    If no side conditions are provided, a default set with all conditions initialized to zero is used.
-
-    Args:
-        pokemon (Pokemon): The active Pokemon for the side.
-        side_conditions (Union[dict, None], optional): A dictionary of side conditions to apply.
-            If None, defaults to all conditions set to zero.
-
-    Returns:
-        Side: A new Side object with the specified active Pokemon, an empty reserve,
-              default wish and future sight settings, and the given or default side conditions.
-    """
-    if side_conditions is None:
-        side_conditions = defaultdict(int, {
-            'stealthrock': 0,
-            'spikes': 0,
-            'toxicspikes': 0,
-            'tailwind': 0,
-            'reflect': 0,
-            'lightscreen': 0,
-            'auroraveil': 0,
-            'protect': 0,
-        })
-    side = Side(
-        active=pokemon,
-        reserve={},
-        wish=(0, 0),
-        side_conditions=side_conditions,
-        future_sight=(0, 0),
-    )
-    return side
-
-def simulate_battle_with_poke_engine(
-    main_pokemon: Pokemon,
-    enemy_pokemon: Pokemon,
-    main_move: str,
-    enemy_move: str,
-    mutator_full_reset: int,
-    state: Union[State, None]=None,
-    ):
-    """
-    Simulates a battle between two Pokémon using the poke-engine if available.
-    The function selects the Pokémon moves (either provided or random), handles state changes,
-    and applies battle instructions based on the current battle state. The function then
-    computes and returns the battle results, including damage dealt, missed moves,
-    and the updated battle state.
-
-    Args:
-        main_pokemon (Pokemon): The user's active Pokémon.
-        enemy_pokemon (Pokemon): The opponent's active Pokémon.
-        main_move (str or None): The move chosen by the user's Pokémon. If None, a random move will be selected.
-        enemy_move (str or None): The move chosen by the opponent's Pokémon. If None, a random move will be selected.
-        new_state (State): The current battle state, including the Pokémon's stats, field conditions, etc.
-        mutator_full_reset (int): A flag controlling whether the battle state should be reset.
-
-    Returns:
-        tuple: A tuple containing:
-            - battle_info (dict): A dictionary with the battle header and instructions for each Pokémon move.
-            - new_state (State): The updated battle state after the battle simulation.
-            - dmg_from_enemy_move (int): The damage dealt to the user's Pokémon by the enemy.
-            - dmg_from_user_move (int): The damage dealt to the enemy's Pokémon by the user.
-            - mutator_full_reset (int): The flag indicating if the battle state was reset.
-
-    Raises:
-        Exception: If any unexpected error occurs during the simulation, the traceback will be printed.
-
-    Notes:
-        - If no moves are provided for the Pokémon, a random move is selected.
-        - The outcome of the battle is determined based on probability, with weights reflecting typical battle mechanics.
-        - The function prints a summary of the battle result, including damage dealt and whether any moves missed.
-        - The state mutator is applied to update the battle state after the moves are resolved.
-    """
-
-    # If no move is provided, use a random move
-    if main_move is None and main_pokemon.attacks:
-        main_move = random.choice(main_pokemon.attacks)
-    if enemy_move is None and enemy_pokemon.attacks:
-        enemy_move = random.choice(enemy_pokemon.attacks)
-    if not main_move:
-        main_move = "Splash"
-    if not enemy_move:
-        enemy_move = "Splash"
-
-
-    if (state is not None) and (state.user.active.id != main_pokemon.name.lower()):
-        mutator_full_reset = 1 # reset AFTER Pokemon is changed !
-    if mutator_full_reset not in (0, 1):
-        mutator_full_reset = 1
-
-    try:
-        main_move_normalized = normalize_name(main_move)
-        enemy_move_normalized = normalize_name(enemy_move)
-
-
-        # Store only the chosen outcome
-        battle_header = {
-            'user': {
-                'name': main_pokemon.name,
-                'level': main_pokemon.level,
-                'move': main_move
-            },
-            'opponent': {
-                'name': enemy_pokemon.name,
-                'level': enemy_pokemon.level,
-                'move': enemy_move
-            }
-        }
-
-        # Create Pokemon objects
-        main_pokemon_poke_engine = main_pokemon.to_poke_engine_Pokemon()
-        enemy_pokemon_poke_engine = enemy_pokemon.to_poke_engine_Pokemon()
-
-        # Default side_conditions with all needed keys
-        side_conditions = defaultdict(int, {
-            'stealthrock': 0,
-            'spikes': 0,
-            'toxicspikes': 0,
-            'tailwind': 0,
-            'reflect': 0,
-            'lightscreen': 0,
-            'auroraveil': 0,
-            'protect': 0,
-        })
-
-        if state is None:
-            state = State(
-                user=reset_side(main_pokemon_poke_engine),
-                opponent=reset_side(enemy_pokemon_poke_engine),
-                weather=None,
-                field=None,
-                trick_room=False,
-                )
-        else:
-            if mutator_full_reset == 0:  # Combat is ongoing
-                pass
-            elif mutator_full_reset == 1:  # Reset both sides of the fight
-                state.user.active = reset_stat_boosts(state.user.active)
-                state.user = reset_side(main_pokemon_poke_engine)
-                state.opponent = reset_side(enemy_pokemon_poke_engine)
-
-                # Reset battle_status and volatile_status for both engine state Pokémon
-                if hasattr(state.user.active, 'battle_status'):
-                    state.user.active.battle_status = 'fighting'
-                if hasattr(state.user.active, 'volatile_status'):
-                    state.user.active.volatile_status = set()
-                if hasattr(state.opponent.active, 'battle_status'):
-                    state.opponent.active.battle_status = 'fighting'
-                if hasattr(state.opponent.active, 'volatile_status'):
-                    state.opponent.active.volatile_status = set()
-                # Clear Future Sight state on reset - NEW
-                if hasattr(state.user, 'future_sight'):
-                    state.user.future_sight = (0, 0)
-                if hasattr(state.opponent, 'future_sight'):
-                    state.opponent.future_sight = (0, 0)
-
-                # Also reset the main_pokemon and enemy_pokemon Python objects
-                main_pokemon.battle_status = 'fighting'
-                main_pokemon.volatile_status = set()
-                enemy_pokemon.battle_status = 'fighting'
-                enemy_pokemon.volatile_status = set()
-
-                state.weather = None # Reset weather to None
-                state.field = None # Reset field to None
-                state.trick_room = False # Reset trick room to None
-
-            else:
-                raise ValueError(f"Wrong mutator_full_reset encountered : {mutator_full_reset}")
-
-        mutator = StateMutator(state)
-
-        if state.opponent.active.hp == 0:
-            main_move = "Splash"
-            enemy_move = "Splash"
-
-        # Get all possible outcomes
-        transpose_instructions = get_all_state_instructions(
-            mutator, main_move_normalized, enemy_move_normalized
-        )
-
-        # Randomly select ONE outcome from possible outcomes, using probability weights for the outcomes in actual Pokemon battles
-        # e.g. if P(outcome 1):P(outcome 2) = 20% : 80%, then 20% chance to pick outcome 1 (picks randomly)
-        weights = [outcome.percentage for outcome in transpose_instructions]
-        chosen_outcome = random.choices(transpose_instructions, weights=weights, k=1)[0]
-
-
-        if settings_obj.get("battle.review_based_damage"):
-            instrs = []
-            for instr in chosen_outcome.instructions:
-                if instr[0] == constants.DAMAGE and instr[1] == constants.OPPONENT:
-                    modified_instr = (instr[0], instr[1], math.floor(instr[2] * ankimon_tracker_obj.multiplier)) + instr[3:]
-                    instrs.append(modified_instr)
-                else:
-                    instrs.append(instr)
-        else:
-            instrs = chosen_outcome.instructions
-
-        user_hp_before = int(state.user.active.hp)
-        opponent_hp_before = int(state.opponent.active.hp)
-
-        # --- Debugging: State changes BEFORE applying instructions
-        state_before = copy.deepcopy(mutator.state)
-        mutator.apply(instrs)
-        state_after = mutator.state
-        battle_info_changes = diff_states(state_before, state_after)
-        print_state_changes(battle_info_changes)
-        # --- End Debugging
-
-        # Save changes from State to Pokemon objects (enhanced for volatile status)
-        main_pokemon.hp = state.user.active.hp
-        main_pokemon.current_hp = state.user.active.hp
-        enemy_pokemon.hp = state.opponent.active.hp
-        enemy_pokemon.current_hp = state.opponent.active.hp
-
-        main_pokemon.stat_stages = {
-            'atk': state.user.active.attack_boost,
-            'def': state.user.active.defense_boost,
-            'spa': state.user.active.special_attack_boost,
-            'spd': state.user.active.special_defense_boost,
-            'spe': state.user.active.speed_boost,
-            'accuracy': state.user.active.accuracy_boost,
-            'evasion': state.user.active.evasion_boost
-        }
-
-        # Save volatile status from poke-engine state to Pokemon object - NEW
-        if hasattr(state.user.active, 'volatile_status'):
-            main_pokemon.volatile_status = state.user.active.volatile_status.copy()
-        elif not hasattr(main_pokemon, 'volatile_status'):
-            main_pokemon.volatile_status = set()
-
-
-        # Same for enemy Pokemon
-        enemy_pokemon.stat_stages = {
-            'atk': state.opponent.active.attack_boost,
-            'def': state.opponent.active.defense_boost,
-            'spa': state.opponent.active.special_attack_boost,
-            'spd': state.opponent.active.special_defense_boost,
-            'spe': state.opponent.active.speed_boost,
-            'accuracy': state.opponent.active.accuracy_boost,
-            'evasion': state.opponent.active.evasion_boost
-        }
-
-        # Save volatile status for enemy - NEW
-        if hasattr(state.opponent.active, 'volatile_status'):
-            enemy_pokemon.volatile_status = state.opponent.active.volatile_status.copy()
-        elif not hasattr(enemy_pokemon, 'volatile_status'):
-            enemy_pokemon.volatile_status = set()
-
-        new_state = copy.deepcopy(state)
-
-        mutator_full_reset = 0 # preserve battle state - until something else changes this value
-
-        user_hp_after = int(new_state.user.active.hp)
-        opponent_hp_after = int(new_state.opponent.active.hp)
-
-        dmg_from_user_move = int(opponent_hp_before - opponent_hp_after)
-        dmg_from_enemy_move = int(user_hp_before - user_hp_after)
-
-        # Reference to the founder and creator of Ankimon, Unlucky-life.
-        # Unlucky, we are very proud of you for your work. You are a legend.
-        # It's been a pleasure being part of this journey. -- h0tp (and friends)
-
-        if int(chosen_outcome.percentage) == 0:
-            unlucky_life = 1
-        else:
-            unlucky_life = int(chosen_outcome.percentage)
-
-        # On a serious note, the function above is the CHANCE that the chosen_outcome was picked out of ALL
-        # the choices in transpose_instructions, based on factors like accuracy rate, the chance to
-        # inflict a certain status (like sleep or paralyze), etc.
-
-        battle_effects = []
-        for instr in instrs:
-            battle_effects.append(list(instr))  # Convert tuples to lists
-
-        battle_info = {
-            'battle_header': battle_header,
-            'instructions': battle_effects,
-            'state': new_state
-            }
-
-        print(f"{unlucky_life * 100}% chance: {battle_effects}")
-        return battle_info, new_state, dmg_from_enemy_move, dmg_from_user_move, mutator_full_reset, battle_info_changes
-
-    except Exception as e:
-        show_warning_with_traceback(exception=e, message="Error simulating battle:")
-
-def diff_states(state_before, state_after, path="", changes=None):
-    """
-    Recursively compare two state objects and return a list of changed attributes.
-    Returns changes in format: {'key': path, 'before': value_before, 'after': value_after}
-    """
-    if changes is None:
-        changes = []
-
-    # Handle None cases
-    if state_before is None and state_after is None:
-        return changes
-    if state_before is None or state_after is None:
-        changes.append({
-            'key': path or 'root',
-            'before': state_before,
-            'after': state_after
-        })
-        return changes
-
-    # Handle primitive types (int, float, str, bool)
-    if isinstance(state_before, (int, float, str, bool)) or isinstance(state_after, (int, float, str, bool)):
-        if state_before != state_after:
-            changes.append({
-                'key': path or 'root',
-                'before': state_before,
-                'after': state_after
-            })
-        return changes
-
-    # Handle sets
-    if isinstance(state_before, set) or isinstance(state_after, set):
-        if state_before != state_after:
-            changes.append({
-                'key': path or 'root',
-                'before': state_before,
-                'after': state_after
-            })
-        return changes
-
-    # Handle tuples
-    if isinstance(state_before, tuple) or isinstance(state_after, tuple):
-        if state_before != state_after:
-            changes.append({
-                'key': path or 'root',
-                'before': state_before,
-                'after': state_after
-            })
-        return changes
-
-    # Handle lists
-    if isinstance(state_before, list) and isinstance(state_after, list):
-        # Compare list lengths and elements
-        if len(state_before) != len(state_after):
-            changes.append({
-                'key': f"{path}.length" if path else 'length',
-                'before': len(state_before),
-                'after': len(state_after)
-            })
-
-        # Compare elements up to the shorter length
-        min_len = min(len(state_before), len(state_after))
-        for i in range(min_len):
-            new_path = f"{path}[{i}]" if path else f"[{i}]"
-            diff_states(state_before[i], state_after[i], new_path, changes)
-
-        # Handle extra elements in longer list
-        if len(state_before) > min_len:
-            for i in range(min_len, len(state_before)):
-                new_path = f"{path}[{i}]" if path else f"[{i}]"
-                changes.append({
-                    'key': new_path,
-                    'before': state_before[i],
-                    'after': None
-                })
-        elif len(state_after) > min_len:
-            for i in range(min_len, len(state_after)):
-                new_path = f"{path}[{i}]" if path else f"[{i}]"
-                changes.append({
-                    'key': new_path,
-                    'before': None,
-                    'after': state_after[i]
-                })
-        return changes
-
-    # Handle dictionaries
-    if isinstance(state_before, dict) and isinstance(state_after, dict):
-        all_keys = set(state_before.keys()) | set(state_after.keys())
-        for key in all_keys:
-            new_path = f"{path}.{key}" if path else str(key)
-            before_val = state_before.get(key, None)
-            after_val = state_after.get(key, None)
-            diff_states(before_val, after_val, new_path, changes)
-        return changes
-
-    # Handle custom objects - check if they're the same type
-    if type(state_before) != type(state_after):
-        changes.append({
-            'key': path or 'root',
-            'before': state_before,
-            'after': state_after
-        })
-        return changes
-
-    # Custom class: recurse into attributes (__dict__ and __slots__ on the class)
-    attrs = set()
-    for obj in (state_before, state_after):
-        # __dict__ attributes
-        if hasattr(obj, "__dict__"):
-            attrs.update(vars(obj).keys())
-        # __slots__ attributes (check on the class)
-        if hasattr(obj.__class__, "__slots__"):
-            for slot in obj.__class__.__slots__:
-                attrs.add(slot)
-
-    if attrs:
-        for attr in attrs:
-            before_val = getattr(state_before, attr, None)
-            after_val = getattr(state_after, attr, None)
-            new_path = f"{path}.{attr}" if path else attr
-            diff_states(before_val, after_val, new_path, changes)
-
-    return changes
-
-
-def print_state_changes(changes):
-    """
-    Print state changes in a clean format: key: before -> after
-    """
-    if not changes:
-        return
-
-    for change in changes:
-        key = change['key']
-        before = change['before']
-        after = change['after']
-        print(f"{key}: {before} -> {after}")
-
-
-
----
-
-[9]. src/Ankimon/poke_engine/battle.py
-Why this file is critical: Core logic file within the isolated battle engine handling combat turns and state evaluation.
-
-import itertools
-from collections import defaultdict
-from collections import namedtuple
-from copy import copy
-from copy import deepcopy
-from abc import ABC
-from abc import abstractmethod
-
-from . import constants
-import logging
-
-from . import data
-from .data import all_move_json
-from .data import pokedex
-from .data.parse_smogon_stats import MOVES_STRING
-from .data.parse_smogon_stats import SPREADS_STRING
-from .data.parse_smogon_stats import ABILITY_STRING
-from .data.parse_smogon_stats import ITEM_STRING
-from .data.helpers import get_pokemon_sets
-from .data.helpers import get_mega_pkmn_name
-from .data.helpers import PASS_ITEMS
-from .data.helpers import PASS_ABILITIES
-from .data.helpers import get_all_likely_moves
-from .data.helpers import get_most_likely_item
-from .data.helpers import get_most_likely_ability
-from .data.helpers import get_most_likely_spread
-from .data.helpers import get_all_possible_moves_for_random_battle
-
-from .objects import State
-from .objects import Side
-from .objects import Pokemon as TransposePokemon
-
-from .helpers import remove_duplicate_spreads
-from .helpers import get_pokemon_info_from_condition
-from .helpers import set_makes_sense
-from .helpers import normalize_name
-from .helpers import calculate_stats
-
-
-logger = logging.getLogger(__name__)
-
-
-LastUsedMove = namedtuple('LastUsedMove', ['pokemon_name', 'move', 'turn'])
-DamageDealt = namedtuple('DamageDealt', ['attacker', 'defender', 'move', 'percent_damage', 'crit'])
-StatRange = namedtuple("Range", ["min", "max"])
-
-
-# Based on the format, this dict controls which pokemon will be replaced during team preview
-# Some pokemon's forms are not revealed in team preview
-smart_team_preview = {
-    "gen8ou": {
-        "urshifu": "urshifurapidstrike"  # urshifu banned in gen8ou
-    }
-}
-
-
-class Battle(ABC):
-
-    def __init__(self, battle_tag):
-        self.battle_tag = battle_tag
-        self.user = Battler()
-        self.opponent = Battler()
-        self.weather = None
-        self.field = None
-        self.trick_room = False
-
-        self.turn = False
-
-        self.started = False
-        self.rqid = None
-
-        self.force_switch = False
-        self.wait = False
-
-        self.battle_type = None
-        self.generation = None
-        self.time_remaining = None
-
-        self.request_json = None
-
-    def initialize_team_preview(self, user_json, opponent_pokemon, battle_type):
-        self.user.from_json(user_json, first_turn=True)
-        self.user.reserve.insert(0, self.user.active)
-        self.user.active = None
-
-        for pkmn_string in opponent_pokemon:
-            pokemon = Pokemon.from_switch_string(pkmn_string)
-
-            if pokemon.name in smart_team_preview.get(battle_type, {}):
-                new_pokemon_name = smart_team_preview[battle_type][pokemon.name]
-                logger.info(
-                    "Smart team preview: Replaced {} with {}".format(
-                        pokemon.name,
-                        new_pokemon_name
-                    )
-                )
-                pokemon = Pokemon(new_pokemon_name, pokemon.level)
-
-            self.opponent.reserve.append(pokemon)
-
-        self.started = True
-        self.rqid = user_json[constants.RQID]
-
-    def during_team_preview(self):
-        ...
-
-    def start_non_team_preview_battle(self, user_json, opponent_switch_string):
-        self.user.from_json(user_json, first_turn=True)
-
-        pkmn_information = opponent_switch_string.split('|')[3]
-        pkmn = Pokemon.from_switch_string(pkmn_information)
-        self.opponent.active = pkmn
-
-        self.started = True
-        self.rqid = user_json[constants.RQID]
-
-    def mega_evolve_possible(self):
-        return (
-                any(g in self.generation for g in constants.MEGA_EVOLVE_GENERATIONS)
-        )
-
-    def prepare_battles(self, guess_mega_evo_opponent=True, join_moves_together=False):
-        """Returns a list of battles based on this one
-        The battles have the opponent's reserve pokemon's unknowns filled in
-        The opponent's active pokemon in each of the battles has a different set"""
-        battle_copy = deepcopy(self)
-        battle_copy.opponent.lock_moves()
-        battle_copy.user.lock_active_pkmn_first_turn_moves()
-
-        if battle_copy.user.active.can_mega_evo:
-            # mega-evolving here gives the pkmn the random-battle spread (Serious + 85s)
-            # unfortunately the correct spread is not stored anywhere as of this being written
-            # this only happens on the turn the pkmn mega-evolves - the next turn will be fine
-            battle_copy.user.active.forme_change(get_mega_pkmn_name(battle_copy.user.active.name))
-
-        if guess_mega_evo_opponent and not battle_copy.opponent.mega_revealed() and self.mega_evolve_possible():
-            check_in_sets = battle_copy.battle_type == constants.STANDARD_BATTLE
-            battle_copy.opponent.active.try_convert_to_mega(check_in_sets=check_in_sets)
-
-        # for reserve pokemon only guess their most likely item/ability/spread and guess all moves
-        for pkmn in filter(lambda x: x.is_alive(), battle_copy.opponent.reserve):
-            pkmn.guess_most_likely_attributes()
-
-        try:
-            pokemon_sets = get_pokemon_sets(battle_copy.opponent.active.name)
-        except KeyError:
-            logger.warning("No sets for {}, trying to find most likely attributes".format(battle_copy.opponent.active.name))
-            battle_copy.opponent.active.guess_most_likely_attributes()
-            return [battle_copy]
-
-        possible_spreads = sorted(pokemon_sets[SPREADS_STRING], key=lambda x: x[2], reverse=True)
-        possible_abilities = sorted(pokemon_sets[ABILITY_STRING], key=lambda x: x[1], reverse=True)
-        possible_items = sorted(pokemon_sets[ITEM_STRING], key=lambda x: x[1], reverse=True)
-        possible_moves = sorted(pokemon_sets[MOVES_STRING], key=lambda x: x[1], reverse=True)
-
-        spreads = battle_copy.opponent.active.get_possible_spreads(possible_spreads)
-        items = battle_copy.opponent.active.get_possible_items(possible_items)
-        abilities = battle_copy.opponent.active.get_possible_abilities(possible_abilities)
-        expected_moves, chance_moves = battle_copy.opponent.active.get_possible_moves(possible_moves, battle_copy.battle_type)
-
-        if join_moves_together:
-            chance_move_combinations = [chance_moves]
-        else:
-            number_of_unknown_moves = max(4 - len(battle_copy.opponent.active.moves) - len(expected_moves), 0)
-            chance_move_combinations = list(itertools.combinations(chance_moves, number_of_unknown_moves))
-
-        combinations = list(itertools.product(spreads, items, abilities, chance_move_combinations))
-
-        # create battle clones for each of the combinations
-        battles = list()
-        for c in combinations:
-            new_battle = deepcopy(battle_copy)
-
-            all_moves = [m.name for m in new_battle.opponent.active.moves]
-            all_moves += expected_moves
-            all_moves += c[3]
-            all_moves = [Move(m) for m in all_moves]
-
-            if join_moves_together or set_makes_sense(c[0][0], c[0][1], c[1], c[2], all_moves):
-                new_battle.opponent.active.set_spread(c[0][0], c[0][1])
-                if new_battle.opponent.active.name == 'ditto':
-                    new_battle.opponent.active.stats = battle_copy.opponent.active.stats
-                new_battle.opponent.active.item = c[1]
-                new_battle.opponent.active.ability = c[2]
-                for m in expected_moves:
-                    new_battle.opponent.active.add_move(m)
-                for m in c[3]:
-                    new_battle.opponent.active.add_move(m)
-
-                logger.debug("Possible set for opponent's {}:\t{} {} {} {} {}".format(battle_copy.opponent.active.name, c[0][0], c[0][1], c[1], c[2], all_moves))
-                battles.append(new_battle)
-
-            new_battle.opponent.lock_moves()
-
-        return battles if battles else [battle_copy]
-
-    def create_state(self):
-        user_active = TransposePokemon.from_state_pokemon_dict(self.user.active.to_dict())
-        user_reserve = dict()
-        for mon in self.user.reserve:
-            user_reserve[mon.name] = TransposePokemon.from_state_pokemon_dict(mon.to_dict())
-
-        opponent_active = TransposePokemon.from_state_pokemon_dict(self.opponent.active.to_dict())
-        opponent_reserve = dict()
-        for mon in self.opponent.reserve:
-            opponent_reserve[mon.name] = TransposePokemon.from_state_pokemon_dict(mon.to_dict())
-
-        user = Side(user_active, user_reserve, copy(self.user.wish), copy(self.user.side_conditions), copy(self.user.future_sight))
-        opponent = Side(opponent_active, opponent_reserve, copy(self.opponent.wish), copy(self.opponent.side_conditions), copy(self.opponent.future_sight))
-
-        state = State(user, opponent, self.weather, self.field, self.trick_room)
-        return state
-
-    def get_all_options(self):
-        force_switch = self.force_switch or self.user.active.hp <= 0
-        wait = self.wait or self.opponent.active.hp <= 0
-
-        # double faint or team preview
-        if force_switch and wait:
-            user_options = self.user.get_switches() or [constants.DO_NOTHING_MOVE]
-
-            # edge-case for uturn or voltswitch killing
-            if (
-                    self.user.last_used_move.move in constants.SWITCH_OUT_MOVES and
-                    self.opponent.active.hp <= 0 and
-                    self.user.last_used_move.turn == self.turn
-
-            ):
-                opponent_options = [constants.DO_NOTHING_MOVE]
-            else:
-                opponent_options = self.opponent.get_switches() or [constants.DO_NOTHING_MOVE]
-
-            return user_options, opponent_options
-
-        if force_switch:
-            user_options = self.user.get_switches(reviving=self.user.active.reviving)
-
-            # uturn or voltswitch
-            if (
-                    self.user.last_used_move.move in constants.SWITCH_OUT_MOVES and
-                    self.opponent.last_used_move.turn != self.turn and
-                    self.user.last_used_move.turn == self.turn
-            ):
-                opponent_options = [m.name for m in self.opponent.active.moves if not m.disabled] or [constants.DO_NOTHING_MOVE]
-            else:
-                opponent_options = [constants.DO_NOTHING_MOVE]
-        elif wait:
-            opponent_options = self.opponent.get_switches()
-            user_options = [constants.DO_NOTHING_MOVE]
-        else:
-            user_forced_move = self.user.active.forced_move()
-            if user_forced_move:
-                user_options = [user_forced_move]
-            else:
-                user_options = [m.name for m in self.user.active.moves if not m.disabled]
-                user_options += self.user.get_switches()
-
-            opponent_forced_move = self.opponent.active.forced_move()
-            if opponent_forced_move:
-                opponent_options = [opponent_forced_move]
-            else:
-                opponent_options = [m.name for m in self.opponent.active.moves if not m.disabled] or [constants.DO_NOTHING_MOVE]
-                opponent_options += self.opponent.get_switches()
-
-        return user_options, opponent_options
-
-    @abstractmethod
-    def find_best_move(self):
-        ...
-
-
-class Battler:
-
-    def __init__(self):
-        self.active = None
-        self.reserve = []
-        self.side_conditions = defaultdict(lambda: 0)
-
-        self.name = None
-        self.trapped = False
-        self.wish = (0, 0)
-        self.future_sight = (0, 0)
-
-        self.account_name = None
-
-        self.last_used_move = LastUsedMove('', '', 0)
-
-    def mega_revealed(self):
-        return self.active.is_mega or any(p.is_mega for p in self.reserve)
-
-    def lock_active_pkmn_first_turn_moves(self):
-        # disable firstimpression and fakeout if the last_used_move was not a switch
-        if self.last_used_move.pokemon_name == self.active.name:
-            for m in self.active.moves:
-                if m.name in constants.FIRST_TURN_MOVES:
-                    m.disabled = True
-
-    def lock_active_pkmn_status_moves_if_active_has_assaultvest(self):
-        if self.active.item == 'assaultvest':
-            for m in self.active.moves:
-                if all_move_json[m.name][constants.CATEGORY] == constants.STATUS:
-                    m.disabled = True
-
-    def choice_lock_moves(self):
-        # if the active pokemon has a choice item and their last used move was by this pokemon -> lock their other moves
-        if self.active.item in constants.CHOICE_ITEMS and self.last_used_move.pokemon_name == self.active.name:
-            for m in self.active.moves:
-                if m.name != self.last_used_move.move:
-                    m.disabled = True
-
-    def taunt_lock_moves(self):
-        if constants.TAUNT in self.active.volatile_statuses:
-            for m in self.active.moves:
-                if all_move_json[m.name][constants.CATEGORY] == constants.STATUS:
-                    m.disabled = True
-
-    def lock_moves(self):
-        self.choice_lock_moves()
-        self.lock_active_pkmn_status_moves_if_active_has_assaultvest()
-        self.lock_active_pkmn_first_turn_moves()
-        self.taunt_lock_moves()
-
-    def from_json(self, user_json, first_turn=False):
-
-        # user_json does not track boosts or volatile statuses
-        # they must be taken from the current battle
-        if first_turn:
-            existing_conditions = (None, None, None)
-        else:
-            existing_conditions = (
-                self.active.name,
-                self.active.boosts,
-                self.active.volatile_statuses,
-                self.active.terastallized,
-                self.active.types
-            )
-
-        try:
-            trapped = user_json[constants.ACTIVE][0].get(constants.TRAPPED, False)
-            maybe_trapped = user_json[constants.ACTIVE][0].get(constants.MAYBE_TRAPPED, False)
-            self.trapped = trapped or maybe_trapped
-        except KeyError:
-            self.trapped = False
-
-        self.name = user_json[constants.SIDE][constants.ID]
-        self.reserve.clear()
-        for index, pkmn_dict in enumerate(user_json[constants.SIDE][constants.POKEMON]):
-
-            nickname = pkmn_dict[constants.IDENT]
-            pkmn = Pokemon.from_switch_string(pkmn_dict[constants.DETAILS], nickname=nickname)
-            pkmn.ability = pkmn_dict[constants.REQUEST_DICT_ABILITY]
-            pkmn.index = index + 1
-            pkmn.reviving = pkmn_dict.get(constants.REVIVING, False)
-            pkmn.hp, pkmn.max_hp, pkmn.status = get_pokemon_info_from_condition(pkmn_dict[constants.CONDITION])
-            for stat, number in pkmn_dict[constants.STATS].items():
-                pkmn.stats[constants.STAT_ABBREVIATION_LOOKUPS[stat]] = number
-
-            pkmn.item = pkmn_dict[constants.ITEM] if pkmn_dict[constants.ITEM] else None
-
-            if pkmn_dict[constants.ACTIVE]:
-                self.active = pkmn
-                if existing_conditions[0] == pkmn.name:
-                    pkmn.boosts = existing_conditions[1]
-                    pkmn.volatile_statuses = existing_conditions[2]
-                    if existing_conditions[3]:
-                        pkmn.terastallized = True
-                        pkmn.types = existing_conditions[4]
-            else:
-                self.reserve.append(pkmn)
-
-            for move_name in pkmn_dict[constants.MOVES]:
-                pkmn.add_move(move_name)
-
-        # if there is no active pokemon, we do not want to look through it's moves
-        if constants.ACTIVE not in user_json:
-            return
-
-        try:
-            self.active.can_mega_evo = user_json[constants.ACTIVE][0][constants.CAN_MEGA_EVO]
-        except KeyError:
-            self.active.can_mega_evo = False
-
-        try:
-            self.active.can_ultra_burst = user_json[constants.ACTIVE][0][constants.CAN_ULTRA_BURST]
-        except KeyError:
-            self.active.can_ultra_burst = False
-
-        try:
-            self.active.can_dynamax = user_json[constants.ACTIVE][0][constants.CAN_DYNAMAX]
-        except KeyError:
-            self.active.can_dynamax = False
-
-        try:
-            self.active.can_terastallize = user_json[constants.ACTIVE][0][constants.CAN_TERASTALLIZE]
-        except KeyError:
-            self.active.can_terastallize = False
-
-        # clear the active moves so they can be reset by the options available
-        self.active.moves.clear()
-
-        # update the active pokemon's moves to show disabled status/pp remaining
-        # this assumes that there is only one active pokemon (single-battle)
-        for index, move in enumerate(user_json[constants.ACTIVE][0][constants.MOVES]):
-            # hidden power's ID is always 'hiddenpower' regardless of the type
-            # the type needs to be parsed separately from the 'move' attribute
-            if move[constants.ID] == constants.HIDDEN_POWER:
-                self.active.add_move('{}{}'.format(
-                        constants.HIDDEN_POWER,
-                        move['move'].split()[constants.HIDDEN_POWER_TYPE_STRING_INDEX].lower()
-                    )
-                )
-            else:
-                self.active.add_move(move[constants.ID])
-            self.active.moves[-1].disabled = move.get(constants.DISABLED, False)
-            self.active.moves[-1].current_pp = move.get(constants.PP, 1)
-
-            try:
-                self.active.moves[index].can_z = user_json[constants.ACTIVE][0][constants.CAN_Z_MOVE][index]
-            except KeyError:
-                pass
-
-    def get_switches(self, reviving=False):
-        if self.trapped:
-            return []
-
-        switches = []
-        if reviving:
-            it = filter(lambda p: p.hp <= 0, self.reserve)
-        else:
-            it = filter(lambda p: p.hp > 0, self.reserve)
-
-        for pkmn in it:
-            switches.append("{} {}".format(constants.SWITCH_STRING, pkmn.name))
-        return switches
-
-    def to_dict(self):
-        return {
-            constants.TRAPPED: self.trapped,
-            constants.ACTIVE: self.active.to_dict(),
-            constants.RESERVE: [p.to_dict() for p in self.reserve],
-            constants.WISH: copy(self.wish),
-            constants.FUTURE_SIGHT: copy(self.future_sight),
-            constants.SIDE_CONDITIONS: copy(self.side_conditions)
-        }
-
-
-class Pokemon:
-
-    def __init__(self, name: str, level: int, nature="serious", evs=(85,) * 6):
-        self.name = normalize_name(name)
-        self.nickname = None
-        self.base_name = self.name
-        self.level = level
-        self.nature = nature
-        self.evs = evs
-        self.speed_range = StatRange(min=0, max=float("inf"))
-
-        try:
-            self.base_stats = pokedex[self.name][constants.BASESTATS]
-        except KeyError:
-            logger.info("Could not pokedex entry for {}".format(self.name))
-            self.name = [k for k in pokedex if self.name.startswith(k)][0]
-            logger.info("Using {} instead".format(self.name))
-            self.base_stats = pokedex[self.name][constants.BASESTATS]
-
-        self.stats = calculate_stats(self.base_stats, self.level, nature=nature, evs=evs)
-
-        self.max_hp = self.stats.pop(constants.HITPOINTS)
-        self.hp = self.max_hp
-        if self.name == 'shedinja':
-            self.max_hp = 1
-            self.hp = 1
-
-        self.ability = None
-        self.types = pokedex[self.name][constants.TYPES]
-        self.item = constants.UNKNOWN_ITEM
-
-        self.terastallized = False
-        self.fainted = False
-        self.reviving = False
-        self.moves = []
-        self.status = None
-        self.volatile_statuses = []
-        self.boosts = defaultdict(lambda: 0)
-        self.can_mega_evo = False
-        self.can_ultra_burst = False
-        self.can_dynamax = False
-        self.is_mega = False
-        self.can_have_assaultvest = True
-        self.can_have_choice_item = True
-        self.can_not_have_band = False
-        self.can_not_have_specs = False
-        self.can_have_life_orb = True
-        self.can_have_heavydutyboots = True
-
-    def forme_change(self, new_pkmn_name):
-        hp_percent = float(self.hp) / self.max_hp
-        moves = self.moves
-        boosts = self.boosts
-        status = self.status
-
-        self.__init__(new_pkmn_name, self.level)
-        self.hp = round(hp_percent * self.max_hp)
-        self.moves = moves
-        self.boosts = boosts
-        self.status = status
-
-    def try_convert_to_mega(self, check_in_sets=False):
-        if self.item != constants.UNKNOWN_ITEM:
-            return
-        mega_pkmn_name = get_mega_pkmn_name(self.name)
-        in_sets_data = mega_pkmn_name in data.pokemon_sets
-
-        if (mega_pkmn_name and check_in_sets and in_sets_data) or (mega_pkmn_name and not check_in_sets):
-            logger.debug("Guessing mega-evolution: {}".format(mega_pkmn_name))
-            self.forme_change(mega_pkmn_name)
-
-    def is_alive(self):
-        return self.hp > 0
-
-    @classmethod
-    def extract_nickname_from_pokemonshowdown_string(cls, ps_string):
-        return "".join(ps_string.split(":")[1:]).strip()
-
-    @classmethod
-    def from_switch_string(cls, switch_string, nickname=None):
-        if nickname is not None:
-            nickname = cls.extract_nickname_from_pokemonshowdown_string(nickname)
-
-        details = switch_string.split(',')
-        name = details[0]
-        try:
-            level = int(details[1].replace('L', '').strip())
-        except (IndexError, ValueError):
-            level = 100
-        pkmn = Pokemon(name, level)
-        pkmn.nickname = nickname
-        return pkmn
-
-    def set_spread(self, nature, evs):
-        if isinstance(evs, str):
-            evs = [int(e) for e in evs.split(',')]
-        hp_percent = self.hp / self.max_hp
-        self.stats = calculate_stats(self.base_stats, self.level, evs=evs, nature=nature)
-        self.nature = nature
-        self.evs = evs
-        self.max_hp = self.stats.pop(constants.HITPOINTS)
-        self.hp = round(self.max_hp * hp_percent)
-
-    def add_move(self, move_name: str):
-        try:
-            new_move = Move(move_name)
-            self.moves.append(new_move)
-            return new_move
-        except KeyError:
-            logger.warning("{} is not a known move".format(move_name))
-            return None
-
-    def get_move(self, move_name: str):
-        for m in self.moves:
-            if m.name == normalize_name(move_name):
-                return m
-        return None
-
-    def set_likely_moves_unless_revealed(self):
-        if len(self.moves) == 4:
-            return
-        additional_moves = get_all_likely_moves(self.name, [m.name for m in self.moves])
-        for m in additional_moves:
-            self.moves.append(Move(m))
-
-    def set_most_likely_ability_unless_revealed(self):
-        if self.ability is not None:
-            return
-        ability = get_most_likely_ability(self.name)
-        self.ability = ability
-
-    def set_most_likely_item_unless_revealed(self):
-        if self.item != constants.UNKNOWN_ITEM:
-            return
-        item = get_most_likely_item(self.name)
-        self.item = item
-
-    def set_most_likely_spread(self):
-        nature, evs, _ = get_most_likely_spread(self.name)
-        self.set_spread(nature, evs)
-
-    def guess_most_likely_attributes(self):
-        self.set_most_likely_ability_unless_revealed()
-        self.set_most_likely_item_unless_revealed()
-        self.set_likely_moves_unless_revealed()
-        self.set_most_likely_spread()
-
-    def get_possible_spreads(self, spreads):
-        # update this once you can use previous attacks to rule out spreads
-        cumulative_percentage = 0
-        possible_spreads = []
-        for s in spreads:
-            cumulative_percentage += s[2]
-            possible_spreads.append(s[:2])
-            if s[2] < 20 or cumulative_percentage >= 80:
-                break
-
-        return remove_duplicate_spreads(possible_spreads)
-
-    def get_possible_items(self, items):
-        # a bunch of flags could be set by the logic in the `battle_modifier` module
-        # these flags being set render some items not possible
-        # for example, if a pkmn uses 2 different moves without switching, then 'can_have_choice_item' will be False
-        # this will omit choice items when guessing an item
-
-        if self.item == constants.UNKNOWN_ITEM:
-            cumulative_percentage = 0
-            possible_items = []
-            for i in items:
-                if i[1] < 10 or cumulative_percentage >= 80:
-                    return possible_items if possible_items else [constants.UNKNOWN_ITEM]
-                elif i[0] in constants.CHOICE_ITEMS and not self.can_have_choice_item:
-                    pass
-                elif i[0] == 'lifeorb' and not self.can_have_life_orb:
-                    pass
-                elif i[0] == 'assaultvest' and not self.can_have_assaultvest:
-                    pass
-                elif i[0] == 'heavydutyboots' and not self.can_have_heavydutyboots:
-                    pass
-                elif i[0] == 'choiceband' and self.can_not_have_band:
-                    pass
-                elif i[0] == 'choicespecs' and self.can_not_have_specs:
-                    pass
-                elif i[0] not in PASS_ITEMS:
-                    possible_items.append(i[0])
-
-                cumulative_percentage += i[1]
-
-            return possible_items if possible_items else [constants.UNKNOWN_ITEM]
-
-        else:
-            return [self.item]
-
-    def get_possible_abilities(self, abilities):
-        if self.ability is None:
-            cumulative_percentage = 0
-            possible_abilities = []
-            for i in abilities:
-                if i[1] < 10 or cumulative_percentage >= 80:
-                    return possible_abilities if possible_abilities else [None]
-                elif i[0] not in PASS_ABILITIES:
-                    possible_abilities.append(i[0])
-
-                cumulative_percentage += i[1]
-
-            return possible_abilities if possible_abilities else [None]
-        else:
-            return [self.ability]
-
-    def get_possible_moves(self, moves, battle_type=constants.STANDARD_BATTLE):
-        if battle_type == constants.RANDOM_BATTLE:
-            if len(self.moves) == 4:
-                return [], []
-            known_move_names = [m.name for m in self.moves]
-            return [], get_all_possible_moves_for_random_battle(self.name, known_move_names)
-
-        moves_remaining = 4 - len(self.moves)
-        expected_moves = list()
-        chance_moves = list()
-
-        for m in moves:
-            if moves_remaining <= 0:
-                break
-            elif m[1] > 60 and self.get_move(m[0]) is None:
-                expected_moves.append(m[0])
-                moves_remaining -= 1
-            elif m[1] > 20 and self.get_move(m[0]) is None:
-                chance_moves.append(m[0])
-
-        return expected_moves, chance_moves
-
-    def forced_move(self):
-        if "phantomforce" in self.volatile_statuses:
-            return "phantomforce"
-        elif "shadowforce" in self.volatile_statuses:
-            return "shadowforce"
-        elif "dive" in self.volatile_statuses:
-            return "dive"
-        elif "dig" in self.volatile_statuses:
-            return "dig"
-        elif "bounce" in self.volatile_statuses:
-            return "bounce"
-        elif "fly" in self.volatile_statuses:
-            return "fly"
-        else:
-            return None
-
-    def to_dict(self):
-        return {
-            constants.FAINTED: self.fainted,
-            constants.ID: self.name,
-            constants.LEVEL: self.level,
-            constants.TYPES: self.types,
-            constants.HITPOINTS: self.hp,
-            constants.MAXHP: self.max_hp,
-            constants.ABILITY: self.ability,
-            constants.ITEM: self.item,
-            constants.BASESTATS: self.base_stats,
-            constants.STATS: self.stats,
-            constants.NATURE: self.nature,
-            constants.EVS: self.evs,
-            constants.BOOSTS: self.boosts,
-            constants.STATUS: self.status,
-            constants.TERASTALLIZED: self.terastallized,
-            constants.VOLATILE_STATUS: set(self.volatile_statuses),
-            constants.MOVES: [m.to_dict() for m in self.moves]
-        }
-
-    @classmethod
-    def get_dummy(cls):
-        p = Pokemon('pikachu', 100)
-        p.hp = 0
-        p.name = ''
-        p.ability = None
-        p.fainted = True
-        return p
-
-    def __eq__(self, other):
-        return self.name == other.name and self.level == other.level
-
-    def __repr__(self):
-        return "{}, level {}".format(self.name, self.level)
-
-
-class Move:
-    def __init__(self, name):
-        name = normalize_name(name)
-        if constants.HIDDEN_POWER in name and not name.endswith(constants.HIDDEN_POWER_ACTIVE_MOVE_BASE_DAMAGE_STRING):
-            name = "{}{}".format(name, constants.HIDDEN_POWER_ACTIVE_MOVE_BASE_DAMAGE_STRING)
-        move_json = all_move_json[name]
-        self.name = name
-        self.max_pp = int(move_json.get(constants.PP) * 1.6)
-
-        self.disabled = False
-        self.can_z = False
-        self.current_pp = self.max_pp
-
-    def to_dict(self):
-        return {
-            "id": self.name,
-            "disabled": self.disabled,
-            "current_pp": self.current_pp
-        }
-
-    def __eq__(self, other):
-        return self.name == other.name
-
-    def __repr__(self):
-        return "{}".format(self.name)
-
-
----
-
-[10]. src/Ankimon/reviewer_ui.py
-Why this file is critical: Sets up the reviewer UI shortcuts and modifies Anki's bottom HTML to inject Ankimon features.
+[12]. src/Ankimon/reviewer_ui.py
+Why this file is critical: Sets up the reviewer UI shortcuts.
 
 from anki.hooks import wrap
 from aqt.reviewer import Reviewer
@@ -3696,493 +4957,118 @@ def setup_reviewer_ui(catch_shortcut: str, defeat_shortcut: str, reviewer_button
 
 ---
 
-[11]. src/Ankimon/functions/reviewer_iframe.py
-Why this file is critical: Generates the HTML/CSS payload needed to display the battle HUD within Anki's reviewer.
-
-import os
-import fnmatch
-
-def list_audio_files(folder_path):
-    # Define common audio file extensions
-    audio_extensions = ['*.mp3', '*.wav', '*.flac', '*.aac', '*.ogg', '*.wma', '*.m4a', '*.aiff']
-
-    # List to store audio files
-    audio_files = []
-
-    # Walk through the directory
-    for root, dirs, files in os.walk(folder_path):
-        for extension in audio_extensions:
-            for filename in fnmatch.filter(files, extension):
-                audio_files.append(filename)
-
-    return audio_files
-
-from aqt import mw
-from .pokemon_functions import find_experience_for_level
-
-def create_html_code(genderTop, genderBottom, nameTop, nameBottom, levelTop, levelBottom, current_health_bottom, max_hp_bottom, max_hp_top, current_health_top, text, general_url, font_url, bottom_pokemon_sprite, top_pokemon_sprite, display, main_attack, enemy_attack, xp_bar_width = 0):
-    html_code = """<div id="spacer">&nbsp;</div>"""
-    html_code += """<div id="AnkimonWindow"></div>"""
-    html_code += f"""<iframe id="myIframe" class="Ankimon" src='{general_url}index.html?bottomPokemonSprite={bottom_pokemon_sprite}&topPokemonSprite={top_pokemon_sprite}&text={text}&levelTop={levelTop}&levelBottom={levelBottom}&nameTop={nameTop}&nameBottom={nameBottom}&genderTop={genderTop}&genderBottom={genderBottom}&current_health_bottom={current_health_bottom}&max_hp_bottom={max_hp_bottom}&max_hp_top={max_hp_top}&fontUrl={font_url}&current_health_top={current_health_top}&main_attack={main_attack}&enemy_attack={enemy_attack}' width=100% style="display:{display};"></iframe>"""
-    return html_code
-
-def create_iframe_html(main_pokemon, enemy_pokemon, settings_obj, textmsg):
-    text = str(textmsg)
-    text = text.replace("'", "")
-    nameBottom = main_pokemon.nickname if main_pokemon.nickname else main_pokemon.name
-    nameTop = enemy_pokemon.name
-    current_health_top = enemy_pokemon.hp
-    current_health_bottom = main_pokemon.hp
-    levelTop = enemy_pokemon.level
-    levelBottom = main_pokemon.level
-    genderTop = enemy_pokemon.gender
-    genderBottom = main_pokemon.gender
-    max_hp_bottom = main_pokemon.max_hp
-    max_hp_top = enemy_pokemon.max_hp
-    display = "block" #fallback
-    mainpokemon_attack = False
-    enemypokemon_attack = False
-    experience_for_next_lvl = int(find_experience_for_level(f"{main_pokemon.growth_rate}", int(main_pokemon.level), settings_obj))
-    xp_bar_width = int((int(main_pokemon.xp or 0) / experience_for_next_lvl) * 100)
-    ankimon_package = mw.addonManager.addonFromModule(__name__)
-    general_url = f"""/_addons/{ankimon_package}/user_files/web/"""
-    sprites_url = f"""/_addons/{ankimon_package}/user_files/sprites/"""
-    if settings_obj.get("gui.reviewer_image_gif") == False:
-        top_pokemon_sprite = f"""{sprites_url}front_default/{enemy_pokemon.id}.png"""
-        bottom_pokemon_sprite = f"""{sprites_url}back_default/{main_pokemon.id}.png"""
-    else:
-        top_pokemon_sprite = f"""{sprites_url}front_default_gif/{enemy_pokemon.id}.gif"""
-        bottom_pokemon_sprite = f"""{sprites_url}back_default_gif/{main_pokemon.id}.gif"""
-    font_url = f"""/_addons/{ankimon_package}/web/assetts/PokemonGB.ttf"""
-    html_code = create_html_code(genderTop, genderBottom, nameTop, nameBottom, levelTop, levelBottom, current_health_bottom, max_hp_bottom, max_hp_top, current_health_top, text, general_url, font_url, bottom_pokemon_sprite, top_pokemon_sprite, display, mainpokemon_attack, enemypokemon_attack, xp_bar_width)
-    return html_code
-
-def prepare(html, content, context):
-    html_code = create_iframe_html(main_pokemon, enemy_pokemon, settings_obj, textmsg="")
-    return html + html_code
-
-def create_head_code(generalurl):
-    css_code = f"""
-	:root {{
-        --background_music: "{generalurl}/"
-	}}
-
-	@keyframes attack {{
-    0% {{ transform: translate(0px, 0px); }}
-    50% {{ transform: translate(300px, -10px); width: 60%; height: 70%}}
-    100% {{ transform: translate(0px, 0px); }}
-	}}
-
-    @font-face {{
-        font-family: 'Pokemon';
-        src: url("{generalurl}Early_GameBoy.ttf");
-    }}
-
-    #bottomPokemon {{
-        width: 50%  ;
-        height: 70%  ;
-        background-image: url("{generalurl}/images/1.gif");
-        background-size: contain  ;
-        background-repeat: no-repeat  ;
-        margin: auto  ;
-        display: block  ;
-        float: left  ;
-        z-index: 3  ;
-        position: absolute;
-        top: 40%  ;
-        left: 25%  ;
-    }}
-
-    #topPoke {{
-        width: 50%  ;
-        height: 70%  ;
-        background-image: url("{generalurl}images/4.gif")  ;
-        background-size: contain  ;
-        margin: auto  ;
-        display: block  ;
-        background-repeat: no-repeat  ;
-        float: right  ;
-        position: relative  ;
-        left: -5%  ;
-        top: 10%  ;
-    }}
-
-    .innerRectangleBit {{
-	width: 75%  ;
-	height: 20%  ;
-	position: relative  ;
-	background-color: rgb(171,154,84)  ;
-	top: 75%  ;
-	display:inline-block  ;
-	background-image: url("/_addons/1908235722/web/images/1.gif")  ;
-    background-repeat: repeat-x  ;
-    background-size: contain  ;
-    }}
-
-    .ovalOutterTop {{
-	z-index: 1 ;
-	position: absolute ;
-    right: 2%;
-	top: 35% ;
-    width: 40% !important;
-	max-width: 300px ;
-	height: 20px ;
-	background: rgb(200,200,176) ;
-	border-radius: 50% / 50% ;
-    }}
-
-    .ovalOutterBottom {{
-	z-index: 1 ;
-	position: absolute ;
-	bottom: 3% ;
-    left: 2% ;
-    width: 40% !important;
-	max-width: 300px ;
-	height: 20px ;
-	background: rgb(200,200,176) ;
-	border-radius: 50% / 50% ;
-    }}
-
-    #AnkimonContainer {{
-    position: absolute;
-	height: 100% ;
-    width: 100%;
-	background-color: rgb(223,225,218) ;
-	overflow: hidden ;
-	font-family: pokemon ;
-	max-width: 800px ;
-	max-height: 900px ;
-    min-height: 300px;
-	margin: auto ;
-    }}
-
-#top {{
-	background-color: rgb(223,225,218) ;
-	height: 70% ;
-	width:100% ;
-}}
-
-#bottom {{
-	background-color: rgb(64,64,80) ;
-	height: 30% ;
-	width:100% ;
-	z-index: 3 ;
-}}
-
-#bottomBox {{
-	height: 90% ;
-	background-color: rgb(207,81,50) ;
-	border-radius: 20px ;
-	width:99% ;
-	position:relative ;
-	top: 5% ;
-	left:0.5% ;
-	z-index: 4 ;
-}}
-
-#bottomBoxInner {{
-	height: 90% ;
-	background-color: rgb(88,144,152) ;
-	border-radius: 20px ;
-	width:95% ;
-	position:relative ;
-	top: 5% ;
-	left:2.5% ;
-	z-index: 5 ;
-}}
-
-.topHalf {{
-	height: 50% ;
-	width: 100% ;
-
-}}
-
-.ovalInner {{
-	z-index:2 ;
-	width: 90% ;
-	height: 80% ;
-	background: rgb(176,176,144) ;
-	border-radius: 50% / 50% ;
-	position: relative ;
-	transform: translateY(-180%) ;
-	left: 5% ;
-}}
-
-.rectangleOutter {{
-	z-index: 3 ;
-	width: 85% ;
-	height: 85% ;
-	background: rgb(31,31,39) ;
-	margin-left: 10% ;
-	border-bottom-right-radius: 20px ;
-	border-top-left-radius: 20px ;
-	border-top-right-radius: 10px ;
-	border-bottom-left-radius: 10px ;
-}}
-
-.rectangleInner {{
-	z-index: 4 ;
-	width: 95% ;
-	height: 90% ;
-	background: rgb(240,240,208) ;
-	position: relative ;
-	top: -55% ;
-	left: 2.5% ;
-	border-bottom-right-radius: 20px ;
-	border-top-left-radius: 20px ;
-	border-top-right-radius: 10px ;
-	border-bottom-left-radius: 10px ;
-}}
-
-#healthContainer {{
-	width: 30% ;
-	height: 150px ;
-	z-index:2 ;
-	position: relative ;
-	top: 45% ;
-}}
-
-.hpContent {{
-	width:90% ;
-	height: 90% ;
-	position: relative ;
-	top: 10% ;
-	left: 5% ;
-	list-style: none ;
-}}
-
-#UpperHealthContainer {{
-    width: 60%;
-    height: 60px;
-	z-index:2 !important;
-    position: absolute !important;
-	top: -5% !important;
-	left: 5% !important;
-}}
-
-.UpperHpContent {{
-	width:90% ;
-	height: 90% ;
-	position: relative ;
-	top: 5% ;
-	left: 5% ;
-	list-style: none ;
-}}
-
-.hpList {{
-	width:100% ;
-	height:33% ;
-}}
-
-
-.UpperHpList {{
-	width:100% ;
-	height:50% ;
-}}
-
-.left {{
-	float:left ;
-	width:50% ;
-	height: 100% ;
-	overflow: hidden ;
-}}
-
-.right {{
-	margin-left: 50% ;
-	width:50% ;
-	height: 100% ;
-}}
-
-#theTop {{
-	float:right ;
-	z-index: 0 ;
-}}
-
-
-
-.triangleBit {{
-	z-index: -1 ;
-	width:10% ;
-	height: 40% ;
-	left: 0px ;
-	position: relative ;
-	top: -25% ;
-	float: left ;
-	background: linear-gradient(to right bottom, transparent 50%, rgb(64,64,80) 50%) ;
-}}
-
-.exp {{
-	width: 15% ;
-	float: left ;
-	position: relative ;
-	top: 77% ;
-	text-align: center ;
-	display:inline-block ;
-	color: rgb(240,208,0) ;
-	font-size: xx-small ;
-}}
-
-.rectangleBit {{
-	z-index: -1 ;
-	width: 90% ;
-	height: 50% ;
-	float:right ;
-	top:-35% ;
-	position: relative ;
-	background-color: rgb(64,64,80) ;
-	border-bottom-right-radius: 20px ;
-}}
-
-#nameTop {{
-	float: left ;
-	font-size: 2.5vh ;
-	font-weight: bold ;
-    top: -140%;
-    left: 0%;
-    position: absolute;
-    color: black !important;
-}}
-
-#nameBottom {{
-	float: left ;
-	font-size: 2.5vh ;
-	font-weight: bold ;
-	transform: translateY(10%) ;
-}}
-
-#hp {{
-	color: rgb(230, 121, 89) ;
-	float:left ;
-	width: 20% ;
-	position: relative ;
-	left: 2% ;
-	top: 15% ;
-	font-size: 2vh ;
-}}
-
-#rhombus {{
-	position: relative ;
-    width: 80% ;
-    height: 40% ;
-    -o-transform: skew(45deg) ;
-    background-color: rgb(64,64,80) ;
-    margin-left: 5% ;
-    top: -25% ;
-    z-index: -1 ;
-}}
-
-#level {{
-	float: right ;
-	text-align: right ;
-	font-weight: bold ;
-	transform: translateY(30%) ;
-	font-size: 2.5vh ;
-}}
-
-#health  {{
-	float: right ;
-	text-align: right ;
-	font-size: 2.5vh ;
-}}
-
-#genderm  {{
-	color: rgb(0,162,232) ;
-	font-size: 1em ;
-}}
-
-#genderf  {{
-	color: rgb(255,174,201) ;
-	font-size: 1em ;
-}}
-
-#hpBar {{
-	float: right ;
-	width:80% ;
-	height:70% ;
-	background-color: rgb(64,64,80) ;
-	border-radius: 500px ;
-}}
-
-#hpBarInner {{
-	width:85% ;
-	height:70% ;
-	background-color: rgb(255,255,255) ;
-	border-radius: 500px ;
-	position: relative ;
-	top: 16% ;
-	left: 13% ;
-}}
-
-#hpSlider {{
-	width:100% ;
-	height:100% ;
-	background-color: rgb(110,218,163) ;
-	border-radius: 500px ;
-	position: relative ;
-	top: 0% ;
-	left: 0% ;
-}}
-
-#healthTop {{
-	margin-left: 0% ;
-}}
-
-#battleText {{
-	height: 100% ;
-	width: 100% ;
-	text-align: center ;
-	display: table ;
-	float: left ;
-	font-size: 1.5rem ;
-	text-shadow: 2px 2px 0px #43547A ;
-	font-family: Pokemon ;
-	color: #ECEEED ;
-}}
-
-#battleText p{{
-	display: table-cell ;
-    vertical-align: middle ;
-}}
-
-#menuText {{
-
-	display: inline-block ;
-	height: 100% ;
-	width: 38% ;
-	background-color: white ;
-
-}}
-
-.menuRow {{
-	height:45% ;
-	width: 100% ;
-}}
-
-.menuHalf {{
-	width: 45% ;
-	font-size: 3.5vw ;
-	padding: 2% ;
-	border: 2px solid transparent ;
-}}
-
-
-.theFocus {{
-    border-radius: 5px ;
-    border: 2px solid rgb(207,81,50) ;
-    padding: 2% ;
-}}
-
-
-.clearBoth {{
-	clear:both ;
-}}
-    """
-    return css_code
+[13]. src/Ankimon/user_files/web/ankimon_hud_portal.js
+Why this file is critical: Client-side JavaScript responsible for injecting and rendering the visual HUD overlay securely via Shadow DOM.
+
+// user_files/web/ankimon_hud_portal.js
+(function initAnkimonHUD() {
+  try {
+    if (window.__ankimonHud) return;
+
+    // Create a fixed container near the bottom center
+    const hostId = "ankimon-hud-host";
+    const existing = document.getElementById(hostId);
+    if (existing) existing.remove();
+
+    const host = document.createElement("div");
+    host.id = hostId;
+
+    const force = (el, props) => {
+      if (!el) return;
+      for (const [k, v] of Object.entries(props)) {
+        try { el.style.setProperty(k, v, "important"); } catch (e) {}
+      }
+    };
+
+    // Pin to viewport bottom-center like the legacy HUD (you can tweak sizes later)
+    force(host, {
+      all: "initial",
+      position: "fixed",
+      left: "50%",
+      bottom: "16px",
+      transform: "translateX(-50%)",
+      width: "min(900px, 96vw)",
+      height: "auto",
+      "z-index": "2147483646",
+      background: "transparent",
+      "pointer-events": "none", // HUD outer lets clicks pass; inner can enable if needed
+      display: "block",
+      isolation: "isolate",
+      filter: "invert(1) hue-rotate(180deg) saturate(0.555) contrast(0.833)" // Counter-filter
+    });
+
+    // Append outside card flow to avoid scroll/overflow containers
+    (document.documentElement || document.body).appendChild(host);
+
+    // Closed shadow root = max isolation
+    const root = host.attachShadow({ mode: "closed" });
+
+    // Base reset inside the shadow; the dynamic CSS you provide will be appended on update()
+    const baseStyle = document.createElement("style");
+    baseStyle.textContent = `
+      :host { all: initial !important; }
+      #hud-root {
+        all: initial !important;
+        display: block !important;
+        position: relative !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        pointer-events: none !important;
+      }
+      *, *::before, *::after {
+        box-sizing: border-box !important;
+        animation: none !important;
+        transition: none !important;
+        filter: none !important;
+        /* Explicitly unset filter and transform for all elements inside shadow DOM */
+        filter: none !important;
+      }
+      img { /* Target images specifically within the shadow DOM */
+        filter: none !important;
+      }
+    `;
+
+    const hudRoot = document.createElement("div");
+    hudRoot.id = "hud-root";
+
+    root.appendChild(baseStyle);
+    root.appendChild(hudRoot);
+
+    // Public API used by Python to render/update HUD content
+    window.__ankimonHud = {
+      update: (html, css) => {
+        try {
+          hudRoot.textContent = "";
+
+          const wrapper = document.createElement("div");
+          wrapper.style.pointerEvents = "auto"; // Allow interaction inside HUD if needed
+
+          if (css && css.length) {
+            const dynStyle = document.createElement("style");
+            dynStyle.textContent = css;
+            hudRoot.appendChild(dynStyle);
+          }
+
+          wrapper.innerHTML = html || "";
+          hudRoot.appendChild(wrapper);
+        } catch (e) {
+          try { console.error("Ankimon HUD update failed:", e); } catch (_) {}
+        }
+      },
+      clear: () => {
+        try { hudRoot.textContent = ""; } catch (_) {}
+      }
+    };
+  } catch (e) {
+    try { console.error("Ankimon HUD init failed:", e); } catch (_) {}
+  }
+})();
 
 ---
 
-[12]. src/Ankimon/pyobj/ankimon_tracker.py
-Why this file is critical: Tracks session statistics, multipliers, streaks, and flashcard review counts.
+[14]. src/Ankimon/pyobj/ankimon_tracker.py
+Why this file is critical: Tracks session statistics, multipliers, streaks.
 
 from PyQt6.QtCore import QTimer
 from .pokemon_obj import PokemonObject
@@ -4455,7 +5341,7 @@ class AnkimonTracker:
 
 ---
 
-[13]. src/Ankimon/resources.py
+[15]. src/Ankimon/resources.py
 Why this file is critical: Centralized registry for file paths, constants, and Pokémon tier definitions.
 
 from pathlib import Path
@@ -5089,1060 +5975,5 @@ def ensure_ankimon_infrastructure(base_path, base_user_path):
     return True
 
 
-
----
-
-[14]. src/Ankimon/utils.py
-Why this file is critical: Provides essential global utilities for audio, RNG, calculations, and API interactions.
-
-import os
-from pathlib import Path
-import requests
-import json
-import random
-import csv
-import base64
-from typing import Any, Optional
-
-from aqt import mw
-from aqt.utils import showWarning, showInfo
-
-from aqt.qt import QFontDatabase, QFont, QUrl
-from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
-
-from .pyobj.settings import Settings
-from .pyobj.InfoLogger import ShowInfoLogger
-
-from .functions.battle_functions import calculate_hp
-from .functions.pokedex_functions import find_details_move, search_pokedex
-
-from .pyobj.error_handler import show_warning_with_traceback
-from .resources import (
-    battlescene_path,
-    berries_path,
-    items_path,
-    csv_file_items_cost,
-    csv_file_descriptions,
-    font_path,
-    hurt_normal_sound_path,
-    hurt_noteff_sound_path,
-    hurt_supereff_sound_path,
-    hpheal_sound_path,
-    ownhplow_sound_path,
-    fainted_sound_path,
-    addon_dir,
-    POKEMON_TIERS,
-    pokedex_path,
-)
-from .move_names import format_move_name
-
-
-audio_output = QAudioOutput()
-media_player = QMediaPlayer()
-media_player.setAudioOutput(audio_output)
-
-with open(pokedex_path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-    POKEMON_NAME_LOOKUP = {x: data[x]["name"] for x in data}
-
-
-def format_pokemon_name(name: str) -> str:
-    """
-    Look up the official Pokémon name using the normalized key.
-    Falls back to capitalizing if not found.
-    """
-    key = name.replace(" ", "").replace("-", "").replace("_", "").lower()
-    return POKEMON_NAME_LOOKUP.get(key, name.capitalize())
-
-
-def check_folders_exist(parent_directory, folder):
-    folder_path = os.path.join(parent_directory, folder)
-    return os.path.isdir(folder_path)
-
-
-def check_file_exists(folder, filename):
-    file_path = os.path.join(folder, filename)
-    return os.path.isfile(file_path)
-
-
-def test_online_connectivity(
-    url="https://raw.githubusercontent.com/Unlucky-Life/ankimon/main/update_txt.md",
-    timeout=5,
-):
-    try:
-        # Attempt to get the URL
-        response = requests.get(url, timeout=timeout)
-
-        # Check if the response status code is 200 (OK)
-        if response.status_code == 200:
-            return True
-    except:
-        # Connection error means no internet connectivity
-        return False
-
-
-# Define the hook function
-def addon_config_editor_will_display_json(text: str) -> str:
-    """
-    This function modifies the JSON configuration text before displaying it to the user.
-    It replaces the values for the keys "pokemon_collection" and "mainpokemon".
-
-    Args:
-        text (str): The JSON configuration text.
-
-    Returns:
-        str: The modified JSON configuration text.
-    """
-    try:
-        # Parse the JSON text
-        config = json.loads(text)
-        if "mainpokemon" in config:
-            # showInfo(f"{config}")
-            showInfo(
-                "This Configuration is old and wont be used anymore. \n Please use the Settings Window in the Ankimon Menu => Settings"
-            )
-            # mw.settings_ankimon.show_window()
-            # dont show all mainpokemon and mypokemon information in config
-            if "pokemon_collection" in config:
-                del config["pokemon_collection"]
-            if "mainpokemon" in config:
-                del config["mainpokemon"]
-            if "trainer.cash" in config:
-                del config["trainer.cash"]
-
-            # Convert back to JSON string
-            modified_text = json.dumps(config, indent=4)
-            return modified_text
-        return text
-    except (requests.RequestException, json.JSONDecodeError):
-        # Handle JSON parsing or network errors
-        return text
-
-
-# Function to read the content of the local file
-def read_local_file(file_path):
-    try:
-        with open(file_path, "r", encoding="utf-8") as file:
-            return file.read()
-    except FileNotFoundError:
-        return None
-
-
-# Function to check if the file exists on GitHub and read its content
-def read_github_file(url):
-    response = requests.get(url)
-
-    if response.status_code == 200:
-        # File exists, parse the Markdown content
-        content = response.text
-        return content
-    else:
-        return None
-
-
-# Function to check if the content of the two files is the same
-def compare_files(local_content, github_content):
-    return local_content == github_content
-
-
-# Function to write content to a local file
-def write_local_file(file_path, content):
-    with open(file_path, "w", encoding="utf-8") as file:
-        file.write(content)
-
-
-def read_html_file(file_path):
-    """Reads an HTML file and returns its content as a string."""
-    with open(file_path, "r", encoding="utf-8") as file:
-        return file.read()
-
-
-def random_battle_scene():
-    # TODO: choice?
-    # TODO: merge with random_berries and
-    battle_scenes = {}
-    for index, filename in enumerate(os.listdir(battlescene_path)):
-        if filename.endswith(".png"):
-            battle_scenes[index + 1] = filename
-    # Get the corresponding file name
-    battlescene_file = battle_scenes.get(random.randint(1, len(battle_scenes)))
-    return battlescene_file
-
-
-def random_berries():
-    berries = {}
-    for index, filename in enumerate(os.listdir(berries_path)):
-        if filename.endswith(".png"):
-            berries[index + 1] = filename
-    # Get the corresponding file name
-    berries_file = berries.get(random.randint(1, len(berries)))
-    return berries_file
-
-
-def filter_item_sprites(string):
-    # Initialize an empty list to store the file names
-    item_names = []
-    # Iterate over each file in the directory
-    for file in os.listdir(items_path):
-        # Check if the file is a .png file
-        if file.endswith(".png"):
-            # Append the file name without the .png extension to the list
-            item_names.append(file[:-4])
-    # filter by -ball, -repel..etc
-    item_names = [name for name in item_names if name.endswith(f"{string}")]
-    showInfo(f"{item_names}")
-    return item_names
-
-
-USELESS_ITEMS = {
-    # not real items
-    # NOTE: maybe these should be in a separate folder?
-    "Bag_TM_normal_SV_Sprite",
-    "Bag_TM_bug_SV_Sprite",
-    "Bag_TM_dark_SV_Sprite",
-    "Bag_TM_dragon_SV_Sprite",
-    "Bag_TM_electric_SV_Sprite",
-    "Bag_TM_fairy_SV_Sprite",
-    "Bag_TM_fighting_SV_Sprite",
-    "Bag_TM_fire_SV_Sprite",
-    "Bag_TM_flying_SV_Sprite",
-    "Bag_TM_ghost_SV_Sprite",
-    "Bag_TM_grass_SV_Sprite",
-    "Bag_TM_ground_SV_Sprite",
-    "Bag_TM_ice_SV_Sprite",
-    "Bag_TM_poison_SV_Sprite",
-    "Bag_TM_psychic_SV_Sprite",
-    "Bag_TM_rock_SV_Sprite",
-    "Bag_TM_steel_SV_Sprite",
-    "Bag_TM_water_SV_Sprite",
-    # items that are sold for cash
-    "balm-mushroom",
-    "big-mushroom",
-    "big-pearl",
-    "comet-shard",
-    "nugget",
-    "pearl",
-    "pearl-string",
-    "pretty-wing",
-    "rare-bone",
-    "relic-gold",
-    "tiny-mushroom",
-    # catching / escape / encounter rate items
-    "dive-ball",
-    "dusk-ball",
-    "great-ball",
-    "heal-ball",
-    "luxury-ball",
-    "master-ball",
-    "nest-ball",
-    "net-ball",
-    "poke-ball",
-    "premier-ball",
-    "quick-ball",
-    "repeat-ball",
-    "safari-ball",
-    "timer-ball",
-    "ultra-ball",
-    "smoke-ball",  # escape from wild battles
-    "fluffy-tail",  # escape from wild battles
-    "repel",
-    "max-repel",
-    "super-repel",
-    # Flutes and scarves, that work outside battle
-    "black-flute",
-    "blue-flute",
-    "red-flute",
-    "white-flute",
-    "yellow-flute",
-    "blue-scarf",
-    "green-scarf",
-    "pink-scarf",
-    "red-scarf",
-    "yellow-scarf",
-    # Collectible shards
-    "blue-shard",
-    "green-shard",
-    "red-shard",
-    "yellow-shard",
-    # Contest / Grooming / Friendship items outside battle
-    "soothe-bell",
-    "luxury-ball",
-    "pretty-wing",
-    # Miscellaneous items for info
-    "heart-scale",
-    "honey",
-    "heart-scale",
-    "shoal-salt",
-    "shoal-shell",
-    # Non-heal status items that only work out of battle
-    "antidote",
-    "awakening",
-    "burn-heal",
-    "full-heal",
-    "ice-heal",
-    "lava-cookie",
-    "old-gateau",
-    "heal-powder",
-    "paralyze-heal",
-    # Non-battle stat=ups or contests
-    "calcium",
-    "carbos",
-    "clever-wing",
-    "genius-wing",
-    "health-wing",
-    "hp-up",
-    "iron",
-    "muscle-wing",
-    "protein",
-    "resist-wing",
-    "swift-wing",
-    "zinc",
-    # Rare candy and PP / elixirs
-    "rare-candy",
-    "pp-max",
-    "pp-up",
-    "max-elixir",
-    "max-ether",
-    "elixir",
-    "ether",
-}
-
-
-def random_item():
-    item_names: list[str] = []
-
-    # Iterate over each file in the directory
-    for file in os.listdir(items_path):
-        # Check if the file is a .png file
-        if not file.endswith(".png"):
-            continue
-
-        # File name without the .png extension to the list
-        name = file[:-4]
-
-        if name in USELESS_ITEMS:
-            continue
-        if name.endswith("-ball"):
-            continue
-        if name.endswith("-repel"):
-            continue
-        if name.endswith("-incense"):
-            continue
-        if name.endswith("-fang"):
-            continue
-        if name.endswith("dust"):
-            continue
-        if name.endswith("-piece"):
-            continue
-        if name.endswith("-nugget"):
-            continue
-
-        item_names.append(name)
-
-    item_name = random.choice(item_names)
-    # add item to item list
-    give_item(item_name)
-    return item_name
-
-
-# Function to get the list of daily items
-def daily_item_list():
-    """
-    Generates a list of items available for the daily shop, filtering out certain categories.
-    """
-    # Check if the sprites directory exists. If not, trigger the download dialog.
-    if not Path(items_path).exists():
-        from .pyobj.download_sprites import show_agreement_and_download_dialog
-
-        show_agreement_and_download_dialog(force_download=True)
-        # Return an empty list to prevent the crash and allow the addon to load.
-        return []
-
-    # Items with these suffixes will be excluded from the daily shop
-    excluded_suffixes = ["dust", "-piece", "-nugget", "-berry"]
-    # Add full item names here to exclude them from the daily shop, e.g., ["master-ball"]
-
-    item_names = []
-    for file in os.listdir(items_path):
-        if not file.endswith(".png"):
-            continue
-
-        item_name = file[:-4]
-
-        # Filter out excluded items
-        if (
-            get_item_price(item_name) == 0
-            or item_name in USELESS_ITEMS
-            or any(item_name.endswith(suffix) for suffix in excluded_suffixes)
-        ):
-            continue
-
-        item_names.append(
-            {
-                "name": item_name,
-                "description": f"Item: {item_name}",
-                "price": get_item_price(item_name),
-            }
-        )
-
-    return item_names
-
-
-# Function to give an item to the player
-def give_item(item_name: str, item_type: Optional[str] = None):
-    """Gives an item to the user."""
-    db = mw.ankimon_db
-
-    # Get current item or create new
-    existing = db.get_item(item_name)
-    if existing:
-        db.update_item_quantity(item_name, 1)
-        return
-
-    extra_data = {"type": item_type} if item_type else None
-    db.add_item(item_name, 1, extra_data)
-
-
-# Function to return a cost of an item
-def get_item_price(item_name, file_path=csv_file_items_cost):
-    """
-    Returns the cost of an item from a CSV file based on its identifier (name).
-
-    Parameters:
-        file_path (str): Path to the CSV file.
-        item_name (str): The identifier (name) of the item.
-
-    Returns:
-        int: The cost of the item, or None if the item is not found or has no id.
-    """
-    try:
-        with open(file_path, mode="r", newline="", encoding="utf-8") as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                if row["identifier"] == item_name:
-                    cost = row["cost"]
-                    return int(cost)
-    except FileNotFoundError:
-        showWarning(f"Error: File {file_path} not found.")
-        return 1000
-    except KeyError:
-        showWarning("Error: CSV file does not contain the expected headers.")
-        return 1000
-    except Exception as e:
-        showWarning(f"Unexpected error: {e}")
-        return 1000
-
-    return None
-
-
-# Function to return a cost of an item
-def get_item_id(item_name, file_path=csv_file_items_cost):
-    """
-    Returns the cost of an item from a CSV file based on its identifier (name).
-
-    Parameters:
-        file_path (str): Path to the CSV file.
-        item_name (str): The identifier (name) of the item.
-
-    Returns:
-        int: The id of the item, or None if the item is not found or has no id.
-    """
-    try:
-        with open(file_path, mode="r", newline="", encoding="utf-8") as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                if row["identifier"] == item_name:
-                    id = row["id"]
-                    return int(id)
-    except (OSError, KeyError) as e:
-        show_warning_with_traceback(
-            parent=mw, exception=e, message="Error reading item data:"
-        )
-        return 4
-    except Exception as e:
-        show_warning_with_traceback(
-            parent=mw, exception=e, message=f"Unexpected error: {e}"
-        )
-        return 4
-
-
-# Function to return a random fossil
-def random_fossil():
-    fossil_names = []
-    # Iterate over each file in the directory
-    for file in os.listdir(items_path):
-        # Check if the file is a .png file
-        if file.endswith("-fossil.png"):
-            # Append the file name without the .png extension to the list
-            fossil_names.append(file[:-4])
-    fossil_name = random.choice(fossil_names)
-    give_item(fossil_name)
-    return fossil_name
-
-
-def count_items_and_rewrite():
-    """
-    Consolidates item quantities in the database.
-    Legacy: Previously read from items.json, now uses database.
-    """
-    try:
-        db = mw.ankimon_db
-
-        # Get all items from database - they're already unique by item_name
-        # so no need to aggregate, the database handles this automatically
-        items = db.get_all_items()
-
-        if items:
-            print(f"Database contains {len(items)} unique items.")
-        else:
-            print("No items in database.")
-
-    except Exception as e:
-        show_warning_with_traceback(
-            exception=e, message=f"An unexpected error occurred: {e}"
-        )
-
-
-# Assuming the data is stored in a CSV file named 'item_flavor_texts.csv'
-def get_item_description(item_name, language_id):
-    """
-    Fetch the flavor text for an item based on its item_id, version_group_id, and language_id.
-    => get item_id from item_name via items.csv
-    :param item_id: The ID of the item.
-    :param language_id: The language ID for the flavor text.
-    :param file_path: The path to the CSV file containing the flavor texts.
-    :return: The flavor text if found, otherwise None.
-    """
-    try:
-        item_id = get_item_id(item_name)
-        file_path = csv_file_descriptions
-        # Normalize language: fall back to Spanish data for es_latam (14), English on errors.
-        try:
-            normalized_lang = int(language_id)
-        except Exception:
-            normalized_lang = 9
-        if normalized_lang == 14:
-            normalized_lang = 7
-
-        # Open the CSV file and read the contents
-        with open(file_path, mode="r", encoding="utf-8") as file:
-            reader = csv.DictReader(file)
-
-            # Iterate through each row in the CSV
-            for row in reader:
-                # Check if the current row matches the item_id, version_group_id, and language_id
-                if (
-                    int(row["item_id"]) == item_id
-                    and int(row["language_id"]) == normalized_lang
-                ):
-                    return row["flavor_text"]  # Return the matching flavor text
-
-        # If no match is found, return None
-        return None
-
-    except Exception as e:
-        show_warning_with_traceback(exception=e, message="An error occurred:")
-        return None
-
-
-def load_custom_font(font_size, language):
-    if language == 1:
-        font_file = "pkmn_w.ttf"
-        font_file_path = font_path / font_file
-        font_size = int((font_size * 1) / 2)
-        if font_file_path.exists():
-            font_name = "PKMN Western"
-        else:
-            font_name = "Early GameBoy"
-            font_file = "Early GameBoy.ttf"
-            font_size = int((font_size * 5) / 7)
-    else:
-        font_name = "Early GameBoy"
-        font_file = "Early GameBoy.ttf"
-        font_size = int((font_size * 2) / 5)
-
-    # Register the custom font with its file path
-    QFontDatabase.addApplicationFont(str(font_path / font_file))
-    custom_font = QFont(
-        font_name
-    )  # Use the font family name you specified in the font file
-    custom_font.setPointSize(int(font_size))  # Adjust the font size as needed
-
-    return custom_font
-
-
-def get_all_sprites(directory):
-    """
-    Returns a list of trainer sprite names without the '.png' extension
-    from the specified directory.
-
-    :param directory: Path to the directory containing trainer sprite images.
-    :return: List of sprite names without '.png'.
-    """
-    try:
-        sprite_names = [
-            os.path.splitext(file)[0]  # Remove the file extension
-            for file in os.listdir(directory)
-            if file.endswith(".png")  # Filter for .png files
-        ]
-        return sprite_names
-    except FileNotFoundError:
-        print(f"Error: The directory '{directory}' does not exist.")
-        return []
-
-
-def play_effect_sound(settings_obj, sound_type):
-    sound_effects = settings_obj.get("audio.sound_effects")
-    if sound_effects is True:
-        audio_path = None
-        if sound_type == "HurtNotEffective":
-            audio_path = hurt_noteff_sound_path
-        elif sound_type == "HurtNormal":
-            audio_path = hurt_normal_sound_path
-        elif sound_type == "HurtSuper":
-            audio_path = hurt_supereff_sound_path
-        elif sound_type == "OwnHpLow":
-            audio_path = ownhplow_sound_path
-        elif sound_type == "HpHeal":
-            audio_path = hpheal_sound_path
-        elif sound_type == "Fainted":
-            audio_path = fainted_sound_path
-
-        if not audio_path.is_file():
-            return
-        else:
-            audio_output.setVolume(settings_obj.get("audio.volume"))
-            media_player.setSource(QUrl.fromLocalFile(str(audio_path)))
-            media_player.play()
-    else:
-        pass
-
-
-def save_error_code(error_code, logger=None):
-    error_fix_msg = ""
-    try:
-        # Find the position of the phrase "can't be transferred from Gen"
-        index = error_code.find("can't be transferred from Gen")
-
-        # Extract the substring starting from this position
-        relevant_text = error_code[index:]
-
-        # Find the first number in the extracted text (assuming it's the generation number)
-        generation_number = int("".join(filter(str.isdigit, relevant_text)))
-
-        # Show the generation number
-        error_fix_msg += f"\n Please use Gen {str(generation_number)[0]} or lower"
-
-        index = error_code.find("can't be transferred from Gen")
-
-        # Extract the substring starting from this position
-        relevant_text = error_code[index:]
-
-        # Find the first number in the extracted text (assuming it's the generation number)
-        generation_number = int("".join(filter(str.isdigit, relevant_text)))
-
-        error_fix_msg += f"\n Please use Gen {str(generation_number)[0]} or lower"
-
-    except Exception as e:
-        if logger is not None:
-            show_warning_with_traceback(exception=e, message="An error occurred:")
-
-    if logger is not None:
-        logger.log_and_showinfo("info", f"{error_fix_msg}")
-
-
-def get_main_pokemon_data():
-    main_pokemon_data = mw.ankimon_db.get_main_pokemon()
-
-    if not main_pokemon_data:
-        return None
-
-    _name = main_pokemon_data["name"]
-    if not main_pokemon_data.get('nickname') or main_pokemon_data.get('nickname') is None:
-        _nickname = None
-    else:
-        _nickname = main_pokemon_data['nickname']
-    _id = main_pokemon_data["id"]
-    _ability = main_pokemon_data["ability"]
-    _type = main_pokemon_data["type"]
-    _stats = main_pokemon_data.get("stats") or main_pokemon_data.get("base_stats", {})
-    _attacks = main_pokemon_data["attacks"]
-    _level = main_pokemon_data["level"]
-    _hp_base_stat = _stats.get("hp", 1)
-    _growth_rate = main_pokemon_data["growth_rate"]
-    _base_experience = main_pokemon_data["base_experience"]
-    _ev = main_pokemon_data["ev"]
-    _iv = main_pokemon_data["iv"]
-    _gender = main_pokemon_data["gender"]
-    _shiny = main_pokemon_data.get("shiny", False)
-    _individual_id = main_pokemon_data.get("individual_id")
-    _pokemon_defeated = main_pokemon_data.get("pokemon_defeated", 0)
-    _current_hp = main_pokemon_data.get("current_hp")
-    _xp = main_pokemon_data.get("xp", 0)
-    _max_moves = main_pokemon_data.get("max_moves", [])
-    _mega = main_pokemon_data.get("mega", False)
-    _everstone = main_pokemon_data.get("everstone", False)
-    _friendship = main_pokemon_data.get("friendship", 0)
-    _held_item = main_pokemon_data.get("held_item")
-    _status = main_pokemon_data.get("status")
-
-    return {
-        "name": _name, "nickname": _nickname, "id": _id, "ability": _ability,
-        "type": _type, "stats": _stats, "attacks": _attacks,
-        "level": _level, "hp": _hp_base_stat, "growth_rate": _growth_rate,
-        "base_experience": _base_experience, "ev": _ev, "iv": _iv,
-        "gender": _gender, "shiny": _shiny, "individual_id": _individual_id,
-        "pokemon_defeated": _pokemon_defeated, "current_hp": _current_hp, "xp": _xp,
-        "max_moves": _max_moves, "mega": _mega, "everstone": _everstone,
-        "friendship": _friendship, "held_item": _held_item, "status": _status
-    }
-
-
-def play_sound(enemy_pokemon_id: int, settings_obj: Settings):
-    if settings_obj.get("audio.sounds"):
-        file_name = f"{enemy_pokemon_id}.ogg"
-        audio_path = addon_dir / "user_files" / "sprites" / "sounds" / file_name
-        if audio_path.is_file():
-            audio_output.setVolume(settings_obj.get("audio.volume"))
-            media_player.setSource(QUrl.fromLocalFile(str(audio_path)))
-            media_player.play()
-
-
-def load_collected_pokemon_ids() -> set:
-    """Loads all captured pokemon IDs from the database."""
-    return mw.ankimon_db.get_all_pokemon_ids()
-
-
-def limit_ev_yield(
-    current_pokemon_ev: dict[str, int], ev_yield: dict[str, int]
-) -> dict[str, int]:
-    """
-    Limits the EV (Effort Value) yield for a Pokémon based on current EVs and Pokémon game rules.
-
-    Ensures that the total EVs after applying the yield do not exceed 510, and that no single
-    stat exceeds 252 EVs. Adjusts the EV yield to comply with these constraints by capping individual
-    stats and reducing EVs randomly if the total would exceed the maximum allowed.
-
-    Args:
-        current_pokemon_ev (dict[str, int]): Current EVs of the Pokémon, with keys as stat abbreviations
-            ("hp", "atk", "def", "spa", "spd", "spe") and values as their EV amounts.
-        ev_yield (dict[str, int]): Proposed EV yields from a defeated Pokémon, with keys as full stat names
-            ("hp", "attack", "defense", "special-attack", "special-defense", "speed") and values as EV amounts.
-
-    Raises:
-        ValueError: If any key in `current_pokemon_ev` or `ev_yield` is not a recognized stat.
-
-    Returns:
-        dict[str, int]: Adjusted EV yields that do not cause the Pokémon's total EVs to exceed 510 or any
-        single stat to exceed 252. The keys correspond to full stat names.
-    """
-    # The sum of EVs of a Pokemon can only add up to 510. With a limit of 252 EVs in a single stat.
-    for stat in current_pokemon_ev.keys():
-        if stat not in ("hp", "atk", "def", "spa", "spd", "spe"):
-            raise ValueError(f"Unknown EV : {stat}")
-
-    for stat in ev_yield.keys():
-        if stat not in (
-            "hp",
-            "attack",
-            "defense",
-            "special-attack",
-            "special-defense",
-            "speed",
-        ):
-            raise ValueError(f"Unknown EV : {stat}")
-
-    zipped_keys = zip(
-        ["hp", "atk", "def", "spa", "spd", "spe"],
-        ["hp", "attack", "defense", "special-attack", "special-defense", "speed"],
-    )
-
-    new_ev_yield = {
-        "hp": 0,
-        "attack": 0,
-        "defense": 0,
-        "special-attack": 0,
-        "special-defense": 0,
-        "speed": 0,
-    }
-
-    for key_1, key_2 in zipped_keys:
-        # For each stat, we yield an amount of EVs that will not exceed the value of 252
-        new_ev_yield[key_2] = min(ev_yield[key_2], 252 - current_pokemon_ev[key_1])
-
-    # To ensure that we won't go above 510 EVs after yielding the EVs, we randomly reduce the EV yield until we drop below the 510 limit
-    while (sum(current_pokemon_ev.values()) + sum(new_ev_yield.values())) > 510:
-        rand_key = [
-            key for key, val in new_ev_yield.items() if val > 0
-        ]  # We only reduce the positive EV yield values. In other words : We don't give out negative EV yields
-        if len(rand_key) == 0:
-            break
-        rand_key = random.choice(rand_key)
-        new_ev_yield[rand_key] -= 1
-
-    # This final block here is specifically made to give out negative EV yields
-    # This might be necessary if, for any reason, the user's pokemon has a total EV sum already above 510
-    # In that case, we randomly give out negative EV yields to bring down the EVs of the user's pokemon below 510
-    while (sum(current_pokemon_ev.values()) + sum(new_ev_yield.values())) > 510:
-        rand_key = random.choice(
-            list(new_ev_yield.keys())
-        )  # This time, we choose any EV yields, including those that could already have a negative EV yield
-        new_ev_yield[rand_key] -= 1
-
-    return new_ev_yield
-
-
-def iv_rand_gauss(mu: float = 15, sigma: float = 5) -> int:
-    """
-    Generates a random individual value (IV) using a Gaussian distribution,
-    clamped to the range [0, 31].
-
-    Args:
-        mu (float, optional): The mean of the Gaussian distribution. Defaults to 15.
-        sigma (float, optional): The standard deviation of the Gaussian distribution. Defaults to 5.
-
-    Returns:
-        int: An integer IV value between 0 and 31 inclusive.
-    """
-    rand = random.gauss(mu, sigma)
-    rand = max(0, rand)  # ensures that rand >= 0
-    rand = min(31, rand)  # ensures that rand <= 31
-    return int(rand)
-
-
-def get_ev_spread(mode: str = "random") -> dict[str, int]:
-    """
-    Generate an EV (Effort Value) spread for Pokémon stats based on the specified mode.
-
-    Args:
-        mode (str): The mode of EV distribution. Supported modes are:
-            - "random": Randomly distributes up to 510 EVs across stats using a uniform distribution,
-                        with each stat capped at 252 EVs.
-            - "pair": Assigns 252 EVs to two random stats and 4 EVs to a third random stat.
-            - "defense": Returns a predefined defensive spread with 252 EVs in Defense and Special Defense,
-                         and 4 EVs in HP.
-            - "uniform": Distributes EVs evenly (84 EVs) across all stats.
-
-    Returns:
-        dict[str, int]: A dictionary mapping each stat ("hp", "atk", "def", "spa", "spd", "spe")
-                        to its corresponding EV value according to the selected mode.
-    """
-    stat_names = ["hp", "atk", "def", "spa", "spd", "spe"]
-    if mode == "random":  # Draws each EV following a uniform probability distribution
-        cuts = sorted(random.sample(range(510 + 1), 6 - 1))
-        parts = [a - b for a, b in zip(cuts + [510], [0] + cuts)]
-        parts = [min(252, part) for part in parts]
-        evs = {stat: val for stat, val in zip(stat_names, parts)}
-        return evs
-    elif mode == "pair":  # Draws 2 stats at 252 EVs, and a 3rd at 4 EVs
-        ev = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
-        stats = random.sample(stat_names, 3)
-        ev[stats[0]] = 252
-        ev[stats[1]] = 252
-        ev[stats[2]] = 4
-        return ev
-    elif mode == "defense":
-        return {"hp": 4, "atk": 0, "def": 252, "spa": 0, "spd": 252, "spe": 0}
-    elif mode == "uniform":
-        return {"hp": 84, "atk": 84, "def": 84, "spa": 84, "spd": 84, "spe": 84}
-
-    raise ValueError(f"Received unknown value for 'mode': {mode}")
-
-
-def get_tier_by_id(pokemon_id: int) -> Optional[str]:
-    """
-    Determines the tier category of a Pokémon based on its ID.
-
-    Searches through lists in resources.py representing different Pokémon tiers
-    (Normal, Legendary, Mythical, Baby, Ultra, Fossil, Hisuian, Starter) to find the tier corresponding
-    to the given Pokémon ID.
-
-    Args:
-        pokemon_id (int): The unique identifier of the Pokémon.
-
-    Returns:
-        str | None: The tier name as a string if the Pokémon ID is found
-        in one of the tier lists; otherwise, None.
-    """
-
-    for tier, ids in POKEMON_TIERS.items():
-        if pokemon_id in ids:
-            return tier
-    return None
-
-
-def safe_get_random_move(
-    pokemon_moves: list[str], logger: Optional[ShowInfoLogger] = None
-) -> dict:
-    """
-    Attempts to retrieve details of a randomly selected move from a list of Pokémon moves.
-
-    This function shuffles the provided list of move names and tries to find the first
-    move for which details can be successfully retrieved using `find_details_move`. If no
-    valid move is found, it logs a warning (if a logger is provided) and defaults to
-    returning the details for the move "Splash".
-
-    Args:
-        pokemon_moves (list[str]): A list of move names to select from.
-        logger (ShowInfoLogger | None, optional): An optional logger instance for
-            logging warnings if no valid move is found. Defaults to None.
-
-    Returns:
-        dict: A dictionary containing the details of a valid move if found;
-            otherwise, the details for the move "Splash".
-    """
-    rand_moves = pokemon_moves.copy()
-    random.shuffle(rand_moves)
-    # We go through the shuffled list to find the first move that gets successfully parsed
-    for move in rand_moves:
-        move_details = find_details_move(move) or find_details_move(
-            format_move_name(move)
-        )
-        if move_details is not None:
-            return move_details
-        else:
-            if logger is not None:
-                logger.log(
-                    "warning",
-                    f"Could not parse the following move : {str(move)}",
-                )
-
-    # If we fail to successfully parse a single move, we just return Splash
-    if logger is not None:
-        logger.log(
-            "warning",
-            f"Could not parse a single move in the following moveset : {str(pokemon_moves)}",
-        )
-    return find_details_move(format_move_name("splash"))
-
-def png_to_base64(path: str) -> str:
-    """Convert a PNG file to a base64 data URI for embedding into HTML.
-
-    Args:
-        path (str): absolute or relative filesystem path to a PNG file.
-
-    Returns:
-        str: a data URI string like ``data:image/png;base64,...`` or empty
-             string if the file does not exist.
-    """
-    if not os.path.exists(path):
-        return ""
-    with open(path, "rb") as f:
-        return "data:image/png;base64," + base64.b64encode(f.read()).decode("utf-8")
-
-
-def close_anki():
-    mw.close()
-
-
----
-
-[15]. src/Ankimon/user_files/web/ankimon_hud_portal.js
-Why this file is critical: Client-side JavaScript responsible for injecting and rendering the visual HUD overlay securely via Shadow DOM.
-
-// user_files/web/ankimon_hud_portal.js
-(function initAnkimonHUD() {
-  try {
-    if (window.__ankimonHud) return;
-
-    // Create a fixed container near the bottom center
-    const hostId = "ankimon-hud-host";
-    const existing = document.getElementById(hostId);
-    if (existing) existing.remove();
-
-    const host = document.createElement("div");
-    host.id = hostId;
-
-    const force = (el, props) => {
-      if (!el) return;
-      for (const [k, v] of Object.entries(props)) {
-        try { el.style.setProperty(k, v, "important"); } catch (e) {}
-      }
-    };
-
-    // Pin to viewport bottom-center like the legacy HUD (you can tweak sizes later)
-    force(host, {
-      all: "initial",
-      position: "fixed",
-      left: "50%",
-      bottom: "16px",
-      transform: "translateX(-50%)",
-      width: "min(900px, 96vw)",
-      height: "auto",
-      "z-index": "2147483646",
-      background: "transparent",
-      "pointer-events": "none", // HUD outer lets clicks pass; inner can enable if needed
-      display: "block",
-      isolation: "isolate",
-      filter: "invert(1) hue-rotate(180deg) saturate(0.555) contrast(0.833)" // Counter-filter
-    });
-
-    // Append outside card flow to avoid scroll/overflow containers
-    (document.documentElement || document.body).appendChild(host);
-
-    // Closed shadow root = max isolation
-    const root = host.attachShadow({ mode: "closed" });
-
-    // Base reset inside the shadow; the dynamic CSS you provide will be appended on update()
-    const baseStyle = document.createElement("style");
-    baseStyle.textContent = `
-      :host { all: initial !important; }
-      #hud-root {
-        all: initial !important;
-        display: block !important;
-        position: relative !important;
-        width: 100% !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        pointer-events: none !important;
-      }
-      *, *::before, *::after {
-        box-sizing: border-box !important;
-        animation: none !important;
-        transition: none !important;
-        filter: none !important;
-        /* Explicitly unset filter and transform for all elements inside shadow DOM */
-        filter: none !important;
-      }
-      img { /* Target images specifically within the shadow DOM */
-        filter: none !important;
-      }
-    `;
-
-    const hudRoot = document.createElement("div");
-    hudRoot.id = "hud-root";
-
-    root.appendChild(baseStyle);
-    root.appendChild(hudRoot);
-
-    // Public API used by Python to render/update HUD content
-    window.__ankimonHud = {
-      update: (html, css) => {
-        try {
-          hudRoot.textContent = "";
-
-          const wrapper = document.createElement("div");
-          wrapper.style.pointerEvents = "auto"; // Allow interaction inside HUD if needed
-
-          if (css && css.length) {
-            const dynStyle = document.createElement("style");
-            dynStyle.textContent = css;
-            hudRoot.appendChild(dynStyle);
-          }
-
-          wrapper.innerHTML = html || "";
-          hudRoot.appendChild(wrapper);
-        } catch (e) {
-          try { console.error("Ankimon HUD update failed:", e); } catch (_) {}
-        }
-      },
-      clear: () => {
-        try { hudRoot.textContent = ""; } catch (_) {}
-      }
-    };
-  } catch (e) {
-    try { console.error("Ankimon HUD init failed:", e); } catch (_) {}
-  }
-})();
 
 ---

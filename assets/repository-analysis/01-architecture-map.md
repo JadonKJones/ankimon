@@ -1,71 +1,62 @@
 # Architecture Map
 
 ## 1. Entrypoints
-*   **Anki Bootstrap Hook**: `src/Ankimon/__init__.py`. This script is executed by the Anki host environment upon startup. It binds the addon to the UI context.
-*   **The Gameloop Trigger**: `src/Ankimon/battle_loop.py:on_review_card()`. While technically a callback, this function is the logical entrypoint for 90% of the addon's business logic, executing every time a user answers a card.
+*   **Anki Bootstrap Hook**: `src/Ankimon/__init__.py`.
+*   **The Gameloop Trigger**: `src/Ankimon/battle_loop.py:on_review_card()`.
+*   **The Engine Trigger**: `src/Ankimon/poke_engine/evaluate.py`. The gateway into the isolated combat simulation.
 
 ## 2. Initialization Flow
-The application initializes via a strictly procedural path designed to validate data integrity before proceeding:
-1.  **Environment Check**: `ensure_ankimon_infrastructure` creates required static directories.
-2.  **Singleton Construction**: `singletons.py` is evaluated, instantiating `AnkimonDB`, which immediately attempts to connect to `ankimon.db`.
-3.  **Migration and Backup**: `run_startup_sequence` in `startup.py` checks `ankimon_db.is_migrated()`. If false, a complex PyQT dialog prompts the user to migrate legacy `.json` files to SQLite. Backups are also triggered here.
-4.  **Asset Verification**: `_check_assets()` verifies the existence of thousands of sprite files, triggering a download sequence if missing.
-5.  **State Hydration**: `_init_first_enemy()` and `update_main_pokemon()` load the active fighting entities into the `PokemonObject` memory representations.
+1.  **Environment Check**: `ensure_ankimon_infrastructure`.
+2.  **Singleton Construction**: `singletons.py` instantiates `AnkimonDB`.
+3.  **Migration and Backup**: `run_startup_sequence` checks `ankimon_db.is_migrated()`.
+4.  **Engine Hydration**: Large JSON datasets within `src/Ankimon/poke_engine/data/` (like `moves.json` and `pokedex.json`) are loaded into memory for rapid parsing during combat turns.
 
 ## 3. Module Boundaries
-*   **`src/Ankimon/pyobj/`**: The Core Domain Entities layer. Contains class definitions for structural objects (`PokemonObject`, `AnkimonTracker`, `Settings`) and the SQLite adapter.
-*   **`src/Ankimon/gui_classes/`**: The Complex UI layer. Contains robust PyQT Dialogs (e.g., `PokemonTeamDialog`) that handle user interaction outside the main gameloop.
-*   **`src/Ankimon/functions/`**: The Utility and Glue layer. Procedural functions grouped by domain (e.g., `battle_functions.py`, `sprite_functions.py`) that lack persistent state.
-*   **`src/Ankimon/poke_engine/`**: The Battle Simulator Submodule. A highly complex, isolated physics engine for Pokémon battles. It is strictly separated from the Anki context.
-*   **`src/Ankimon/pokedex/`**: Specific encapsulation for the Pokédex UI and data retrieval.
+*   **`src/Ankimon/pyobj/`**: Core Domain Entities (`PokemonObject`) and SQLite adapter.
+*   **`src/Ankimon/gui_classes/`**: Complex PyQT Dialogs.
+*   **`src/Ankimon/poke_engine/`**: The Battle Simulator Submodule.
+    *   *Boundary Sub-layer (`evaluate.py`, `battle.py`)*: Manages macro board state and turn ordering.
+    *   *Physics Sub-layer (`instruction_generator.py`, `damage_calculator.py`)*: Applies STAB, crits, and converts moves to raw events.
+    *   *Lifecycle Sub-layer (`special_effects/`)*: Handles isolated triggers for items and abilities.
+    *   *Data Sub-layer (`data/`)*: Massive JSON stores acting as the physics constants.
 
 ## 4. Orchestration Model
-The system operates on an **event-driven orchestration model**, specifically leveraging the Observer pattern via Anki's hook system.
-*   Anki acts as the primary Subject.
-*   Ankimon registers Observers (functions) via `aqt.gui_hooks.append()`.
-*   When a state change occurs in Anki (a card is shown, a card is answered, sync finishes), the corresponding Observer in Ankimon executes.
+*   **Outer Model**: Event-driven via Anki's hook system (`aqt.gui_hooks`).
+*   **Inner Model (Engine)**: Functional Evaluation Pipeline. The engine takes an immutable `State` object and an Action, runs it through speed/priority resolution (`find_state_instructions.py`), generates discrete effect payloads (`instruction_generator.py`), and returns a modified `State`.
 
 ## 5. State Flow
-Data flows in a rigid cycle:
-1.  **Read**: `database_manager.py` loads persistent data from SQLite into memory.
-2.  **Hydrate**: Data is bound to `PokemonObject` instances in `singletons.py`.
-3.  **Mutate**: `battle_loop.py` executes, modifying the `hp`, `xp`, and `level` attributes of the in-memory `PokemonObject`s based on user performance.
-4.  **Persist**: Explicit calls to `ankimon_db.save_pokemon()` flush the mutated state back to SQLite.
+1.  **Read**: `database_manager.py` loads persistent data into `singletons.py`.
+2.  **Translate**: `ankimon_hooks_to_poke_engine.py` converts `PokemonObject` into the engine's `State` class.
+3.  **Evaluate**: `poke_engine` parses the state and applies mathematical instructions.
+4.  **Re-Hydrate**: The output `State` diff is translated back into the global `PokemonObject` attributes (hp, volatile status).
+5.  **Persist**: Explicit calls to `ankimon_db.save_pokemon()` flush to SQLite.
 
 ## 6. Persistence Model
-*   **Storage Medium**: SQLite (`ankimon.db`).
-*   **Schema Design**: A primary `captured_pokemon` table using a generic schema, where complex attributes (like IV/EV spreads) are serialized as JSON strings within text columns.
-*   **Caching Strategy**: `database_manager.py` implements an in-memory `_all_pokemon_cache` to minimize disk I/O, explicitly invalidated upon mutations.
+*   **Storage Medium**: SQLite (`ankimon.db`) via `database_manager.py`.
 
 ## 7. Configuration Model
-*   **Source**: Anki's native Addon Configuration schema (`config.json`).
-*   **Access**: Wrapped by `src/Ankimon/pyobj/settings.py` providing a type-safe getter/setter interface globally available via `settings_obj`.
+*   **Source**: Anki's native `config.json` wrapped by `src/Ankimon/pyobj/settings.py`.
 
 ## 8. Error and Side-Effect Boundaries
-*   **Anki Protection**: All hook callbacks are wrapped in `try...except` blocks utilizing `show_warning_with_traceback`. This ensures that a failure in the Gameloop Controller does not crash Anki itself.
-*   **Engine Isolation**: The `poke_engine` is strictly functional regarding state. It accepts an input state, applies mutations via an instruction generator, and returns an output state diff. It performs no I/O operations.
+*   **Anki Protection**: Gameloop errors are trapped via `show_warning_with_traceback`.
+*   **Engine Isolation**: The `poke_engine` performs no I/O operations (after initial data load) and relies entirely on passed-in arguments, ensuring combat logic never accidentally crashes the database.
 
 ## 9. External Integrations
-*   **Discord Rich Presence**: `discord_integration.py` utilizes `pypresence` to broadcast the user's active gameloop state to Discord.
-*   **Showdown Export**: `pokemon_showdown_functions.py` formats the user's SQLite data into standard Smogon formats for external competitive play.
+*   **Discord Rich Presence**: `discord_integration.py`.
+*   **Showdown Export**: `pokemon_showdown_functions.py`.
 
 ## 10. Important Abstractions
-*   **`PokemonObject`**: The central data structure holding combat and identification metadata.
-*   **`AnkimonDB`**: The DAO (Data Access Object) abstracting direct SQL queries.
-*   **`State` (poke_engine)**: The immutable representation of a battle phase before instructions are applied.
+*   **`PokemonObject` (Outer)**: The central data structure holding combat metadata.
+*   **`State` (Inner Engine)**: The immutable representation of a battle phase before instructions are applied (`poke_engine/objects.py`).
 
 ## 11. High-Confidence Findings
-*   The system has successfully completed a massive architectural shift from flat-file JSON persistence to SQLite.
-*   The Gameloop Controller is extremely tightly coupled to the Anki review window lifecycle.
-*   The Battle Simulator is effectively a black-box submodule to the rest of the application.
+*   The battle simulator is incredibly robust and strictly isolated from Anki's context. It functions identically to a headless Pokémon Showdown server implementation.
 
 ## 12. Open Questions and Ambiguous Areas
-*   **State Race Conditions**: What occurs if `on_review_card` fires rapidly in succession before the previous database write completes? The synchronicity of the SQLite connection in the context of PyQt's event loop is unclear.
-*   **Memory Leaks**: `ankimon_hud_portal.js` continuously modifies the DOM. It is ambiguous whether Anki aggressively garbage collects the iframe contents between reviews.
+*   **Memory Footprint of Engine Data**: The `poke_engine/data/` JSON files are massive. It is unclear if these are lazily loaded or if they sit permanently in RAM while Anki is running.
 
 ## 13. Change-Risk Hotspots
-*   `src/Ankimon/singletons.py`: Modifying imports here has a 90% probability of creating circular dependencies.
-*   `src/Ankimon/battle_loop.py`: Modifying the synchronous logic here directly impacts the perceived responsiveness of Anki's flashcard review interface.
+*   `src/Ankimon/functions/ankimon_hooks_to_poke_engine.py`: This single file bears the entire weight of translating between the Outer and Inner architectures. Modifying a class in `poke_engine` without updating this adapter will shatter the gameloop.
 
 ## 14. Likely Architectural Intent
-The repository demonstrates a transition from a procedural script to an MVC-inspired application. The intent is clear: decouple data persistence (`database_manager.py`) from rendering (`reviewer_iframe.py`) and business logic (`poke_engine`), though significant technical debt remains in the form of `singletons.py` acting as a global namespace.
+To completely decouple the complex mathematics of Pokémon from the fragile UI rendering of Anki, allowing the engine to be tested in isolation (`poke_engine/tests/`) while Ankimon handles user progression.
