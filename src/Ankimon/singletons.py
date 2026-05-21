@@ -48,6 +48,7 @@ from .gui_entities import (
 from .functions.update_main_pokemon import update_main_pokemon
 from .functions.badges_functions import populate_achievements_from_badges
 from .resources import addon_dir
+from .services import services
 
 # start loggerobject for Ankimon
 logger = ShowInfoLogger()
@@ -75,7 +76,23 @@ settings_window = SettingsWindow(
 # Init Translator
 translator = Translator(language=int(settings_obj.get("misc.language")))
 
-# Not sure what this does, but from afar it looks like a bad idea
+# --- Composition root: populate the aqt-free service registry ONCE. ---
+# This is the single source of truth for the addon's own services. Code should
+# read these from `services` (see services.py) rather than reaching into `mw`,
+# which is what makes that code testable without an Anki runtime.
+services.populate(
+    db=ankimon_db,
+    logger=logger,
+    settings=settings_obj,
+    translator=translator,
+)
+
+# Back-compat shims: modules not yet migrated still read `mw.<service>`. These
+# mirror the registry and are removed file-by-file as call sites move to
+# `services`. Do NOT add new writes here — populate the registry above instead.
+# (NOTE: menu_buttons.py:45 re-creates mw.translator at its own import time;
+# __init__.py re-points mw.translator back to this registry instance afterwards.
+# Both that clobber and the compensation go away when menu_buttons is migrated.)
 mw.settings_ankimon = settings_window
 mw.logger = logger
 mw.translator = translator
