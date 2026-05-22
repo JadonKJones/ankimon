@@ -34,6 +34,9 @@ from ..functions.pokedex_functions import (
     search_pokedex,
     search_pokedex_by_id,
 )
+from ..functions.friendship_evolution import (
+    check_friendship_evolution_for_pokemon,
+)
 from ..pyobj.error_handler import show_warning_with_traceback
 from ..functions.trainer_functions import xp_share_gain_exp
 from ..functions.badges_functions import check_for_badge, receive_badge
@@ -456,6 +459,7 @@ def save_main_pokemon_progress(
             parent=mw, exception=e, message="Error loading main pokemon data."
         )
         return
+    evolution_prompted = False
     while int(
         find_experience_for_level(
             main_pokemon.growth_rate,
@@ -486,14 +490,23 @@ def save_main_pokemon_progress(
             main_pokemon.level,
             evo_window,
             main_pokemon.everstone,
+            getattr(main_pokemon, "evolution_rejected", False),
         )
         if evo_id is not None:
+            evolution_prompted = True
+            # None-safe: return_name_for_id can return None for an unknown id, so
+            # fall back to the numeric id instead of crashing on .capitalize()
+            # (mirrors the friendship-evolution path below).
+            evo_display_name = return_name_for_id(evo_id)
+            evo_display_name = (
+                evo_display_name.capitalize() if evo_display_name else str(evo_id)
+            )
             logger.log_and_showinfo(
                 "info",
                 translator.translate(
                     "pokemon_about_to_evolve",
                     main_pokemon_name=main_pokemon.name,
-                    evo_pokemon_name=return_name_for_id(evo_id).capitalize(),
+                    evo_pokemon_name=evo_display_name,
                     main_pokemon_level=main_pokemon.level,
                 ),
             )
@@ -589,10 +602,35 @@ def save_main_pokemon_progress(
         main_pokemon.ev["spe"] += ev_yield["speed"]
         main_pokemon.invalidate_cp_cache()
         mainpkmndata["current_hp"] = int(main_pokemon.hp)
+        # Friendship is uncapped — it keeps climbing past MAX_FRIENDSHIP (400) so
+        # players can flex a super-bonded Pokémon. The progress bar still fills at
+        # MAX_FRIENDSHIP; the raw number above it is what keeps growing.
         main_pokemon.friendship += random.randint(5, 9)
-        if main_pokemon.friendship > 255:
-            main_pokemon.friendship = 255
         mainpkmndata["friendship"] = main_pokemon.friendship
+        if not evolution_prompted:
+            fevo_id = check_friendship_evolution_for_pokemon(
+                main_pokemon.individual_id,
+                main_pokemon.id,
+                evo_window,
+                main_pokemon.everstone,
+                main_pokemon.friendship,
+                getattr(main_pokemon, "evolution_rejected", False),
+            )
+            if fevo_id is not None:
+                evolution_prompted = True
+                # return_name_for_id can return None (and pop a spurious warning)
+                # if the evolved id is missing from the name CSV; guard the
+                # .capitalize() so a data gap can't crash the defeat flow.
+                fevo_name = return_name_for_id(fevo_id)
+                fevo_name = fevo_name.capitalize() if fevo_name else str(fevo_id)
+                logger.log_and_showinfo(
+                    "info",
+                    translator.translate(
+                        "pokemon_about_to_evolve_friendship",
+                        main_pokemon_name=main_pokemon.name,
+                        evo_pokemon_name=fevo_name,
+                    ),
+                )
         main_pokemon.pokemon_defeated += 1
         mainpkmndata["pokemon_defeated"] = main_pokemon.pokemon_defeated
         if hasattr(main_pokemon, "tier"):

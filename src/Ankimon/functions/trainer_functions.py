@@ -4,6 +4,7 @@ from .badges_functions import get_achieved_badges
 from .pokedex_functions import extract_ids_from_file
 from .pokemon_functions import find_experience_for_level
 from .pokedex_functions import check_evolution_for_pokemon, return_name_for_id
+from .friendship_evolution import check_friendship_evolution_for_pokemon
 from aqt.utils import showInfo, showWarning
 from aqt import mw
 
@@ -110,7 +111,8 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
         pokemon['id'],
         pokemon['level'],
         evo_window,
-        pokemon['everstone']
+        pokemon.get('everstone', False),
+        pokemon.get('evolution_rejected', False)
     )
 
     if evo_id is not None:
@@ -121,6 +123,35 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
         db.save_pokemon(pokemon)
 
         # Now call evolution (which will read the updated file and handle the evolution)
+
+    # Secondary friendship/time-of-day evolution check. Only fires if the level
+    # check above did not already prompt an evolution (avoids double-prompting).
+    # No friendship is granted here; it only triggers if stored friendship
+    # already meets the species threshold.
+    if not evolution_triggered:
+        fevo_id = check_friendship_evolution_for_pokemon(
+            pokemon["individual_id"],
+            pokemon["id"],
+            evo_window,
+            pokemon.get("everstone", False),
+            pokemon.get("friendship", 0),
+            pokemon.get("evolution_rejected", False),
+        )
+        if fevo_id is not None:
+            # return_name_for_id can return None if the evolved id is missing
+            # from the name CSV; guard the .capitalize() so a data gap can't
+            # crash the XP-share flow.
+            fevo_name = return_name_for_id(fevo_id)
+            fevo_name = fevo_name.capitalize() if fevo_name else str(fevo_id)
+            msg += evo_window.translator.translate(
+                "pokemon_about_to_evolve_friendship",
+                main_pokemon_name=pokemon["name"],
+                evo_pokemon_name=fevo_name,
+            )
+            evolution_triggered = True
+
+            # Write the XP/level changes to database BEFORE calling evolution
+            db.save_pokemon(pokemon)
 
     # Only save to database if no evolution was triggered (since evolution already saved)
     if not evolution_triggered:

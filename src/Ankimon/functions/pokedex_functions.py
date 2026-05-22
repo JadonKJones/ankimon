@@ -175,6 +175,12 @@ def get_mainpokemon_evo(pokemon_name):
         return evolutions
 
 def get_growth_rate(species_id: int) -> str:
+    # Coerce string callers to int so they match the integer CSV ids; a
+    # non-numeric argument keeps the original "not found" behaviour.
+    try:
+        species_id = int(species_id)
+    except (TypeError, ValueError):
+        raise ValueError(species_id)
     with open(poke_species_path, mode="r", encoding="utf-8") as file:
         reader = csv.DictReader(file)
 
@@ -185,6 +191,12 @@ def get_growth_rate(species_id: int) -> str:
     raise ValueError(species_id)
 
 def get_base_experience(actual_id: int) -> int:
+    # Coerce string callers to int so they match the integer CSV ids; a
+    # non-numeric argument keeps the original "not found" behaviour.
+    try:
+        actual_id = int(actual_id)
+    except (TypeError, ValueError):
+        raise ValueError(actual_id)
     with open(pokemon_csv, mode="r", encoding="utf-8") as file:
         reader = csv.DictReader(file)
 
@@ -411,7 +423,7 @@ def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
 
 
 def check_evolution_for_pokemon(
-    individual_id, pokemon_id, level, evo_window, everstone=False
+    individual_id, pokemon_id, level, evo_window, everstone=False, evolution_rejected=False
 ):
     """
     Check if a Pokémon evolves using a specific item or level condition.
@@ -423,11 +435,13 @@ def check_evolution_for_pokemon(
         level (int): The current level of the Pokémon.
         evo_window (object): The evolution window object for displaying evolution information.
         everstone (bool): Whether the Pokémon is holding an Everstone. Defaults to False.
+        evolution_rejected (bool): Whether the user previously rejected this
+            evolution. When True the automatic prompt is suppressed. Defaults to False.
 
     Returns:
         int | None: The evolution ID if an evolution is found, or None otherwise.
     """
-    if not everstone:
+    if not everstone and not evolution_rejected:
         try:
             # Get the evolution data for the given Pokémon ID
             possible_evos = pokemon_evolves_from_id(
@@ -580,6 +594,42 @@ def check_key_in_table(column_name, value, file_path):
     return matching_row
 
 
+def rows_for_key_in_table(column_name, value, file_path):
+    """Return *all* rows where ``column_name`` equals ``value`` (as a list).
+
+    Unlike :func:`check_key_in_table`, which stops at the first hit, this returns
+    every matching row. The bundled ``pokemon_evolution.csv`` stores one row per
+    evolution *method*, so a single evolved species can appear on several rows —
+    e.g. Sylveon has a blank row and a separate ``minimum_happiness`` row, and
+    Persian has both a level-up row and a friendship row. Callers that need to
+    pick the row matching a specific method (level vs. friendship) must see them
+    all rather than just whichever comes first in the file.
+
+    Args:
+        column_name: The column to match on.
+        value: The value to match (compared as a string, like
+            :func:`check_key_in_table`).
+        file_path: Path to the CSV file to scan.
+
+    Returns:
+        A list of matching rows (each a ``dict``); empty on no match or error.
+    """
+    matching_rows = []
+    try:
+        with open(file_path, mode="r", encoding="utf-8") as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                # Use .get() to prevent KeyError if the column doesn't exist.
+                if row.get(column_name) and str(row[column_name]) == str(value):
+                    matching_rows.append(row)
+    except FileNotFoundError:
+        print(f"Error: The file {file_path} does not exist.")
+    except Exception as e:
+        print(f"Error: {e}")
+
+    return matching_rows
+
+
 def return_name_for_id(pokemon_id):
     """
     For National Pokedex Pokémon ID, return the name (identifier).
@@ -611,8 +661,8 @@ def return_name_for_id(pokemon_id):
         show_warning_with_traceback(
             parent=mw,
             exception=e,
-            message=f"No evolution data found for Pokémon ID '{pokemon_id}'",
-        )(f"Error retrieving name for Pokémon ID '{pokemon_id}': {e}")
+            message=f"Error retrieving name for Pokémon ID '{pokemon_id}'",
+        )
         return None
 
 
