@@ -39,6 +39,7 @@ from ..gui_classes.pokemon_details import PokemonCollectionDetails
 from ..pyobj.InfoLogger import ShowInfoLogger
 
 from ..pyobj.settings import Settings
+from ..functions.friendship_evolution import evolution_readiness, current_time_label
 from ..functions.sprite_functions import get_sprite_path
 from ..utils import load_custom_font, get_tier_by_id
 from ..resources import icon_path, items_path, csv_file_items_cost, poke_evo_path
@@ -154,6 +155,7 @@ class PokemonPC(QDialog):
         self.sort_by_id = None
         self.sort_by_name = None
         self.sort_by_level = None
+        self.sort_by_friendship = None
         self.sort_by_date = None
         self.sort_group = None
         self.selected_sort_key = "Date"
@@ -168,16 +170,34 @@ class PokemonPC(QDialog):
         self.grid_container = None
         self.pokemon_grid = None
         self.curr_box_label = None
+        self.time_label = None
+
+        # Cached BFF (highest-friendship Pokémon). Recomputed only when the
+        # underlying collection could have changed (open/show, catch, evolve,
+        # trade, release, favorite toggle, held-item change), NOT on pure
+        # layout re-renders (resize, pagination, filter changes, selection).
+        self._bff_id = None
+        self._bff_dirty = True
 
         self.create_gui()
         self.refresh_pokemon_grid()
+
+    def showEvent(self, event):
+        """Recompute the BFF whenever the PC is (re)opened.
+
+        Friendship can change while the window is closed (battles/reviews), so
+        a fresh show must invalidate the cached BFF.
+        """
+        self._bff_dirty = True
+        super().showEvent(event)
 
     def on_theme_change(self):
         """
         Callback function triggered when Anki's theme changes (light to dark or vice versa).
         Refreshes the GUI to apply the new theme settings.
         """
-        self.refresh_gui()
+        # Theme change is cosmetic — no data change, so reuse the cached BFF.
+        self.refresh_gui(recompute_bff=False)
 
     def create_gui(self):
         """
@@ -340,11 +360,27 @@ class PokemonPC(QDialog):
             f"border: 1px solid {button_border}; background-color: {background_color};"
         )
 
+        # Day/night time indicator so players know the current evolution window.
+        # Only relevant when the friendship/time feature is enabled (the master
+        # toggle); hidden otherwise. refresh_pokemon_grid keeps it in sync.
+        self.time_label = QLabel(current_time_label())
+        self.time_label.setFixedHeight(50)
+        self.time_label.setFont(
+            load_custom_font(16, int(self.settings.get("misc.language")))
+        )
+        self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.time_label.setStyleSheet(
+            f"border: 1px solid {button_border}; background-color: {background_color}; padding: 0px 8px;"
+        )
+        if not self.settings.get("evolution.friendship_time_enabled", True):
+            self.time_label.hide()
+
         box_selector_layout.addStretch(1)  # Push buttons to center
         box_selector_layout.addWidget(prev_box_button)
         box_selector_layout.addWidget(self.curr_box_label)
         box_selector_layout.addWidget(next_box_button)
         box_selector_layout.addStretch(1)  # Push buttons to center
+        box_selector_layout.addWidget(self.time_label)
         collection_layout.addLayout(box_selector_layout)
 
         # Grid Container in a Scroll Area to allow window shrinking
@@ -483,6 +519,7 @@ class PokemonPC(QDialog):
         self.sort_by_cp = QRadioButton("CP")
         self.sort_by_iv = QRadioButton("IV")
         self.sort_by_ev = QRadioButton("EV")
+        self.sort_by_friendship = QRadioButton("Friendship")
         self.sort_by_date = QRadioButton("Date")
 
         self.sort_group.addButton(self.sort_by_id)
@@ -491,6 +528,7 @@ class PokemonPC(QDialog):
         self.sort_group.addButton(self.sort_by_cp)
         self.sort_group.addButton(self.sort_by_iv)
         self.sort_group.addButton(self.sort_by_ev)
+        self.sort_group.addButton(self.sort_by_friendship)
         self.sort_group.addButton(self.sort_by_date)
 
         if self.selected_sort_key == "ID":
@@ -505,6 +543,8 @@ class PokemonPC(QDialog):
             self.sort_by_iv.setChecked(True)
         elif self.selected_sort_key == "EV":
             self.sort_by_ev.setChecked(True)
+        elif self.selected_sort_key == "Friendship":
+            self.sort_by_friendship.setChecked(True)
         else:  # Date is the default
             self.sort_by_date.setChecked(True)
 
@@ -519,6 +559,7 @@ class PokemonPC(QDialog):
         sort_radio_layout.addWidget(self.sort_by_cp)
         sort_radio_layout.addWidget(self.sort_by_iv)
         sort_radio_layout.addWidget(self.sort_by_ev)
+        sort_radio_layout.addWidget(self.sort_by_friendship)
         sort_radio_layout.addWidget(self.sort_by_date)
         sort_radio_widget = QWidget()
         sort_radio_widget.setLayout(sort_radio_layout)
@@ -561,15 +602,29 @@ class PokemonPC(QDialog):
             self.details_widget.hide()
             self.main_layout.addWidget(self.details_widget, 0)
 
-    def refresh_pokemon_grid(self):
+    def refresh_pokemon_grid(self, recompute_bff: bool = True):
         """
         Clears and rebuilds the grid.
+
+        Args:
+            recompute_bff (bool): When ``True`` (the default, used by every
+                external data-mutating caller — catch, evolve, trade, release,
+                fossil, main-pick), the BFF is recomputed via SQL. Pure layout
+                re-renders (resize, pagination, filter changes, selection) pass
+                ``False`` so the cached BFF is reused, avoiding the per-render
+                ``json_extract`` query. A pending dirty flag forces a recompute
+                regardless (e.g. after the window is shown).
         """
         if self.pokemon_grid is None:
             return
 
         clear_layout(self.pokemon_grid)
         self.gif_in_collection = self.settings.get("gui.gif_in_collection")
+        # The day/night clock and the friendship-specific evolution badges are
+        # part of the friendship/time feature, which is behind a master toggle.
+        friendship_time_enabled = self.settings.get(
+            "evolution.friendship_time_enabled", True
+        )
 
         pokemon_list = self.fetch_filtered_pokemon()
         max_box_idx = max(0, (len(pokemon_list) - 1) // (self.n_rows * self.n_cols))
@@ -585,6 +640,24 @@ class PokemonPC(QDialog):
                     total=max_box_idx + 1,
                 )
             )
+
+        # Keep the day/night indicator current on every render, but only when
+        # the friendship/time feature is enabled — otherwise hide it.
+        if self.time_label is not None:
+            if friendship_time_enabled:
+                self.time_label.setText(current_time_label())
+                self.time_label.show()
+            else:
+                self.time_label.hide()
+
+        # Resolve the BFF (highest-friendship Pokémon). Recompute only when the
+        # caller signals a possible data change or a prior invalidation is
+        # pending; otherwise reuse the cached value so plain re-renders
+        # (resize/pagination/filter/selection) skip the SQL query.
+        if recompute_bff or self._bff_dirty:
+            self._bff_id = self._compute_bff_id()
+            self._bff_dirty = False
+        bff_id = self._bff_id
 
         start_index = self.current_box_idx * self.n_rows * self.n_cols
         pokemon_list_slice = pokemon_list[
@@ -616,16 +689,20 @@ class PokemonPC(QDialog):
                 pokemon_button = PokemonSlotButton("")
                 pokemon_button.setFixedSize(self.slot_size, self.slot_size)
 
-                bg = (
-                    theme_vars["favorite_color"]
-                    if pokemon.get("is_favorite")
-                    else theme_vars["slot_bg_color"]
+                # BFF (highest friendship) takes visual precedence over Favorite.
+                is_bff = (
+                    bff_id is not None
+                    and pokemon.get("individual_id") == bff_id
                 )
-                h_bg = (
-                    theme_vars["favorite_hover_color"]
-                    if pokemon.get("is_favorite")
-                    else theme_vars["hover_color"]
-                )
+                if is_bff:
+                    bg = "#FF69B4"  # Hot pink
+                    h_bg = "#FF8DC7"
+                elif pokemon.get("is_favorite"):
+                    bg = theme_vars["favorite_color"]
+                    h_bg = theme_vars["favorite_hover_color"]
+                else:
+                    bg = theme_vars["slot_bg_color"]
+                    h_bg = theme_vars["hover_color"]
                 pokemon_button.setStyleSheet(
                     f"QPushButton {{ background-color: {bg}; border: 1px solid {border}; border-radius: 5px; }} QPushButton:hover {{ background-color: {h_bg}; }}"
                 )
@@ -664,6 +741,120 @@ class PokemonPC(QDialog):
                         QSize(self.slot_size - 10, self.slot_size - 10)
                     )
 
+                # Collect badge meanings so the same info is reachable on hover.
+                # The badge QLabels below are WA_TransparentForMouseEvents (so the
+                # slot stays clickable), which means *their* tooltips never fire —
+                # we mirror the explanation onto the slot button, which does
+                # receive hover events.
+                badge_tooltips = []
+
+                # Badge overlays, added last so they paint on top of the sprite.
+                # Heart on the BFF slot (top-left corner).
+                if is_bff:
+                    heart_badge = QLabel("💖")
+                    heart_badge.setAttribute(
+                        Qt.WidgetAttribute.WA_TransparentForMouseEvents
+                    )
+                    heart_badge.setStyleSheet("background: transparent;")
+                    self.pokemon_grid.addWidget(
+                        heart_badge,
+                        row,
+                        col,
+                        alignment=Qt.AlignmentFlag.AlignTop
+                        | Qt.AlignmentFlag.AlignLeft,
+                    )
+                    badge_tooltips.append("💖 Your best friend (highest friendship)")
+
+                # Sparkle on Pokémon ready to evolve (friendship or level-up) —
+                # top-right. The level-up case mostly surfaces rejected/Everstone/
+                # caught-high mons (a plain level-ready mon auto-evolves on level
+                # up). The 🌙/☀️ wait badge below stays friendship-only because
+                # required_time is None for level evolutions.
+                readiness = evolution_readiness(
+                    {
+                        "id": pokemon["id"],
+                        "friendship": pokemon.get("friendship", 0),
+                        "everstone": pokemon.get("everstone", False),
+                        "evolution_rejected": pokemon.get("evolution_rejected", False),
+                        "level": pokemon.get("level", 1),
+                    }
+                )
+                # Friendship/time evolution is behind a master toggle; its badges
+                # only show when enabled. Level-up evolution is base-game and
+                # always shows its ✨ badge.
+                if readiness["ready"] and (
+                    readiness["method"] == "level" or friendship_time_enabled
+                ):
+                    evo_badge = QLabel("✨")
+                    evo_badge.setAttribute(
+                        Qt.WidgetAttribute.WA_TransparentForMouseEvents
+                    )
+                    evo_badge.setStyleSheet("background: transparent;")
+                    evo_badge.setToolTip(readiness["status_text"])
+                    self.pokemon_grid.addWidget(
+                        evo_badge,
+                        row,
+                        col,
+                        alignment=Qt.AlignmentFlag.AlignTop
+                        | Qt.AlignmentFlag.AlignRight,
+                    )
+                    badge_tooltips.append(f"✨ {readiness['status_text']}")
+                elif (
+                    friendship_time_enabled
+                    and readiness["evolvable"]
+                    and readiness["friendship_remaining"] == 0
+                    and not readiness["time_ok"]
+                    and readiness["required_time"]
+                ):
+                    # Friendship requirement is met — only the time of day is
+                    # blocking. Show a sun/moon so the player knows to come back
+                    # during the day / at night (full text is in the details
+                    # panel and the day/night label at the top of the PC).
+                    wait_icon = (
+                        "🌙" if readiness["required_time"] == "night" else "☀️"
+                    )
+                    wait_badge = QLabel(wait_icon)
+                    wait_badge.setAttribute(
+                        Qt.WidgetAttribute.WA_TransparentForMouseEvents
+                    )
+                    wait_badge.setStyleSheet("background: transparent;")
+                    wait_badge.setToolTip(readiness["status_text"])
+                    self.pokemon_grid.addWidget(
+                        wait_badge,
+                        row,
+                        col,
+                        alignment=Qt.AlignmentFlag.AlignTop
+                        | Qt.AlignmentFlag.AlignRight,
+                    )
+                    badge_tooltips.append(f"{wait_icon} {readiness['status_text']}")
+
+                # Mirror the badge meaning(s) onto the (hover-capable) slot button
+                # so the otherwise-unreachable badge tooltips become discoverable.
+                if badge_tooltips:
+                    pokemon_button.setToolTip("\n".join(badge_tooltips))
+
+    def _compute_bff_id(self):
+        """Return the individual_id of the highest-friendship Pokémon.
+
+        The BFF is computed (not stored): the single Pokémon with the highest
+        friendship across the whole collection, ignoring any with friendship 0.
+        Ties are broken deterministically by ``rowid`` (oldest wins). Returns
+        ``None`` if every Pokémon has 0 friendship or on query failure.
+        """
+        try:
+            cursor = mw.ankimon_db.execute(
+                "SELECT individual_id FROM captured_pokemon "
+                "WHERE CAST(json_extract(data, '$.friendship') AS INTEGER) > 0 "
+                "ORDER BY CAST(json_extract(data, '$.friendship') AS INTEGER) DESC, "
+                "rowid ASC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            return row["individual_id"] if row else None
+        except Exception as e:
+            if self.logger:
+                self.logger.log("error", f"Error computing BFF: {e}")
+            return None
+
     def navigate_box(self, delta):
         """
         Move to a different box relative to the current one.
@@ -695,7 +886,8 @@ class PokemonPC(QDialog):
         if new_cols != self.n_cols or new_rows != self.n_rows:
             self.n_cols = new_cols
             self.n_rows = new_rows
-            self.refresh_pokemon_grid()
+            # Resize is pure layout — reuse the cached BFF.
+            self.refresh_pokemon_grid(recompute_bff=False)
 
     def calculate_grid_dimensions(self):
         """
@@ -712,13 +904,20 @@ class PokemonPC(QDialog):
 
         return int(new_cols), int(new_rows)
 
-    def refresh_gui(self):
+    def refresh_gui(self, recompute_bff: bool = True):
         """
         Refreshes the entire graphical user interface by rebuilding its structure
         and then populating the grid.
+
+        Args:
+            recompute_bff (bool): Forwarded to :meth:`refresh_pokemon_grid`.
+                Defaults to ``True`` because the data-mutating callers
+                (favorite toggle, give/remove item, release/trade/rename/evolve
+                via ``refresh_callback``) need a fresh BFF. Non-mutating callers
+                (theme change, selecting a Pokémon) pass ``False``.
         """
         self.create_gui()
-        self.refresh_pokemon_grid()
+        self.refresh_pokemon_grid(recompute_bff=recompute_bff)
         self.layout().invalidate()
         self.layout().activate()
 
@@ -734,7 +933,9 @@ class PokemonPC(QDialog):
             - Refreshes the Pokémon grid to display the selected box's contents.
         """
         self.current_box_idx = idx
-        self.refresh_pokemon_grid()
+        # Pagination and filter changes route through here; neither alters which
+        # Pokémon is the BFF (it spans the whole collection), so reuse the cache.
+        self.refresh_pokemon_grid(recompute_bff=False)
 
     def looparound_go_to_box(self, idx: int, max_idx: int):
         """
@@ -791,6 +992,9 @@ class PokemonPC(QDialog):
             "rowid as original_index, json_extract(data, '$.nickname') as nickname, "
             "json_extract(data, '$.gender') as gender, json_extract(data, '$.is_favorite') as is_favorite, "
             "json_extract(data, '$.held_item') as held_item, "
+            "json_extract(data, '$.friendship') as friendship, "
+            "json_extract(data, '$.everstone') as everstone, "
+            "json_extract(data, '$.evolution_rejected') as evolution_rejected, "
             "json_extract(data, '$.iv') as iv_json, json_extract(data, '$.ev') as ev_json "
             "FROM captured_pokemon WHERE 1=1"
         ]
@@ -860,6 +1064,11 @@ class PokemonPC(QDialog):
             order_clause = f"ORDER BY pokedex_id {direction}"
         elif sort_key_str == "cp":
             order_clause = f"ORDER BY CAST(json_extract(data, '$.cp') AS REAL) {direction}"
+        elif sort_key_str == "friendship":
+            # COALESCE so a missing/NULL friendship sorts as 0 (grouped with the
+            # zero-friendship Pokémon) instead of NULL drifting to an extreme
+            # end of the list under ASC/DESC.
+            order_clause = f"ORDER BY CAST(COALESCE(json_extract(data, '$.friendship'), 0) AS INTEGER) {direction}"
         else:
             # For IV/EV or default, sort by original_index first, then override in Python if needed
             order_clause = f"ORDER BY original_index {direction}"
@@ -881,8 +1090,11 @@ class PokemonPC(QDialog):
                     "gender": row["gender"],
                     "is_favorite": bool(row["is_favorite"]),
                     "held_item": row["held_item"],
+                    "friendship": row["friendship"] or 0,
+                    "everstone": bool(row["everstone"]),
+                    "evolution_rejected": bool(row["evolution_rejected"]),
                 }
-                
+
                 # Pre-calculate sums for sorting if needed
                 if sort_key_str in ["iv", "ev"]:
                     stats_json = row[f"{sort_key_str}_json"]
@@ -1008,6 +1220,7 @@ class PokemonPC(QDialog):
             individual_id=pokemon.get("individual_id"),
             pokemon_defeated=pokemon.get("pokemon_defeated", 0),
             everstone=pokemon.get("everstone", False),
+            evolution_rejected=pokemon.get("evolution_rejected", False),
             captured_date=pokemon.get("captured_date", "Missing"),
             language=int(self.settings.get("misc.language")),
             gif_in_collection=self.gif_in_collection,
@@ -1018,8 +1231,15 @@ class PokemonPC(QDialog):
             tab_changed_callback=self.on_stats_tab_changed,
             nature=pokemon.get("nature", "serious"),
             base_stats=pokemon.get("base_stats"),
+            friendship=pokemon.get("friendship", 0),
+            friendship_time_enabled=self.settings.get(
+                "evolution.friendship_time_enabled", True
+            ),
         )
-        self.refresh_gui()
+        # Selecting a Pokémon only opens the details panel — no data change, so
+        # reuse the cached BFF. (The refresh_callback above keeps the default
+        # recompute=True for mutating actions like release/trade/rename/evolve.)
+        self.refresh_gui(recompute_bff=False)
 
     def on_stats_tab_changed(self, index: int):
         """Callback to remember which tab (Stats/IV/EV) is selected."""
@@ -1160,6 +1380,7 @@ class PokemonPC(QDialog):
             "base_experience",
             "growth_rate",
             "everstone",
+            "evolution_rejected",
             "shiny",
             "captured_date",
             "individual_id",
@@ -1195,6 +1416,7 @@ class PokemonPC(QDialog):
             "base_experience": 0,
             "growth_rate": "medium",
             "everstone": False,
+            "evolution_rejected": False,
             "shiny": False,
             "captured_date": None,
             "individual_id": lambda p: str(uuid.uuid4()),
