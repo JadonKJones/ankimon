@@ -163,6 +163,7 @@ Support my Caffeine Addiction (something that helps building this Addon):
 
 - **Pokémon Collection:** Catch and collect Pokémon as you progress through your Anki decks.
 - **Training:** Train your Pokémon to improve their abilities and strengths.
+- **Friendship & Evolution:** Pokémon build friendship as you study and evolve through friendship, time of day (day/night), level, or a held item. The Pokémon PC shows who's ready to evolve, highlights your highest-friendship "best friend", lets you sort by friendship, and gives you an **Evolve now** button to evolve on demand.
 - **Battles:** Engage in battles with other users on Pokémon Showdown to test your knowledge and skills.
 - **Interactive Learning:** Ankimon integrates seamlessly with Anki, enhancing your learning process by adding an element of excitement and challenge.
 
