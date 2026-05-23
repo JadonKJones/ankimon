@@ -448,6 +448,11 @@ def save_main_pokemon_progress(
     elif main_pokemon.level != 100:
         main_pokemon.xp += exp
         level_cap = 100
+    else:
+        # Cap is on AND the main is already level 100: no XP is granted, but
+        # level_cap must still be defined or the while-loop condition below
+        # raises NameError and crashes every post-cap defeat (upstream #402).
+        level_cap = 100
     try:
         db = mw.ankimon_db
         main_pokemon_data = db.get_main_pokemon()

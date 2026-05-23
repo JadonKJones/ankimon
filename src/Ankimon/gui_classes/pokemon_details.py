@@ -1272,6 +1272,14 @@ def PokemonFree(
     else:
         logger.log_and_showinfo("error", f"Failed to add {name} to history.")
     
+    # If this Pokémon is the current XP-Share target, clear the setting before
+    # it disappears from the DB. Otherwise the dangling individual_id would make
+    # xp_share_gain_exp look up a now-missing Pokémon and crash on the next
+    # review. str() guards against any id type mismatch in the compare.
+    settings_obj = getattr(mw, "settings_obj", None)
+    if settings_obj is not None and str(settings_obj.get("trainer.xp_share")) == str(individual_id):
+        settings_obj.set("trainer.xp_share", None)
+
     # Delete from database
     mw.ankimon_db.delete_pokemon(individual_id)
     logger.log_and_showinfo("info", f"{name.capitalize()} has been let free.")

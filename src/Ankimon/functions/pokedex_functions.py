@@ -387,12 +387,28 @@ def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
     """
     Check if a Pokémon evolves using a specific item.
 
+    Two evolution methods consume an item:
+
+    * ``evolution_trigger_id == 3`` — *use-item* evolutions, where the item is
+      applied directly (e.g. Eevee + Water Stone -> Vaporeon). The item id lives
+      in ``trigger_item_id``.
+    * ``evolution_trigger_id == 2`` — *trade* evolutions that additionally
+      require a *held item* (e.g. Clamperl -> Huntail/Gorebyss via Deep Sea
+      Tooth/Scale, Onix -> Steelix via Metal Coat, Seadra -> Kingdra via Dragon
+      Scale). Since Ankimon has no trading, we treat the held item as the trigger
+      so these species are still reachable. The item id lives in ``held_item_id``.
+
+    Comparisons are done as strings via ``.get(...)`` so blank/missing CSV fields
+    (most trade rows leave ``trigger_item_id`` empty, and most use-item rows leave
+    ``held_item_id`` empty) never raise on ``int("")``.
+
     Args:
-        pokemon_id (int): The ID of the Pokémon.
+        pokemon_id (int): The ID of the (pre-evolution) Pokémon.
         item_id (int): The ID of the item.
 
     Returns:
-        bool: True if the Pokémon evolves with the given item, False otherwise.
+        int | None: The evolved species id if the Pokémon evolves with the given
+        item, otherwise ``None``.
     """
     # Get the evolution data for the given Pokémon ID
     possible_evos = pokemon_evolves_from_id(
@@ -402,18 +418,31 @@ def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
         showWarning("No possible evos found")
         return False
 
+    target_item = str(item_id)
+
     # Iterate through the possible evolutions
     for evos in possible_evos:
-        evo_data = get_pokemon_evolution_data(int(evos))
-        if evo_data:
-            if int(evo_data["evolution_trigger_id"]) == 3 and int(
-                evo_data["trigger_item_id"]
-            ) == int(item_id):
-                return int(
-                    evo_data["evolved_species_id"]
-                )  # Return True as soon as a matching evolution is found
+        try:
+            evo_data = get_pokemon_evolution_data(int(evos))
+        except (TypeError, ValueError):
+            continue
+        if not evo_data:
+            continue
 
-    # If no evolution matches the criteria, return False
+        try:
+            trigger_id = int(evo_data.get("evolution_trigger_id", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+
+        # Use-item evolutions match on trigger_item_id; trade-with-held-item
+        # evolutions match on held_item_id. Compare as strings so blank fields
+        # ("") simply don't match instead of raising on int("").
+        if trigger_id == 3 and str(evo_data.get("trigger_item_id", "")) == target_item:
+            return int(evo_data["evolved_species_id"])
+        if trigger_id == 2 and str(evo_data.get("held_item_id", "")) == target_item:
+            return int(evo_data["evolved_species_id"])
+
+    # If no evolution matches the criteria, return None
     return None
 
 
