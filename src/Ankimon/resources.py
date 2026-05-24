@@ -420,7 +420,6 @@ POKEMON_TIERS = {
   1022,  # iron-boulder
   1023,  # iron-crown
   1024,  # terapagos
-  1025,  # pecharunt
 ]
 ,
   "Mythical": [
@@ -439,7 +438,9 @@ POKEMON_TIERS = {
   # Gen 7
   801, 802, 807, 808, 809,   # Magearna, Marshadow, Zeraora, Meltan, Melmetal
   # Gen 8
-  893                        # Zarude
+  893,                       # Zarude
+  # Gen 9
+  1025                       # Pecharunt
 ]
 ,
   "Ultra": [
