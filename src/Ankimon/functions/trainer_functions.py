@@ -127,7 +127,12 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
     )
 
     if evo_id is not None:
-        msg += f"{pokemon['name']} is about to evolve to {return_name_for_id(evo_id).capitalize()} at level {pokemon['level']}"
+        # return_name_for_id can return None if the evolved id is missing from
+        # the name CSV; guard the .capitalize() so a data gap can't crash the
+        # XP-share flow (mirrors the friendship path below).
+        evo_disp_name = return_name_for_id(evo_id)
+        evo_disp_name = evo_disp_name.capitalize() if evo_disp_name else str(evo_id)
+        msg += f"{pokemon['name']} is about to evolve to {evo_disp_name} at level {pokemon['level']}"
         evolution_triggered = True
 
         # Write the XP/level changes to database BEFORE calling evolution

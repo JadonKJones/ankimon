@@ -183,13 +183,17 @@ class PokemonPC(QDialog):
         self.refresh_pokemon_grid()
 
     def showEvent(self, event):
-        """Recompute the BFF whenever the PC is (re)opened.
+        """Refresh the grid whenever the PC is (re)opened.
 
-        Friendship can change while the window is closed (battles/reviews), so
-        a fresh show must invalidate the cached BFF.
+        Two things drift while the window is closed: friendship (battles/reviews)
+        and the day/night clock (just elapsed time). A plain ``.show()`` doesn't
+        rebuild the grid, so without this the header clock, the BFF heart, and the
+        time-gated evolution badges would all display whatever was last rendered.
+        Invalidate the cached BFF and re-render so the reopened view is current.
         """
         self._bff_dirty = True
         super().showEvent(event)
+        self.refresh_pokemon_grid()
 
     def on_theme_change(self):
         """
