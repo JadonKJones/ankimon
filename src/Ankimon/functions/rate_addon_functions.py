@@ -17,7 +17,7 @@ def rate_this_addon():
     # Only check database
     db_rate_this = mw.ankimon_db.get_user_data("rate_this")
     
-    if db_rate_this is True:
+    if db_rate_this in (True, "true"):
         return
 
     # If we get here, user hasn't rated yet

@@ -66,7 +66,7 @@ def show_tip_of_the_day():
         return
 
     # Check if the addon has been rated
-    if mw.ankimon_db.get_user_data("rate_this") is not True:
+    if mw.ankimon_db.get_user_data("rate_this") not in (True, "true"):
         return
 
     tips_path = Path(__file__).parent.parent / "addon_files" / "tips.json"
