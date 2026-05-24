@@ -98,18 +98,18 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
     if main_pokemon.level:
         # Define level thresholds for each tier
         level_thresholds = {
-            "Ultra": 30,
-            "Legendary": 50,
-            "Mythical": 75
+            "Ultra": 30,  # Example threshold for Ultra Pokémon
+            "Legendary": 50,  # Example threshold for Legendary Pokémon
+            "Mythical": 75  # Example threshold for Mythical Pokémon
         }
 
         for tier in ["Ultra", "Legendary", "Mythical"]:
             if main_pokemon.level < level_thresholds.get(tier, float("inf")):
-                percentages[tier] = 0
+                percentages[tier] = 0  # Set percentage to 0 if the level requirement isn't met
 
     # Example modification based on trainer level
     if trainer_level:
-        adjustment = 5
+        adjustment = 5  # Adjustment value for the example
         if trainer_level > 10:
             for tier in percentages:
                 if tier == "Normal":
@@ -128,6 +128,8 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
     _percentages_cache['trainer_level'] = trainer_level
     _percentages_cache['main_pokemon_level'] = main_pokemon.level
     
+    # this function gets called maybe 10 times per battle round, which is concerning.
+    # it could be rewritten to run ONLY when the change in review ratio is detected.
     return percentages
 
 

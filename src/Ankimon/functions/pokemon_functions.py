@@ -7,32 +7,28 @@ from datetime import datetime
 from aqt.utils import showWarning
 from aqt import mw
 
-from .pokedex_functions import get_base_experience, get_growth_rate, search_pokedex, search_pokedex_by_id
+from .pokedex_functions import get_base_experience, get_growth_rate, search_pokedex, search_pokedex_by_id, safe_int
 from .battle_functions import calculate_hp
 from ..resources import (
     pokedex_path,
     next_lvl_file_path,
     learnset_path,
 )
-from .pokedex_functions import _load_pokedex_cache
-
-_next_lvl_cache = None
-
-def _load_next_lvl_cache():
-    global _next_lvl_cache
-    if _next_lvl_cache is None:
-        _next_lvl_cache = {}
-        with open(next_lvl_file_path, 'r', encoding='utf-8') as file:
-            csv_reader = csv.DictReader(file, delimiter=';')
-            for row in csv_reader:
-                # Use the first fieldname to access the 'Level' column
-                level_str = row[list(row.keys())[0]].strip()
-                _next_lvl_cache[level_str] = row
-    return _next_lvl_cache
 
 def pick_random_gender(pokemon_name):
+    """
+    Randomly pick a gender for a given Pokémon based on its gender ratios.
+
+    Args:
+        pokemon_name (str): The name of the Pokémon.
+        pokedex_data (dict): Pokémon data loaded from the pokedex JSON file.
+
+    Returns:
+        str: "M" for male, "F" for female, or "Genderless" for genderless Pokémon.
+    """
+    from .pokedex_functions import _load_pokedex_cache
     pokedex_data = _load_pokedex_cache()
-    pokemon_name = pokemon_name.lower()
+    pokemon_name = pokemon_name.lower()  # Normalize Pokémon name to lowercase
     pokemon = pokedex_data.get(pokemon_name)
     if not pokemon:
         genders = ["M", "F"]
@@ -41,7 +37,7 @@ def pick_random_gender(pokemon_name):
 
     gender_ratio = pokemon.get("genderRatio")
     if gender_ratio:
-        random_number = random.random()
+        random_number = random.random()  # Generate a random number between 0 and 1
         return "M" if random_number < gender_ratio["M"] else "F"
 
     genders = pokemon.get("gender")
@@ -49,9 +45,29 @@ def pick_random_gender(pokemon_name):
         return genders
 
     genders = ["M", "F"]
+    #genders = ["M", "♀"]
     gender = random.choice(genders)
     return gender
     # Randomly choose between "M" and "F"
+
+_next_lvl_cache = None
+
+def _load_next_lvl_cache():
+    global _next_lvl_cache
+    if _next_lvl_cache is None:
+        try:
+            _next_lvl_cache = {}
+            with open(next_lvl_file_path, 'r', encoding='utf-8') as file:
+                csv_reader = csv.DictReader(file, delimiter=';')
+                fieldnames = [field.strip() for field in csv_reader.fieldnames]
+                first_col = fieldnames[0]
+                for row in csv_reader:
+                    level_str = row[first_col]
+                    _next_lvl_cache[level_str] = row
+        except Exception as e:
+            print(f"Error loading next_lvl_cache: {e}")
+            _next_lvl_cache = {}
+    return _next_lvl_cache
 
 def calculate_max_hp_wildpokemon(enemy_pokemon):
     wild_pk_max_hp = enemy_pokemon.calculate_max_hp()
@@ -73,9 +89,13 @@ def find_experience_for_level(group_growth_rate, level, remove_levelcap=True):
     # Specify the growth rate and level you're interested in
     growth_rate = f'{group_growth_rate}'
     if level < 100:
+        # Default if no row matches or the growth_rate column is unknown —
+        # prevents UnboundLocalError from breaking the level-up path.
+        experience = 0
         cache = _load_next_lvl_cache()
         row = cache.get(str(level))
-        experience = row.get(growth_rate, 0) if row else 0
+        if row:
+            experience = safe_int(row.get(growth_rate, 0))
 
         return experience
     elif level > 99:
@@ -229,7 +249,6 @@ def save_fossil_pokemon(pokemon_id):
         "individual_id": str(uuid.uuid4()),
         "mega": False,
         "special_form": None,
-        "tier": "Fossil",
         "nature": "serious",
         "held_item": None,
         "is_favorite": False,
