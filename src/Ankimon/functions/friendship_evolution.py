@@ -33,19 +33,13 @@ MAX_FRIENDSHIP = 400
 
 
 class FriendshipEvolution(NamedTuple):
-    """An immutable description of a single friendship-based evolution.
-
-    Instances are produced by :func:`get_friendship_evolutions_for_species` and
-    cached for the lifetime of the process. Being a ``NamedTuple`` they are
-    hashable and immutable, so cached tuples can be shared freely across callers
-    (``pc_box``, ``pokemon_details``, the battle flow) with no mutation risk.
+    """A single friendship-based evolution (immutable, hashable, cacheable).
 
     Attributes:
         evo_id: National Pokédex id of the evolved species.
         evo_name: Capitalised display name of the evolved species.
         min_happiness: Friendship value required to evolve.
-        time_of_day: ``"day"``, ``"night"``, or ``None`` if the evolution has no
-            time-of-day requirement.
+        time_of_day: ``"day"``, ``"night"``, or ``None`` (no time requirement).
     """
 
     evo_id: int
@@ -55,14 +49,7 @@ class FriendshipEvolution(NamedTuple):
 
 
 class LevelEvolution(NamedTuple):
-    """An immutable description of a single level-up evolution.
-
-    Counterpart to :class:`FriendshipEvolution` for plain level-up evolutions
-    (``evolution_trigger_id == 1`` rows that carry a positive ``minimum_level``
-    and *no* friendship requirement). Produced by
-    :func:`get_level_evolutions_for_species` and cached for the lifetime of the
-    process. Friendship evolutions are deliberately excluded here so the two
-    helpers never double-count the same row.
+    """A single plain level-up evolution (counterpart to :class:`FriendshipEvolution`).
 
     Attributes:
         evo_id: National Pokédex id of the evolved species.
@@ -78,11 +65,9 @@ class LevelEvolution(NamedTuple):
 def _now_in_configured_tz() -> datetime:
     """Return the current time in the user's configured time zone.
 
-    Auto-detect mode (the default) uses *this device's* local time zone via
-    ``datetime.now()`` — so the day/night cycle follows the system clock with no
-    setup. When ``evolution.timezone_auto`` is turned off, a fixed UTC offset
-    (``evolution.timezone_offset``, in hours) is applied instead. Only the
-    resulting wall-clock hour/time is consumed by the day/night logic.
+    Auto-detect (default) uses the device's local time via ``datetime.now()``;
+    when ``evolution.timezone_auto`` is off, a fixed ``evolution.timezone_offset``
+    (hours, clamped to ±14) is applied instead.
     """
     from ..singletons import settings_obj  # lazy: avoids load-time circular import
 
@@ -104,13 +89,10 @@ def _format_utc_offset(offset: float) -> str:
 
 
 def _coerce_hour(value: Any, default: int) -> int:
-    """Coerce a configured day/night boundary hour to a sane ``int``.
+    """Coerce a configured day/night boundary hour to an ``int`` in ``0-23``.
 
-    The day/night bounds live in advanced config that isn't surfaced in the
-    settings UI, so a hand-edited or migrated config can hand us a string
-    (``"6"``), ``None``, or junk. Comparing those against an integer hour would
-    raise :class:`TypeError` on the hot PC-render path, so we coerce to ``int``
-    (falling back to ``default``) and clamp to ``0-23``.
+    The bounds are advanced (non-UI) config, so a hand-edited value can be a
+    string / ``None`` / junk; fall back to ``default`` and clamp rather than raise.
     """
     try:
         hour = int(value)
@@ -122,13 +104,9 @@ def _coerce_hour(value: Any, default: int) -> int:
 def _coerce_int(value: Any, default: int) -> int:
     """Coerce a Pokémon stat (friendship / level) to an ``int``.
 
-    A Pokémon dict assembled from the SQLite store can carry these as strings —
-    ``json_extract`` returns whatever JSON type was persisted, and trades /
-    imports / migrations can stash ``friendship`` or ``level`` as a JSON string
-    (``"160"``). Arithmetic and comparisons against the integer thresholds would
-    otherwise raise :class:`TypeError`, so we coerce here and fall back to
-    ``default`` for ``None`` / non-numeric junk. Floats truncate toward zero,
-    matching ``int()``.
+    The SQLite store can hand these back as JSON strings (``"160"``) via trades /
+    imports / migrations; fall back to ``default`` for ``None`` / non-numeric junk
+    rather than raising on later arithmetic.
     """
     try:
         return int(value)
@@ -139,18 +117,13 @@ def _coerce_int(value: Any, default: int) -> int:
 def get_time_of_day(now: Optional[datetime] = None) -> str:
     """Return the current in-game time of day as ``"day"`` or ``"night"``.
 
-    The day window is ``[day_start_hour, night_start_hour)``; everything else is
-    night. With the defaults (6, 18) this means 06:00-17:59 is day and
-    18:00-05:59 is night, so "night" naturally spans midnight. The clock used is
-    the device's local time by default, or a fixed UTC offset when the user
-    disables auto-detect (see :func:`_now_in_configured_tz`). The boundary hours
-    are coerced/clamped defensively (see :func:`_coerce_hour`); a misconfigured
-    ``day_start_hour >= night_start_hour`` simply yields an empty day window
-    (always "night") rather than raising.
+    The day window is ``[day_start_hour, night_start_hour)`` (defaults 6-18, so
+    night spans midnight); everything else is night. A misconfigured
+    ``day_start_hour >= night_start_hour`` just yields an always-night window.
 
     Args:
-        now: Optional :class:`datetime` to evaluate against. When omitted, the
-            user's configured time zone is used. Useful for testing.
+        now: Optional :class:`datetime` to evaluate; defaults to the configured
+            time zone. Useful for testing.
 
     Returns:
         ``"day"`` or ``"night"``.
@@ -182,8 +155,8 @@ def current_time_label(now: Optional[datetime] = None) -> str:
     from ..singletons import settings_obj  # lazy: avoids load-time circular import
 
     moment = now if now is not None else _now_in_configured_tz()
-    tod = get_time_of_day(moment)
-    icon = "☀️ Day" if tod == "day" else "🌙 Night"
+    time_of_day = get_time_of_day(moment)
+    icon = "☀️ Day" if time_of_day == "day" else "🌙 Night"
     label = f"{icon} · {moment.strftime('%H:%M')}"
     if not settings_obj.get("evolution.timezone_auto", True):
         try:
@@ -351,25 +324,23 @@ def get_level_evolutions_for_species(
 
 
 def _select_evolution(
-    evos: tuple[FriendshipEvolution, ...], tod: str
+    evos: tuple[FriendshipEvolution, ...], time_of_day: str
 ) -> FriendshipEvolution:
     """Pick the most appropriate friendship evolution for the current time.
 
-    Precedence among the available evolutions:
-      1. Prefer one eligible *right now* (``time_of_day == tod`` or no time
-         requirement); within those, prefer an explicitly time-gated row over a
-         blank-time row, then lowest ``evo_id``.
-      2. If none is eligible right now, fall back to a representative (lowest
-         ``evo_id``) so the UI can still show e.g. "waiting for Night".
+    Prefers an evolution eligible right now (its ``time_of_day`` matches, or it
+    has none); among those, an explicitly time-gated row beats a blank-time one,
+    then lowest ``evo_id``. If none is eligible now, falls back to the lowest
+    ``evo_id`` so the UI can still show e.g. "waiting for Night".
 
     Args:
         evos: Non-empty tuple from :func:`get_friendship_evolutions_for_species`.
-        tod: Current time of day (``"day"`` or ``"night"``).
+        time_of_day: Current time of day (``"day"`` or ``"night"``).
 
     Returns:
         The chosen :class:`FriendshipEvolution`.
     """
-    eligible_now = [e for e in evos if e.time_of_day in (tod, None)]
+    eligible_now = [e for e in evos if e.time_of_day in (time_of_day, None)]
     if eligible_now:
         # Prefer explicit-time rows (e.g. Espeon@day) over blank-time rows, then
         # lowest evo_id. ``time_of_day is None`` sorts last via the bool key.
@@ -398,19 +369,19 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
         defaults to :data:`MAX_FRIENDSHIP` outside the friendship path.
     """
     if isinstance(pokemon, dict):
-        pid = pokemon.get("id")
+        species_id = pokemon.get("id")
         friendship = _coerce_int(pokemon.get("friendship", 0), 0)
         everstone = pokemon.get("everstone", False)
         evolution_rejected = pokemon.get("evolution_rejected", False)
         level = _coerce_int(pokemon.get("level", 1), 1)
     else:
-        pid = getattr(pokemon, "id", None)
+        species_id = getattr(pokemon, "id", None)
         friendship = _coerce_int(getattr(pokemon, "friendship", 0), 0)
         everstone = getattr(pokemon, "everstone", False)
         evolution_rejected = getattr(pokemon, "evolution_rejected", False)
         level = _coerce_int(getattr(pokemon, "level", 1), 1)
 
-    tod = get_time_of_day(now)
+    time_of_day = get_time_of_day(now)
 
     not_evolvable = {
         "evolvable": False,
@@ -428,23 +399,23 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
         "rejected": False,
     }
 
-    if pid is None:
+    if species_id is None:
         return not_evolvable
     try:
-        pid = int(pid)
+        species_id = int(species_id)
     except (TypeError, ValueError):
         # A malformed/non-numeric id can't be matched against the integer CSV
         # ids; treat it like a missing id rather than raising on the hot path.
         return not_evolvable
 
-    evos = get_friendship_evolutions_for_species(pid)
+    evos = get_friendship_evolutions_for_species(species_id)
     if not evos:
         # No friendship evolution — fall back to a plain level-up evolution so
         # the manual "Evolve now" path covers level evolvers too (auto level-ups
         # are still handled by check_evolution_for_pokemon; this is for mons that
         # rejected, hold an Everstone, or were caught above their evolve level).
         return _level_readiness(
-            pid=pid,
+            species_id=species_id,
             level=level,
             everstone=everstone,
             friendship=friendship,
@@ -452,14 +423,14 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
             not_evolvable=not_evolvable,
         )
 
-    chosen = _select_evolution(evos, tod)
+    chosen = _select_evolution(evos, time_of_day)
     evo_id = chosen.evo_id
     evo_name = chosen.evo_name
     min_happiness = chosen.min_happiness
     required_time = chosen.time_of_day
 
     friendship_remaining = max(0, min_happiness - friendship)
-    time_ok = required_time is None or required_time == tod
+    time_ok = required_time is None or required_time == time_of_day
     ready = (not everstone) and friendship >= min_happiness and time_ok
 
     status_text = _build_status_text(
@@ -469,7 +440,7 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
         friendship_remaining=friendship_remaining,
         required_time=required_time,
         time_ok=time_ok,
-        tod=tod,
+        time_of_day=time_of_day,
         rejected=evolution_rejected,
     )
 
@@ -492,7 +463,7 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
 
 def _level_readiness(
     *,
-    pid: int,
+    species_id: int,
     level: int,
     everstone: bool,
     friendship: int,
@@ -501,27 +472,15 @@ def _level_readiness(
 ) -> dict:
     """Compute readiness for a plain level-up evolution.
 
-    Called by :func:`evolution_readiness` only when the species has no
-    friendship evolution. Returns ``not_evolvable`` unchanged when the species
-    has no level-up evolution either, so the no-evo case stays identical.
-
-    Readiness ignores ``evolution_rejected`` (so the manual button still shows
-    for rejected mons) and ``required_time``/time-of-day (level evolutions are
-    not time-gated): ``ready = (not everstone) and level >= min_level``.
-
-    Args:
-        pid: National Pokédex species id (already coerced to ``int``).
-        level: The Pokémon's current level.
-        everstone: Whether the Pokémon holds an Everstone.
-        friendship: Current friendship value (carried through for the bar/UI).
-        evolution_rejected: Whether the user previously rejected this evolution.
-        not_evolvable: The pre-built "no evolution" result dict to return when
-            there is no level-up evolution.
+    Called by :func:`evolution_readiness` when the species has no friendship
+    evolution; returns ``not_evolvable`` unchanged if it has no level-up evolution
+    either. Ignores ``evolution_rejected`` (the manual button still shows) and
+    time of day: ``ready = (not everstone) and level >= min_level``.
 
     Returns:
         A readiness dict with ``method="level"`` (or ``not_evolvable``).
     """
-    level_evos = get_level_evolutions_for_species(pid)
+    level_evos = get_level_evolutions_for_species(species_id)
     if not level_evos:
         return not_evolvable
 
@@ -565,7 +524,7 @@ def _build_status_text(
     friendship_remaining: int,
     required_time: Optional[str],
     time_ok: bool,
-    tod: str,
+    time_of_day: str,
     rejected: bool = False,
 ) -> str:
     """Build the human-readable readiness line shown in the UI.
@@ -590,7 +549,7 @@ def _build_status_text(
     if friendship_remaining == 0 and not time_ok and required_time is not None:
         return (
             f"Ready — waiting for {required_time.capitalize()} "
-            f"(now {tod.capitalize()})"
+            f"(now {time_of_day.capitalize()})"
         )
 
     # Still needs more friendship.
@@ -611,20 +570,8 @@ def check_friendship_evolution_for_pokemon(
 ) -> Optional[int]:
     """Prompt a friendship evolution for a Pokémon if it is ready.
 
-    Honors the global ``evolution.friendship_time_enabled`` toggle and the
-    Everstone item. When the Pokémon is ready, opens the evolution window via
-    :meth:`EvoWindow.ask_pokemon_evo` and returns the evolved species id.
-
-    Args:
-        individual_id: The individual (instance) id of the Pokémon.
-        pokemon_id: National Pokédex species id of the Pokémon.
-        evo_window: The shared :class:`EvoWindow` used to confirm evolution.
-        everstone: Whether the Pokémon holds an Everstone. Defaults to ``False``.
-        friendship: Current friendship value. Defaults to ``0``.
-        evolution_rejected: Whether the user previously rejected this evolution.
-            When ``True`` the automatic prompt is suppressed (the manual
-            "Evolve now" button stays available elsewhere). Defaults to ``False``.
-        now: Optional :class:`datetime` for the time-of-day check.
+    Honors the ``evolution.friendship_time_enabled`` toggle, the Everstone, and a
+    prior rejection. When ready, opens :meth:`EvoWindow.ask_pokemon_evo`.
 
     Returns:
         The evolved species id if the evolution was triggered, else ``None``.
