@@ -266,9 +266,21 @@ def generate_random_pokemon(
     min_allowed_pokemon_lvl = check_min_generate_level(
         str(name.lower())
     )  # Gets the minimum allowed level for that pokemon given its stage of evolution
+
+    attempts = 0
     while (not check_id_ok(pokemon_id)) or (
         wild_pokemon_lvl < min_allowed_pokemon_lvl
     ):  # We keep drawing a random pokemon until we find a valid one
+        attempts += 1
+        if attempts >= 500:
+            showWarning("Failed to generate a valid Pokémon after 500 attempts. Please ensure at least one generation is enabled in the settings. Defaulting to Rattata.")
+            pokemon_id = 19
+            name = search_pokedex_by_id(19)
+            tier = "Normal"
+            min_allowed_pokemon_lvl = check_min_generate_level(str(name.lower()))
+            wild_pokemon_lvl = max(wild_pokemon_lvl, min_allowed_pokemon_lvl)
+            break
+
         pokemon_id, tier = choose_random_pkmn_from_tier()
         name = search_pokedex_by_id(pokemon_id)
         min_allowed_pokemon_lvl = check_min_generate_level(
