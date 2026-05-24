@@ -613,7 +613,7 @@ def save_main_pokemon_progress(
         main_pokemon.friendship += random.randint(5, 9)
         mainpkmndata["friendship"] = main_pokemon.friendship
         if not evolution_prompted:
-            fevo_id = check_friendship_evolution_for_pokemon(
+            friendship_evo_id = check_friendship_evolution_for_pokemon(
                 main_pokemon.individual_id,
                 main_pokemon.id,
                 evo_window,
@@ -621,19 +621,19 @@ def save_main_pokemon_progress(
                 main_pokemon.friendship,
                 getattr(main_pokemon, "evolution_rejected", False),
             )
-            if fevo_id is not None:
+            if friendship_evo_id is not None:
                 evolution_prompted = True
                 # return_name_for_id can return None (and pop a spurious warning)
                 # if the evolved id is missing from the name CSV; guard the
                 # .capitalize() so a data gap can't crash the defeat flow.
-                fevo_name = return_name_for_id(fevo_id)
-                fevo_name = fevo_name.capitalize() if fevo_name else str(fevo_id)
+                friendship_evo_name = return_name_for_id(friendship_evo_id)
+                friendship_evo_name = friendship_evo_name.capitalize() if friendship_evo_name else str(friendship_evo_id)
                 logger.log_and_showinfo(
                     "info",
                     translator.translate(
                         "pokemon_about_to_evolve_friendship",
                         main_pokemon_name=main_pokemon.name,
-                        evo_pokemon_name=fevo_name,
+                        evo_pokemon_name=friendship_evo_name,
                     ),
                 )
         main_pokemon.pokemon_defeated += 1

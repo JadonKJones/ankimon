@@ -1,27 +1,15 @@
 """Friendship- and time-of-day-based evolution helpers.
 
-This module is the single source of truth for:
-- the in-game day/night clock (derived from the local system clock + settings),
-- which friendship evolution(s) a species can undergo,
-- whether a given Pokémon is *ready* to evolve via friendship right now, and
-- triggering that evolution through the existing :class:`EvoWindow`.
+Single source of truth for the in-game day/night clock, a species' friendship
+evolution(s), whether a Pokémon is ready to evolve right now, and triggering that
+evolution via :class:`EvoWindow`. Friendship evolutions live in
+``pokemon_evolution.csv`` as level-up rows (``evolution_trigger_id == 1``) with a
+positive ``minimum_happiness`` and an optional ``time_of_day``; the legacy
+level-up code skips them because their ``minimum_level`` is blank.
 
-Friendship evolutions in the bundled data (``pokemon_evolution.csv``) are encoded
-as ``evolution_trigger_id == 1`` (level-up) rows that carry a positive
-``minimum_happiness`` and, for some species, a ``time_of_day`` of ``"day"`` or
-``"night"`` (e.g. Eevee -> Espeon by day / Umbreon at night). The legacy
-level-up evolution code skips these because they have a blank ``minimum_level``.
-
-Circular-import note
---------------------
-This module is imported (directly or transitively) by ``pc_box.py``,
-``encounter_functions.py``, ``trainer_functions.py`` and ``pokemon_details.py``.
-``singletons.py`` imports ``pc_box`` at module top level *before* it binds the
-``settings_obj`` singleton, so importing ``settings_obj`` at this module's top
-level would crash at addon load. Therefore ``settings_obj`` is imported lazily,
-inside each function that needs it, by which point ``singletons`` is fully
-initialised. The ``pokedex_functions`` / ``resources`` imports below have no such
-back-edge and are safe at top level.
+``settings_obj`` is imported lazily inside each function, not at module top level:
+``singletons`` imports ``pc_box`` (which imports this module) before binding
+``settings_obj``, so a top-level import would crash at addon load.
 """
 
 from __future__ import annotations
@@ -237,29 +225,20 @@ def get_friendship_evolutions_for_species(
 ) -> tuple[FriendshipEvolution, ...]:
     """Return all friendship evolutions for a species, sorted by evolved id.
 
-    Iterates the species' evolved forms and keeps those that have a row carrying
-    a positive ``minimum_happiness``. An evolved species can span several CSV
-    rows (one per evolution method), so all rows are scanned — first-match would
-    miss e.g. Eevee -> Sylveon, whose blank row precedes its friendship row.
-    Evolved forms that are *also* reachable by a plain level-up are left to the
-    level path (see :func:`_is_plain_level_row`) so the feature does not silently
-    change a classic level-up evolution (only Meowth -> Persian is dual-route in
-    the bundled data).
-    Results are cached by the integer ``pokemon_id`` argument via
-    :func:`functools.lru_cache`: the underlying CSV is static for the lifetime of
-    the process, so caching is safe and avoids re-reading the file on every slot
-    render. Each returned
-    :class:`FriendshipEvolution` is an immutable ``NamedTuple``, so the cached
-    tuple can be shared across callers with no risk of one mutating another's
-    view.
+    Scans every CSV row of each evolved form (not first-match — that would miss
+    e.g. Eevee -> Sylveon, whose blank row precedes its friendship row) and keeps
+    those with a positive ``minimum_happiness``. Forms also reachable by a plain
+    level-up are left to the level path (see :func:`_is_plain_level_row`) so a
+    classic level-up evolution isn't silently changed. ``lru_cache``d on
+    ``pokemon_id`` (the CSV is static for the process lifetime; the returned
+    ``NamedTuple``s are immutable, so the cached tuple is safe to share).
 
     Args:
         pokemon_id: National Pokédex id of the *pre-evolution* species.
 
     Returns:
-        A tuple of :class:`FriendshipEvolution` entries (``evo_id``,
-        ``evo_name``, ``min_happiness``, ``time_of_day``), sorted by ``evo_id``
-        ascending. Empty tuple if the species has no friendship evolution.
+        A tuple of :class:`FriendshipEvolution` entries sorted by ``evo_id``;
+        empty if the species has no friendship evolution.
     """
     evolutions: list[FriendshipEvolution] = []
     for evo in pokemon_evolves_from_id(pokemon_id):
@@ -312,22 +291,17 @@ def get_level_evolutions_for_species(
 ) -> tuple[LevelEvolution, ...]:
     """Return all plain level-up evolutions for a species, sorted by evolved id.
 
-    Mirrors :func:`get_friendship_evolutions_for_species` but keeps the
-    *level-up* rows (``evolution_trigger_id == 1``) that have a positive numeric
-    ``minimum_level`` and are **not** friendship evolutions (blank/zero
-    ``minimum_happiness``). Excluding friendship rows keeps the two helpers from
-    double-counting the same CSV row — friendship evolutions are handled
-    exclusively by the friendship helper. Cached by the integer ``pokemon_id``
-    via :func:`functools.lru_cache` for the same reasons as the friendship
-    helper (the CSV is static for the process lifetime).
+    Like :func:`get_friendship_evolutions_for_species` but keeps level-up rows
+    (``evolution_trigger_id == 1``) with a positive ``minimum_level`` and no
+    friendship requirement, so the two helpers never double-count a row.
+    ``lru_cache``d on ``pokemon_id``.
 
     Args:
         pokemon_id: National Pokédex id of the *pre-evolution* species.
 
     Returns:
-        A tuple of :class:`LevelEvolution` entries (``evo_id``, ``evo_name``,
-        ``min_level``), sorted by ``evo_id`` ascending. Empty tuple if the
-        species has no plain level-up evolution.
+        A tuple of :class:`LevelEvolution` entries sorted by ``evo_id``; empty if
+        the species has no plain level-up evolution.
     """
     evolutions: list[LevelEvolution] = []
     for evo in pokemon_evolves_from_id(pokemon_id):
@@ -407,31 +381,21 @@ def _select_evolution(
 def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
     """Compute manual-evolution readiness for a single Pokémon.
 
-    Covers both **friendship/time** evolutions and plain **level-up**
-    evolutions, so the PC's manual "Evolve now" button and ✨ badge light up for
-    either kind. Friendship evolutions take precedence (``method="friendship"``);
-    if the species has none, a level-up evolution is considered instead
-    (``method="level"``). Accepts either a dict or an object exposing ``id``,
-    ``friendship``, ``everstone`` and ``level`` attributes; missing values
-    default to ``friendship=0``, ``everstone=False`` and ``level=1``.
+    Covers both friendship/time and plain level-up evolutions, so the PC's
+    "Evolve now" button and ✨ badge work for either. Friendship takes precedence
+    (``method="friendship"``); otherwise a level-up evolution is considered
+    (``method="level"``), else ``method=None``. Accepts a dict or an object with
+    ``id`` / ``friendship`` / ``everstone`` / ``level`` (missing -> 0 / False / 1).
 
     Args:
         pokemon: A Pokémon dict or object.
         now: Optional :class:`datetime` for the time-of-day check.
 
     Returns:
-        A dict with the keys::
-
-            evolvable, ready, method, evo_id, evo_name, min_happiness,
-            current_friendship, friendship_remaining, required_time, time_ok,
-            status_text, bar_max
-
-        For a friendship evolution ``method`` is ``"friendship"``; for a
-        level-up evolution it is ``"level"`` (with ``min_happiness=None``,
-        ``required_time=None``, ``time_ok=True``, ``friendship_remaining=0`` and
-        ``bar_max`` :data:`MAX_FRIENDSHIP`). For a species with no evolution of
-        either kind, ``evolvable`` is ``False``, ``method`` is ``None``,
-        ``bar_max`` is :data:`MAX_FRIENDSHIP` and ``status_text`` is empty.
+        A readiness dict with keys: ``evolvable, ready, method, evo_id,
+        evo_name, min_happiness, current_friendship, friendship_remaining,
+        required_time, time_ok, status_text, bar_max, rejected``. ``bar_max``
+        defaults to :data:`MAX_FRIENDSHIP` outside the friendship path.
     """
     if isinstance(pokemon, dict):
         pid = pokemon.get("id")

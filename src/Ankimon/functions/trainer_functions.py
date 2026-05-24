@@ -145,7 +145,7 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
     # No friendship is granted here; it only triggers if stored friendship
     # already meets the species threshold.
     if not evolution_triggered:
-        fevo_id = check_friendship_evolution_for_pokemon(
+        friendship_evo_id = check_friendship_evolution_for_pokemon(
             pokemon["individual_id"],
             pokemon["id"],
             evo_window,
@@ -153,16 +153,16 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
             pokemon.get("friendship", 0),
             pokemon.get("evolution_rejected", False),
         )
-        if fevo_id is not None:
+        if friendship_evo_id is not None:
             # return_name_for_id can return None if the evolved id is missing
             # from the name CSV; guard the .capitalize() so a data gap can't
             # crash the XP-share flow.
-            fevo_name = return_name_for_id(fevo_id)
-            fevo_name = fevo_name.capitalize() if fevo_name else str(fevo_id)
+            friendship_evo_name = return_name_for_id(friendship_evo_id)
+            friendship_evo_name = friendship_evo_name.capitalize() if friendship_evo_name else str(friendship_evo_id)
             msg += evo_window.translator.translate(
                 "pokemon_about_to_evolve_friendship",
                 main_pokemon_name=pokemon["name"],
-                evo_pokemon_name=fevo_name,
+                evo_pokemon_name=friendship_evo_name,
             )
             evolution_triggered = True
 
