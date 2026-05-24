@@ -43,3 +43,4 @@ __pycache__/
 .coverage.*
 htmlcov/
 coverage.xml
+src/Ankimon/user_files/update_state.json
