@@ -416,7 +416,7 @@ def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
     )  # Ensure this returns a list of possible evolutions
     if not possible_evos:
         showWarning("No possible evos found")
-        return False
+        return None
 
     target_item = str(item_id)
 
