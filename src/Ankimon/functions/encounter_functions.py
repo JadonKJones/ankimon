@@ -400,6 +400,7 @@ def new_pokemon(
     Returns:
         PokemonObject: The updated `pokemon` object representing the newly generated wild Pokémon ready for battle.
     """
+    ankimon_tracker.caught = 0
     (
         name,
         pkmn_id,
@@ -888,7 +889,7 @@ def catch_pokemon(
             logger.log_and_showinfo(
                 "info", translator.translate("already_caught_pokemon")
             )  # Display a message when the Pokémon is caught
-            return
+        return
 
     # If we arrive here, this means that ankimon_tracker_obj.caught == 1
     if not nickname:
