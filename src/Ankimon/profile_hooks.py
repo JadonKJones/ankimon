@@ -2,6 +2,7 @@ from anki.hooks import addHook
 from aqt import gui_hooks, mw
 
 from .singletons import settings_obj, logger
+from .utils import test_online_connectivity
 from .pyobj.ankimon_sync import setup_ankimon_sync_hooks, check_and_sync_pokemon_data
 from .pyobj.tip_of_the_day import show_tip_of_the_day
 from .pyobj.pokemon_trade import check_and_award_monthly_pokemon
@@ -12,6 +13,10 @@ sync_dialog = None
 
 def _on_profile_did_open(online_connectivity):
     def handler():
+        nonlocal online_connectivity
+        if not online_connectivity:
+            online_connectivity = test_online_connectivity()
+
         try:
             show_tip_of_the_day()
         except Exception as e:
