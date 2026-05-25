@@ -36,6 +36,203 @@ STATS = {
     6: "speed",
 }
 
+# === PERFORMANCE FIX: Cache pokedex data ===
+_pokedex_cache = None
+_poke_species_cache = None
+
+def safe_int(value, default=0):
+    """Safely convert a value to an integer, returning a default if conversion fails."""
+    if value is None:
+        return default
+    try:
+        # Strip whitespace if it's a string
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return default
+        # Using float first handles things like "123.0"
+        return int(float(value))
+    except (ValueError, TypeError):
+        return default
+
+def _load_pokedex_cache():
+    """Load pokedex JSON once and cache it in memory"""
+    global _pokedex_cache
+    if _pokedex_cache is None:
+        try:
+            with open(str(pokedex_path), "r", encoding="utf-8") as json_file:
+                _pokedex_cache = json.load(json_file)
+        except Exception as e:
+            print(f"Error loading pokedex cache: {e}")
+            _pokedex_cache = {}
+    return _pokedex_cache
+
+# === ID INDEX CACHE: Fast O(1) lookups by species_id ===
+_pokedex_id_index = None
+
+def _load_pokedex_id_index():
+    """Build a reverse index: species_id -> pokemon_name for O(1) lookups"""
+    global _pokedex_id_index
+    if _pokedex_id_index is None:
+        try:
+            pokedex_data = _load_pokedex_cache()
+            _pokedex_id_index = {}
+            for entry_name, attributes in pokedex_data.items():
+                species_id = safe_int(attributes.get("species_id"))
+                actual_id = safe_int(attributes.get("actual_id"))
+                
+                # Use internal names (keys) for logic consistency
+                if actual_id is not None:
+                    _pokedex_id_index[actual_id] = entry_name
+                
+                if species_id is not None:
+                    if species_id not in _pokedex_id_index:
+                        _pokedex_id_index[species_id] = entry_name
+        except Exception as e:
+            print(f"Error building pokedex ID index: {e}")
+            _pokedex_id_index = {}
+    return _pokedex_id_index
+
+
+
+def _load_poke_species_cache():
+    """Load poke_species CSV once and cache it in memory"""
+    global _poke_species_cache
+    if _poke_species_cache is None:
+        try:
+            _poke_species_cache = {}
+            with open(poke_species_path, mode="r", encoding="utf-8") as file:
+                reader = csv.DictReader(file)
+                for row in reader:
+                    species_id = safe_int(row.get("id", 0))
+                    _poke_species_cache[species_id] = row
+        except Exception as e:
+            print(f"Error loading poke_species cache: {e}")
+            _poke_species_cache = {}
+    return _poke_species_cache
+
+# === ADDITIONAL CACHES ===
+_pokemon_csv_cache = None
+_stats_csv_cache = None
+_poke_evo_cache = None
+_moves_cache = None
+
+def _load_pokemon_csv_cache():
+    """Cache pokemon.csv to avoid repeated file I/O"""
+    global _pokemon_csv_cache
+    if _pokemon_csv_cache is None:
+        try:
+            _pokemon_csv_cache = {}
+            with open(pokemon_csv, mode="r", encoding="utf-8") as file:
+                reader = csv.DictReader(file)
+                for row in reader:
+                    actual_id = safe_int(row.get("id"))
+                    _pokemon_csv_cache[actual_id] = row
+        except Exception as e:
+            print(f"Error loading pokemon CSV cache: {e}")
+            _pokemon_csv_cache = {}
+    return _pokemon_csv_cache
+
+def _load_stats_csv_cache():
+    """Cache stats.csv to avoid repeated file I/O. Keyed by pokemon_id."""
+    global _stats_csv_cache
+    if _stats_csv_cache is None:
+        try:
+            _stats_csv_cache = {}
+            with open(stats_csv, mode="r", encoding="utf-8") as file:
+                reader = csv.DictReader(file)
+                for row in reader:
+                    actual_id = safe_int(row.get("pokemon_id"))
+                    stat_id = safe_int(row.get("stat_id"))
+                    effort = safe_int(row.get("effort"))
+                    if actual_id not in _stats_csv_cache:
+                        _stats_csv_cache[actual_id] = {}
+                    _stats_csv_cache[actual_id][stat_id] = effort
+        except Exception as e:
+            print(f"Error loading stats CSV cache: {e}")
+            _stats_csv_cache = {}
+    return _stats_csv_cache
+
+def _load_poke_evo_cache():
+    """Cache pokemon evolution data to avoid repeated file I/O"""
+    global _poke_evo_cache
+    if _poke_evo_cache is None:
+        try:
+            _poke_evo_cache = []
+            with open(poke_evo_path, mode="r", encoding="utf-8") as file:
+                reader = csv.DictReader(file)
+                _poke_evo_cache = list(reader)
+        except Exception as e:
+            print(f"Error loading poke evo cache: {e}")
+            _poke_evo_cache = []
+    return _poke_evo_cache
+
+def _load_moves_cache():
+    """Cache moves.json to avoid repeated file I/O"""
+    global _moves_cache
+    if _moves_cache is None:
+        try:
+            with open(moves_file_path, "r", encoding="utf-8") as json_file:
+                _moves_cache = json.load(json_file)
+        except Exception as e:
+            print(f"Error loading moves cache: {e}")
+            _moves_cache = {}
+    return _moves_cache
+
+# === POKEMON NAME & DESCRIPTION CACHES ===
+_pokemon_names_cache = {}  # {(pokemon_id, language): name}
+_pokemon_descriptions_cache = {}  # {(species_id, language): description}
+
+def _load_pokemon_names_csv():
+    """Load all pokemon names into cache on first access"""
+    global _pokemon_names_cache
+    if not _pokemon_names_cache:
+        try:
+            with open(pokenames_lang_path, mode="r", encoding="utf-8") as file:
+                reader = csv.DictReader(file)
+                for row in reader:
+                    species_id = safe_int(row.get("pokemon_species_id"))
+                    lang_id = safe_int(row.get("local_language_id"))
+                    name = row.get("name", "")
+                    _pokemon_names_cache[(species_id, lang_id)] = name
+        except Exception as e:
+            print(f"Error loading pokemon names cache: {e}")
+    return _pokemon_names_cache
+
+def _load_pokemon_descriptions_csv():
+    """Load all pokemon descriptions into cache on first access"""
+    global _pokemon_descriptions_cache
+    if not _pokemon_descriptions_cache:
+        try:
+            with open(pokedesc_lang_path, mode="r", encoding="utf-8") as file:
+                reader = csv.DictReader(file)
+                for row in reader:
+                    species_id = safe_int(row.get("species_id"))
+                    lang_id = safe_int(row.get("language_id"))
+                    flavor_text = row.get("flavor_text", "").replace("\x0c", " ")
+                    
+                    # Store all descriptions for this (species_id, lang_id) pair
+                    key = (species_id, lang_id)
+                    if key not in _pokemon_descriptions_cache:
+                        _pokemon_descriptions_cache[key] = []
+                    _pokemon_descriptions_cache[key].append(flavor_text)
+        except Exception as e:
+            print(f"Error loading pokemon descriptions cache: {e}")
+    return _pokemon_descriptions_cache
+
+def clear_pokedex_caches():
+    """Call this when pokedex data is updated or session ends"""
+    global _pokedex_cache, _poke_species_cache, _pokemon_csv_cache, _stats_csv_cache, _poke_evo_cache, _moves_cache, _pokedex_id_index, _pokemon_names_cache, _pokemon_descriptions_cache
+    _pokedex_cache = None
+    _poke_species_cache = None
+    _pokemon_csv_cache = None
+    _stats_csv_cache = None
+    _poke_evo_cache = None
+    _moves_cache = None
+    _pokedex_id_index = None
+    _pokemon_names_cache = {}
+    _pokemon_descriptions_cache = {}
+
 def _normalize_language_id(language):
     """Map unsupported language IDs to a fallback that exists in data files."""
     try:
@@ -120,9 +317,11 @@ def special_pokemon_names_for_min_level(name):
 
 def search_pokedex(pokemon_name, variable):
     try:
+        if isinstance(pokemon_name, str):
+            pokemon_name = pokemon_name.lower()
+            
         pokemon_name = special_pokemon_names_for_min_level(pokemon_name)
-        with open(str(pokedex_path), "r", encoding="utf-8") as json_file:
-            pokedex_data = json.load(json_file)
+        pokedex_data = _load_pokedex_cache()  # Use cache instead of file I/O
 
         # Create a copy of the name to modify
         current_name = pokemon_name
@@ -134,15 +333,24 @@ def search_pokedex(pokemon_name, variable):
                 var = pokemon_info.get(variable)
                 if var is not None:
                     return var
+            
+            # 2. Try normalized version (no spaces, hyphens, or apostrophes)
+            # This handles cases like "Venusaur-Mega" matching "venusaurmega"
+            normalized_name = current_name.replace(" ", "").replace("-", "").replace("'", "")
+            if normalized_name in pokedex_data:
+                pokemon_info = pokedex_data[normalized_name]
+                var = pokemon_info.get(variable)
+                if var is not None:
+                    return var
 
-            # 2. If no match, find the last hyphen
+            # 3. If no match, find the last hyphen to try the base form
             last_hyphen_index = current_name.rfind("-")
 
-            # 3. If no hyphen is found, we can't shorten the name anymore.
+            # 4. If no hyphen is found, we can't shorten the name anymore.
             if last_hyphen_index == -1:
                 break
 
-            # 4. Remove the suffix and try again in the next iteration
+            # 5. Remove the suffix and try again in the next iteration
             current_name = current_name[:last_hyphen_index]
 
         # 5. If no match was ever found, return an empty list
@@ -156,23 +364,91 @@ def search_pokedex(pokemon_name, variable):
         )
         return []
 
+    except Exception as e:
+        show_warning_with_traceback(
+            parent=mw,
+            exception=e,
+            message=f"Error searching for pokemon '{pokemon_name}'",
+        )
+        return []
+
 def search_pokedex_by_id(species_id):
-    with open(str(pokedex_path), "r", encoding="utf-8") as json_file:
-        pokedex_data = json.load(json_file)
-        for entry_name, attributes in pokedex_data.items():
-            if attributes["species_id"] == species_id:
-                return entry_name
+    id_index = _load_pokedex_id_index()  # Use index for O(1) lookup instead of O(n)
+    return id_index.get(safe_int(species_id), "Pokémon not found")
+
+def format_lore_name(name: str) -> str:
+    """Transform internal hyphenated names into lore-accurate ones (e.g. Venusaur-Mega -> Mega Venusaur)."""
+    if not name or not isinstance(name, str):
+        return name
+        
+    # Order matters: check more specific ones first
+    if "-Mega-X" in name:
+        return "Mega " + name.replace("-Mega-X", " X")
+    if "-Mega-Y" in name:
+        return "Mega " + name.replace("-Mega-Y", " Y")
+    if "-Mega-Z" in name:
+        return "Mega " + name.replace("-Mega-Z", " Z")
+    
+    replacements = {
+        "-Mega": "Mega ",
+        "-Gmax": "Gigantamax ",
+        "-Alola": "Alolan ",
+        "-Galar": "Galarian ",
+        "-Paldea": "Paldean ",
+        "-Hisui": "Hisuian ",
+        "-Primal": "Primal ",
+        "-Origin": "Origin ",
+        "-Therian": "Therian ",
+    }
+    
+    for suffix, prefix in replacements.items():
+        if suffix in name:
+            base = name.replace(suffix, "")
+            return prefix + base
+            
+    return name
+
+def get_pretty_name_for_id(species_id):
+    """Get the official pretty name (e.g. Mega Venusaur) for an ID."""
+    try:
+        pokedex_data = _load_pokedex_cache()
+        internal_name = search_pokedex_by_id(species_id)
+        if internal_name in pokedex_data:
+            raw_name = pokedex_data[internal_name].get("name", internal_name.capitalize())
+            return format_lore_name(raw_name)
+    except:
+        pass
     return "Pokémon not found"
 
+def get_pretty_name_for_name(pokemon_name):
+    """Get the official pretty name (e.g. Mega Venusaur) from an internal name."""
+    try:
+        pokedex_data = _load_pokedex_cache()
+        # Use aggressive normalization (isalnum) to match cache keys
+        internal_name = "".join(c for c in str(pokemon_name).lower() if c.isalnum())
+        
+        if internal_name in pokedex_data:
+            raw_name = pokedex_data[internal_name].get("name", pokemon_name.title())
+            return format_lore_name(raw_name)
+            
+        # Fallback: try removing common suffixes if direct match fails
+        for suffix in ["-mega", "-gmax", "-alola", "-galar", "-hisui", "-paldea"]:
+            if suffix in pokemon_name.lower():
+                base_name = pokemon_name.lower().replace(suffix, "").replace("-", "")
+                if base_name in pokedex_data:
+                    raw_base = pokedex_data[base_name].get("name", base_name.capitalize())
+                    return format_lore_name(pokemon_name.title())
+    except:
+        pass
+    return format_lore_name(str(pokemon_name).replace("-", " ").title())
 
 def get_mainpokemon_evo(pokemon_name):
-    with open(str(pokedex_path), "r", encoding="utf-8") as json_file:
-        pokedex_data = json.load(json_file)
-        if pokemon_name not in pokedex_data:
-            return []
-        pokemon_info = pokedex_data[pokemon_name]
-        evolutions = pokemon_info.get("evos", [])
-        return evolutions
+    pokedex_data = _load_pokedex_cache()  # Use cache instead of file I/O
+    if pokemon_name not in pokedex_data:
+        return []
+    pokemon_info = pokedex_data[pokemon_name]
+    evolutions = pokemon_info.get("evos", [])
+    return evolutions
 
 def get_growth_rate(species_id: int) -> str:
     # Coerce string callers to int so they match the integer CSV ids; a
@@ -181,13 +457,10 @@ def get_growth_rate(species_id: int) -> str:
         species_id = int(species_id)
     except (TypeError, ValueError):
         raise ValueError(species_id)
-    with open(poke_species_path, mode="r", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
-
-        for row in reader:
-            if int(row["id"]) == species_id:
-                return GROWTH_RATES[int(row["growth_rate_id"])]
-
+    cache = _load_poke_species_cache()
+    row = cache.get(species_id)
+    if row:
+        return GROWTH_RATES[int(row["growth_rate_id"])]
     raise ValueError(species_id)
 
 def get_base_experience(actual_id: int) -> int:
@@ -197,48 +470,40 @@ def get_base_experience(actual_id: int) -> int:
         actual_id = int(actual_id)
     except (TypeError, ValueError):
         raise ValueError(actual_id)
-    with open(pokemon_csv, mode="r", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
-
-        for row in reader:
-            if int(row["id"]) == actual_id:
-                return int(row["base_experience"])
-
+    cache = _load_pokemon_csv_cache()
+    row = cache.get(actual_id)
+    if row:
+        return int(row["base_experience"])
     raise ValueError(actual_id)
 
 def get_effort_values(actual_id: int) -> dict[str, int]:
     evs = {}
-    with open(stats_csv, mode="r", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
-
-        for row in reader:
-            if int(row["pokemon_id"]) == actual_id:
-                evs[STATS[int(row["stat_id"])]] = int(row["effort"])
+    stats_data = _load_stats_csv_cache()  # Use cache instead of file I/O
+    
+    pokemon_stats = stats_data.get(actual_id, {})
+    for stat_id, effort in pokemon_stats.items():
+        if stat_id in STATS:
+            evs[STATS[stat_id]] = effort
 
     return {
-        "hp": evs["hp"],
-        "attack": evs["attack"],
-        "defense": evs["defense"],
-        "special-attack": evs["special-attack"],
-        "special-defense": evs["special-defense"],
-        "speed": evs["speed"],
+        "hp": evs.get("hp", 0),
+        "attack": evs.get("attack", 0),
+        "defense": evs.get("defense", 0),
+        "special-attack": evs.get("special-attack", 0),
+        "special-defense": evs.get("special-defense", 0),
+        "speed": evs.get("speed", 0),
     }
 
 def get_pokemon_descriptions(species_id, language):
-    descriptions = []  # Initialize an empty list to store matching descriptions
+    """Get pokemon descriptions from cache. Returns a random description if multiple exist."""
     language = _normalize_language_id(language)
-    with open(pokedesc_lang_path, mode="r", encoding="utf-8") as csv_file:
-        csv_reader = csv.DictReader(csv_file)
-        for row in csv_reader:
-            if (
-                int(row["species_id"]) == species_id
-                and int(row["language_id"]) == language
-            ):
-                # Replace control characters for readability, if necessary
-                flavor_text = row["flavor_text"].replace("\x0c", " ")
-                descriptions.append(
-                    flavor_text
-                )  # Add the matching description to the list
+    
+    # Load all descriptions into cache
+    all_descriptions = _load_pokemon_descriptions_csv()
+    
+    # Get descriptions for this species and language
+    descriptions = all_descriptions.get((species_id, language), [])
+    
     if descriptions:
         if len(descriptions) > 1:
             return random.choice(descriptions)
@@ -249,17 +514,36 @@ def get_pokemon_descriptions(species_id, language):
 
 
 def get_pokemon_diff_lang_name(pokemon_id: int, language: int):
+    """Get pokemon name in specified language from cache."""
     language = _normalize_language_id(language)
-    with open(pokenames_lang_path, mode="r", encoding="utf-8") as file:
-        reader = csv.reader(file)
-        next(reader)  # Skip the header row if there is one
-        for row in reader:
-            # Assuming the CSV structure is: pokemon_species_id,local_language_id,name,genus
-            species_id, lang_id, name, genus = row
-            if int(species_id) == pokemon_id and int(lang_id) == language:
-                return name
-    return "No Translation in this language"  # Return None if no match is found
+    
+    # Load all names into cache
+    names_cache = _load_pokemon_names_csv()
+    
+    # Look up the name
+    name = names_cache.get((pokemon_id, language))
+    if name:
+        return format_lore_name(name)
+        
+    # If not found and it's a form ID (>= 10000), fall back to species ID
+    if pokemon_id >= 10000:
+        internal_name = search_pokedex_by_id(pokemon_id)
+        # Load pokedex data to get the raw name with suffix (e.g. Meowth-Alola)
+        pokedex_data = _load_pokedex_cache()
+        info = pokedex_data.get(internal_name, {})
+        raw_pokedex_name = info.get("name", "")
+        
+        species_id = safe_int(info.get("species_id"))
+        if species_id:
+            base_lang_name = names_cache.get((species_id, language))
+            if base_lang_name:
+                # If we have a hyphenated name, reconstruct with translated base
+                if "-" in raw_pokedex_name:
+                    suffix = raw_pokedex_name[raw_pokedex_name.find("-"):]
+                    return format_lore_name(base_lang_name + suffix)
+                return format_lore_name(base_lang_name)
 
+    return "No Translation in this language"
 
 def extract_ids_from_file():
     try:
@@ -279,109 +563,32 @@ from .learnset_retrieval import get_all_pokemon_moves  # noqa: F401 — re-expor
 def find_details_move(move_name: str) -> dict:
     """
     Retrieve the move details for the given move.
-    Due to the JSON objects structure it attempts various normalization steps to improve matching.
-
-    Args:
-        move_name (str): The name of the move to search for.
-
-    Returns:
-        dict: A dictionary containing information about the given move if found. If not it tries falling back to 
-        either tackle (preferred) or None.
     """
     try:
-        with open(moves_file_path, "r", encoding="utf-8") as json_file:
-            moves_data = json.load(json_file)
-            move = moves_data.get(
-                move_name.lower()
-            )  # Use get() to access the move by name
-            if move:
-                return move
-            move_name = move_name.replace(" ", "")
-            move = moves_data.get(move_name.lower())
-            if move:
-                return move
-            move_name = move_name.replace("-", "")
-            move = moves_data.get(move_name.lower())
-            if move:
-                return move
-            else:
-                move = moves_data.get("tackle")
-                showWarning(f"Move '{move_name}' not found. Returning default move 'tackle'.")
-                return move
+        moves_data = _load_moves_cache()  # Use cache instead of file I/O
+        move = moves_data.get(move_name.lower())
+        if move:
+            return move
+        move_name = move_name.replace(" ", "")
+        move = moves_data.get(move_name.lower())
+        if move:
+            return move
+        move_name = move_name.replace("-", "")
+        move = moves_data.get(move_name.lower())
+        if move:
+            return move
+        else:
+            move = moves_data.get("tackle")
+            showWarning(f"Move '{move_name}' not found. Returning default move 'tackle'.")
+            return move
                 
-    except FileNotFoundError as f:
-        show_warning_with_traceback(
-            parent=mw,
-            exception=f,
-            message="The is an issue finding moves.json."
-        )
-        return None
-        
     except Exception as e:
         show_warning_with_traceback(
             parent=mw,
             exception=e,
             message=f"There is an issue in find_details_move for move: {move_name}. Returning to default move 'tackle'."
         )
-        return moves_data.get("tackle")
-
-
-def get_pokemon_evolution_data_all(pokemon_id, file_path=poke_evo_path):
-    # Open the CSV file
-    with open(file_path, mode="r", encoding="utf-8") as file:
-        reader = csv.DictReader(file, delimiter="\t")  # Assuming tab-separated values
-        for row in reader:
-            # Check if the current row's Pokémon ID matches the requested ID
-            if int(row["id"]) == pokemon_id:
-                # Return the data as a dictionary for the specific Pokémon ID
-                evolution_data = {
-                    "id": row["id"],
-                    "evolved_species_id": row["evolved_species_id"],
-                    "evolution_trigger_id": row["evolution_trigger_id"],
-                    "trigger_item_id": row["trigger_item_id"],
-                    "minimum_level": row["minimum_level"],
-                    "gender_id": row["gender_id"],
-                    "location_id": row["location_id"],
-                    "held_item_id": row["held_item_id"],
-                    "time_of_day": row["time_of_day"],
-                    "known_move_id": row["known_move_id"],
-                    "known_move_type_id": row["known_move_type_id"],
-                    "minimum_happiness": row["minimum_happiness"],
-                    "minimum_beauty": row["minimum_beauty"],
-                    "minimum_affection": row["minimum_affection"],
-                    "relative_physical_stats": row["relative_physical_stats"],
-                    "party_species_id": row["party_species_id"],
-                    "party_type_id": row["party_type_id"],
-                    "trade_species_id": row["trade_species_id"],
-                    "needs_overworld_rain": row["needs_overworld_rain"],
-                    "turn_upside_down": row["turn_upside_down"],
-                }
-
-                # Add the evolution trigger ID description
-                evolution_trigger_map = {
-                    1: "level-up",
-                    2: "trade",
-                    3: "use-item",
-                    4: "shed",
-                    5: "spin",
-                    6: "tower-of-darkness",
-                    7: "tower-of-waters",
-                    8: "three-critical-hits",
-                    9: "take-damage",
-                    10: "other",
-                    11: "agile-style-move",
-                    12: "strong-style-move",
-                    13: "recoil-damage",
-                }
-
-                # trigger_id = int(row['evolution_trigger_id'])
-                # evolution_data['evolution_trigger_description'] = evolution_trigger_map.get(trigger_id, "Unknown Trigger ID")
-
-                return evolution_data
-
-        # Return None if the Pokémon ID is not found
-        return None
-
+        return moves_data.get("tackle") if moves_data else None
 
 def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
     """
@@ -446,6 +653,49 @@ def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
     return None
 
 
+def get_time_of_day():
+    """Return the current time of day as 'day' or 'night' self-contained without friendship_evolution dependency."""
+    try:
+        from datetime import datetime, timedelta, timezone
+        from ..singletons import settings_obj
+        
+        # Check if settings_obj exists and is fully initialized
+        if settings_obj is None:
+            return "day"
+            
+        offset_str = settings_obj.get("evolution.timezone_offset", "auto")
+        if offset_str == "auto":
+            moment = datetime.now()
+        else:
+            try:
+                offset_hours = float(offset_str)
+                tz = timezone(timedelta(hours=offset_hours))
+                moment = datetime.now(tz)
+            except Exception:
+                moment = datetime.now()
+                
+        hour = moment.hour
+        
+        def coerce_hour(val, default):
+            try:
+                return max(0, min(23, int(float(val))))
+            except Exception:
+                return default
+                
+        day_start = coerce_hour(settings_obj.get("evolution.day_start_hour", 6), 6)
+        night_start = coerce_hour(settings_obj.get("evolution.night_start_hour", 18), 18)
+        
+        return "day" if day_start <= hour < night_start else "night"
+    except Exception:
+        # Fallback to local system time in case of any exception/import error
+        try:
+            from datetime import datetime
+            hour = datetime.now().hour
+            return "day" if 6 <= hour < 18 else "night"
+        except Exception:
+            return "day"
+
+
 # get pokemon name for next evolution from csv species
 # get pokemon id from name
 # get from pokemon_evolutions.csv with pokemon evo id the evo trigger id and evolution min_level or item_id
@@ -456,11 +706,11 @@ def check_evolution_for_pokemon(
 ):
     """
     Check if a Pokémon evolves using a specific item or level condition.
+    Prioritizes pokedex.json for regional forms, falling back to species CSVs.
 
     Args:
-        individual_id (int): The ID of the individual Pokémon.
-        id (int): A unique identifier for the Pokémon instance.
-        pokemon_id (int): The ID of the Pokémon species.
+        individual_id (str): The ID of the individual Pokémon.
+        pokemon_id (int): The ID of the Pokémon species/form.
         level (int): The current level of the Pokémon.
         evo_window (object): The evolution window object for displaying evolution information.
         everstone (bool): Whether the Pokémon is holding an Everstone. Defaults to False.
@@ -471,42 +721,74 @@ def check_evolution_for_pokemon(
         int | None: The evolution ID if an evolution is found, or None otherwise.
     """
     if not everstone and not evolution_rejected:
-        try:
-            # Get the evolution data for the given Pokémon ID
-            possible_evos = pokemon_evolves_from_id(
-                pokemon_id
-            )  # Ensure this returns a list of possible evolutions
-            if not possible_evos:
-                # showWarning("No possible evolutions found")
-                return None
+        # Get the evolution data for the given Pokémon ID
+        possible_evos = pokemon_evolves_from_id(
+            pokemon_id
+        )  # Ensure this returns a list of possible evolutions
+        if not possible_evos:
+            # showWarning("No possible evolutions found")
+            return None
 
-            # Check each possible evolution
+    try:
+        current_time = get_time_of_day()
+
+        # 1. PRIORITY CHECK: Form-aware evolution from pokedex.json
+        # This handles Alolan/Galarian etc. forms that aren't in the base species CSV
+        pokedex_data = _load_pokedex_cache()
+        internal_name = search_pokedex_by_id(pokemon_id)
+        
+        if internal_name in pokedex_data:
+            details = pokedex_data[internal_name]
+            evo_list = details.get("evos")
+            
+            if evo_list:
+                for target_evo_name in evo_list:
+                    normalized_target = target_evo_name.lower().replace(" ", "").replace("-", "").replace("'", "")
+                    target_data = pokedex_data.get(normalized_target) or pokedex_data.get(target_evo_name.lower())
+                    
+                    if target_data:
+                        # In Smogon-style pokedex.json, evoLevel is stored on the evolved species
+                        min_level = safe_int(target_data.get("evoLevel"))
+                        
+                        if min_level > 0 and level >= min_level:
+                            condition = (target_data.get("evoCondition") or "").lower()
+                            time_of_day = None
+                            if "day" in condition:
+                                time_of_day = "day"
+                            elif "night" in condition:
+                                time_of_day = "night"
+
+                            if time_of_day is None or time_of_day == current_time:
+                                evo_id = safe_int(target_data.get("actual_id") or target_data.get("species_id"))
+                                if evo_id > 0:
+                                    evo_window.ask_pokemon_evo(individual_id, pokemon_id, evo_id)
+                                    return evo_id
+
+        # 2. LEGACY FALLBACK: Species CSV lookup
+        # This covers base forms and legacy data mapping
+        possible_evos = pokemon_evolves_from_id(pokemon_id)
+        if possible_evos:
             for evos in possible_evos:
-                evo_data = get_pokemon_evolution_data(int(evos))
-                # Only handle level-up evolutions (trigger_id == 1)
-                if evo_data and int(evo_data.get("evolution_trigger_id", 0)) == 1:
-                    min_level_str = evo_data.get("minimum_level", "")
-                    # Only proceed if min_level_str represents a valid integer
-                    if not min_level_str or not str(min_level_str).isdigit():
-                        continue  # Skip this evolution if minimum_level is missing or not a number
-                    min_level = int(min_level_str)
-                    if min_level <= level:
-                        evo_window.ask_pokemon_evo(
-                            individual_id, pokemon_id, int(evos)
-                        )
-                        return int(evos)  # Return the evolution ID
+                evo_data = get_pokemon_evolution_data(safe_int(evos))
+                if evo_data and safe_int(evo_data.get("evolution_trigger_id", 0)) == 1:
+                    min_level = safe_int(evo_data.get("minimum_level"))
+                    if min_level > 0 and level >= min_level:
+                        time_raw = (evo_data.get("time_of_day") or "").strip().lower()
+                        time_of_day = time_raw if time_raw in ("day", "night") else None
 
-            # If no evolutions fit the criteria
-            # showWarning("No fitting evolution found for the given level")
-            return None
-        except Exception as e:
-            show_warning_with_traceback(
-                parent=mw,
-                exception=e,
-                message=f"Error checking evolution for Pokémon ID {pokemon_id}",
-            )
-            return None
-    else:
+                        if time_of_day is None or time_of_day == current_time:
+                            evo_window.ask_pokemon_evo(individual_id, pokemon_id, safe_int(evos))
+                            return safe_int(evos)
+
+        return None
+
+        
+    except Exception as e:
+        show_warning_with_traceback(
+            parent=mw,
+            exception=e,
+            message=f"Error checking evolution for Pokémon ID {pokemon_id}",
+        )
         return None
 
 
@@ -527,20 +809,18 @@ def pokemon_evolves_from_id(pokemon_id):
     """
     evolves_from_ids = []  # List to hold the ids of Pokémon that evolve into the given ID
     try:
-        # Open the CSV file
-        with open(poke_species_path, mode="r", encoding="utf-8") as file:
-            reader = csv.DictReader(file)
-            for row in reader:
-                # Safely check if 'evolves_from_species_id' exists and is a valid number
-                evolves_from_species_id = row.get("evolves_from_species_id", None)
-                if evolves_from_species_id:
-                    try:
-                        # Convert to integer and compare
-                        if int(evolves_from_species_id) == int(pokemon_id):
-                            evolves_from_ids.append(row["id"])
-                    except ValueError:
-                        # Handle the case where 'evolves_from_species_id' is not a valid integer
-                        continue
+        poke_species_data = _load_poke_species_cache()  # Use cache instead of file I/O
+        for row in poke_species_data.values():
+            # Safely check if 'evolves_from_species_id' exists and is a valid number
+            evolves_from_species_id = row.get("evolves_from_species_id", None)
+            if evolves_from_species_id:
+                try:
+                    # Convert to integer and compare
+                    if safe_int(evolves_from_species_id) == safe_int(pokemon_id):
+                        evolves_from_ids.append(row["id"])
+                except ValueError:
+                    # Handle the case where 'evolves_from_species_id' is not a valid integer
+                    continue
 
         # Return the list of evolves_from_species_id or an empty list if no matches
         # if evolves_from_ids:
@@ -553,7 +833,7 @@ def pokemon_evolves_from_id(pokemon_id):
         # Use a more specific error message
         show_warning_with_traceback(
             exception=e,
-            message="Error in pokemon_evolves_from_id function: {e} with pokemon_id {pokemon_id}",
+            message=f"Error in pokemon_evolves_from_id function: {e} with pokemon_id {pokemon_id}",
         )
         return []
 
@@ -563,30 +843,23 @@ def get_pokemon_evolution_data(pokemon_id):
     evolution_data = None  # Initialize variable to hold evolution data
 
     try:
-        # Open the CSV file
-        with open(poke_evo_path, mode="r", encoding="utf-8") as file:
-            reader = csv.DictReader(file)
-
-            # Search for the given Pokémon ID in the evolved_species_id column
-            for row in reader:
-                try:
-                    # Compare the evolved_species_id with the given pokemon_id (as an integer)
-                    if int(row["evolved_species_id"]) == int(pokemon_id):
-                        # If a match is found, store the evolution data
-                        evolution_data = row
-                        break  # No need to continue once we find a match
-                except ValueError:
-                    # Handle case where evolved_species_id is not a valid integer
-                    continue
+        poke_evo_data = _load_poke_evo_cache()  # Use cache instead of file I/O
+        # Search for the given Pokémon ID in the evolved_species_id column
+        for row in poke_evo_data:
+            try:
+                # Compare the evolved_species_id with the given pokemon_id (as an integer)
+                if safe_int(row.get("evolved_species_id")) == safe_int(pokemon_id):
+                    # If a match is found, store the evolution data
+                    evolution_data = row
+                    break  # No need to continue once we find a match
+            except ValueError:
+                # Handle case where evolved_species_id is not a valid integer
+                continue
 
         # Check if evolution data was found, log a message if not
         if not evolution_data:
-            showWarning(f"No evolution data found for Pokémon ID '{pokemon_id}'")
+            # showWarning(f"No evolution data found for Pokémon ID '{pokemon_id}'")
             pass
-    except FileNotFoundError as e:
-        show_warning_with_traceback(
-            parent=mw, exception=e, message=f"The evolution data file was not found."
-        )
     except Exception as e:
         show_warning_with_traceback(
             parent=mw,
@@ -649,6 +922,42 @@ def rows_for_key_in_table(column_name, value, file_path):
             reader = csv.DictReader(file)
             for row in reader:
                 # Use .get() to prevent KeyError if the column doesn't exist.
+                if row.get(column_name) and str(row[column_name]) == str(value):
+                    matching_rows.append(row)
+    except FileNotFoundError:
+        print(f"Error: The file {file_path} does not exist.")
+    except Exception as e:
+        print(f"Error: {e}")
+
+    return matching_rows
+
+
+def rows_for_key_in_table(column_name, value, file_path):
+    """Return *all* rows where ``column_name`` equals ``value`` (as a list).
+
+    Unlike :func:`check_key_in_table`, which stops at the first hit, this returns
+    every matching row. The bundled ``pokemon_evolution.csv`` stores one row per
+    evolution *method*, so a single evolved species can appear on several rows —
+    e.g. Sylveon has a blank row and a separate ``minimum_happiness`` row, and
+    Persian has both a level-up row and a friendship row. Callers that need to
+    pick the row matching a specific method (level vs. friendship) must see them
+    all rather than just whichever comes first in the file.
+
+    Args:
+        column_name: The column to match on.
+        value: The value to match (compared as a string, like
+            :func:`check_key_in_table`).
+        file_path: Path to the CSV file to scan.
+
+    Returns:
+        A list of matching rows (each a ``dict``); empty on no match or error.
+    """
+    matching_rows = []
+    try:
+        with open(file_path, mode="r", encoding="utf-8") as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                # Use .get() to prevent KeyError if the column doesn't exist.
                 if column_name in row and str(row[column_name]) == str(value):
                     matching_rows.append(row)
     except FileNotFoundError:
@@ -671,16 +980,10 @@ def return_name_for_id(pokemon_id):
         None: If no matching Pokémon is found or an error occurs.
     """
     try:
-        # Open the CSV file
-        with open(pokemon_csv, mode="r", encoding="utf-8") as file:
-            reader = csv.DictReader(file)  # Read the file as a dictionary
-
-            # Search for the value in the "id" column
-            for row in reader:
-                if int(row["id"]) == int(
-                    pokemon_id
-                ):  # Convert CSV id to integer for comparison
-                    return row["identifier"]  # Return the identifier from the CSV row
+        cache = _load_pokemon_csv_cache()
+        row = cache.get(int(pokemon_id))
+        if row:
+            return row["identifier"]
 
         # Log a message if the item is not found
         showWarning(f"Name for Pokemon with ID '{pokemon_id}' not found in the CSV.")
@@ -707,16 +1010,10 @@ def return_id_for_item_name(item_name):
         None: If no matching item is found or an error occurs.
     """
     try:
-        # Open the CSV file
-        with open(csv_file_items_cost, mode="r", encoding="utf-8") as file:
-            reader = csv.DictReader(file)  # Read the file as a dictionary
-
-            # Search for the value in the "identifier" column
-            for row in reader:
-                if (
-                    row["identifier"] == item_name
-                ):  # Check if the identifier matches the item name
-                    return row["id"]  # Return the id from the CSV row
+        cache = _load_items_cost_cache()
+        for row in cache:
+            if row["identifier"] == item_name:
+                return row["id"]
 
         # Log a message if the item is not found
         showWarning("warning", f"Item '{item_name}' not found in the CSV.")

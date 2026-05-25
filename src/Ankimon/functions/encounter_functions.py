@@ -55,10 +55,24 @@ from ..singletons import (
 )
 
 
+_percentages_cache = {
+    'percentages': None,
+    'total_reviews': None,
+    'trainer_level': None,
+    'main_pokemon_level': None,
+}
+
 def modify_percentages(total_reviews, daily_average, trainer_level):
     """
     Modify Pokémon encounter percentages based on total reviews, trainer level, and main Pokémon level.
     """
+    # Performance Guard: Skip recalculation if inputs haven't changed
+    if (_percentages_cache['percentages'] is not None and
+        _percentages_cache['total_reviews'] == total_reviews and
+        _percentages_cache['trainer_level'] == trainer_level and
+        _percentages_cache['main_pokemon_level'] == main_pokemon.level):
+        return _percentages_cache['percentages']
+
     # Start with the base percentages
     percentages = {"Baby": 2, "Legendary": 0.5, "Mythical": 0.2, "Normal": 92.3, "Ultra": 5}
 
@@ -107,6 +121,13 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
     total = sum(percentages.values())
     for tier in percentages:
         percentages[tier] = (percentages[tier] / total) * 100 if total > 0 else 0
+
+    # Cache and return
+    _percentages_cache['percentages'] = percentages
+    _percentages_cache['total_reviews'] = total_reviews
+    _percentages_cache['trainer_level'] = trainer_level
+    _percentages_cache['main_pokemon_level'] = main_pokemon.level
+    
     # this function gets called maybe 10 times per battle round, which is concerning.
     # it could be rewritten to run ONLY when the change in review ratio is detected.
     return percentages
