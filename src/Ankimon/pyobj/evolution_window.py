@@ -316,6 +316,13 @@ class EvoWindow(QWidget):
                 )
                 return
 
+            # Explicitly mark the pre-evolved state as caught before changing the ID
+            if hasattr(db, 'mark_as_caught'):
+                try:
+                    db.mark_as_caught(int(prevo_id))
+                except Exception as e:
+                    self.logger.log("warning", f"Failed to mark prevo as caught: {e}")
+
             pokemon["name"] = evo_name.capitalize()
             # Carry the nickname across evolution: only rewrite it when the user
             # never set a custom one (it still matched the pre-evolution species
