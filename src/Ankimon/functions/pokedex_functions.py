@@ -649,7 +649,7 @@ def rows_for_key_in_table(column_name, value, file_path):
             reader = csv.DictReader(file)
             for row in reader:
                 # Use .get() to prevent KeyError if the column doesn't exist.
-                if row.get(column_name) and str(row[column_name]) == str(value):
+                if column_name in row and str(row[column_name]) == str(value):
                     matching_rows.append(row)
     except FileNotFoundError:
         print(f"Error: The file {file_path} does not exist.")
