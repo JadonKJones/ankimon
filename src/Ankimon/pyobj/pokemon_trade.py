@@ -587,6 +587,14 @@ class PokemonTrade:
             
             try:
                 db.replace_pokemon(new_pokemon, self.individual_id)
+                # The traded-away Pokémon's individual_id is now gone from the DB
+                # (it was swapped for new_pokemon's fresh id). If it was the
+                # XP-Share target, clear the setting so xp_share_gain_exp doesn't
+                # later look up a missing Pokémon and crash. str() guards against
+                # any id type mismatch in the compare.
+                settings_obj = getattr(mw, "settings_obj", None)
+                if settings_obj is not None and str(settings_obj.get("trainer.xp_share")) == str(self.individual_id):
+                    settings_obj.set("trainer.xp_share", None)
             except Exception as e:
                 show_warning_with_traceback(parent=self.parent_window, exception=e, message=f"An error occurred during trade: {e}")
 
