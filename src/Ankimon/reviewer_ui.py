@@ -97,6 +97,9 @@ def cycle_team_pokemon():
             return
         
         try:
+            # Save the outgoing pokemon's state before switching
+            save_main_pokemon(main_pokemon)
+
             # Update main_pokemon with new data
             from .functions.pokedex_functions import search_pokedex_by_id, search_pokedex
             pokemon_name = search_pokedex_by_id(pokemon_data.get("id", 1))
@@ -104,8 +107,15 @@ def cycle_team_pokemon():
             
             main_pokemon.update_stats(**pokemon_data)
             main_pokemon.max_hp = main_pokemon.calculate_max_hp()
-            main_pokemon.hp = main_pokemon.max_hp
             
+            # Load current HP from the database instead of healing to max
+            main_pokemon.hp = pokemon_data.get('hp', main_pokemon.max_hp)
+
+            # Clear volatile status so they don't carry over
+            main_pokemon.volatile_status = set()
+            main_pokemon.battle_status = 'fighting'
+
+            # Save the incoming pokemon to register it in the database
             save_main_pokemon(main_pokemon)
         except Exception as e:
             print(f"Error updating pokemon: {e}")
