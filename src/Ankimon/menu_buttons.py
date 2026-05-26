@@ -262,6 +262,13 @@ def create_menu_actions(
     # Show the Settings window
     mw.pokemenu.addAction(config_action)
 
+    # Encounter Rate Simulator (dev tool — ported from BRRRR_Experimental)
+    if debug is True:
+        from .pyobj.encounter_simulator_dialog import EncounterSimulatorDialog
+        simulator_action = QAction("Encounter Rate Simulator", mw)
+        simulator_action.setMenuRole(QAction.MenuRole.NoRole)
+        simulator_action.triggered.connect(lambda: EncounterSimulatorDialog(addon_dir).show())
+        help_menu.addAction(simulator_action)
     if debug is True:
         tracker_window_action = QAction(mw.translator.translate("ankimon_tracker_button"), mw)
         tracker_window_action.setMenuRole(QAction.MenuRole.NoRole)

@@ -69,11 +69,195 @@ _percentages_cache = {
     'main_pokemon_level': None,
 }
 
+# ==============================================================================
+# ENCOUNTER OVERHAUL CONFIGURATION (DEVELOPER TOGGLES & BALANCING COEFFICIENTS)
+# ==============================================================================
+USE_OVERHAUL_ENCOUNTER_SYSTEM = False
+
+# EP Mastery Index Components Weights
+EP_WEIGHT_TRAINER_LEVEL = 0.25     # T_norm weight
+EP_WEIGHT_DEX_COMPLETION = 0.25    # D_norm weight
+EP_WEIGHT_SESSION_PROGRESS = 0.25  # S_norm weight
+EP_WEIGHT_CORE_TEAM_POWER = 0.25   # C_norm weight
+
+# Scale limits for EP components
+TRAINER_LEVEL_CAP = 50.0
+CORE_TEAM_POWER_CAP = 16000.0
+
+# Master Rarity Parameters: (Beginner Base Rate, Master Max Rate)
+OVERHAUL_TIER_PARAMS = {
+    "Normal": (96.98, 84.70),
+    "Baby": (2.30, 3.0),
+    "Ultra": (0.35, 4.50),
+    "Gmax": (0.15, 2.50),
+    "Starter": (0.10, 1.80),
+    "Mega": (0.05, 1.50),
+    "Legendary": (0.05, 1.50),
+    "Mythical": (0.02, 0.50)
+}
+
+# Main Pokémon level thresholds for unlocking tiers
+OVERHAUL_LEVEL_THRESHOLDS = {
+    "Ultra": 30,
+    "Legendary": 50,
+    "Mega": 60,
+    "Gmax": 65,
+    "Mythical": 75,
+    "Starter": 80,
+}
+
+# Dry spell thresholds for independent pity (Pi reviews)
+OVERHAUL_PITY_THRESHOLDS = {
+    "Ultra": 100,
+    "Gmax": 150,
+    "Starter": 175,
+    "Mega": 200,
+    "Legendary": 200,
+    "Mythical": 400
+}
+
+# Pity divisor/scaling factor (the quadratic denominator)
+OVERHAUL_PITY_DIVISOR = 50.0
+# ==============================================================================
+
+
+def calculate_mastery_index_ep(total_reviews, daily_average, trainer_level):
+    """
+    Calculate the Encounter Potential (EP) Mastery Index (0.0 to 100.0).
+    EP = 0.30 * T_norm + 0.30 * D_norm + 0.25 * S_norm + 0.15 * C_norm
+    """
+    # 1. T_norm (Trainer Level)
+    level_val = trainer_level if trainer_level is not None else 1
+    t_norm = min((level_val / TRAINER_LEVEL_CAP) * 100.0, 100.0)
+
+    # 2. D_norm (Pokedex Completion)
+    d_norm = 0.0
+    try:
+        from ..functions.pokedex_functions import _load_pokedex_cache
+        pokedex_data = _load_pokedex_cache()
+        if pokedex_data and hasattr(mw, 'ankimon_db') and mw.ankimon_db:
+            caught_ids = mw.ankimon_db.get_all_pokemon_ids()
+            caught_species = set()
+            for pid in caught_ids:
+                if pid >= 10000:
+                    name = search_pokedex_by_id(pid)
+                    if name and name != "Pokémon not found":
+                        base_id = safe_int(search_pokedex(name, "species_id"))
+                        if base_id:
+                            caught_species.add(base_id)
+                else:
+                    caught_species.add(pid)
+                    
+            unique_species_in_game = {safe_int(v.get("species_id")) for v in pokedex_data.values() if v.get("species_id")}
+            unique_species_in_game.discard(0)
+            total_species_count = len(unique_species_in_game) if unique_species_in_game else 1
+            d_norm = (len(caught_species & unique_species_in_game) / total_species_count) * 100.0
+    except Exception as e:
+        print(f"[Ankimon] Warning: Error calculating Dex Completion for EP: {e}")
+
+    # 3. S_norm (Session Progress)
+    daily_goal = daily_average if daily_average and daily_average > 0 else 100.0
+    s_norm = min((total_reviews / daily_goal) * 100.0, 100.0)
+
+    # 4. C_norm (Core Team Power)
+    c_norm = 0.0
+    try:
+        if hasattr(mw, 'ankimon_db') and mw.ankimon_db:
+            all_pkmn = mw.ankimon_db.get_all_pokemon()
+            if all_pkmn:
+                cps = []
+                for p in all_pkmn:
+                    try:
+                        cp = calculate_cp_from_dict(p)
+                        cps.append(cp)
+                    except Exception:
+                        pass
+                cps.sort(reverse=True)
+                top_6 = cps[:6]
+                avg_top_6_cp = sum(top_6) / len(top_6) if top_6 else 0.0
+                c_norm = min((avg_top_6_cp / CORE_TEAM_POWER_CAP) * 100.0, 100.0)
+    except Exception as e:
+        print(f"[Ankimon] Warning: Error calculating Core Team Power for EP: {e}")
+
+    ep = (EP_WEIGHT_TRAINER_LEVEL * t_norm) + \
+         (EP_WEIGHT_DEX_COMPLETION * d_norm) + \
+         (EP_WEIGHT_SESSION_PROGRESS * s_norm) + \
+         (EP_WEIGHT_CORE_TEAM_POWER * c_norm)
+    return max(0.0, min(ep, 100.0))
+
+def load_pity_trackers() -> dict:
+    default_pity = {
+        "Ultra": 0,
+        "Gmax": 0,
+        "Starter": 0,
+        "Mega": 0,
+        "Legendary": 0,
+        "Mythical": 0
+    }
+    try:
+        if hasattr(mw, 'ankimon_db') and mw.ankimon_db:
+            stored = mw.ankimon_db.get_user_data("ankimon_pity_trackers")
+            if isinstance(stored, dict):
+                for k in default_pity:
+                    if k in stored:
+                        default_pity[k] = int(stored[k])
+    except Exception as e:
+        print(f"[Ankimon] Warning: Error loading pity trackers: {e}")
+    return default_pity
+
+def save_pity_trackers(trackers: dict):
+    try:
+        if hasattr(mw, 'ankimon_db') and mw.ankimon_db:
+            mw.ankimon_db.set_user_data("ankimon_pity_trackers", trackers)
+    except Exception as e:
+        print(f"[Ankimon] Warning: Error saving pity trackers: {e}")
+
+def _modify_percentages_overhaul(total_reviews, daily_average, trainer_level):
+    """
+    Overhaul calculation for encounter percentages based on the Mastery Index (EP),
+    Exponential Rarity Scaling, and Independent Pity systems.
+    """
+    ep = calculate_mastery_index_ep(total_reviews, daily_average, trainer_level)
+
+    # Generate base weights
+    weights = {}
+    for tier, (base, max_val) in OVERHAUL_TIER_PARAMS.items():
+        weights[tier] = base * ((max_val / base) ** (ep / 100.0))
+
+    # Apply level thresholds
+    level_val = main_pokemon.level if main_pokemon and hasattr(main_pokemon, 'level') and main_pokemon.level is not None else 1
+    for tier, limit in OVERHAUL_LEVEL_THRESHOLDS.items():
+        if level_val < limit:
+            weights[tier] = 0.0
+
+    # Apply pity multipliers
+    pity_trackers = load_pity_trackers()
+    for tier in OVERHAUL_PITY_THRESHOLDS:
+        p_i = pity_trackers.get(tier, 0)
+        t_i = OVERHAUL_PITY_THRESHOLDS[tier]
+        multiplier = 1.0 + (max(0, (p_i - t_i) / OVERHAUL_PITY_DIVISOR)) ** 2
+        weights[tier] = weights[tier] * multiplier
+
+    # Force Starter to 0 (Comment to activate starters)
+    #weights["Starter"] = 0.0
+
+    total_sum = sum(weights.values())
+    percentages = {}
+    for tier in weights:
+        percentages[tier] = (weights[tier] / total_sum) * 100.0 if total_sum > 0.0 else 0.0
+
+    return percentages
+
 def modify_percentages(total_reviews, daily_average, trainer_level):
     """
     Modify Pokémon encounter percentages based on total reviews, trainer level, and main Pokémon level.
     """
+    if USE_OVERHAUL_ENCOUNTER_SYSTEM:
+        return _modify_percentages_overhaul(total_reviews, daily_average, trainer_level)
+
+    # Legacy System
     # Performance Guard: Skip recalculation if inputs haven't changed
+    # Check if cache is valid
     if (_percentages_cache['percentages'] is not None and
         _percentages_cache['total_reviews'] == total_reviews and
         _percentages_cache['trainer_level'] == trainer_level and
@@ -291,8 +475,128 @@ def generate_random_pokemon(
     if main_pokemon_level == 100:
         wild_pokemon_lvl = 100
 
-    # First, we draw a random, valid pokemon id.
-    pokemon_id, tier = choose_random_pkmn_from_tier()
+    from ..utils import load_collected_pokemon_ids
+    collected_ids = load_collected_pokemon_ids()
+
+    # FALLBACK HIERARCHY
+    # If a rolled tier fails, try the next one in the list.
+    TIER_ORDER = ["Mythical", "Mega", "Legendary", "Gmax", "Ultra", "Starter", "Normal", "Baby"]
+    
+    selected_pokemon_id = None
+    selected_tier = None
+    
+    # 1. Select the initial tier based on probabilities
+    initial_tier = get_tier(ankimon_tracker_obj.get_total_reviews(), trainer_card.level)
+    
+    # Find starting point in fallback order
+    try:
+        start_idx = TIER_ORDER.index(initial_tier)
+    except ValueError:
+        start_idx = TIER_ORDER.index("Normal")
+        
+    # Iterate through tiers starting from the rolled one
+    for i in range(start_idx, len(TIER_ORDER)):
+        current_tier = TIER_ORDER[i]
+        
+        tier_ids = get_all_pokemon_in_tier(current_tier)
+        full_pool = []
+        for pokemon_id in tier_ids:
+            name = search_pokedex_by_id(pokemon_id)
+            if not name or name == "Pokémon not found":
+                continue
+                
+            # Guard 1: Generation check
+            if not check_id_ok(pokemon_id):
+                continue
+
+            # Guard 2: Level check
+            min_allowed_pokemon_lvl = check_min_generate_level(str(name.lower()))
+            if wild_pokemon_lvl < min_allowed_pokemon_lvl:
+                continue
+
+            # Guard 3: Mega/Gmax base ownership
+            if current_tier in ("Mega", "Gmax") and not _player_owns_base_form(pokemon_id, collected_ids):
+                continue
+
+            # Guard 4: Prerequisite check
+            if not _meets_prerequisites(pokemon_id, collected_ids):
+                continue
+                
+            full_pool.append(pokemon_id)
+            
+        if not full_pool:
+            continue
+
+        active_region = settings_obj.get("misc.active_region")
+        boosted_pool = []
+
+        if active_region:
+            boosted_gens = get_boosted_gens_for_region(active_region)
+            
+            for pid in full_pool:
+                if get_base_species_gen(pid) in boosted_gens:
+                    if pid not in boosted_pool:
+                        boosted_pool.append(pid)
+                
+                # Add eligible regional variants for the active region
+                options = encounter_data.REGIONAL_FORM_LOOKUP.get(pid, {}).get(active_region, [])
+                for opt in options:
+                    if check_id_ok(opt) and opt not in boosted_pool:
+                        boosted_pool.append(opt)
+
+        if active_region and boosted_pool:
+            chance = get_boosted_pool_chance(active_region)
+            if random.random() < chance:
+                selected_pokemon_id = random.choice(boosted_pool)
+            else:
+                selected_pokemon_id = random.choice(full_pool)
+        else:
+            selected_pokemon_id = random.choice(full_pool)
+
+        selected_tier = current_tier
+        break
+            
+    # Final fallback if somehow everything failed (e.g. settings restrict all IDs)
+    if not selected_pokemon_id:
+        selected_pokemon_id = 19 # Rattata
+        selected_tier = "Normal"
+
+    # --- Regional form resolution ---
+    # Apply 7%-per-variant resolution for base species.
+    if selected_pokemon_id < 10000:
+        region_forms = encounter_data.REGIONAL_FORM_LOOKUP.get(selected_pokemon_id, {})
+        num_eligible = 0
+        for variants in region_forms.values():
+            for v in variants:
+                if check_id_ok(v):
+                    num_eligible += 1
+        
+        if num_eligible > 0:
+            if random.random() < 0.07 * num_eligible:
+                sub = get_regional_substitute(selected_pokemon_id)
+                if sub:
+                    selected_pokemon_id = sub
+    # --- End form resolution ---
+
+    pokemon_id = selected_pokemon_id
+    tier = selected_tier
+
+    # Update pity trackers if overhaul system is active
+    if USE_OVERHAUL_ENCOUNTER_SYSTEM:
+        try:
+            pity_trackers = load_pity_trackers()
+            rare_tiers = ["Ultra", "Gmax", "Starter", "Mega", "Legendary", "Mythical"]
+            if tier in rare_tiers:
+                pity_trackers[tier] = 0
+                for rt in rare_tiers:
+                    if rt != tier:
+                        pity_trackers[rt] += 1
+            else:
+                for rt in rare_tiers:
+                    pity_trackers[rt] += 1
+            save_pity_trackers(pity_trackers)
+        except Exception as e:
+            print(f"[Ankimon] Warning: Error updating pity trackers in generate_random_pokemon: {e}")
     name = search_pokedex_by_id(pokemon_id)
     min_allowed_pokemon_lvl = check_min_generate_level(
         str(name.lower())
