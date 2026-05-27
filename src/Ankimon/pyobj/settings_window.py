@@ -543,18 +543,18 @@ class SettingsWindow(QMainWindow):
         if "trainer.cash_reward_interval" in self.config:
             orig_val = self.config["trainer.cash_reward_interval"]
             if isinstance(orig_val, int):
-                new_val = max(5, min(250, orig_val))
+                new_val = max(5, min(100, orig_val))
                 if new_val != orig_val:
                     self.config["trainer.cash_reward_interval"] = new_val
                     has_adjustments = True
-                    adjustment_msg += f"- Reward Interval: Adjusted to {new_val} (Range: 5-250)\n"
+                    adjustment_msg += f"- Reward Interval: Adjusted to {new_val} (Range: 5-100)\n"
 
         # 2. Validate Amount & Cheat Threshold
         if "trainer.cash_reward_amount" in self.config:
             orig_amount = self.config["trainer.cash_reward_amount"]
             if isinstance(orig_amount, int):
                 # Hard bounds
-                new_amount = max(10, min(2000, orig_amount))
+                new_amount = max(10, min(400, orig_amount))
                 
                 # Cheat Threshold
                 interval = self.config.get("trainer.cash_reward_interval", 10)
@@ -567,7 +567,7 @@ class SettingsWindow(QMainWindow):
                     adjustment_msg += f"- Reward Amount: Capped at {new_amount}¥ to maintain the maximum daily economy limit.\n"
                 elif new_amount != orig_amount:
                     has_adjustments = True
-                    adjustment_msg += f"- Reward Amount: Adjusted to {new_amount}¥ (Range: 10-2,000)\n"
+                    adjustment_msg += f"- Reward Amount: Adjusted to {new_amount}¥ (Range: 10-400)\n"
                 
                 self.config["trainer.cash_reward_amount"] = new_amount
 
