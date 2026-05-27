@@ -8,6 +8,7 @@ The program is not usable until migration completes.
 import json
 import shutil
 import traceback
+import uuid
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QProgressBar, QTextEdit, QApplication, QMessageBox
@@ -153,6 +154,8 @@ class MigrationDialog(QDialog):
                     total = len(pokemon_list)
                     for i, pokemon in enumerate(pokemon_list):
                         if self.cancelled: break
+                        if "individual_id" not in pokemon:
+                            pokemon["individual_id"] = str(uuid.uuid4())
                         if self.db.save_pokemon(pokemon):
                             stats["pokemon"] += 1
                         if total > 0 and (i % 20 == 0 or i == total - 1):
@@ -175,6 +178,8 @@ class MigrationDialog(QDialog):
                         main_data = json.load(f)
                     if main_data:
                         main_pokemon = main_data[0] if isinstance(main_data, list) else main_data
+                        if "individual_id" not in main_pokemon:
+                            main_pokemon["individual_id"] = str(uuid.uuid4())
                         if self.db.save_main_pokemon(main_pokemon):
                             stats["main"] = 1
                     self._update_progress(55, "✓ Migrated main Pokemon")
@@ -189,11 +194,17 @@ class MigrationDialog(QDialog):
                         if self.cancelled: break
                         if not item: continue
                         
-                        item_name = item.get("item") or item.get("item_name") or item.get("name")
-                        quantity = item.get("quantity", item.get("amount", 1))
+                        if isinstance(item, str):
+                            item_name = item
+                            quantity = 1
+                            extra_data = None
+                        else:
+                            item_name = item.get("item") or item.get("item_name") or item.get("name")
+                            quantity = item.get("quantity", item.get("amount", 1))
+                            extra_data = item
                         
                         if item_name:
-                            self.db.add_item(item_name, quantity, extra_data=item, commit=False)
+                            self.db.add_item(item_name, quantity, extra_data=extra_data, commit=False)
                             stats["items"] += 1
                     
                     # Final commit for items
@@ -236,6 +247,9 @@ class MigrationDialog(QDialog):
                 self._update_progress(66, "Migrating team...")
                 with open(self.team_path, 'r', encoding='utf-8') as f:
                     team_list = json.load(f)
+                for member in team_list:
+                    if "individual_id" not in member:
+                        member["individual_id"] = str(uuid.uuid4())
                 if self.db.save_team(team_list):
                     stats["team"] = len(team_list)
                 self._update_progress(70, f"✓ Migrated team ({stats['team']} members)")
