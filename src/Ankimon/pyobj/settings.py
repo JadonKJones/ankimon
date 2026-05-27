@@ -73,6 +73,10 @@ DEFAULT_CONFIG = {
     "trainer.sprite": "ash",
     "trainer.id": 0,
     "trainer.cash": 0,
+    "trainer.cash_reward_amount": 100,
+    "trainer.cash_reward_interval": 10,
+    "trainer.cash_earned_today": 0,
+    "trainer.last_cash_reward_date": "",
     "trainer.level": 0,
     "trainer.xp": 0,
 }
@@ -163,6 +167,9 @@ class Settings:
             "gui.reviewer_text_message_box_time",
             "gui.xp_bar_location",
             "misc.discord_rich_presence_text",
+            "trainer.cash_reward_amount",
+            "trainer.cash_reward_interval",
+            "trainer.cash_earned_today",
         ]
         for key in keys_to_coerce_to_int:
             if key in config and isinstance(config[key], str):
