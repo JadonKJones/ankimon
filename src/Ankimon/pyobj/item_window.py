@@ -536,8 +536,18 @@ class ItemWindow(QWidget):
             with open(poke_evo_path, mode='r', newline='', encoding='utf-8') as evo_file:
                 reader = csv.DictReader(evo_file)
                 for row in reader:
-                    if row['evolution_trigger_id'] == '3':
-                        item_id = row['trigger_item_id']
+                    # Use-item evolutions (trigger 3) consume trigger_item_id.
+                    if row.get('evolution_trigger_id') == '3':
+                        item_id = row.get('trigger_item_id')
+                        if item_id:
+                            evolution_item_ids.add(item_id)
+                    # Trade-with-held-item evolutions (trigger 2) need held_item_id.
+                    # Ankimon has no trading, so surface the held item as usable
+                    # (e.g. Metal Coat -> Steelix/Scizor, Deep Sea Tooth/Scale ->
+                    # Huntail/Gorebyss, Dragon Scale -> Kingdra, King's Rock ->
+                    # Politoed/Slowking).
+                    elif row.get('evolution_trigger_id') == '2':
+                        item_id = row.get('held_item_id')
                         if item_id:
                             evolution_item_ids.add(item_id)
 

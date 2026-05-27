@@ -324,6 +324,9 @@ class SettingsWindow(QMainWindow):
                     "Show Text Message Box in Reviewer",
                     "Message Box Display Time",
                     "Review Based Damage",
+                    "Friendship & Time Evolution",
+                    "Auto-detect Time Zone",
+                    "Time Zone UTC Offset",
                 ],
                 "subgroups": {
                     "Fight Hotkeys": {
@@ -532,7 +535,6 @@ class SettingsWindow(QMainWindow):
                     self.config[key] = str(new_text)
             elif isinstance(widget, QButtonGroup):
                 self.config[key] = widget.checkedButton().text() == "Enabled"
-
         # --- Enforce bounds for cash rewards ---
         has_adjustments = False
         adjustment_msg = ""
@@ -578,6 +580,23 @@ class SettingsWindow(QMainWindow):
             QMessageBox.warning(self, "Settings Adjusted", 
                               f"Some values were adjusted to stay within fair play bounds:\n\n{adjustment_msg}")
 
+        # Check if all generations are disabled
+        gen_keys = [f"misc.gen{i}" for i in range(1, 10)]
+        all_gens_disabled = all(self.config.get(key) is False for key in gen_keys)
+
+        if all_gens_disabled:
+            showWarning("You must enable at least one Pokémon generation. Reverting generations to previous settings.")
+            for key in gen_keys:
+                # Revert logic
+                self.config[key] = self.original_config.get(key, True)
+                # Update UI widgets
+                if key in self.input_widgets and isinstance(self.input_widgets[key], QButtonGroup):
+                    group = self.input_widgets[key]
+                    for button in group.buttons():
+                        if button.text() == "Enabled" and self.config[key]:
+                            button.setChecked(True)
+                        elif button.text() == "Disabled" and not self.config[key]:
+                            button.setChecked(True)
 
         # Now that self.config is up-to-date, call the save callback
         self.save_config_callback(self.config)

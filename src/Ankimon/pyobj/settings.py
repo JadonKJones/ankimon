@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from aqt import mw
 from aqt.utils import showInfo
 from PyQt6.QtWidgets import (
@@ -20,6 +21,11 @@ DEFAULT_CONFIG = {
     "battle.daily_average": 100,
     "battle.card_max_time": 60,
     "battle.review_based_damage": True,
+    "evolution.friendship_time_enabled": True,
+    "evolution.day_start_hour": 6,
+    "evolution.night_start_hour": 18,
+    "evolution.timezone_auto": True,
+    "evolution.timezone_offset": 0.0,
     "controls.pokemon_buttons": True,
     "controls.defeat_key": "5",
     "controls.catch_key": "6",
@@ -121,6 +127,17 @@ class Settings:
                         try:
                             mw.ankimon_db.save_all_config(config)
                             print("Ankimon: Migrated config from config.obf to database")
+                            
+                            # Archive config.obf after successful migration
+                            try:
+                                backup_dir = user_path / "json"
+                                backup_dir.mkdir(exist_ok=True)
+                                dest = backup_dir / "config.obf"
+                                shutil.move(str(obfuscated_config_path), str(dest))
+                                print(f"Ankimon: Archived config.obf to {backup_dir}")
+                            except Exception as e:
+                                print(f"Ankimon: Failed to archive config.obf: {e}")
+                                
                         except Exception as e:
                             print(f"Ankimon: Failed to migrate config to database: {e}")
                             
@@ -158,12 +175,22 @@ class Settings:
 
     def save_config(self, config):
         from ..pyobj.ankimon_sync import AnkimonDataSync  # To reuse obfuscation logic
+        from ..pyobj.ankimon_sync import AnkimonDataSync  # To reuse obfuscation logic
 
+        # 1. Always save to database if available
+        if hasattr(mw, 'ankimon_db') and mw.ankimon_db is not None:
+            try:
+                mw.ankimon_db.save_all_config(config)
+                print("Ankimon: Saved config to database")
+            except Exception as e:
+                print(f"Ankimon: Failed to save config to database: {e}")
+
+        # 2. Also save to obfuscated file if it exists (legacy support)
+        # Note: Once moved to the archive folder, this will no longer be found here.
         obfuscated_config_path = user_path / "config.obf"
-        sync_handler = AnkimonDataSync()  # Re-use the obfuscation logic
-
         if obfuscated_config_path.is_file():
             try:
+                sync_handler = AnkimonDataSync()  # Re-use the obfuscation logic
                 obfuscated_str = sync_handler._obfuscate_data(config)
                 warning_message = "WARNING: This file contains important user data. Do not delete or modify this file. Deleting or modifying this file can lead to data loss in the Ankimon addon.\n---"
                 file_content = warning_message + obfuscated_str
@@ -171,14 +198,6 @@ class Settings:
                     f.write(file_content)
             except Exception as e:
                 print(f"Ankimon: Could not save obfuscated config: {e}")
-        else:
-            # Check if database has config
-            if hasattr(mw, 'ankimon_db') and mw.ankimon_db is not None:
-                try:
-                    mw.ankimon_db.save_all_config(config)
-                    print("Ankimon: Saved config to database")
-                except Exception as e:
-                    print(f"Ankimon: Failed to save config to database: {e}")
 
         self.config = config
         self.compute_gui_config()

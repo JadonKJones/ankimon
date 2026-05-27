@@ -34,6 +34,9 @@ from ..functions.pokedex_functions import (
     search_pokedex,
     search_pokedex_by_id,
 )
+from ..functions.friendship_evolution import (
+    check_friendship_evolution_for_pokemon,
+)
 from ..pyobj.error_handler import show_warning_with_traceback
 from ..functions.trainer_functions import xp_share_gain_exp
 from ..functions.badges_functions import check_for_badge, receive_badge
@@ -52,10 +55,24 @@ from ..singletons import (
 )
 
 
+_percentages_cache = {
+    'percentages': None,
+    'total_reviews': None,
+    'trainer_level': None,
+    'main_pokemon_level': None,
+}
+
 def modify_percentages(total_reviews, daily_average, trainer_level):
     """
     Modify Pokémon encounter percentages based on total reviews, trainer level, and main Pokémon level.
     """
+    # Performance Guard: Skip recalculation if inputs haven't changed
+    if (_percentages_cache['percentages'] is not None and
+        _percentages_cache['total_reviews'] == total_reviews and
+        _percentages_cache['trainer_level'] == trainer_level and
+        _percentages_cache['main_pokemon_level'] == main_pokemon.level):
+        return _percentages_cache['percentages']
+
     # Start with the base percentages
     percentages = {"Baby": 2, "Legendary": 0.5, "Mythical": 0.2, "Normal": 92.3, "Ultra": 5}
 
@@ -104,6 +121,13 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
     total = sum(percentages.values())
     for tier in percentages:
         percentages[tier] = (percentages[tier] / total) * 100 if total > 0 else 0
+
+    # Cache and return
+    _percentages_cache['percentages'] = percentages
+    _percentages_cache['total_reviews'] = total_reviews
+    _percentages_cache['trainer_level'] = trainer_level
+    _percentages_cache['main_pokemon_level'] = main_pokemon.level
+    
     # this function gets called maybe 10 times per battle round, which is concerning.
     # it could be rewritten to run ONLY when the change in review ratio is detected.
     return percentages
@@ -266,9 +290,21 @@ def generate_random_pokemon(
     min_allowed_pokemon_lvl = check_min_generate_level(
         str(name.lower())
     )  # Gets the minimum allowed level for that pokemon given its stage of evolution
+
+    attempts = 0
     while (not check_id_ok(pokemon_id)) or (
         wild_pokemon_lvl < min_allowed_pokemon_lvl
     ):  # We keep drawing a random pokemon until we find a valid one
+        attempts += 1
+        if attempts >= 500:
+            showWarning("Failed to generate a valid Pokémon after 500 attempts. Please ensure at least one generation is enabled in the settings. Defaulting to Rattata.")
+            pokemon_id = 19
+            name = search_pokedex_by_id(19)
+            tier = "Normal"
+            min_allowed_pokemon_lvl = check_min_generate_level(str(name.lower()))
+            wild_pokemon_lvl = max(wild_pokemon_lvl, min_allowed_pokemon_lvl)
+            break
+
         pokemon_id, tier = choose_random_pkmn_from_tier()
         name = search_pokedex_by_id(pokemon_id)
         min_allowed_pokemon_lvl = check_min_generate_level(
@@ -445,6 +481,11 @@ def save_main_pokemon_progress(
     elif main_pokemon.level != 100:
         main_pokemon.xp += exp
         level_cap = 100
+    else:
+        # Cap is on AND the main is already level 100: no XP is granted, but
+        # level_cap must still be defined or the while-loop condition below
+        # raises NameError and crashes every post-cap defeat (upstream #402).
+        level_cap = 100
     try:
         db = mw.ankimon_db
         main_pokemon_data = db.get_main_pokemon()
@@ -456,6 +497,7 @@ def save_main_pokemon_progress(
             parent=mw, exception=e, message="Error loading main pokemon data."
         )
         return
+    evolution_prompted = False
     while int(
         find_experience_for_level(
             main_pokemon.growth_rate,
@@ -486,14 +528,23 @@ def save_main_pokemon_progress(
             main_pokemon.level,
             evo_window,
             main_pokemon.everstone,
+            getattr(main_pokemon, "evolution_rejected", False),
         )
         if evo_id is not None:
+            evolution_prompted = True
+            # None-safe: return_name_for_id can return None for an unknown id, so
+            # fall back to the numeric id instead of crashing on .capitalize()
+            # (mirrors the friendship-evolution path below).
+            evo_display_name = return_name_for_id(evo_id)
+            evo_display_name = (
+                evo_display_name.capitalize() if evo_display_name else str(evo_id)
+            )
             logger.log_and_showinfo(
                 "info",
                 translator.translate(
                     "pokemon_about_to_evolve",
                     main_pokemon_name=main_pokemon.name,
-                    evo_pokemon_name=return_name_for_id(evo_id).capitalize(),
+                    evo_pokemon_name=evo_display_name,
                     main_pokemon_level=main_pokemon.level,
                 ),
             )
@@ -589,10 +640,35 @@ def save_main_pokemon_progress(
         main_pokemon.ev["spe"] += ev_yield["speed"]
         main_pokemon.invalidate_cp_cache()
         mainpkmndata["current_hp"] = int(main_pokemon.hp)
+        # Friendship is uncapped — it keeps climbing past MAX_FRIENDSHIP (400) so
+        # players can flex a super-bonded Pokémon. The progress bar still fills at
+        # MAX_FRIENDSHIP; the raw number above it is what keeps growing.
         main_pokemon.friendship += random.randint(5, 9)
-        if main_pokemon.friendship > 255:
-            main_pokemon.friendship = 255
         mainpkmndata["friendship"] = main_pokemon.friendship
+        if not evolution_prompted:
+            friendship_evo_id = check_friendship_evolution_for_pokemon(
+                main_pokemon.individual_id,
+                main_pokemon.id,
+                evo_window,
+                main_pokemon.everstone,
+                main_pokemon.friendship,
+                getattr(main_pokemon, "evolution_rejected", False),
+            )
+            if friendship_evo_id is not None:
+                evolution_prompted = True
+                # return_name_for_id can return None (and pop a spurious warning)
+                # if the evolved id is missing from the name CSV; guard the
+                # .capitalize() so a data gap can't crash the defeat flow.
+                friendship_evo_name = return_name_for_id(friendship_evo_id)
+                friendship_evo_name = friendship_evo_name.capitalize() if friendship_evo_name else str(friendship_evo_id)
+                logger.log_and_showinfo(
+                    "info",
+                    translator.translate(
+                        "pokemon_about_to_evolve_friendship",
+                        main_pokemon_name=main_pokemon.name,
+                        evo_pokemon_name=friendship_evo_name,
+                    ),
+                )
         main_pokemon.pokemon_defeated += 1
         mainpkmndata["pokemon_defeated"] = main_pokemon.pokemon_defeated
         if hasattr(main_pokemon, "tier"):
