@@ -134,6 +134,7 @@ def test_evolve_pokemon_consumes_stone():
          
          mock_db.update_item_quantity.assert_called_once_with("fire-stone", -1)
 
+
 def test_evolve_pokemon_nickname_update():
     evo_win_module = sys.modules["Ankimon.pyobj.evolution_window"]
     mock_db = MagicMock()
