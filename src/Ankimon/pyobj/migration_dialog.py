@@ -8,6 +8,7 @@ The program is not usable until migration completes.
 import json
 import shutil
 import traceback
+import uuid
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QProgressBar, QTextEdit, QApplication, QMessageBox
@@ -153,6 +154,12 @@ class MigrationDialog(QDialog):
                     total = len(pokemon_list)
                     for i, pokemon in enumerate(pokemon_list):
                         if self.cancelled: break
+
+                        if isinstance(pokemon, (str, int)):
+                            pokemon = {"id": int(pokemon)}
+                        if not pokemon.get("individual_id"):
+                            pokemon["individual_id"] = str(uuid.uuid4())
+
                         if self.db.save_pokemon(pokemon):
                             stats["pokemon"] += 1
                         if total > 0 and (i % 20 == 0 or i == total - 1):
@@ -175,6 +182,12 @@ class MigrationDialog(QDialog):
                         main_data = json.load(f)
                     if main_data:
                         main_pokemon = main_data[0] if isinstance(main_data, list) else main_data
+
+                        if isinstance(main_pokemon, (str, int)):
+                            main_pokemon = {"id": int(main_pokemon)}
+                        if not main_pokemon.get("individual_id"):
+                            main_pokemon["individual_id"] = str(uuid.uuid4())
+
                         if self.db.save_main_pokemon(main_pokemon):
                             stats["main"] = 1
                     self._update_progress(55, "✓ Migrated main Pokemon")
@@ -236,6 +249,13 @@ class MigrationDialog(QDialog):
                 self._update_progress(66, "Migrating team...")
                 with open(self.team_path, 'r', encoding='utf-8') as f:
                     team_list = json.load(f)
+
+                for i in range(len(team_list)):
+                    if isinstance(team_list[i], (str, int)):
+                        team_list[i] = {"id": int(team_list[i])}
+                    if not team_list[i].get("individual_id"):
+                        team_list[i]["individual_id"] = str(uuid.uuid4())
+
                 if self.db.save_team(team_list):
                     stats["team"] = len(team_list)
                 self._update_progress(70, f"✓ Migrated team ({stats['team']} members)")
@@ -249,6 +269,12 @@ class MigrationDialog(QDialog):
                 total_hist = len(history_list)
                 for i, pokemon in enumerate(history_list):
                     if self.cancelled: break
+
+                    if isinstance(pokemon, (str, int)):
+                        pokemon = {"id": int(pokemon)}
+                    if not pokemon.get("individual_id"):
+                        pokemon["individual_id"] = str(uuid.uuid4())
+
                     if self.db.add_to_history(pokemon):
                         stats["history"] += 1
                     if total_hist > 0 and (i % 50 == 0 or i == total_hist - 1):
