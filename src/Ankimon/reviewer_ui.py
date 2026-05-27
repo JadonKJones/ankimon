@@ -97,8 +97,8 @@ def cycle_team_pokemon():
             return
         
         try:
-            # Save the outgoing pokemon's state before switching
-            save_main_pokemon(main_pokemon)
+            # Save the outgoing pokemon's state to the collection before switching
+            mw.ankimon_db.save_pokemon(main_pokemon.to_dict())
 
             # Update main_pokemon with new data
             from .functions.pokedex_functions import search_pokedex_by_id, search_pokedex
