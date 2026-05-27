@@ -464,7 +464,10 @@ class ItemWindow(QWidget):
             self.delete_item(item_name)
             self.starter_window.display_fossil_pokemon(fossil_id, fossil_poke_name)
             from ..singletons import pokemon_pc
-            pokemon_pc.refresh_pokemon_grid()
+            from ..utils import is_alive
+
+            if is_alive(pokemon_pc):
+                pokemon_pc.refresh_pokemon_grid()
         except Exception as e:
             show_warning_with_traceback(parent=self, exception=e, message=f"Error using fossil item '{item_name}'")
         finally:
