@@ -100,9 +100,28 @@ def on_review_card(*args):
             if not check_for_badge(achievements, 6):
                 receive_badge(6, achievements)
 
-        if total_reviews == settings_obj.get("battle.daily_average"):
-            settings_obj.set("trainer.cash", settings_obj.get("trainer.cash") + 200)
-            trainer_card.cash = settings_obj.get("trainer.cash")
+        try:
+            cash_interval = int(settings_obj.get("trainer.cash_reward_interval", 10))
+            cash_amount = int(settings_obj.get("trainer.cash_reward_amount", 100))
+        except (ValueError, TypeError):
+            cash_interval = 10
+            cash_amount = 100
+        if cash_interval > 0 and total_reviews % cash_interval == 0:
+            from datetime import date
+            today_str = str(date.today())
+            last_reward_date = settings_obj.get("trainer.last_cash_reward_date", "")
+            cash_earned_today = settings_obj.get("trainer.cash_earned_today", 0)
+            
+            if last_reward_date != today_str:
+                cash_earned_today = 0
+                settings_obj.set("trainer.last_cash_reward_date", today_str)
+            
+            if cash_earned_today < 400:
+                allowed_amount = min(cash_amount, 400 - cash_earned_today)
+                if allowed_amount > 0:
+                    settings_obj.set("trainer.cash_earned_today", cash_earned_today + allowed_amount)
+                    settings_obj.set("trainer.cash", settings_obj.get("trainer.cash") + allowed_amount)
+                    trainer_card.cash = settings_obj.get("trainer.cash")
 
         if battle_sounds == True and ankimon_tracker_obj.general_card_count_for_battle == 1:
             play_sound(enemy_pokemon.id, settings_obj)
