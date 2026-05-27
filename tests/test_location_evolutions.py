@@ -247,5 +247,3 @@ def test_mrmime_evolution_distinction():
     assert result_galar["ready"] is True
     assert result_galar["evo_id"] == 866
     assert "Mr. Rime" in result_galar["evo_name"]
-
-
