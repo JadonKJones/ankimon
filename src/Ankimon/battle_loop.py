@@ -100,9 +100,13 @@ def on_review_card(*args):
             if not check_for_badge(achievements, 6):
                 receive_badge(6, achievements)
 
-        cash_interval = int(settings_obj.get("trainer.cash_reward_interval"))
-        cash_amount = int(settings_obj.get("trainer.cash_reward_amount"))
-        if total_reviews % cash_interval == 0:
+        try:
+            cash_interval = int(settings_obj.get("trainer.cash_reward_interval", 10))
+            cash_amount = int(settings_obj.get("trainer.cash_reward_amount", 100))
+        except (ValueError, TypeError):
+            cash_interval = 10
+            cash_amount = 100
+        if cash_interval > 0 and total_reviews % cash_interval == 0:
             from datetime import date
             today_str = str(date.today())
             last_reward_date = settings_obj.get("trainer.last_cash_reward_date", "")

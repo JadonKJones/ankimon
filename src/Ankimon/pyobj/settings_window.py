@@ -541,24 +541,28 @@ class SettingsWindow(QMainWindow):
 
         # 1. Validate Interval
         if "trainer.cash_reward_interval" in self.config:
-            orig_val = self.config["trainer.cash_reward_interval"]
-            if isinstance(orig_val, int):
+            try:
+                orig_val = int(self.config["trainer.cash_reward_interval"])
                 new_val = max(5, min(100, orig_val))
                 if new_val != orig_val:
                     self.config["trainer.cash_reward_interval"] = new_val
                     has_adjustments = True
                     adjustment_msg += f"- Reward Interval: Adjusted to {new_val} (Range: 5-100)\n"
+            except (ValueError, TypeError):
+                self.config["trainer.cash_reward_interval"] = 10
 
         # 2. Validate Amount & Cheat Threshold
         if "trainer.cash_reward_amount" in self.config:
-            orig_amount = self.config["trainer.cash_reward_amount"]
-            if isinstance(orig_amount, int):
+            try:
+                orig_amount = int(self.config["trainer.cash_reward_amount"])
                 # Hard bounds
                 new_amount = max(10, min(400, orig_amount))
                 
                 # Cheat Threshold
-                interval = self.config.get("trainer.cash_reward_interval", 10)
+                interval = int(self.config.get("trainer.cash_reward_interval", 10))
                 daily_average = int(self.config.get("battle.daily_average", 100))
+                if daily_average <= 0:
+                    daily_average = 100
                 max_per_card = 400.0 / daily_average
                 max_allowed = max(1, int(interval * max_per_card))
                 if new_amount > max_allowed:
@@ -570,6 +574,8 @@ class SettingsWindow(QMainWindow):
                     adjustment_msg += f"- Reward Amount: Adjusted to {new_amount}¥ (Range: 10-400)\n"
                 
                 self.config["trainer.cash_reward_amount"] = new_amount
+            except (ValueError, TypeError):
+                self.config["trainer.cash_reward_amount"] = 100
 
         if has_adjustments:
             # Update UI widgets to reflect capped values
