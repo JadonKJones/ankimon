@@ -110,6 +110,7 @@ def cycle_team_pokemon():
             
             # Load current HP from the database instead of healing to max
             main_pokemon.hp = pokemon_data.get('hp', main_pokemon.max_hp)
+            main_pokemon.current_hp = main_pokemon.hp
 
             # Clear volatile status so they don't carry over
             main_pokemon.volatile_status = set()
