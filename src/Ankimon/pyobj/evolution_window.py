@@ -324,14 +324,8 @@ class EvoWindow(QWidget):
                     self.logger.log("warning", f"Failed to mark prevo as caught: {e}")
 
             pokemon["name"] = evo_name.capitalize()
-            # Carry the nickname across evolution: only rewrite it when the user
-            # never set a custom one (it still matched the pre-evolution species
-            # name). An empty nickname is left empty — every display path already
-            # falls back to pokemon["name"], which we just updated to the evolved
-            # species, so writing it here would dupe to "Umbreon (Umbreon)".
-            old_nickname = pokemon.get("nickname", "")
-            if old_nickname and old_nickname.strip().lower() == prevo_name.lower():
-                pokemon["nickname"] = evo_name.capitalize()
+            # (Nickname is updated further below, after the new ability is rolled,
+            # using the richer default-nickname detection.)
             pokemon["id"] = evo_id
             pokemon["type"] = search_pokedex(evo_name.lower(), "types")
             attacks = pokemon["attacks"]
@@ -378,7 +372,33 @@ class EvoWindow(QWidget):
                 pokemon["ability"] = random.choice(abilities_list)
             else:
                 pokemon["ability"] = self.translator.translate("no_ability")
-            
+
+            # Update the nickname only if it was never customised. We treat the
+            # nickname as a default when it's empty or matches the pre-evolution
+            # species' internal name OR its pretty name (normalised, so e.g.
+            # "Mime Jr." / "mime-jr" both count). Default nicknames advance to the
+            # evolved form's pretty name; a user-set custom nickname is preserved.
+            old_nickname = pokemon.get("nickname", "")
+
+            def normalize_nick(s):
+                return str(s).lower().replace(" ", "").replace("-", "").replace("'", "").replace(".", "").replace(":", "")
+
+            from ..functions.pokedex_functions import get_pretty_name_for_id
+            prevo_pretty = get_pretty_name_for_id(prevo_id)
+
+            norm_old = normalize_nick(old_nickname)
+            is_default = (
+                not old_nickname
+                or norm_old == normalize_nick(prevo_name)
+                or norm_old == normalize_nick(prevo_pretty)
+            )
+
+            if is_default:
+                pretty_evo = get_pretty_name_for_id(evo_id)
+                if pretty_evo == "Pokémon not found":
+                    pretty_evo = evo_name.replace("-", " ").title()
+                pokemon["nickname"] = pretty_evo
+
             # Recompute Combat Power from the evolved base stats so the stored
             # CP isn't left stale after evolution.
             pokemon["cp"] = calculate_cp_from_dict(pokemon)

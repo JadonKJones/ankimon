@@ -999,7 +999,8 @@ class PokemonPC(QDialog):
             "json_extract(data, '$.friendship') as friendship, "
             "json_extract(data, '$.everstone') as everstone, "
             "json_extract(data, '$.evolution_rejected') as evolution_rejected, "
-            "json_extract(data, '$.iv') as iv_json, json_extract(data, '$.ev') as ev_json "
+            "json_extract(data, '$.iv') as iv_json, json_extract(data, '$.ev') as ev_json, "
+            "json_extract(data, '$.attacks') as attacks_json "
             "FROM captured_pokemon WHERE 1=1"
         ]
         params = []
@@ -1097,6 +1098,7 @@ class PokemonPC(QDialog):
                     "friendship": row["friendship"] or 0,
                     "everstone": bool(row["everstone"]),
                     "evolution_rejected": bool(row["evolution_rejected"]),
+                    "attacks": json.loads(row["attacks_json"]) if row["attacks_json"] else [],
                 }
 
                 # Pre-calculate sums for sorting if needed

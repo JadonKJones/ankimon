@@ -43,7 +43,7 @@ from ..functions.pokedex_functions import (
 from ..resources import icon_path, items_path, csv_file_items_cost, poke_evo_path
 from ..functions.badges_functions import check_for_badge, receive_badge
 from ..functions.pokemon_functions import save_fossil_pokemon
-from ..utils import play_effect_sound
+from ..utils import play_effect_sound, is_alive
 from .error_handler import show_warning_with_traceback
 
 # At the moment when I write this line, "UserRole" is defined as UserRole 1000 in the Ankimon __init__.py file. IDK what it's about.
@@ -529,7 +529,12 @@ class ItemWindow(QWidget):
             if evo_id:
                 # Perform your action when the item matches the Pokémon's evolution item
                 self.logger.log_and_showinfo("info", "Pokemon Evolution is fitting !")
-                self.evo_window.ask_pokemon_evo(individual_id, prevo_id, evo_id)
+                if not is_alive(self.evo_window):
+                    from ..singletons import get_evo_window
+                    self.evo_window = get_evo_window()
+                self.evo_window.ask_pokemon_evo(
+                    individual_id, prevo_id, evo_id, item_name=item_name
+                )
             else:
                 self.logger.log_and_showinfo("info", "This Pokemon does not need this item.")
         except Exception as e:

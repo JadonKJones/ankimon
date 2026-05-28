@@ -118,6 +118,8 @@ def PokemonCollectionDetails(
                 "everstone": everstone,
                 "evolution_rejected": evolution_rejected,
                 "level": level,
+                "individual_id": individual_id,
+                "attacks": attacks,
             }
         )
         lang_name = get_pokemon_diff_lang_name(int(id), language).capitalize()

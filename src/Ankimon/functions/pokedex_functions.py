@@ -339,9 +339,10 @@ def search_pokedex(pokemon_name, variable):
                 if var is not None:
                     return var
             
-            # 2. Try normalized version (no spaces, hyphens, or apostrophes)
-            # This handles cases like "Venusaur-Mega" matching "venusaurmega"
-            normalized_name = current_name.replace(" ", "").replace("-", "").replace("'", "")
+            # 2. Try normalized version (no spaces, hyphens, apostrophes, dots, or colons)
+            # This handles cases like "Venusaur-Mega" matching "venusaurmega",
+            # and "Mr. Mime"/"Type: Null" matching "mrmime"/"typenull".
+            normalized_name = current_name.replace(" ", "").replace("-", "").replace("'", "").replace(".", "").replace(":", "")
             if normalized_name in pokedex_data:
                 pokemon_info = pokedex_data[normalized_name]
                 var = pokemon_info.get(variable)

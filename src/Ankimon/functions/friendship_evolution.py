@@ -56,11 +56,13 @@ class LevelEvolution(NamedTuple):
         evo_id: National Pokédex id of the evolved species.
         evo_name: Capitalised display name of the evolved species.
         min_level: Level required to evolve.
+        time_of_day: ``"day"``, ``"night"``, or ``None`` if not time-gated.
     """
 
     evo_id: int
     evo_name: str
     min_level: int
+    time_of_day: Optional[str] = None
 
 
 def _now_in_configured_tz() -> datetime:
@@ -276,8 +278,68 @@ def get_level_evolutions_for_species(
     Returns:
         A tuple of :class:`LevelEvolution` entries sorted by ``evo_id``; empty if
         the species has no plain level-up evolution.
+
+    Form-aware: when the species is present in ``pokedex.json`` it is treated as
+    the source of truth (so e.g. Kantonian Mr. Mime, which has no evolution there,
+    is never offered Mr. Rime via the form-blind legacy CSV). pokedex.json stores
+    the evolution metadata (``evoLevel``/``evoType``/``evoCondition``/``evoRegion``)
+    on the *evolved* species. ``levelMove`` evolutions (e.g. Mime Jr. -> Mr. Mime
+    via Mimic) are included with ``min_level`` defaulting to 1 when omitted; the
+    actual move requirement is enforced in :func:`_level_readiness`.
     """
+    from .pokedex_functions import _load_pokedex_cache, search_pokedex_by_id, safe_int
+
     evolutions: list[LevelEvolution] = []
+
+    # 1. PRIORITY CHECK: Form-aware evolution from pokedex.json
+    pokedex_data = _load_pokedex_cache()
+    internal_name = search_pokedex_by_id(pokemon_id)
+
+    if internal_name in pokedex_data:
+        details = pokedex_data[internal_name]
+        evo_list = details.get("evos")
+
+        if evo_list:
+            for target_evo_name in evo_list:
+                normalized_target = target_evo_name.lower().replace(" ", "").replace("-", "").replace("'", "").replace(".", "").replace(":", "")
+                target_data = pokedex_data.get(normalized_target) or pokedex_data.get(target_evo_name.lower())
+
+                if target_data:
+                    # In Smogon-style pokedex.json, evoLevel is stored on the evolved species
+                    min_level = safe_int(target_data.get("evoLevel"))
+                    evo_type = target_data.get("evoType")
+                    target_id = safe_int(target_data.get("actual_id") or target_data.get("species_id"))
+
+                    is_eligible = min_level > 0
+                    if evo_type == "levelMove":
+                        is_eligible = True
+                        if min_level <= 0:
+                            min_level = 1
+
+                    if target_id > 0 and is_eligible:
+                        # Extract time of day if present in evoCondition
+                        condition = (target_data.get("evoCondition") or "").lower()
+                        time_of_day = None
+                        if "day" in condition:
+                            time_of_day = "day"
+                        elif "night" in condition:
+                            time_of_day = "night"
+
+                        evolutions.append(
+                            LevelEvolution(
+                                evo_id=target_id,
+                                evo_name=target_data.get("name", target_evo_name),
+                                min_level=min_level,
+                                time_of_day=time_of_day,
+                            )
+                        )
+
+        # Always return the pokedex.json results if the species exists in pokedex.json,
+        # preventing incorrect legacy CSV fallback (which doesn't distinguish regional forms).
+        evolutions.sort(key=lambda e: e.evo_id)
+        return tuple(evolutions)
+
+    # 2. LEGACY FALLBACK: Species CSV lookup
     for evo in pokemon_evolves_from_id(pokemon_id):
         # Scan every row for this evolved species and keep the first that is a
         # plain level-up row. An evolved species may carry several method rows
@@ -422,6 +484,8 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
             friendship=friendship,
             evolution_rejected=evolution_rejected,
             not_evolvable=not_evolvable,
+            tod=time_of_day,
+            pokemon=pokemon,
         )
 
     chosen = _select_evolution(evos, time_of_day)
@@ -470,13 +534,22 @@ def _level_readiness(
     friendship: int,
     evolution_rejected: bool,
     not_evolvable: dict,
+    tod: str = "day",
+    pokemon=None,
 ) -> dict:
     """Compute readiness for a plain level-up evolution.
 
     Called by :func:`evolution_readiness` when the species has no friendship
     evolution; returns ``not_evolvable`` unchanged if it has no level-up evolution
-    either. Ignores ``evolution_rejected`` (the manual button still shows) and
-    time of day: ``ready = (not everstone) and level >= min_level``.
+    either. Ignores ``evolution_rejected`` (the manual button still shows) but does
+    honour the ``misc.active_region`` setting, time of day, and (for ``levelMove``
+    evolutions) whether the Pokémon has learned the required move:
+    ``ready = (not everstone) and level >= min_level and time_ok and knows_move``.
+
+    Args:
+        tod: Current time of day (``"day"`` or ``"night"``).
+        pokemon: The originating Pokémon dict/object (used to read ``attacks`` for
+            move-based ``levelMove`` evolutions).
 
     Returns:
         A readiness dict with ``method="level"`` (or ``not_evolvable``).
@@ -485,20 +558,105 @@ def _level_readiness(
     if not level_evos:
         return not_evolvable
 
-    chosen = min(level_evos, key=lambda e: e.evo_id)
+    # Filter based on active region: prefer a regional target (Galarian/Alolan/…)
+    # when the configured region matches; otherwise suppress regional targets and
+    # keep the base form (unless a sibling matches the active region).
+    active_region = None
+    try:
+        from aqt import mw
+        if hasattr(mw, "settings_obj") and mw.settings_obj:
+            active_region = mw.settings_obj.get("misc.active_region")
+            if active_region:
+                active_region = active_region.strip()
+    except Exception:
+        pass
+
+    if active_region in ("No Region", ""):
+        active_region = None
+
+    from .pokedex_functions import _load_pokedex_cache, search_pokedex_by_id
+    pokedex_data = _load_pokedex_cache()
+
+    filtered_evos = []
+    for e in level_evos:
+        target_name = search_pokedex_by_id(e.evo_id)
+        if target_name in pokedex_data:
+            target_data = pokedex_data[target_name]
+            target_region = target_data.get("evoRegion")
+
+            if target_region:
+                if active_region and active_region.lower() == target_region.lower():
+                    filtered_evos.append(e)
+            else:
+                has_matching_regional_sibling = False
+                for other_e in level_evos:
+                    other_name = search_pokedex_by_id(other_e.evo_id)
+                    if other_name in pokedex_data:
+                        other_data = pokedex_data[other_name]
+                        other_region = other_data.get("evoRegion")
+                        if other_region and active_region and active_region.lower() == other_region.lower():
+                            has_matching_regional_sibling = True
+                            break
+                if not has_matching_regional_sibling:
+                    filtered_evos.append(e)
+
+    if filtered_evos:
+        level_evos = filtered_evos
+
+    # If there are time-gated evolutions, prefer the one that matches current time
+    eligible_now = [e for e in level_evos if e.time_of_day in (tod, None)]
+    if eligible_now:
+        chosen = min(eligible_now, key=lambda e: (e.time_of_day is None, e.evo_id))
+    else:
+        chosen = min(level_evos, key=lambda e: e.evo_id)
+
     evo_name = chosen.evo_name
     min_level = chosen.min_level
+    required_time = chosen.time_of_day
 
-    ready = (not everstone) and level >= min_level
+    time_ok = required_time is None or required_time == tod
+    ready = (not everstone) and level >= min_level and time_ok
+
+    # Check for levelMove move requirement (e.g. Mime Jr. -> Mr. Mime via Mimic)
+    knows_move = True
+    required_move = None
+    target_name = search_pokedex_by_id(chosen.evo_id)
+    if target_name in pokedex_data:
+        t_data = pokedex_data[target_name]
+        if t_data.get("evoType") == "levelMove":
+            required_move = t_data.get("evoMove")
+            knows_move = False
+            p_attacks = []
+            if isinstance(pokemon, dict):
+                p_attacks = pokemon.get("attacks") or []
+            elif pokemon is not None:
+                p_attacks = getattr(pokemon, "attacks", []) or []
+
+            if required_move and p_attacks:
+                if any(a.lower().replace(" ", "").replace("-", "") == required_move.lower().replace(" ", "").replace("-", "") for a in p_attacks):
+                    knows_move = True
+
+    if not knows_move:
+        ready = False
 
     if everstone:
         status_text = "Everstone prevents evolution"
+    elif not knows_move and required_move:
+        status_text = f"Needs to learn {required_move} to evolve"
     elif ready and evolution_rejected:
         status_text = "Evolution rejected — tap Evolve now to override"
     elif ready:
         status_text = f"Ready to evolve into {evo_name}!"
+    elif level >= min_level and not time_ok:
+        status_text = f"Ready — waiting for {required_time.capitalize()} (now {tod.capitalize()})"
     else:
-        status_text = f"Evolves into {evo_name} at Lv{min_level}"
+        if required_move:
+            text = f"Evolves into {evo_name} knowing {required_move}"
+        else:
+            text = f"Evolves into {evo_name} at Lv{min_level}"
+        if required_time is not None:
+            text += f" · needs {required_time.capitalize()}"
+        status_text = text
 
     return {
         "evolvable": True,
@@ -509,8 +667,8 @@ def _level_readiness(
         "min_happiness": None,
         "current_friendship": friendship,
         "friendship_remaining": 0,
-        "required_time": None,
-        "time_ok": True,
+        "required_time": required_time,
+        "time_ok": time_ok,
         "status_text": status_text,
         "bar_max": MAX_FRIENDSHIP,
         "rejected": evolution_rejected,
