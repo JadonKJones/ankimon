@@ -90,19 +90,19 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
         logger.log("info", "XP Share target no longer exists; cleared the setting.")
         return original_exp
 
-    current_level = int(pokemon['level'])  # MODIFIED: Use local variable for level
-    if pokemon.get('held_item') == "lucky-egg":
+    current_level = int(pokemon.level)
+    if pokemon.held_item == "lucky-egg":
         exp = int(exp * 1.5) # Multiply by 1.5 if pokemon holds lucky egg
-        msg += f"{pokemon['name']}'s Lucky Egg boosts its XP gained!\n"
+        msg += f"{pokemon.name}'s Lucky Egg boosts its XP gained!\n"
     # Increase the xp of the matched Pokémon
-    current_xp = pokemon.get("xp") or pokemon.get("stats", {}).get("xp", 0)
-    growth_rate = pokemon['growth_rate']  # MODIFIED: Use local variable for growth rate
+    current_xp = pokemon.xp
+    growth_rate = pokemon.growth_rate
     experience_needed = int(find_experience_for_level(growth_rate, current_level, remove_level_cap))  # MODIFIED: Pre-calculate needed XP
     evo_id = None # Initialize variable
 
     logger.log("info", "Running XP share function")
     if experience_needed > exp + current_xp:
-        pokemon["xp"] = current_xp + exp
+        pokemon.xp = current_xp + exp
     else:
         while exp + current_xp > experience_needed:
             if (remove_level_cap or current_level < 100):
@@ -110,20 +110,20 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
                 exp = exp + current_xp - experience_needed
                 current_xp = 0
                 experience_needed = int(find_experience_for_level(growth_rate, current_level, remove_level_cap))  # MODIFIED: Recalculate needed XP
-                msg += f"XP increased for {pokemon['name']} with level {current_level} and XP {exp}\n"
+                msg += f"XP increased for {pokemon.name} with level {current_level} and XP {exp}\n"
             else:
                 break
-        pokemon['level'] = current_level
-        pokemon['xp'] = 0 if exp < 0 else exp
+        pokemon.level = current_level
+        pokemon.xp = 0 if exp < 0 else exp
 
     # Check for evolution
     evo_id = check_evolution_for_pokemon(
-        pokemon['individual_id'],
-        pokemon['id'],
-        pokemon['level'],
+        pokemon.individual_id,
+        pokemon.id,
+        pokemon.level,
         evo_window,
-        pokemon.get('everstone', False),
-        pokemon.get('evolution_rejected', False)
+        getattr(pokemon, 'everstone', False),
+        getattr(pokemon, 'evolution_rejected', False)
     )
 
     if evo_id is not None:
@@ -132,11 +132,11 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
         # XP-share flow (mirrors the friendship path below).
         evo_disp_name = return_name_for_id(evo_id)
         evo_disp_name = evo_disp_name.capitalize() if evo_disp_name else str(evo_id)
-        msg += f"{pokemon['name']} is about to evolve to {evo_disp_name} at level {pokemon['level']}"
+        msg += f"{pokemon.name} is about to evolve to {evo_disp_name} at level {pokemon.level}"
         evolution_triggered = True
 
         # Write the XP/level changes to database BEFORE calling evolution
-        db.save_pokemon(pokemon)
+        db.save_pokemon(pokemon.to_dict())
 
         # Now call evolution (which will read the updated file and handle the evolution)
 
@@ -146,12 +146,12 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
     # already meets the species threshold.
     if not evolution_triggered:
         friendship_evo_id = check_friendship_evolution_for_pokemon(
-            pokemon["individual_id"],
-            pokemon["id"],
+            pokemon.individual_id,
+            pokemon.id,
             evo_window,
-            pokemon.get("everstone", False),
-            pokemon.get("friendship", 0),
-            pokemon.get("evolution_rejected", False),
+            getattr(pokemon, 'everstone', False),
+            getattr(pokemon, 'friendship', 0),
+            getattr(pokemon, 'evolution_rejected', False),
         )
         if friendship_evo_id is not None:
             # return_name_for_id can return None if the evolved id is missing
@@ -161,7 +161,7 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
             friendship_evo_name = friendship_evo_name.capitalize() if friendship_evo_name else str(friendship_evo_id)
             msg += evo_window.translator.translate(
                 "pokemon_about_to_evolve_friendship",
-                main_pokemon_name=pokemon["name"],
+                main_pokemon_name=pokemon.name,
                 evo_pokemon_name=friendship_evo_name,
             )
             evolution_triggered = True
