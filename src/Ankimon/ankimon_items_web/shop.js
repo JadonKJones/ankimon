@@ -75,9 +75,25 @@
         });
     }
 
+    // Switch the View filter (in_shop | owned) and sync the sidebar buttons.
+    // Used both by the nav clicks and by a Python-forced initial view.
+    function setView(filter) {
+        if (filter !== 'in_shop' && filter !== 'owned') return;
+        state.filter = filter;
+        document.querySelectorAll('.nav-item[data-filter]').forEach((b) => {
+            b.classList.toggle('active', b.dataset.filter === filter);
+        });
+    }
+
     // Entry from Python
     window.initializeItems = function (data) {
         state.data = data;
+        // A menu entry (Mart vs Item Bag) can request a starting view. This
+        // is a one-shot from Python — it's only present on the push that
+        // follows a menu click, so it won't override the user's own filtering.
+        if (data && data.initial_view) {
+            setView(data.initial_view);
+        }
         const urls = (data.items || []).map((i) => i.image_url).filter(Boolean);
         preloadImages(urls, function () {
             render();
@@ -670,10 +686,7 @@
     function bindUI() {
         document.querySelectorAll('.nav-item[data-filter]').forEach((btn) => {
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.nav-item[data-filter]').forEach((b) =>
-                    b.classList.remove('active'));
-                btn.classList.add('active');
-                state.filter = btn.dataset.filter;
+                setView(btn.dataset.filter);
                 render();
             });
         });
@@ -1085,50 +1098,13 @@
         });
     }
 
-    // Nav switcher
-    function bindNavSwitcher() {
-        const trigger = document.getElementById('nav-trigger');
-        const menu = document.getElementById('nav-menu');
-
-        function openMenu() {
-            menu.classList.remove('hidden');
-            trigger.setAttribute('aria-expanded', 'true');
-        }
-        function closeMenu() {
-            menu.classList.add('hidden');
-            trigger.setAttribute('aria-expanded', 'false');
-        }
-
-        trigger.addEventListener('click', (e) => {
-            e.stopPropagation();
-            menu.classList.contains('hidden') ? openMenu() : closeMenu();
-        });
-        document.addEventListener('click', (e) => {
-            if (!menu.classList.contains('hidden') &&
-                !menu.contains(e.target) && e.target !== trigger) {
-                closeMenu();
-            }
-        });
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !menu.classList.contains('hidden')) closeMenu();
-        });
-        menu.querySelectorAll('.nav-menu-item[data-screen]').forEach((item) => {
-            item.addEventListener('click', () => {
-                const screen = item.dataset.screen;
-                closeMenu();
-                if (screen === 'items') return;
-                const router = (window.nav) || bridge;
-                if (!router) return;
-                if (screen === 'ankidex' && router.openAnkidex) router.openAnkidex();
-                else if (screen === 'settings' && router.openSettings) router.openSettings();
-            });
-        });
-    }
-
     document.addEventListener('DOMContentLoaded', () => {
         bindUI();
         bindPickerUI();
-        bindNavSwitcher();
-        initChannel(() => {});
+        // Dropdown nav: wire from the shared switcher once the channel resolves
+        // so it has the live NavBridge. See ankimon_items_web/nav-switcher.js.
+        initChannel(() => {
+            if (window.wireNavSwitcher) window.wireNavSwitcher(window.nav);
+        });
     });
 })();
