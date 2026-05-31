@@ -63,10 +63,10 @@ Key tables: `captured_pokemon`, `items`, `badges`, `team`, `pokemon_history`, `m
 pip install pytest pytest-qt PyQt6 markdown
 
 # Run all tests
-python -m pytest tests/ -v
+python -m pytest tests/ 
 
 # Run just the integrity test (imports every module)
-python -m pytest tests/test_addon_integrity.py -v
+python -m pytest tests/test_addon_integrity.py 
 ```
 
 All tests should pass. The integrity test dynamically imports every module to catch ImportError/AttributeError at load time.
@@ -87,7 +87,7 @@ Clean startup should show: `AnkimonDB: Database schema initialized.` and `Ankimo
 
 ### Rules
 
-- Run `pytest tests/` after every change. All tests must pass.
+- Run `pytest tests/` if making changes that affect Python code. All tests must pass.
 - Run the Anki smoke test for anything touching startup, imports, or singletons.
 - Never modify user data files (anything gitignored).
 - The `__init__.py` is a thin orchestrator — add new logic to the appropriate extracted module, not to init.
