@@ -37,7 +37,7 @@ def get_team_pokemon_list():
         team_data = db.get_team()  # Returns list of dicts with 'individual_id'
         
         # Load dynamic cycle count limit from settings (default to 3)
-        cycle_count = mw.settings_obj.get("controls.team_cycle_count", 3)
+        cycle_count = int(mw.settings_obj.get("controls.team_cycle_count", 3))
         
         # Extract first N individual_ids
         _team_cycle_pokemon_ids = [
@@ -82,7 +82,7 @@ def cycle_team_pokemon():
         from .functions.update_main_pokemon import save_main_pokemon
         
         # Check dynamic cycle count limit from settings
-        cycle_count = mw.settings_obj.get("controls.team_cycle_count", 3)
+        cycle_count = int(mw.settings_obj.get("controls.team_cycle_count", 3))
         if cycle_count <= 1:
             tooltip("Team cycling is disabled (set rotation limit > 1 in Team Select)")
             return

@@ -170,6 +170,7 @@ class Settings:
             "gui.reviewer_text_message_box_time",
             "gui.xp_bar_location",
             "misc.discord_rich_presence_text",
+            "controls.team_cycle_count",
         ]
         for key in keys_to_coerce_to_int:
             if key in config and isinstance(config[key], str):
