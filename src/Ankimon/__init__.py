@@ -70,6 +70,44 @@ mw.logger = logger
 mw.translator = translator
 mw.settings_obj = settings_obj
 
+ADDON_MIN_COMPATIBLE_VERSION = "2.0.0"
+
+def _alert_outdated_init(reason: str = "Detected an outdated or corrupted Ankimon __init__.py file.") -> None:
+    error_message = (
+        f"Ankimon Add-on Error: {reason}\n\n"
+        "Your Ankimon installation appears to be partially updated or corrupted. "
+        "This can lead to unexpected errors and instability.\n\n"
+        "Please try reinstalling the add-on to ensure all files are up to date. "
+        "You may need to manually remove the old add-on folder (typically named '1908235722' in Anki's addons21 directory) "
+        "before installing the latest version from AnkiWeb."
+    )
+    mw.logger.critical(f"Ankimon Integrity Check Failed: {error_message}")
+    aqt.utils.showWarning(error_message, title="Ankimon Add-on Error")
+
+def _verify_addon_integrity() -> None:
+    # Check for direct presence of old functions in __init__.py's global scope
+    # This is a strong indicator of an outdated __init__.py
+    if 'generate_random_pokemon' in globals() or 'search_pokedex_by_id' in globals():
+        _alert_outdated_init()
+        return
+
+    # Check addon version from manifest.json
+    try:
+        from packaging.version import parse as parse_version
+    except ImportError:
+        mw.logger.warning("Ankimon: 'packaging' module not found, skipping detailed version check.")
+        return
+
+    current_addon_version = mw.addonManager.addonMeta(__name__).get("version", "0.0.0")
+
+    try:
+        if parse_version(current_addon_version) < parse_version(ADDON_MIN_COMPATIBLE_VERSION):
+            _alert_outdated_init(f"Add-on version {current_addon_version} is older than minimum required {ADDON_MIN_COMPATIBLE_VERSION}.")
+    except Exception as e:
+        mw.logger.error(f"Ankimon: Failed to parse addon version for integrity check: {e}")
+
+_verify_addon_integrity()
+
 from .gui_classes import overview_team
 
 # --- Startup: backup, migration, assets, first enemy ---
