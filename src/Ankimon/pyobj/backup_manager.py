@@ -128,10 +128,10 @@ class BackupManager:
                     summary["main_pokemon_name"] = main_pokemon.get("name", "N/A")
                     summary["main_pokemon_level"] = main_pokemon.get("level", "N/A")
                 
-                # Trainer info from user_data
-                summary["trainer_name"] = db.get_user_data("trainer.name", "N/A")
-                summary["trainer_cash"] = db.get_user_data("trainer.cash", 0)
-                summary["trainer_level"] = db.get_user_data("trainer.level", 1)
+                # Trainer info from config table
+                summary["trainer_name"] = db.get_config_value("trainer.name", "N/A")
+                summary["trainer_cash"] = db.get_config_value("trainer.cash", 0)
+                summary["trainer_level"] = db.get_config_value("trainer.level", 1)
                 
                 return summary
             except Exception as e:
