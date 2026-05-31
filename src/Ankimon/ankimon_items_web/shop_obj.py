@@ -104,6 +104,10 @@ class TeamBridge(QObject):
     def getRoster(self):
         return self._w.profile_data.get_roster_data()
 
+    @pyqtSlot(str)
+    def saveSpriteMode(self, mode):
+        mw.settings_obj.set("ankidex.spriteMode", mode)
+
     @pyqtSlot(str, result=int)
     def getCp(self, individual_id):
         return self._w.profile_data._calc_cp(individual_id)

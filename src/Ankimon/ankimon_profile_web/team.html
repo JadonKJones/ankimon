@@ -98,8 +98,15 @@
 
         <main class="main-content">
             <header class="top-bar">
-                <h2>Choose Your Team</h2>
-                <span style="font-size:.8rem;color:var(--text-muted);">Click a slot to add or switch · ★ sets XP Share · ✕ removes</span>
+                <div>
+                    <h2>Choose Your Team</h2>
+                    <span style="font-size:.8rem;color:var(--text-muted);">Click a slot to add or switch · ★ sets XP Share · ✕ removes</span>
+                </div>
+                <div class="top-actions">
+                    <button id="sprite-toggle" class="btn" title="Toggle Static/Animated Sprites">
+                        <span id="sprite-toggle-text">Static</span>
+                    </button>
+                </div>
             </header>
             <div class="content-scroll">
                 <div class="team-grid" id="team-grid">

@@ -592,11 +592,17 @@ class ProfileData:
         except Exception:
             xp_share = None
 
+        sprite_mode = self.settings_obj.get(
+            "ankidex.spriteMode",
+            self.settings_obj.get("pokedex_v2.spriteMode", "static")
+        )
+
         return {
             "max_size": MAX_TEAM_SIZE,
             "team": members,
             "xp_share": str(xp_share) if xp_share else None,
             "xp_share_info": self._resolve_stub(xp_share, members) if xp_share else None,
+            "sprite_mode": sprite_mode,
         }
 
     def _resolve_stub(self, individual_id, members=None):

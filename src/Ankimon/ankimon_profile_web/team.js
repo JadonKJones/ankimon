@@ -22,15 +22,31 @@
         pickerMode: 'slot',    // 'slot' (fill a team slot) | 'xpshare' (pick XP Share)
         rosterType: 'all',     // picker Type filter
         rosterSort: 'cp',      // picker Sort: 'cp' | 'level' | 'name'
+        spriteMode: 'static',
     };
 
     let teamBridge = null;
 
-    function spriteUrl(stub) {
-        if (!stub || !stub.p) return FALLBACK;
-        return stub.s
-            ? SPRITE_BASE + '/shiny/' + stub.p + '.png'
-            : SPRITE_BASE + '/' + stub.p + '.png';
+    function spriteUrl(stub, mode = state.spriteMode) {
+        if (!stub) return FALLBACK;
+        let base = stub.sprite;
+        if (!base) {
+            const isShiny = !!stub.s;
+            const id = stub.p;
+            if (!id) return FALLBACK;
+            if (mode === 'animated') {
+                return isShiny
+                    ? `../user_files/sprites/front_default_gif/shiny/${id}.gif`
+                    : `../user_files/sprites/front_default_gif/${id}.gif`;
+            }
+            return isShiny
+                ? `../user_files/sprites/front_default/shiny/${id}.png`
+                : `../user_files/sprites/front_default/${id}.png`;
+        }
+        if (mode === 'animated') {
+            return base.replace('/front_default/', '/front_default_gif/').replace('.png', '.gif');
+        }
+        return base;
     }
 
     function esc(s) {
@@ -154,8 +170,8 @@
                     <button class="slot-corner slot-star${isXp ? ' on' : ''}" data-act="xp" data-slot="${i}"
                             title="${isXp ? 'Remove XP Share' : 'Set as XP Share'}">★</button>
                     <button class="slot-corner slot-remove" data-act="remove" data-slot="${i}" title="Remove">✕</button>
-                    <div class="slot-sprite-wrap"><img src="${m.sprite || spriteUrl(m)}" alt="${esc(m.n)}"
-                         onerror="this.onerror=null;this.src='${FALLBACK}';"></div>
+                    <div class="slot-sprite-wrap"><img src="${spriteUrl(m)}" alt="${esc(m.n)}"
+                         onerror="if (this.src.indexOf('_gif') !== -1) { this.src = this.src.replace('_gif', '').replace('.gif', '.png'); } else { this.onerror=null; this.src='${FALLBACK}'; }"></div>
                     <div class="slot-name">${esc(m.n)}${m.s ? ' <span class="shiny-dot">★</span>' : ''}</div>
                     ${types ? `<div class="slot-types">${types}</div>` : ''}
                     <div class="slot-stats">
@@ -229,8 +245,8 @@
         if (m) {
             holder.innerHTML = `
                 <div class="xps-card" title="Change XP Share">
-                    <img class="xps-sprite" src="${m.sprite || spriteUrl(m)}" alt="${esc(m.n)}"
-                         onerror="this.onerror=null;this.src='${FALLBACK}';">
+                    <img class="xps-sprite" src="${spriteUrl(m)}" alt="${esc(m.n)}"
+                         onerror="if (this.src.indexOf('_gif') !== -1) { this.src = this.src.replace('_gif', '').replace('.gif', '.png'); } else { this.onerror=null; this.src='${FALLBACK}'; }">
                     <div class="xps-name">${esc(m.n)}${m.s ? ' <span class="shiny-dot">★</span>' : ''}</div>
                     <div class="xps-lv">★ Lv ${esc(m.l)}</div>
                     <div class="xps-change-hint">⇄ Change</div>
@@ -473,7 +489,7 @@
             const types = (c.types || []).map(typeBadge).join('');
             const cp = (c.cp != null && c.cp > 0) ? num(c.cp) : '—';
             card.innerHTML = `
-                <img class="rc-sprite" src="${c.sprite || spriteUrl(c)}" alt="${esc(c.n)}" onerror="this.onerror=null;this.src='${FALLBACK}';">
+                <img class="rc-sprite" src="${spriteUrl(c)}" alt="${esc(c.n)}" onerror="if (this.src.indexOf('_gif') !== -1) { this.src = this.src.replace('_gif', '').replace('.gif', '.png'); } else { this.onerror=null; this.src='${FALLBACK}'; }">
                 <div class="rc-name">${esc(c.n)}${c.s ? ' <span class="shiny-dot">★</span>' : ''}</div>
                 ${types ? `<div class="rc-types">${types}</div>` : ''}
                 <div class="rc-stats"><span>Lv ${esc(c.l)}</span><span>·</span><span class="rc-cp">${cp}</span><span>CP</span></div>
@@ -546,6 +562,11 @@
         for (let i = 0; i < state.maxSize; i++) state.team.push(team[i] || null);
         state.xpShare = data.xp_share ? String(data.xp_share) : null;
         state.xpShareInfo = data.xp_share_info || null;
+        state.spriteMode = data.sprite_mode || 'static';
+        const text = document.getElementById('sprite-toggle-text');
+        if (text) {
+            text.textContent = state.spriteMode === 'static' ? 'Static' : 'Animated';
+        }
         state.dirty = false;
         // Membership changed underneath us → force a roster reload next open.
         state.roster = null;
@@ -559,6 +580,21 @@
         document.getElementById('save-btn').addEventListener('click', saveTeam);
         // XP Share button is rendered dynamically inside #xpshare-holder (see
         // renderXpShare), so it's wired there, not here.
+        const spriteBtn = document.getElementById('sprite-toggle');
+        if (spriteBtn) {
+            spriteBtn.addEventListener('click', () => {
+                state.spriteMode = state.spriteMode === 'static' ? 'animated' : 'static';
+                const text = document.getElementById('sprite-toggle-text');
+                if (text) {
+                    text.textContent = state.spriteMode === 'static' ? 'Static' : 'Animated';
+                }
+                renderTeam();
+                renderRosterList();
+                if (teamBridge && teamBridge.saveSpriteMode) {
+                    teamBridge.saveSpriteMode(state.spriteMode);
+                }
+            });
+        }
         document.getElementById('picker-close').addEventListener('click', () => showPicker(false));
         document.getElementById('picker-search').addEventListener('input', () => renderRosterList());
         document.getElementById('picker').addEventListener('click', (e) => {
