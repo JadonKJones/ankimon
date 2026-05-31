@@ -353,10 +353,10 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
         "Baby": 2,
         "Legendary": 0.5,
         "Mythical": 0.2,
-        "Normal": 88.6,
-        "Starter": 2.5,
-        "Ultra": 5,
-        "Mega": 0.7,
+        "Normal": 93.3,
+        "Starter": 0.5,
+        "Ultra": 2.5,
+        "Mega": 0.5,
         "Gmax": 0.5,
     }
     # Adjust percentages based on total reviews relative to the daily average
@@ -370,29 +370,31 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
             + percentages.pop("Ultra", 0)
             + percentages.pop("Mega", 0)
             + percentages.pop("Gmax", 0)
+            + percentages.pop("Starter", 0)
         )
     elif review_ratio < 0.6:
-        percentages["Baby"] += 2
-        percentages["Normal"] -= 2
+        percentages["Baby"] += 1.5
+        percentages["Normal"] -= 1.5
     elif review_ratio < 0.8:
-        percentages["Ultra"] += 3
-        percentages["Normal"] -= 3
+        percentages["Ultra"] += 2
+        percentages["Normal"] -= 2
     else:
-        percentages["Legendary"] += 2
+        percentages["Legendary"] += 1
         percentages["Ultra"] += 3
-        percentages["Mega"] += 2
-        percentages["Gmax"] += 1.5
-        percentages["Normal"] -= 8.5
+        percentages["Mega"] += 1
+        percentages["Gmax"] += 1
+        percentages["Starter"] += 1
+        percentages["Normal"] -= 7
     # Restrict access to certain tiers based on main Pokémon level
     if main_pokemon.level:
         # Define level thresholds for each tier
         level_thresholds = {
-            "Starter": 30,
             "Ultra": 30,
             "Legendary": 50,
             "Mega": 60,
             "Gmax": 65,
             "Mythical": 75,
+            "Starter": 80,
         }
 
         # Example modification based on trainer level
