@@ -16,6 +16,7 @@
         xpShare: null,         // individual_id of the XP Share holder (any owned Pokémon)
         xpShareInfo: null,     // display stub for the holder (may be benched)
         maxSize: 6,
+        teamCycleCount: 3,     // limit for hotkey 9 rotation
         roster: null,          // null = not loaded yet
         dirty: false,
         pickerSlot: null,
@@ -164,9 +165,12 @@
             if (m) {
                 const cp = (m.cp === undefined || m.cp === null) ? '—' : num(m.cp);
                 const types = (m.types || []).map(typeBadge).join('');
+                const hasCycle = state.teamCycleCount > 1 && i < state.teamCycleCount;
+                const cycleBadge = hasCycle ? '<span class="slot-rotation-badge" title="Cycled via Hotkey 9">↻</span>' : '';
+
                 slot.title = 'Click to switch';
                 slot.innerHTML = `
-                    <span class="slot-num">${i + 1}</span>
+                    <span class="slot-num">${i + 1}${cycleBadge}</span>
                     <button class="slot-corner slot-star${isXp ? ' on' : ''}" data-act="xp" data-slot="${i}"
                             title="${isXp ? 'Remove XP Share' : 'Set as XP Share'}">★</button>
                     <button class="slot-corner slot-remove" data-act="remove" data-slot="${i}" title="Remove">✕</button>
@@ -563,6 +567,11 @@
         state.xpShare = data.xp_share ? String(data.xp_share) : null;
         state.xpShareInfo = data.xp_share_info || null;
         state.spriteMode = data.sprite_mode || 'static';
+        state.teamCycleCount = data.team_cycle_count || 3;
+
+        const cycleSelect = document.getElementById('cycle-select');
+        if (cycleSelect) cycleSelect.value = state.teamCycleCount;
+
         const text = document.getElementById('sprite-toggle-text');
         if (text) {
             text.textContent = state.spriteMode === 'static' ? 'Static' : 'Animated';
@@ -578,6 +587,19 @@
 
     function wireStaticControls() {
         document.getElementById('save-btn').addEventListener('click', saveTeam);
+        
+        const cycleSelect = document.getElementById('cycle-select');
+        if (cycleSelect) {
+            cycleSelect.addEventListener('change', (e) => {
+                const count = parseInt(e.target.value, 10) || 3;
+                state.teamCycleCount = count;
+                renderTeam();
+                if (teamBridge && teamBridge.saveCycleCount) {
+                    teamBridge.saveCycleCount(count);
+                }
+            });
+        }
+
         // XP Share button is rendered dynamically inside #xpshare-holder (see
         // renderXpShare), so it's wired there, not here.
         const spriteBtn = document.getElementById('sprite-toggle');

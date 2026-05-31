@@ -254,6 +254,14 @@ body {
 }
 
 .slot-num { position: absolute; top: 10px; left: 12px; font-size: 0.66rem; font-weight: 700; color: var(--text-muted); }
+.slot-rotation-badge {
+    margin-left: 5px;
+    font-size: 0.8rem;
+    color: var(--accent-blue);
+    vertical-align: middle;
+    cursor: help;
+    text-shadow: 0 0 5px rgba(88, 166, 255, 0.4);
+}
 .slot-corner {
     position: absolute; top: 8px; width: 26px; height: 26px;
     display: flex; align-items: center; justify-content: center;
@@ -357,6 +365,33 @@ body {
 }
 .ts-analysis .ts-section { margin-bottom: 0; }
 .ts-xpshare { margin-bottom: 16px; }   /* sits between the summary and the analysis */
+.ts-cycle { margin-bottom: 16px; }
+.cycle-select {
+    width: 100%;
+    background: var(--bg-card);
+    border: 1px solid var(--border-main);
+    color: var(--text-main);
+    padding: 9px 12px;
+    border-radius: 9px;
+    font-family: inherit;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    outline: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M2 4.5l4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+}
+.cycle-select:hover {
+    border-color: var(--accent-blue);
+    background-color: var(--bg-card-hover);
+}
+.cycle-select:focus {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
+}
 
 /* XP Share holder — a gold-tinted mini-card with the holder's sprite. */
 /* Vertical, whole-card-pressable (like a team slot): the sprite sits directly on

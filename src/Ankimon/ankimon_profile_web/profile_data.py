@@ -589,8 +589,10 @@ class ProfileData:
 
         try:
             xp_share = self.settings_obj.get("trainer.xp_share") or None
+            cycle_count = self.settings_obj.get("controls.team_cycle_count", 3)
         except Exception:
             xp_share = None
+            cycle_count = 3
 
         sprite_mode = self.settings_obj.get(
             "ankidex.spriteMode",
@@ -603,6 +605,7 @@ class ProfileData:
             "xp_share": str(xp_share) if xp_share else None,
             "xp_share_info": self._resolve_stub(xp_share, members) if xp_share else None,
             "sprite_mode": sprite_mode,
+            "team_cycle_count": cycle_count,
         }
 
     def _resolve_stub(self, individual_id, members=None):

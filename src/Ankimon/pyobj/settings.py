@@ -37,6 +37,7 @@ DEFAULT_CONFIG = {
     "controls.defeat_key": "5",
     "controls.catch_key": "6",
     "controls.team_cycle_key": "9",
+    "controls.team_cycle_count": 3,
     "controls.key_for_opening_closing_ankimon": "Ctrl+Shift+P",
     "controls.allow_to_choose_moves": False,
     "gui.animate_time": True,

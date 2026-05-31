@@ -29,18 +29,20 @@ _team_cycle_index = 0
 _team_cycle_pokemon_ids = []  # Cache of first 3 team member IDs
 
 def get_team_pokemon_list():
-    """Load first 3 team member IDs from database"""
+    """Load first N team member IDs from database"""
     global _team_cycle_pokemon_ids
     try:
-        
         # Get team from database
         db = mw.ankimon_db
         team_data = db.get_team()  # Returns list of dicts with 'individual_id'
         
-        # Extract first 3 individual_ids
+        # Load dynamic cycle count limit from settings (default to 3)
+        cycle_count = mw.settings_obj.get("controls.team_cycle_count", 3)
+        
+        # Extract first N individual_ids
         _team_cycle_pokemon_ids = [
             entry.get("individual_id")
-            for entry in team_data[:3]  # First 3 only
+            for entry in team_data[:cycle_count]
             if entry.get("individual_id")
         ]
         
@@ -79,6 +81,12 @@ def cycle_team_pokemon():
     try:
         from .functions.update_main_pokemon import save_main_pokemon
         
+        # Check dynamic cycle count limit from settings
+        cycle_count = mw.settings_obj.get("controls.team_cycle_count", 3)
+        if cycle_count <= 1:
+            tooltip("Team cycling is disabled (set rotation limit > 1 in Team Select)")
+            return
+
         team_ids = get_team_pokemon_list()
         if not team_ids or len(team_ids) < 2:
             tooltip("Not enough team members to cycle (need at least 2)")

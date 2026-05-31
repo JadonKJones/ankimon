@@ -108,6 +108,10 @@ class TeamBridge(QObject):
     def saveSpriteMode(self, mode):
         mw.settings_obj.set("ankidex.spriteMode", mode)
 
+    @pyqtSlot(int)
+    def saveCycleCount(self, count):
+        mw.settings_obj.set("controls.team_cycle_count", count)
+
     @pyqtSlot(str, result=int)
     def getCp(self, individual_id):
         return self._w.profile_data._calc_cp(individual_id)
