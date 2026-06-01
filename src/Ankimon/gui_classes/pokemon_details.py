@@ -1,5 +1,4 @@
 import math
-from math import exp
 import json
 from typing import Any
 import re
@@ -545,6 +544,23 @@ def PokemonDetailsStats(
         "friendship": "Friendship",
     }
 
+    # 1. Query the max level in the player's collection to dynamically scale the visual baseline
+    max_level = 100
+    try:
+        cursor = mw.ankimon_db.execute("SELECT MAX(level) FROM captured_pokemon")
+        row = cursor.fetchone()
+        if row and row[0] is not None:
+            max_level = int(row[0])
+    except Exception:
+        pass
+
+    # 2. Get the maximum stat of the currently selected Pokémon (handles manual DB/JSON stat edits)
+    core_stats = ["hp", "atk", "def", "spa", "spd", "spe"]
+    current_max_stat = max(detail_stats.get(s, 0) for s in core_stats) if any(s in detail_stats for s in core_stats) else 0
+
+    # 3. Determine unified global maximum for this database context
+    global_max_stat = max(750, max_level * 7.5, current_max_stat)
+
     for row, (stat, value) in enumerate(detail_stats.items()):
         # Skip unknown stats that are not in stat_colors
         if stat not in stat_colors:
@@ -594,7 +610,7 @@ def PokemonDetailsStats(
                 int((friendship_value / max(1, friendship_bar_max)) * max_width_stat_item),
             )
         else:
-            value = int(max_width_stat_item * (1 - exp(-value / max_width_stat_item)))
+            value = int((math.sqrt(max(0, value)) / math.sqrt(global_max_stat)) * max_width_stat_item)
         pixmap2 = createStatBar(stat_colors.get(stat), value)
         # Convert the QPixmap to an QIcon
         icon = QIcon(pixmap2)
