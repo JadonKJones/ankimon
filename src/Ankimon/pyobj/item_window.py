@@ -329,6 +329,11 @@ class ItemWindow(QWidget):
                     f"{item_name} was given to {target_pokemon_data.get('name')}.",
                 )
                 self.renewWidgets()
+
+                # Refresh open PC Box window
+                from ..singletons import pokemon_pc
+                if is_alive(pokemon_pc):
+                    pokemon_pc.refresh_gui()
             else:
                 self.logger.log_and_showinfo("error", "Could not find Pokemon data.")
 

@@ -548,6 +548,10 @@ class PokemonObject:
             main_pokemon["held_item"] = held_item
             db.save_main_pokemon(main_pokemon)
 
+        # Sync in-memory main_pokemon singleton if it's the target
+        if mw and getattr(mw, "main_pokemon", None) and mw.main_pokemon.individual_id == self.individual_id:
+            mw.main_pokemon.held_item = held_item
+
     def remove_held_item(self) -> None:
         """
         Removes the held item from the Pokémon and updates the database.
@@ -571,6 +575,10 @@ class PokemonObject:
         if main_pokemon and main_pokemon.get("individual_id") == self.individual_id:
             main_pokemon["held_item"] = None
             db.save_main_pokemon(main_pokemon)
+
+        # Sync in-memory main_pokemon singleton if it's the target
+        if mw and getattr(mw, "main_pokemon", None) and mw.main_pokemon.individual_id == self.individual_id:
+            mw.main_pokemon.held_item = None
 
 
 class PokemonEncoder(json.JSONEncoder):

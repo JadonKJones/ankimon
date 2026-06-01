@@ -5,29 +5,42 @@ window close/open flicker; the dropdown switcher in either screen calls back
 through QWebChannel to swap content in place.
 """
 
+print("1", flush=True)
 import json
+print("2", flush=True)
 import random
+print("3", flush=True)
 from datetime import datetime
-
+print("4", flush=True)
 from aqt import QDialog, QVBoxLayout, QWebEngineView, mw
+print("5", flush=True)
 from aqt.qt import Qt, QUrl, QFrame
+print("6", flush=True)
 from PyQt6.QtCore import QObject, pyqtSlot, QTimer
+print("7", flush=True)
 from PyQt6.QtGui import QColor
+print("8", flush=True)
 from PyQt6.QtWebChannel import QWebChannel
+print("9", flush=True)
 from PyQt6.QtWidgets import QStackedWidget
-
+print("10", flush=True)
 import csv
-
+print("11", flush=True)
 from ..utils import give_item, is_dev_mode
+print("12", flush=True)
 from ..resources import items_path, csv_file_items_cost, csv_file_descriptions
+print("13", flush=True)
 from ..functions.pokedex_functions import (
     find_details_move,
     _load_pokedex_cache,
     check_evolution_by_item,
     return_id_for_item_name,
 )
+print("14", flush=True)
 from ..business import calculate_cp_from_dict
+print("15", flush=True)
 from ..ankimon_profile_web.profile_data import ProfileData
+print("16", flush=True)
 
 
 SCREEN_ITEMS = "items"
@@ -210,6 +223,12 @@ class ItemsBridge(QObject):
         self._w.push_screen_data()
         return result
 
+    @pyqtSlot(str, str, result="QVariant")
+    def unequipItem(self, individual_id, item_name):
+        result = self._w.handle_unequip_item(individual_id, item_name)
+        self._w.push_screen_data()
+        return result
+
     # Back-compat: items.shop.js previously called bridge.openAnkidex; keep
     # it as a passthrough so older cached pages still work.
     @pyqtSlot()
@@ -220,14 +239,18 @@ class ItemsBridge(QObject):
 class AnkimonItemsWeb(QDialog):
     def __init__(self, addon_dir, shop_manager, item_window, ankimon_tracker,
                  trainer_card=None, settings_obj=None, logger=None):
+        print("INIT START", flush=True)
         super().__init__()
+        print("INIT SUPER DONE", flush=True)
         self.addon_dir = addon_dir
         self.shop_manager = shop_manager
         self.item_window = item_window
         self.ankimon_tracker = ankimon_tracker
         # Profile + Team are folded into this shell so all five screens share
         # one window and one dropdown. Their data lives in ProfileData.
+        print("INIT BEFORE ProfileData", flush=True)
         self.profile_data = ProfileData(addon_dir, trainer_card, settings_obj, logger)
+        print("INIT AFTER ProfileData", flush=True)
         self._pending_profile_action = None
         # Live updates: map of screen -> bound method that pushes fresh data to
         # that screen. Only screens listed here react to gameplay events. To add
@@ -237,7 +260,9 @@ class AnkimonItemsWeb(QDialog):
         self._live_refreshers = {SCREEN_PROFILE: self._push_profile_live}
         self._live_refresh_pending = False
         self.current_screen = None
+        print("INIT BEFORE setWindowTitle", flush=True)
         self.setWindowTitle("Ankimon")
+        print("INIT AFTER setWindowTitle", flush=True)
 
         # Paint the shell dark from the first frame. The web views set their
         # own page background, but the surrounding QDialog/QFrame/QStackedWidget
@@ -250,12 +275,15 @@ class AnkimonItemsWeb(QDialog):
         # Disabled WA_TranslucentBackground to prevent heavy window-level repaint
         # flickering under Windows DWM when QWebEngineView re-composes or updates.
         # self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        print("INIT BEFORE setWindowFlags", flush=True)
         self.setWindowFlags(
             self.windowFlags()
             | Qt.WindowType.WindowMaximizeButtonHint
             | Qt.WindowType.WindowMinimizeButtonHint
         )
+        print("INIT BEFORE resize", flush=True)
         self.resize(1180, 720)
+        print("INIT BEFORE layout", flush=True)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -269,14 +297,17 @@ class AnkimonItemsWeb(QDialog):
         frame.layout().setContentsMargins(0, 0, 0, 0)
         layout.addWidget(frame)
 
+        print("INIT BEFORE stack", flush=True)
         self.stack = QStackedWidget()
         frame.layout().addWidget(self.stack)
 
+        print("INIT BEFORE webviews", flush=True)
         self.webview_items = QWebEngineView()
         self.webview_ankidex = QWebEngineView()
         self.webview_settings = QWebEngineView()
         self.webview_profile = QWebEngineView()
         self.webview_team = QWebEngineView()
+        print("INIT AFTER webviews", flush=True)
         self._views = {
             SCREEN_ITEMS: self.webview_items,
             SCREEN_ANKIDEX: self.webview_ankidex,
@@ -640,6 +671,22 @@ class AnkimonItemsWeb(QDialog):
         except Exception:
             owned_rows = []
 
+        # Find all equipped items from Pokemon
+        equipped_by_map = {}
+        try:
+            all_pokemons = mw.ankimon_db.get_all_pokemon() or []
+            for pkm in all_pokemons:
+                held = pkm.get("held_item")
+                if held:
+                    if held not in equipped_by_map:
+                        equipped_by_map[held] = []
+                    equipped_by_map[held].append({
+                        "name": pkm.get("name", "Unknown"),
+                        "individual_id": pkm.get("individual_id")
+                    })
+        except Exception as e:
+            print(f"[Ankimon] get_all_pokemon failed in _get_mart_and_bag_data: {e}")
+
         owned_index = {}
         for row in owned_rows:
             name = row.get("item_name") or row.get("name")
@@ -651,7 +698,7 @@ class AnkimonItemsWeb(QDialog):
                 "category_id": row.get("category_id"),
             }
 
-        all_names = sorted(set(shop_index.keys()) | set(owned_index.keys()))
+        all_names = sorted(set(shop_index.keys()) | set(owned_index.keys()) | set(equipped_by_map.keys()))
 
         items = []
         for name in all_names:
@@ -669,6 +716,7 @@ class AnkimonItemsWeb(QDialog):
                     shop_price=(shop_entry or {}).get("price"),
                     item_type=(shop_entry or {}).get("item_type"),
                     owned_quantity=(owned_entry or {}).get("quantity", 0),
+                    equipped_instances=equipped_by_map.get(name, []),
                 )
             )
 
@@ -707,7 +755,7 @@ class AnkimonItemsWeb(QDialog):
         return {"ok": True}
 
     def _serialize_item(
-        self, name, is_tm, in_shop, shop_price, item_type, owned_quantity
+        self, name, is_tm, in_shop, shop_price, item_type, owned_quantity, equipped_instances=None
     ):
         ui_name = name.replace("-", " ").title()
         entry = {
@@ -719,6 +767,7 @@ class AnkimonItemsWeb(QDialog):
             "owned_quantity": int(owned_quantity or 0),
             "item_type": item_type,
             "category": self._categorize(name, is_tm),
+            "equipped_instances": equipped_instances or [],
         }
 
         if is_tm:
@@ -1094,6 +1143,37 @@ class AnkimonItemsWeb(QDialog):
             return {"ok": True, "message": ""}
         except Exception as e:
             return {"ok": False, "message": f"Use failed: {e}"}
+
+    def handle_unequip_item(self, individual_id, item_name):
+        """Unequip a held item from a specific Pokémon and return it to the bag."""
+        if not individual_id:
+            return {"ok": False, "message": "No Pokémon selected."}
+        
+        self._invalidate_pokemon_cache()
+        try:
+            from ..pyobj.pokemon_obj import PokemonObject
+            pokemon_data = mw.ankimon_db.get_pokemon(individual_id)
+            if not pokemon_data:
+                return {"ok": False, "message": "Could not find that Pokémon."}
+            
+            pokemon_obj = PokemonObject.from_dict(pokemon_data)
+            if pokemon_obj.held_item != item_name:
+                return {"ok": False, "message": "That Pokémon is not holding this item."}
+                
+            pokemon_obj.remove_held_item()
+            
+            # Refresh open legacy item bag if it exists
+            if self.item_window is not None:
+                self.item_window.renewWidgets()
+                
+            # Also refresh open PC Box window
+            from ..singletons import pokemon_pc, is_alive
+            if is_alive(pokemon_pc):
+                pokemon_pc.refresh_gui()
+                
+            return {"ok": True, "message": f"Unequipped {item_name.replace('-', ' ').title()} from {pokemon_data.get('name')}."}
+        except Exception as e:
+            return {"ok": False, "message": f"Unequip failed: {e}"}
 
     def _find_serialized(self, item_name):
         data = self.get_inventory_data()

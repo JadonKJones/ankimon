@@ -2177,6 +2177,12 @@ class PokemonPC(QDialog):
             )
             self.refresh_gui()
 
+            # Refresh open item/bag/shop windows
+            if hasattr(mw, "item_window") and is_alive(mw.item_window):
+                mw.item_window.renewWidgets()
+            if hasattr(mw, "items_web_window") and is_alive(mw.items_web_window):
+                mw.items_web_window.update_ui_data()
+
         give_item_window = GiveItemWindow(
             item_list=items_names,
             give_item_func=lambda item_name: func(item_name),
@@ -2221,6 +2227,12 @@ class PokemonPC(QDialog):
 
         # Refreshing the PC after giving the item is important in order to update the pokemon information without the held item
         self.refresh_gui()
+
+        # Refresh open item/bag/shop windows
+        if hasattr(mw, "item_window") and is_alive(mw.item_window):
+            mw.item_window.renewWidgets()
+        if hasattr(mw, "items_web_window") and is_alive(mw.items_web_window):
+            mw.items_web_window.update_ui_data()
 
     def ensure_data_integrity(self):
         """

@@ -215,14 +215,14 @@
         const counts = {all: items.length, in_shop: 0, owned: 0};
         items.forEach((i) => {
             if (i.in_shop) counts.in_shop++;
-            if ((i.owned_quantity || 0) > 0) counts.owned++;
+            if ((i.owned_quantity || 0) > 0 || (i.equipped_instances && i.equipped_instances.length > 0)) counts.owned++;
         });
         return counts;
     }
 
     function matchesFilters(item) {
         if (state.filter === 'in_shop' && !item.in_shop) return false;
-        if (state.filter === 'owned' && (item.owned_quantity || 0) <= 0) return false;
+        if (state.filter === 'owned' && (item.owned_quantity || 0) <= 0 && (!item.equipped_instances || item.equipped_instances.length === 0)) return false;
         if (state.category !== 'all' && item.category !== state.category) return false;
         if (state.search) {
             const q = state.search.toLowerCase();
@@ -236,7 +236,7 @@
 
     function cardStateClass(item) {
         const inShop = item.in_shop;
-        const owned = (item.owned_quantity || 0) > 0;
+        const owned = (item.owned_quantity || 0) > 0 || (item.equipped_instances && item.equipped_instances.length > 0);
         if (inShop && owned) return 'in-shop-and-owned';
         if (inShop) return 'in-shop-only';
         if (owned) return 'owned-only';
@@ -251,19 +251,13 @@
         const owned = (item.owned_quantity || 0) > 0;
         const inShop = !!item.in_shop;
 
-        // Build the parts that aren't already implied by the active filter.
-        const parts = [];
-        let cls = '';
-        if (inShop && state.filter !== 'in_shop') {
-            parts.push('STOCK');
-            cls = owned ? 'in-shop-and-owned' : 'in-shop-only';
+        if (inShop) {
+            return {
+                label: 'STOCK',
+                cls: owned ? 'in-shop-and-owned' : 'in-shop-only'
+            };
         }
-        if (owned && state.filter !== 'owned') {
-            parts.push('OWNED');
-            if (!cls) cls = 'owned-only';
-        }
-        if (parts.length === 0) return null;  // category pill below carries it
-        return {label: parts.join(' · '), cls};
+        return null;
     }
 
     function updateCard(card, item) {
@@ -276,6 +270,7 @@
             (!item.is_tm || (item.owned_quantity || 0) === 0)) {
             card.classList.add('unaffordable');
         }
+        if (item.equipped_instances && item.equipped_instances.length > 0) card.classList.add('equipped');
         if (state.selected === item.name) card.classList.add('selected');
 
         // Update tag
@@ -315,6 +310,12 @@
                 badge.textContent = 'x' + item.owned_quantity;
                 badges.appendChild(badge);
             }
+        }
+        if (item.equipped_instances && item.equipped_instances.length > 0) {
+            const badge = document.createElement('span');
+            badge.className = 'shop-card-badge equipped';
+            badge.textContent = 'E x' + item.equipped_instances.length;
+            badges.appendChild(badge);
         }
 
         // Update sprite src if different (preserves img DOM instance to avoid flickering)
@@ -360,6 +361,7 @@
             (!item.is_tm || (item.owned_quantity || 0) === 0)) {
             card.classList.add('unaffordable');
         }
+        if (item.equipped_instances && item.equipped_instances.length > 0) card.classList.add('equipped');
         if (state.selected === item.name) card.classList.add('selected');
 
         // Top-left tag — only show information the filter doesn't already imply.
@@ -390,6 +392,12 @@
                 badge.textContent = 'x' + item.owned_quantity;
                 badges.appendChild(badge);
             }
+        }
+        if (item.equipped_instances && item.equipped_instances.length > 0) {
+            const badge = document.createElement('span');
+            badge.className = 'shop-card-badge equipped';
+            badge.textContent = 'E x' + item.equipped_instances.length;
+            badges.appendChild(badge);
         }
         card.appendChild(badges);
 
@@ -554,6 +562,33 @@
             moveSection.classList.add('hidden');
         }
 
+        // Equipped section
+        const equippedSection = document.getElementById('det-equipped-section');
+        const equippedList = document.getElementById('det-equipped-list');
+        equippedList.innerHTML = '';
+        if (item.equipped_instances && item.equipped_instances.length > 0) {
+            equippedSection.classList.remove('hidden');
+            item.equipped_instances.forEach((inst) => {
+                const row = document.createElement('div');
+                row.className = 'equipped-row';
+                
+                const name = document.createElement('span');
+                name.className = 'equipped-poke-name';
+                name.textContent = inst.name;
+                
+                const btn = document.createElement('button');
+                btn.className = 'equipped-unequip-btn';
+                btn.textContent = 'Unequip';
+                btn.onclick = () => onUnequip(inst.individual_id, item.name);
+                
+                row.appendChild(name);
+                row.appendChild(btn);
+                equippedList.appendChild(row);
+            });
+        } else {
+            equippedSection.classList.add('hidden');
+        }
+
         // Actions
         const actions = document.getElementById('det-actions');
         actions.innerHTML = '';
@@ -638,6 +673,15 @@
             row.appendChild(bg);
         }
         return row;
+    }
+
+    function onUnequip(individualId, itemName) {
+        if (!bridge || !bridge.unequipItem) return;
+        bridge.unequipItem(individualId, itemName, function (result) {
+            if (!result) return;
+            showToast(result.message || (result.ok ? 'Unequipped!' : 'Unequip failed.'), !result.ok);
+            state.picker.choicesContext = null;
+        });
     }
 
     // ---------- Actions ----------
