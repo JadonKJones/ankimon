@@ -887,6 +887,10 @@ body {
 #det-sprite {
     width: 180px;
     height: 180px;
+    /* object-fit:contain scales the sprite to fit the 180x180 hero box while
+     * preserving its natural aspect ratio — wide Pokémon (Kyogre, Wailord)
+     * no longer get stretched into a square. */
+    object-fit: contain;
     image-rendering: pixelated;
     position: relative;
     z-index: 1;
@@ -1037,6 +1041,7 @@ body {
 .form-chip img {
     width: 24px;
     height: 24px;
+    object-fit: contain;
     image-rendering: pixelated;
 }
 
@@ -1165,6 +1170,7 @@ body {
 .evo-sprite {
     width: 40px;
     height: 40px;
+    object-fit: contain;
     image-rendering: pixelated;
 }
 
@@ -2023,6 +2029,7 @@ body {
 .prereq-item img {
     width: 48px;
     height: 48px;
+    object-fit: contain;
     image-rendering: pixelated;
 }
 
