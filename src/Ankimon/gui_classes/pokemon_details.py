@@ -616,6 +616,23 @@ def PokemonDetailsStats(detail_stats, growth_rate, level, remove_levelcap, langu
         "friendship": "Friendship",
     }
 
+    # 1. Query the max level in the player's collection to dynamically scale the visual baseline
+    max_level = 100
+    try:
+        cursor = mw.ankimon_db.execute("SELECT MAX(level) FROM captured_pokemon")
+        row = cursor.fetchone()
+        if row and row[0] is not None:
+            max_level = int(row[0])
+    except Exception:
+        pass
+
+    # 2. Get the maximum stat of the currently selected Pokémon (handles manual DB/JSON stat edits)
+    core_stats = ["hp", "atk", "def", "spa", "spd", "spe"]
+    current_max_stat = max(detail_stats.get(s, 0) for s in core_stats) if any(s in detail_stats for s in core_stats) else 0
+
+    # 3. Determine unified global maximum for this database context
+    global_max_stat = max(750, max_level * 7.5, current_max_stat)
+
     for row, (stat, value) in enumerate(detail_stats.items()):
         # Skip unknown stats that are not in stat_colors
         if stat not in stat_colors:
@@ -645,7 +662,7 @@ def PokemonDetailsStats(detail_stats, growth_rate, level, remove_levelcap, langu
             elif stat == "friendship":
                 old_val_mapped = int((old_val / MAX_FRIENDSHIP) * max_width_stat_item)
             else:
-                old_val_mapped = int(max_width_stat_item * (1 - exp(-old_val / max_width_stat_item)))
+                old_val_mapped = int((math.sqrt(max(0, old_val)) / math.sqrt(global_max_stat)) * max_width_stat_item)
         else:
             old_val_mapped = 0
 
@@ -655,7 +672,7 @@ def PokemonDetailsStats(detail_stats, growth_rate, level, remove_levelcap, langu
         elif stat == "friendship":
             new_val_mapped = int((value / MAX_FRIENDSHIP) * max_width_stat_item)
         else:
-            new_val_mapped = int(max_width_stat_item * (1 - exp(-value / max_width_stat_item)))
+            new_val_mapped = int((math.sqrt(max(0, value)) / math.sqrt(global_max_stat)) * max_width_stat_item)
             
         bar_item2 = AnimatedStatBar(stat_colors.get(stat), old_val_mapped, new_val_mapped)
         
