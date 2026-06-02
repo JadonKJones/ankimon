@@ -353,9 +353,9 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
         "Baby": 2,
         "Legendary": 0.5,
         "Mythical": 0.2,
-        "Normal": 93.3,
+        "Normal": 94.3,
         "Starter": 0.5,
-        "Ultra": 2.5,
+        "Ultra": 1.5,
         "Mega": 0.5,
         "Gmax": 0.5,
     }
@@ -376,15 +376,16 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
         percentages["Baby"] += 1.5
         percentages["Normal"] -= 1.5
     elif review_ratio < 0.8:
-        percentages["Ultra"] += 2
-        percentages["Normal"] -= 2
+        percentages["Ultra"] += 1.5
+        percentages["Normal"] -= 1.5
     else:
-        percentages["Legendary"] += 1
-        percentages["Ultra"] += 3
-        percentages["Mega"] += 1
-        percentages["Gmax"] += 1
-        percentages["Starter"] += 1
-        percentages["Normal"] -= 7
+        percentages["Legendary"] += 0.5
+        percentages["Ultra"] += 1.5
+        percentages["Mega"] += 0.5
+        percentages["Gmax"] += 0.5
+        percentages["Starter"] += 0.5
+        percentages["Mythical"] += 0.2
+        percentages["Normal"] -= 3.7
     # Restrict access to certain tiers based on main Pokémon level
     if main_pokemon.level:
         # Define level thresholds for each tier
@@ -401,11 +402,18 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
         if trainer_level:
             adjustment = 5
             if trainer_level > 10:
-                for tier in percentages:
+                """for tier in percentages:
                     if tier == "Normal":
                         percentages[tier] = max(percentages[tier] - adjustment, 0)
                     else:
-                        percentages[tier] = percentages.get(tier, 0) + adjustment
+                        percentages[tier] = percentages.get(tier, 0) + adjustment"""
+                percentages["Legendary"] += 0.5
+                percentages["Ultra"] += 1.5
+                percentages["Mega"] += 0.5
+                percentages["Gmax"] += 0.5
+                percentages["Starter"] += 0.5
+                percentages["Mythical"] += 0.2
+                percentages["Normal"] -= 3.7
 
         for tier in ["Starter", "Ultra", "Legendary", "Mythical", "Mega", "Gmax"]:
             if main_pokemon.level < level_thresholds.get(tier, float("inf")):
