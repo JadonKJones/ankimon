@@ -64,7 +64,7 @@ def check_and_award_monthly_pokemon(logger):
     """Checks for and automatically awards the current monthly challenge Pokémon."""
     try:
         db = mw.ankimon_db
-        if db.get_user_data("rate_this") is not True:
+        if db.get_user_data("rate_this") not in (True, "true"):
             logger.log("info", "Monthly Pokemon check skipped: user has not rated the addon.")
             return
 
@@ -113,7 +113,7 @@ def check_and_award_monthly_pokemon(logger):
         if prev_id and threshold:
             logger.log("info", f"Checking for shiny eligibility: prev_id={prev_id}, threshold={threshold}")
             previous_challenge_pokemon = db.get_pokemon(prev_id)
-            if previous_challenge_pokemon.get("pokemon_defeated", 0) >= threshold:
+            if previous_challenge_pokemon and previous_challenge_pokemon.get("pokemon_defeated", 0) >= threshold:
                 logger.log("info", f"Shiny criteria met for {challenge_pokemon_data.get('name')}.")
                 make_shiny = True
         

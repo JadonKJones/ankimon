@@ -897,7 +897,7 @@ class AnkimonDB:
                     rate_data = json.load(f)
                 
                 if isinstance(rate_data, dict) and rate_data.get("rate_this"):
-                    self.set_user_data("rate_this", "true")
+                    self.set_user_data("rate_this", True)
                     self._log("info", "Migrated rate_this.json")
             except Exception as e:
                 self._log("error", f"Failed to migrate rate_this.json: {e}")
