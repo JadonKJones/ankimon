@@ -202,6 +202,26 @@ All web-based screens route through `AnkimonItemsWeb` with `_open_shell_at("item
 - `__init__.py` is a thin orchestrator — add new logic to the appropriate extracted module.
 - `singletons.py` instantiates objects — don't add logic there.
 
+### Documentation Maintenance
+
+When your change **adds, removes, or significantly restructures** a module, singleton, data model, setting key, UI surface, or hook — update the relevant `repository-analysis/` document to match.
+
+| Change type | Documents to update |
+|---|---|
+| New/removed module or file | [02-file-cards.md](repository-analysis/02-file-cards.md), [14-import-hotspots.md](repository-analysis/14-import-and-call-hotspots.md) |
+| New/changed singleton | [02-file-cards.md](repository-analysis/02-file-cards.md), [03-startup-and-control-flow.md](repository-analysis/03-startup-and-control-flow.md) |
+| New/changed data model or table | [16-data-models-and-schemas.md](repository-analysis/16-data-models-and-schemas.md), [20-persistence-deep-dive.md](repository-analysis/20-persistence-deep-dive.md) |
+| New/changed setting key | [17-config-surface-map.md](repository-analysis/17-config-surface-map.md) |
+| New/changed Anki hook or side effect | [18-event-hooks-and-side-effects.md](repository-analysis/18-event-hooks-and-side-effects.md) |
+| New/changed UI surface or dialog | [19-ui-surface-to-logic-map.md](repository-analysis/19-ui-surface-to-logic-map.md) |
+| New risk identified | [05-risk-register.md](repository-analysis/05-risk-register.md) |
+| New convention established | [06-conventions-observed.md](repository-analysis/06-conventions-observed.md) |
+| Architecture change (layers, boundaries) | [01-architecture-map.md](repository-analysis/01-architecture-map.md), [09-module-boundaries.md](repository-analysis/09-module-boundaries.md) |
+
+**Do NOT update repo-analysis docs for**: bug fixes, CSS-only changes, test-only changes, comment/docstring edits, or changes that don't affect the documented architecture.
+
+If the AGENTS.md itself needs updating (new rule, new skill, etc.), update all 4 mirrored copies: `AGENTS.md`, `.agents/AGENTS.md`, `.agents/CLAUDE.md`, `.agents/GEMINI.md`.
+
 ### Editing Playbooks
 
 For step-by-step recipes, see [11-editing-playbook.md](repository-analysis/11-editing-playbook.md):
