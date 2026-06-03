@@ -217,10 +217,11 @@ When your change **adds, removes, or significantly restructures** a module, sing
 | New risk identified | [05-risk-register.md](repository-analysis/05-risk-register.md) |
 | New convention established | [06-conventions-observed.md](repository-analysis/06-conventions-observed.md) |
 | Architecture change (layers, boundaries) | [01-architecture-map.md](repository-analysis/01-architecture-map.md), [09-module-boundaries.md](repository-analysis/09-module-boundaries.md) |
+| AGENTS.md itself updated | `.agents/skills/openrouter-agent/references/ankimon_context.md` |
 
 **Do NOT update repo-analysis docs for**: bug fixes, CSS-only changes, test-only changes, comment/docstring edits, or changes that don't affect the documented architecture.
 
-If the AGENTS.md itself needs updating (new rule, new skill, etc.), update all 4 mirrored copies: `AGENTS.md`, `.agents/AGENTS.md`, `.agents/CLAUDE.md`, `.agents/GEMINI.md`.
+If the AGENTS.md itself needs updating (new rule, new skill, etc.), update all 4 mirrored copies: `AGENTS.md`, `.agents/AGENTS.md`, `.agents/CLAUDE.md`, `.agents/GEMINI.md`. Also update `.agents/skills/openrouter-agent/references/ankimon_context.md` to keep the OpenRouter context in sync.
 
 ### Editing Playbooks
 
