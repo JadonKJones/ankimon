@@ -63,6 +63,23 @@ def test_get_tier_calls_modify_percentages_correctly():
         import pytest
         pytest.fail(f"NameError raised in get_tier: {e}")
 
+def test_modify_percentages_low_reviews_keyerror():
+    # Setup mocks
+    ef.main_pokemon.level = 50
+    ef.settings_obj.get.return_value = 100  # daily_average
+
+    # This should NOT raise KeyError if fixed (total_reviews=10, daily_average=100 -> ratio=0.1 < 0.4, trainer_level=20 > 10)
+    try:
+        res = ef.modify_percentages(total_reviews=10, daily_average=100, trainer_level=20)
+        assert isinstance(res, dict)
+        assert sum(res.values()) > 99.9  # Normalized to 100
+        # Ensure only active tiers are present/active
+        assert res.get("Normal") > 99.9
+        assert res.get("Legendary", 0) == 0
+    except KeyError as e:
+        import pytest
+        pytest.fail(f"KeyError raised: {e}")
+
 def test_handle_enemy_faint_auto_catch_regional_enabled():
     # Save original globals
     orig_settings = ef.settings_obj

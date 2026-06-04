@@ -407,16 +407,22 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
                         percentages[tier] = max(percentages[tier] - adjustment, 0)
                     else:
                         percentages[tier] = percentages.get(tier, 0) + adjustment"""
-                percentages["Legendary"] += 0.5
-                percentages["Ultra"] += 1.5
-                percentages["Mega"] += 0.5
-                percentages["Gmax"] += 0.5
-                percentages["Starter"] += 0.5
-                percentages["Mythical"] += 0.2
-                percentages["Normal"] -= 3.7
+                added = 0
+                for tier, boost in [
+                    ("Legendary", 0.5),
+                    ("Ultra", 1.5),
+                    ("Mega", 0.5),
+                    ("Gmax", 0.5),
+                    ("Starter", 0.5),
+                    ("Mythical", 0.2),
+                ]:
+                    if tier in percentages:
+                        percentages[tier] += boost
+                        added += boost
+                percentages["Normal"] -= added
 
         for tier in ["Starter", "Ultra", "Legendary", "Mythical", "Mega", "Gmax"]:
-            if main_pokemon.level < level_thresholds.get(tier, float("inf")):
+            if tier in percentages and main_pokemon.level < level_thresholds.get(tier, float("inf")):
                 percentages[tier] = 0
 
     # Force starter probability to 0 and normalize
