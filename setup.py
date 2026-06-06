@@ -58,10 +58,8 @@ def setup_virtual_environment():
     # Determine the python/pip paths inside the venv
     if sys.platform == "win32":
         venv_python = venv_dir / "Scripts" / "python.exe"
-        venv_pip = venv_dir / "Scripts" / "pip.exe"
     else:
         venv_python = venv_dir / "bin" / "python"
-        venv_pip = venv_dir / "bin" / "pip"
 
     # If the venv exists but is broken or incompatible with the current platform, recreate it
     is_broken = False
