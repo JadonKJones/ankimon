@@ -12,6 +12,7 @@ sync_dialog = None
 
 def _on_profile_did_open(online_connectivity):
     def handler():
+        nonlocal online_connectivity
         try:
             show_tip_of_the_day()
         except Exception as e:
