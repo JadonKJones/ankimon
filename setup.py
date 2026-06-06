@@ -187,6 +187,8 @@ def create_addon_symlink(addons_dir: Path):
                 os.rmdir(target_link)
             except OSError:
                 shutil.rmtree(target_link)
+        else:
+            target_link.unlink()
                 
     # Create the link
     print_cyan(f"Linking {source_dir} -> {target_link}")
