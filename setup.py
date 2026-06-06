@@ -107,7 +107,7 @@ def setup_virtual_environment():
     print_cyan("Installing dependencies from requirements.txt...")
     if Path("requirements.txt").exists():
         try:
-            subprocess.run([str(venv_pip), "install", "-r", "requirements.txt"], check=True)
+            subprocess.run([str(venv_python), "-m", "pip", "install", "-r", "requirements.txt"], check=True)
             print_green("Dependencies installed successfully!")
         except subprocess.CalledProcessError as e:
             print_red(f"Error installing dependencies: {e}")
