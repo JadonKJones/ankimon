@@ -304,13 +304,23 @@ def load_pokemon_team() -> list[dict[str, Any]]:
 
         # JSON fallback (legacy)
         if os.path.exists(team_pokemon_path):
-            with open(team_pokemon_path, "r", encoding="utf-8") as fh:
-                team_entries = json.load(fh)
-            individual_ids = [e.get("individual_id") for e in team_entries if e.get("individual_id") is not None]
+            try:
+                with open(team_pokemon_path, "r", encoding="utf-8") as fh:
+                    team_entries = json.load(fh)
+                if not isinstance(team_entries, list):
+                    team_entries = []
+            except (json.JSONDecodeError, OSError):
+                team_entries = []
+            individual_ids = [e.get("individual_id") for e in team_entries if isinstance(e, dict) and e.get("individual_id") is not None]
 
-            with open(mypokemon_path, "r", encoding="utf-8") as fh:
-                all_pokemon = json.load(fh)
-            pokemon_by_id = {p.get("individual_id"): p for p in all_pokemon if p.get("individual_id") is not None}
+            try:
+                with open(mypokemon_path, "r", encoding="utf-8") as fh:
+                    all_pokemon = json.load(fh)
+                if not isinstance(all_pokemon, list):
+                    all_pokemon = []
+            except (json.JSONDecodeError, OSError):
+                all_pokemon = []
+            pokemon_by_id = {p.get("individual_id"): p for p in all_pokemon if isinstance(p, dict) and p.get("individual_id") is not None}
             ordered = [pokemon_by_id[ind] for ind in individual_ids if ind in pokemon_by_id]
             if ordered:
                 return ordered[:_MAX_TEAM_SIZE]
