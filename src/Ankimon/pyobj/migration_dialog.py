@@ -390,6 +390,24 @@ def show_migration_dialog_if_needed(db, mypokemon_path, mainpokemon_path,
     """
     if db.is_migrated():
         return True
+
+    # Check if there are actually any JSON files to migrate.
+    # If not, this is likely a fresh install. We can simply mark it as migrated.
+    from pathlib import Path
+    files_to_check = [
+        mypokemon_path, mainpokemon_path, items_path, badges_path,
+        team_path, history_path, data_path, rate_path
+    ]
+
+    has_legacy_files = any(Path(p).is_file() for p in files_to_check if p)
+
+    if not has_legacy_files:
+        # Fresh install, no need to migrate. Just mark as done.
+        conn = db._get_connection()
+        conn.cursor().execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('migrated', 'true')")
+        conn.cursor().execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('migrated_phase2', 'true')")
+        conn.commit()
+        return True
     
     dialog = MigrationDialog(
         db, mypokemon_path, mainpokemon_path, items_path, badges_path, parent,
