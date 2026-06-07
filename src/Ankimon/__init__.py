@@ -56,7 +56,23 @@ mw.logger = logger
 mw.translator = translator
 mw.settings_obj = settings_obj
 
-from .gui_classes import overview_team
+# --- Register Team Overview Hooks  ---
+try:
+    from .gui_classes.overview_team import (
+        deck_browser_will_render,
+        on_overview_will_render_content,
+    )
+
+    # Register hooks if the setting is enabled (requires Anki restart to toggle)
+    if settings_obj.get("gui.team_deck_view") is True:
+        gui_hooks.deck_browser_will_render_content.append(deck_browser_will_render)
+        gui_hooks.overview_will_render_content.append(on_overview_will_render_content)
+
+except Exception as e:
+    # Don't break addon startup if team overview fails
+    print(f"Ankimon: Failed to register team overview hooks: {e}")
+    if logger:
+        logger.exception("Team overview hook registration failed")
 
 # --- Startup: asynchronous & thread-safe ---
 mw.ankimon_startup_finished = False
