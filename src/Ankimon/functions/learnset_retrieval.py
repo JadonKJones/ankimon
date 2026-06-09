@@ -73,7 +73,7 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
             pass
     
     # Fallback 3: base form for Mega/Gigantamax/Primal if no learnset found
-    if not pokemon_learnset and any(x in norm_name for x in ["mega", "gmax", "primal"]):
+    if not pokemon_learnset and any(x in norm_name for x in ["mega", "gmax", "primal", "eternamax"]):
         # Use pokedex to find the base form via species_id
         from .pokedex_functions import _load_pokedex_cache, search_pokedex_by_id, search_pokedex
         pokedex_data = _load_pokedex_cache()
