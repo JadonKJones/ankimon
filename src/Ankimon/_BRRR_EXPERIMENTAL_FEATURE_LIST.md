@@ -2,21 +2,38 @@
 
 This report provides a comprehensive analysis of the features, architectural changes, and improvements in the `BRRRR_Experimental` branch of the Ankimon repository compared to the `main` branch.
 
+## 🌟 Quick Summary of Notable Features (For Players)
+
+Here is a quick look at what's new and improved in this experimental version:
+
+- **📱 Unified Web Shell**: A single, modern, unified window containing the **Item Shop/Bag**, the brand-new **Ankidex (Pokédex V2)**, a beautiful **Trainer Profile**, **Roster Management (Team Builder)**, and **Settings**. Swap between screens instantly without opening separate windows.
+- **⚖️ Balanced Battle Economy**: Continuously earn cash rewards as you review, toggle auto-catching per tier, and use custom wishlists.
+- **🌟 Mega, Gigantamax & Special Form Encounters**: Encounter and capture powerful **Mega Evolutions**, **Gigantamax forms**, and many other special forms (which are unavailable to be encountered in the main version) after discovering their base forms.
+- **🌎 Region Selection & Regional Forms**: Select an active region (like Kanto, Alola, Galar, etc.) to boost generation spawn odds and catch unique regional forms (e.g. Alolan Geodude, Galarian Darmanitan).
+- **🧬 Deep Evolution Depth**: Level-up evolutions now respect your selected active region and support move-based evolutions. Special forms have been accurately redistributed into their lore-correct Legendary/Mythical tiers.
+- **🔄 Fast Hotkeys**: Swap active team members instantly with the `9` key during card reviews.
+
 ## 1. Performance & Memory Optimization
 
 The most significant architectural improvement in this branch is the transition from high-latency file I/O and redundant database queries to an aggressive **in-memory caching system**. This results in nearly zero lag across the application.
 
-### Comprehensive Data Caching
+### Comprehensive Data Caching & Performance Polish
 
 - **File I/O Elimination**: `learnsets.json`, `pokedex.json`, and `next_lvl.csv` (experience tables) are now cached in memory to eliminate disk reads during move selection and level-up processing.
 - **CSV Memory Mapping**: Heavy CSV files (`pokemon.csv`, `stats.csv`, `pokemon_species.csv`, `evolution.csv`) are cached as dictionary structures.
 - **HUD Performance**: Implemented sprite caching in the reviewer to drastically speed up HUD rendering during battles.
 - **Fast ID Indexing**: A reverse index (`species_id` -> `pokemon_name`) is built at startup for $O(1)$ lookups.
+- **Shop TM Caching**: Cached the flattened TM pool on first call in `PokemonShopManager.get_tm_pool()` to avoid repetitive builds.
 
 ### PC Box Query Optimization
 
 - **Results Caching**: The PC Box caches the results of the last filtered query. Navigating between boxes (paging) or selecting different Pokémon no longer triggers a new SQLite query unless the filter state changes.
 - **Filter State Tracking**: Balances performance with data accuracy by intelligently invalidating the cache only when necessary.
+
+### QStackedWidget Multi-View Shell (Instant Screen Swapping)
+
+- **Load Delay Elimination**: Replaced webpage-reloading delays with a persistent `QStackedWidget` in the `AnkimonItemsWeb` shell window, maintaining pre-loaded `QWebEngineView` instances for Items, Ankidex, Settings, Profile, and Team. This eliminates tab-loading white flashes and latency.
+- **Off-DOM Reconciliation & Scoped Repaints**: Unified Items grid leverages off-DOM `DocumentFragment` construction and atomic `replaceChildren` swaps to eliminate layout reflow flashes. CSS `contain: layout` is applied to the `.shop-grid` container to localize repaints.
 
 ### Asynchronous & Thread-Safe Startup Sequence (Zero-Lag Boot)
 
@@ -29,12 +46,36 @@ The most significant architectural improvement in this branch is the transition 
 
 ## 2. Major UI/UX Overhaul
 
+### Unified QWebEngineView Web Shell (`AnkimonItemsWeb`)
+
+The Item Shop, Item Bag, Settings, Trainer Card (Profile), and Pokémon Team windows have been completely moved out of their legacy, resource-heavy PyQt dialogs into a single, cohesive, HTML5/CSS3/JS-based unified web shell window.
+- **Drop-Down Screen Switcher**: A navigation bar with a drop-down selector allows users to jump instantly between Items, Ankidex, Team, Profile, and Settings within the same window.
+- **Loading & Flicker Polish**: Swapped generic loading white flashes for an elegant `#0d1117` background color default and skeleton card placeholder loaders in the Items grid and Ankidex during load events.
+- **Context Menu Suppression**: Disabled QtWebEngine browser-style right-click context menus (Inspect, Reload, Back/Forward) to keep the focus entirely on gameplay.
+- **Flicker-Free Transitions**: Off-DOM grid rebuilding and double-buffered updates eliminate flickering on item usage, purchases, or roster changes.
+
 ### Ankidex (Pokédex V2)
 
 The legacy Pokédex system has been replaced with **Ankidex**, a high-performance, web-based implementation.
-
 - **Tech Stack**: HTML5, CSS3 (Glassmorphism), and Vanilla JavaScript integrated via QtWebEngine.
-- **Features**: Faster loading, improved search, and support for regional/special forms.
+- **Features**: Faster loading, improved search, aspect-ratio preservation for sprites, and support for regional/special forms.
+
+### Web Profile Screen
+
+A modern, responsive profile interface replacing the legacy trainer card:
+- Displays trainer levels, cash, cumulative XP, Pokédex count aligned to Ankidex, badge cases, and recent catches.
+- **Sprite Picker & Name Editing**: Supports selecting trainer sprites and editing trainer nicknames inline.
+
+### Web Team Screen
+
+A drag-and-drop team roster builder that:
+- Features filters (by type/search), customizable team rotation cycle limits, CP-based sorting, and XP Share toggles.
+- Displays animated sprites (synced with the Ankidex sprite toggle).
+- Provides real-time type coverage analysis (Strengths, Weaknesses, and Resistances).
+
+### In-Shell Pokémon Pickers
+
+Custom modal pickers inside the Bag and Mart to easily choose which Pokémon to apply evolution stones, held items, or move items to without spawning legacy PyQt bags.
 
 ### PC Box (mini) Rework
 
@@ -62,12 +103,17 @@ The reviewer interface received a "HUD Portal" upgrade for better injection and 
 - **UI Refresh**: Implemented automatic cache invalidation and sprite refreshing to ensure evolved Pokémon are reflected instantly in the PC grid.
 - **Form-Aware Evolution**: Both auto-evolution (post-battle) and manual evolution (PC Box) now prioritize `pokedex.json` metadata over legacy CSVs. This fully supports evolution paths for regional forms (e.g., Alolan Geodude -> Alolan Graveler).
 - **Time-of-Day Enforcement**: Level-up evolutions now strictly respect time-of-day constraints (day/night) parsed from `pokedex.json` or CSVs. The PC Box displays dynamic status text (e.g., "waiting for Night") when the level is met but the time is wrong.
+- **Stone Evolution Consumption**: Dedicated stones are consumed upon manual evolution confirmation, updating the inventory and refreshing item displays.
+- **Move-Based Manual Evolution**: Supports manual evolutions that depend on learning specific moves (e.g., Koffing -> Galarian Weezing, Stantler -> Wyrdeer).
+- **Region-Aware Level Evolution**: Level-up evolutions prefer regional targets (Galarian/Alolan) over base targets when `active_region` is set.
 
 ### Rare & Level-Gated Encounters
 
 - **Mega & Gigantamax**: Restored and stabilized. These now require the user to have encountered the **base form** first, creating a more realistic progression.
 - **Starter Families**: Implemented as rare level-gated encounters with a strict prerequisite chain (e.g., you cannot encounter Charmeleon until you have caught Charmander).
 - **Legendary & Mythical Chains**: Gen I-III legendaries use their original `encounters.txt` prerequisite chains. Similar logic has been applied to Gen IV-IX legendaries and mythicals.
+- **Special Form Redistribution**: Relocated stat-shuffled special forms (0/negative BST boost like Dialga/Palkia/Giratina Origin, Tornadus/Thundurus/Landorus/Enamorus Therian, Urshifu Rapid Strike, Deoxys forms, Shaymin Sky, Meloetta, Keldeo) to Legendary/Mythical pools, enforcing base-form prerequisites. True battle boosts/forms (Kyogre/Groudon Primal, Eternatus Eternamax, Necrozma Dusk Mane/Dawn Wings/Ultra, Zacian/Zamazenta Crowned, Terapagos Terastal/Stellar, Hoopa Unbound, Magearna Original) remain in MEGA_AND_SPECIAL.
+- **Eternatus Eternamax Encounter & Learnset**: Supported Eternamax encounters and specific learnset retrieval.
 
 ### Regional Forms & Region Selection
 
@@ -106,17 +152,19 @@ Developer features are now dynamically enabled at runtime without modifying code
 
 Toggle seamlessly between save profiles (different `.db` files) to test features without impacting main account progression. This menu action is visible only when Developer Mode is active.
 
-### Add-on Reloader (Hidden Dev Feature)
+### Add-on Reloader & Hot-Reload Shortcut (Hidden Dev Feature)
 
-A dedicated menu button for hot-reloading code. This eliminates the need to restart Anki for every code change, significantly accelerating development and testing. This menu action is visible only when Developer Mode is active.
+- **Reload Button**: A dedicated menu button for hot-reloading code. This eliminates the need to restart Anki for every code change, significantly accelerating development and testing. This menu action is visible only when Developer Mode is active.
+- **Global Hotkey `Ctrl+Shift+R`**: Triggers a fast reloader purger and restart action across the app.
 
 ### Test Encounter Shortcut (Hidden Dev Feature)
 
 - **Hotkey '0'**: Triggers a new Pokémon encounter immediately during cards review. Only registered and active when Developer Mode is active.
 
-### Team Cycling
+### Team Cycling & Roster Rotation
 
 - **Hotkey '9'**: Instantly swap between the top 3 team members during battle while clearing buffs/debuffs.
+- **Customizable Team Rotation Limits**: Team selection window supports customizable team rotation cycle limits and animated sprites (toggle synced with Ankidex).
 
 ### Encounter Rate Simulator (Hidden Dev Feature)
 
@@ -131,11 +179,25 @@ A premium, interactive web-based dashboard integrated directly into Ankimon's he
 
 ## 6. Architectural & Data Improvements
 
+### Global Live Updates Sync (`LIVE_UPDATES.md`)
+
+- **Screen-Agnostic Push Architecture**: Created a lightweight JS/Python QWebChannel bridge (`singletons.notify_stats_changed()`) that pushes changes in cash, experience, level, and caught Pokémon in real-time to active web pages. This avoids expensive manual reloads and updates components atomically.
+- **GUI Thread Execution**: Refreshes run asynchronously on the next event-loop turn via `QTimer.singleShot(0)` to prevent blocking gameplay execution or database commits.
+
 ### Fixes & Fallbacks
 
 - **Generational Fallback**: A progressive move lookup system (Gen 9 → Gen 1) to handle incomplete data, specifically for newer additions like Ultra Beasts.
+- **Learnset Retrieval Upgrades**: Supported Relearn (`R`) and Special (`S`) moves to allow iconic moves like Behemoth Blade/Bash, Sunsteel Strike, Moongeistbeam to show in Move Manager. Programmatic exclusions (e.g., `DEOXYS_EXCLUSIONS`) prevent Deoxys forms from cross-learning each other's signature moves.
+- **3-Tier Suffix Fallbacks**: PokéAPI suffix-cleaning and 3-tier fallback to resolve form learnset errors (e.g., Galarian Darmanitan).
 - **Sprite Fallbacks**: Improved naming logic and back-sprite fallbacks for special forms to prevent "MissingNo" errors.
-- **Reward Balancing**: Configurable cash reward amounts and payout intervals. Unlike the `main` branch which pays a single flat 200¥ daily reward upon hitting the daily average, the experimental branch grants cash dynamically and continuously (defaulting to 100¥ every 10 reviews).
+- **Reward Balancing**: Configurable cash reward amounts and payout intervals. Unlike the `main` branch which pays a single flat 200¥ daily reward upon hitting the daily average, the experimental branch grants cash dynamically and continuously (defaulting to 100¥ every 10 reviews). Fixed infinite cash reward exploits by correcting day cutoff calculation.
+- **Dynamic PC Box Stat Scaling**: Implemented a global square-root scaling formula for PC box stat bars to make visual stat differences look more balanced.
+
+### Settings Upgrades
+
+- **Per-Tier Toggles**: Configured per-tier auto-catch toggles (Megas, Legendaries, etc.) and regional forms toggle.
+- **Always-Catch Wishlist Suggestions**: Implemented a premium always-catch wishlist suggestions popup. Added Pikachu and Eevee to default wishlist settings.
+- **Friendship & Time Evolution**: Removed the Friendship & Time Evolution setting toggle and always enabled it to match standard expectations.
 
 ### Massive Data Update
 
@@ -183,21 +245,31 @@ A major mathematical and architectural redesign of the wild spawn economy to cur
 
 | File                                           | Primary Change                                                |
 | ---------------------------------------------- | ------------------------------------------------------------- |
+| `src/Ankimon/ankimon_items_web/`               | **New** Mart, Bag, and Settings web views within the unified shell window. |
+| `src/Ankimon/ankimon_profile_web/`             | **New** Profile (Trainer Card) and Team web views.            |
+| `src/Ankimon/ankimon_items_web/LIVE_UPDATES.md` | **New** architecture documentation detailing the JS/Python live stats updates bridge. |
 | `src/Ankimon/encounter_simulator/`             | **New** interactive wild Pokémon spawn rate and pity calculator dashboard. |
 | `src/Ankimon/pyobj/encounter_simulator_dialog.py` | **New** developer-mode QDialog WebEngine host and dynamic save patches. |
 | `src/Ankimon/ankidex/`                         | **New** web-based Pokedex system.                             |
-| `src/Ankimon/pyobj/pc_box.py`                  | Complete overhaul of the PC interface and caching.            |
+| `src/Ankimon/pyobj/pc_box.py`                  | Complete overhaul of the PC interface, sorting, and caching.  |
 | `src/Ankimon/pyobj/pokemon_trade.py`           | **New** Trade V2 logic, versioning, and legacy support.       |
 | `src/Ankimon/reloader.py`                      | **New** hot-reload logic.                                     |
+| `src/Ankimon/menu_buttons.py`                  | Wired the unified shell, key shortcuts, and dynamic developer modes. |
+| `src/Ankimon/functions/encounter_data.py`      | Relocated stat-redistributive special forms to Legendary/Mythical pools. |
 | `src/Ankimon/functions/encounter_functions.py` | Prerequisite chains, level-gating, region-boost, and new Encounter Overhaul. |
-| `src/Ankimon/singletons.py`                    | Account switching and lazy-loading support.                   |
+| `src/Ankimon/functions/learnset_retrieval.py`  | Learnset retrieval fallback logic and Deoxys exclusions.      |
+| `src/Ankimon/singletons.py`                    | Account switching, unified Items window, and live update sync. |
 | `src/Ankimon/pyobj/settings.py`                | Region selection, reward balancing, and auto-catch settings.  |
 | `src/Ankimon/pyobj/update_manager.py`          | **New** updater state, locked-file safety, and commit fetch.  |
 | `src/Ankimon/pyobj/update_dialog.py`           | **New** update available modal, snooze box, and progress bar. |
 | `src/Ankimon/changelog.py`                     | **New** background startup update check query logic.          |
 | `src/Ankimon/startup.py`                      | **New** split of boot sequence into asynchronous QueryOp background checks and main-thread UI callbacks. |
 | `src/Ankimon/__init__.py`                     | **New** asynchronous and thread-safe startup registration and deferred client-side hooks wiring. |
+| `src/Ankimon/pyobj/trainer_card_window.py`     | **Deleted** (superseded by web Profile view).                 |
+| `src/Ankimon/gui_classes/pokemon_team_window.py` | **Deleted** (superseded by web Team view).                    |
+| `src/Ankimon/gui_classes/choose_trainer_sprite_graphical.py` | **Deleted** (superseded by web sprite picker).                 |
+| `src/Ankimon/pyobj/achievements_dialog.py`     | **Deleted** (superseded by web achievements in Profile).       |
 
 ---
 
-_Analysis completed based on repository state as of May 26, 2026, incorporating the encounter overhaul and simulation framework._
+_Analysis completed based on repository state as of June 10, 2026, incorporating the unified web shell features, special forms redistribution, and learnset logic._
