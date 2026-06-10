@@ -42,6 +42,25 @@ def clean_pokeapi_name(name: str) -> str:
             
     return name
 
+DEOXYS_EXCLUSIONS = {
+    "deoxys": {
+        "spikes", "superpower", "extremespeed", "zapcannon", "irondefense", 
+        "amnesia", "agility", "counter", "mirrorcoat"
+    },
+    "deoxysattack": {
+        "spikes", "extremespeed", "cosmicpower", "irondefense", "amnesia", 
+        "agility", "recover", "counter", "mirrorcoat", "doubleteam"
+    },
+    "deoxysdefense": {
+        "superpower", "extremespeed", "cosmicpower", "zapcannon", "agility", 
+        "doubleteam"
+    },
+    "deoxysspeed": {
+        "spikes", "superpower", "cosmicpower", "zapcannon", "irondefense", 
+        "amnesia", "counter", "mirrorcoat"
+    }
+}
+
 def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
     """
     Return all moves a Pokémon can know at *pokemon_level* in a single *generation*.
@@ -72,19 +91,24 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
         except Exception:
             pass
     
-    # Fallback 3: base form for Mega/Gigantamax/Primal if no learnset found
-    if not pokemon_learnset and any(x in norm_name for x in ["mega", "gmax", "primal", "eternamax"]):
+    # Fallback 3: base form for Mega/Gigantamax/Special forms if no level-up moves found
+    has_lvl_moves = any(any("L" in code for code in codes) for codes in pokemon_learnset.values())
+    if not pokemon_learnset or not has_lvl_moves:
         # Use pokedex to find the base form via species_id
-        from .pokedex_functions import _load_pokedex_cache, search_pokedex_by_id, search_pokedex
-        pokedex_data = _load_pokedex_cache()
-        
-        # Use search_pokedex to handle normalized names and fallbacks
-        species_id = search_pokedex(norm_name, "species_id")
-        
-        if species_id and not isinstance(species_id, list):
-            base_name = search_pokedex_by_id(species_id)
-            if base_name and base_name != "Pokémon not found":
-                pokemon_learnset = learnsets.get(base_name, {}).get("learnset", {})
+        try:
+            from .pokedex_functions import _load_pokedex_cache, search_pokedex_by_id, search_pokedex
+            pokedex_data = _load_pokedex_cache()
+            
+            # Use search_pokedex to handle normalized names and fallbacks
+            species_id = search_pokedex(norm_name, "species_id")
+            
+            if species_id and not isinstance(species_id, list):
+                base_name = search_pokedex_by_id(species_id)
+                if base_name and base_name != "Pokémon not found" and base_name != norm_name:
+                    base_learnset = learnsets.get(base_name, {}).get("learnset", {})
+                    pokemon_learnset = {**base_learnset, **pokemon_learnset}
+        except Exception:
+            pass
 
     moves = {}
     
@@ -94,13 +118,30 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
         target_generation = str(gen)
         
         for move, learn_codes in pokemon_learnset.items():
+            if norm_name in DEOXYS_EXCLUSIONS and move in DEOXYS_EXCLUSIONS[norm_name]:
+                continue
             best = -1
             for learn_code in learn_codes:
-                move_generation, _, move_level = learn_code.partition("L")
-                if move_generation != target_generation:
+                if not learn_code or learn_code[0] != target_generation:
                     continue
                 
-                learn_level = int(move_level)
+                # Parse method: L (level-up), R (relearn), S (special/event level)
+                method = learn_code[1] if len(learn_code) > 1 else ""
+                if method == "L":
+                    try:
+                        learn_level = int(learn_code[2:])
+                    except ValueError:
+                        continue
+                elif method == "R":
+                    learn_level = 1  # Relearn moves can be learned at any level >= 1
+                elif method == "S":
+                    try:
+                        learn_level = int(learn_code[2:])
+                    except ValueError:
+                        continue
+                else:
+                    continue
+                
                 if pokemon_level >= learn_level > best:
                     best = learn_level
             

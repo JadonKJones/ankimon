@@ -253,3 +253,30 @@ def test_handle_enemy_faint_auto_catch_regional_disabled():
         ef.catch_pokemon = orig_catch
         ef.new_pokemon = orig_new
         ef.kill_pokemon = orig_kill
+
+
+def test_meets_prerequisites_fusion_and_normal():
+    # 1. Test normal pokemon prerequisite (e.g. Mewtwo (150) needs Mew (151))
+    assert ef._meets_prerequisites(150, {151}) is True
+    assert ef._meets_prerequisites(150, set()) is False
+
+    # 2. Test fusion forms (specific actual_id prerequisite, e.g. Necrozma Dusk Mane (10155) needs Necrozma (800) and Solgaleo (791))
+    # It should not require Lunala (792) even though base Necrozma (800) requires Solgaleo and Lunala.
+    assert ef._meets_prerequisites(10155, {800, 791}) is True
+    assert ef._meets_prerequisites(10155, {800}) is False
+    assert ef._meets_prerequisites(10155, {791}) is False
+    
+    # 3. Test fallback for forms not explicitly in PREREQUISITES (e.g. Venusaur Mega (10033) has base species Venusaur (3))
+    # Venusaur has no prerequisites, so Venusaur Mega should meet prerequisites unconditionally.
+    assert ef._meets_prerequisites(10033, set()) is True
+
+    # 4. Test stat-redistribution forms requiring their base forms
+    # Dialga Origin (10245) requires Dialga (483)
+    assert ef._meets_prerequisites(10245, {483}) is True
+    assert ef._meets_prerequisites(10245, set()) is False
+
+    # Meloetta Pirouette (10018) requires Meloetta (648)
+    assert ef._meets_prerequisites(10018, {648}) is True
+    assert ef._meets_prerequisites(10018, set()) is False
+
+

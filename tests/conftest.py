@@ -11,7 +11,7 @@ from pathlib import Path
 _src = Path(__file__).parent.parent / "src"
 
 # Stub parent packages so relative imports resolve without loading __init__.py
-for _pkg in ("Ankimon", "Ankimon.functions"):
+for _pkg in ("Ankimon", "Ankimon.functions", "Ankimon.pyobj", "Ankimon.ankimon_items_web"):
     if _pkg not in sys.modules:
         _mod = types.ModuleType(_pkg)
         _mod.__path__ = [str(_src / _pkg.replace(".", "/"))]

@@ -507,11 +507,12 @@ def _meets_prerequisites(pokemon_id: int, collected_ids: set) -> bool:
     """
 
     check_id = pokemon_id
-    if pokemon_id >= 10000:
-        name = search_pokedex_by_id(pokemon_id)
-        species_id = safe_int(search_pokedex(name, "species_id"))
-        if species_id:
-            check_id = species_id
+    if pokemon_id not in encounter_data.PREREQUISITES:
+        if pokemon_id >= 10000:
+            name = search_pokedex_by_id(pokemon_id)
+            species_id = safe_int(search_pokedex(name, "species_id"))
+            if species_id:
+                check_id = species_id
 
     required = encounter_data.PREREQUISITES.get(check_id)
     if not required:

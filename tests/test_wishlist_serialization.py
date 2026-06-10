@@ -49,7 +49,6 @@ def _install_aqt_stubs():
 
 def test_wishlist_serialization():
     _install_aqt_stubs()
-
     from Ankimon.ankimon_items_web.shop_obj import AnkimonItemsWeb
 
     # We want to test _serialize_setting for the battle.auto_catch_wishlist key

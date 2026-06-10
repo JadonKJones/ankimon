@@ -6,6 +6,9 @@ from unittest.mock import MagicMock
 import importlib.util
 from pathlib import Path
 
+# --- BACKUP SYS.MODULES ---
+_orig_modules = sys.modules.copy()
+
 # --- DIRECTORY RESOLUTION ---
 base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, base_dir)
@@ -409,6 +412,14 @@ def test_simulation_suite():
     assert passed_b is True
     assert passed_c is True
     assert passed_d is True
+
+def teardown_module():
+    touched = modules_to_mock + ["Ankimon.functions.encounter_functions"]
+    for k in touched:
+        if k in _orig_modules:
+            sys.modules[k] = _orig_modules[k]
+        elif k in sys.modules:
+            del sys.modules[k]
 
 if __name__ == "__main__":
     log("Starting Encounter Overhaul Simulation Suite...")

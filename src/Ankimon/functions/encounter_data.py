@@ -15,14 +15,19 @@ LEGENDARY = [
     # Generation 4
     480, 481, 482,  # uxie, mesprit, azelf
     483, 484,       # dialga, palkia
+    10245, 10246,   # dialgaorigin, palkiaorigin
     485, 486, 487,  # heatran, regigigas, giratina
+    10007,          # giratinaorigin
     488,            # cresselia
     # Generation 5
     638, 639, 640,  # cobalion, terrakion, virizion
     641, 642, 643,  # tornadus-incarnate, thundurus-incarnate, reshiram
+    10019, 10020,   # tornadustherian, thundurustherian
     644, 645, 646,  # zekrom, landorus-incarnate, kyurem
+    10021,          # landorustherian
     # Generation 6
     716, 717, 10119,  # xerneas, yveltal, zygarde-50 (actual_id=10119)
+    10181,          # zygarde10
     # Generation 7
     772, 773, 785,  # type-null, silvally, tapu-koko
     786, 787, 788,  # tapu-lele, tapu-bulu, tapu-fini
@@ -31,8 +36,10 @@ LEGENDARY = [
     # Generation 8
     888, 889, 890,  # zacian, zamazenta, eternatus
     891, 892, 894,  # kubfu, urshifu-single-strike, regieleki
+    10191,          # urshifurapidstrike
     895, 896, 897,  # regidrago, glastrier, spectrier
     898, 905,       # calyrex, enamorus-incarnate
+    10249,          # enamorustherian
     # Generation 9
     1001, 1002, 1003,  # wo-chien, chien-pao, ting-lu
     1004, 1007, 1008,  # chi-yu, koraidon, miraidon
@@ -50,12 +57,15 @@ MYTHICAL = [
     # Generation 3
     385,            # jirachi
     386,            # deoxys  [from encounter.txt]
+    10001, 10002, 10003, # deoxysattack, deoxysdefense, deoxysspeed
     # Generation 4
     489, 490, 491,  # phione, manaphy, darkrai
     492,            # shaymin-land
+    10006,          # shayminsky
     493,            # arceus  [from encounter.txt]
     # Generation 5
     494, 647, 648,  # victini, keldeo-ordinary, meloetta-aria
+    10024, 10018,   # keldeoresolute, meloettapirouette
     649,            # genesect  [from encounter.txt]
     # Generation 6
     719, 720, 721,  # diancie, hoopa, volcanion
@@ -412,7 +422,10 @@ STARTERS = [
 # HARD-CODED MEGA / GMAX LISTS
 # Generated from pokedex.json forme field — 95 Mega, 34 Gmax.
 # =============================================================
-MEGA = [
+MEGA_AND_SPECIAL = [
+    # =============================================================
+    # 1. TRUE MEGAS
+    # =============================================================
     10033,  # venusaurmega           (species=3)
     10034,  # charizardmegax         (species=6)
     10035,  # charizardmegay         (species=6)
@@ -456,8 +469,6 @@ MEGA = [
     10074,  # glaliemega             (species=362)
     10075,  # dianciemega            (species=719)
     10076,  # metagrossmega          (species=376)
-    10077,  # kyogreprimal           (species=382)   not a mega
-    10078,  # groudonprimal          (species=383)   not a mega
     10079,  # rayquazamega           (species=384)
     10087,  # cameruptmega           (species=323)
     10088,  # lopunnymega            (species=428)
@@ -510,8 +521,45 @@ MEGA = [
     10323,  # tatsugiridroopymega    (species=978)
     10324,  # tatsugiristretchymega  (species=978)
     10325,  # baxcaliburmega         (species=998)
-    10190,  # eternatuseternamax     (species=890)   not a mega
+
+    # =============================================================
+    # 2. PHASE 1 SPECIAL FORMS (LEGENDARY & MYTHICAL FUSIONS, ORIGINS, ETC.)
+    # =============================================================
+    # Primal Reversions & Eternamax (Not true Megas)
+    10077,  # kyogreprimal           (species=382)
+    10078,  # groudonprimal          (species=383)
+
+    10190,  # eternatuseternamax     (species=890)
+
+    # Zygarde Forms
+    10120,  # zygardecomplete        (species=718)
+
+    # Necrozma Forms & Fusions
+    10155,  # necrozmaduskmane       (species=800)
+    10156,  # necrozmadawnwings      (species=800)
+    10157,  # necrozmaultra          (species=800)
+
+    # Kyurem Fusions
+    10022,  # kyuremblack            (species=646)
+    10023,  # kyuremwhite            (species=646)
+
+    # Zacian & Zamazenta Crowned Forms
+    10188,  # zaciancrowned          (species=888)
+    10189,  # zamazentacrowned       (species=889)
+
+    # Calyrex Fusions
+    10193,  # calyrexice             (species=898)
+    10194,  # calyrexshadow          (species=898)
+
+    # Terapagos Forms
+    10276,  # terapagosterastal      (species=1024)
+    10277,  # terapagosstellar       (species=1024)
+
+    # Other Mythical/Legendary Special Forms
+    10086,  # hoopaunbound           (species=720)
 ]
+
+MEGA = MEGA_AND_SPECIAL
 
 GMAX = [
     10195,  # venusaurgmax              (species=3)
@@ -564,47 +612,43 @@ UNAVAILABLE = [
     # Alolan Forms (10093 = raticatealolatotem, 10149 = marowakalolatotem: stay UNAVAILABLE)
     10093, 10149, 10099, # raticatealolatotem, marowakalolatotem, pikachualola
     # Special & Battle-Only Forms
-    10117, 10120, 10121, # greninjaash, zygardecomplete, gumshoostotem
+    10117, 10121,        # greninjaash, gumshoostotem (zygardecomplete moved to MEGA)
     10122, 10128, 10129, # vikavolttotem, lurantistotem, salazzletotem
     10144, 10145, 10146, # mimikyutotem, mimikyubustedtotem, kommoototem
     10150, 10153, 10154, # ribombeetotem, araquanidtotem, togedemarutotem
-    10157, 10181, # necrozmaultra, zygarde10
     10256,           # palafinhero
     # Alternate Species Forms
-    10001, 10002, 10003, # deoxysattack, deoxysdefense, deoxysspeed
-    10004, 10005, 10006, # wormadamsandy, wormadamtrash, shayminsky
-    10007, 10008, 10009, # giratinaorigin, rotomheat, rotomwash
+    10004, 10005,        # wormadamsandy, wormadamtrash (deoxys forms & shayminsky moved to MEGA)
+    10008, 10009,        # rotomheat, rotomwash
     10010, 10011, 10012, # rotomfrost, rotomfan, rotommow
     10013, 10014, 10015, # castformsunny, castformrainy, castformsnowy
-    10016, 10017, 10018, # basculinbluestriped, darmanitanzen, meloettapirouette
-    10019, 10020, 10021, # tornadustherian, thundurustherian, landorustherian
-    10022, 10023, 10024, # kyuremblack, kyuremwhite, keldeoresolute
-    10025, 10026, 10027, # meowsticf, aegislashblade, pumpkaboosmall
+    10016, 10017,        # basculinbluestriped, darmanitanzen (meloettapirouette moved to MEGA)
+    10025, 10027,        # meowsticf, aegislashblade, pumpkaboosmall (tornadus/thundurus/landorus therians & kyurems & keldeoresolute moved to MEGA)
     10028, 10029, 10030, # pumpkaboolarge, pumpkaboosuper, gourgeistsmall
     10031, 10032, 10061, # gourgeistlarge, gourgeistsuper, floetteeternal
     10080,               # pikachurockstar
     10081, 10082, 10083, # pikachubelle, pikachupopstar, pikachuphd
-    10084, 10085, 10086, # pikachulibre, pikachucosplay, hoopaunbound
+    10084, 10085,        # pikachulibre, pikachucosplay (hoopaunbound moved to MEGA)
     10094, 10095, 10096, # pikachuoriginal, pikachuhoenn, pikachusinnoh
     10097, 10098, 10116, # pikachuunova, pikachukalos, greninjabond
     10123, 10124, 10125, # oricoriopompom, oricoriopau, oricoriosensu
     10126, 10127, 10136, # lycanrocmidnight, wishiwashischool, minior
     10137, 10138, 10139, # miniororange, minioryellow, miniorgreen
     10140, 10141, 10142, # miniorblue, miniorindigo, miniorviolet
-    10143, 10147, 10148, # mimikyubusted, magearnaoriginal, pikachupartner
-    10152, 10155, 10156, # lycanrocdusk, necrozmaduskmane, necrozmadawnwings
+    10143, 10148,        # mimikyubusted, pikachupartner (magearnaoriginal is now mega candidate)
+    10152,               # lycanrocdusk (necrozma fusion forms moved to MEGA)
     10158, 10159, 10160, # pikachustarter, eeveestarter, pikachuworld
     10182, 10183, 10184, # cramorantgulping, cramorantgorging, toxtricitylowkey
     10185, 10186, 10187, # eiscuenoice, indeedeef, morpekohangry
-    10188, 10189, 10191, # zaciancrowned, zamazentacrowned, urshifurapidstrike
-    10192, 10193, 10194, # zarudedada, calyrexice, calyrexshadow
-    10245, 10246, 10247, # dialgaorigin, palkiaorigin, basculinwhitestriped
-    10248, 10249, 10254, # basculegionf, enamorustherian, oinkolognef
+    10191,               # urshifurapidstrike (crowned forms & calyrex riders moved to MEGA)
+    10192,               # zarudedada
+    10247,               # basculinwhitestriped (dialga/palkia origin & enamorus therian moved to MEGA)
+    10248, 10254,        # basculegionf, oinkolognef
     10255, 10257, 10258, # dudunsparcethreesegment, maushold, tatsugiridroopy
     10259, 10260, 10261, # tatsugiristretchy, squawkabillyblue, squawkabillyyellow
     10262, 10263, 10272, # squawkabillywhite, gimmighoulroaming, ursalunabloodmoon
     10273, 10274, 10275, # ogerponwellspringtera, ogerponhearthflametera, ogerponcornerstonetera
-    10276, 10277, 10178, # terapagosterastal, terapagosstellar, darmanitan-galar-zen
+    10178,               # darmanitan-galar-zen (terapagos forms moved to MEGA)
 ]
 
 # =============================================================
@@ -683,36 +727,58 @@ PREREQUISITES = {
     
     # Generation 3
     384: {382, 383},       # Rayquaza requires Kyogre + Groudon
+    10001: {386},          # Deoxys Attack requires Deoxys
+    10002: {386},          # Deoxys Defense requires Deoxys
+    10003: {386},          # Deoxys Speed requires Deoxys
     
     # Generation 4
     487: {483, 484},       # Giratina requires Dialga + Palkia
     483: {480, 481, 482},  # Dialga requires Uxie + Mesprit + Azelf
     484: {480, 481, 482},  # Palkia requires Uxie + Mesprit + Azelf
+    10245: {483},          # Dialga Origin requires Dialga
+    10246: {484},          # Palkia Origin requires Palkia
+    10007: {487},          # Giratina Origin requires Giratina
+    10006: {492},          # Shaymin Sky requires Shaymin
     493: {487},            # Arceus requires Lake Trio + Dialga + Palkia + Giratina
     490: {489},            # Phione requires Manaphy
     486: {894, 895, 377, 378, 379}, # Regigigas requires Eleki + Drago + Regi Trio
     
     # Generation 5
     647: {638, 639, 640},  # Keldeo requires Swords of Justice
+    10024: {647},          # Keldeo Resolute requires Keldeo
     645: {641, 642},       # Landorus requires Tornadus + Thundurus
     646: {643, 644},       # Kyurem requires Reshiram + Zekrom
+    10022: {646, 644},     # Kyurem-Black requires Kyurem + Zekrom
+    10023: {646, 643},     # Kyurem-White requires Kyurem + Reshiram
+    10019: {641},          # Tornadus Therian requires Tornadus
+    10020: {642},          # Thundurus Therian requires Thundurus
+    10021: {645},          # Landorus Therian requires Landorus
+    10018: {648},          # Meloetta Pirouette requires Meloetta
     
     # Generation 6
     718: {716, 717},       # Zygarde requires Xerneas + Yveltal
+    10181: {10119},        # Zygarde 10% requires Zygarde 50%
     
     # Generation 7
     800: {791, 792},       # Necrozma requires Solgaleo + Lunala
     773: {772},            # Silvally requires Type: Null
+    10155: {800, 791},     # Necrozma-Dusk-Mane requires Necrozma + Solgaleo
+    10156: {800, 792},     # Necrozma-Dawn-Wings requires Necrozma + Lunala
+    10157: {800, 791, 792},# Necrozma-Ultra requires Necrozma + Solgaleo + Lunala
     
     # Generation 8
     890: {888, 889},       # Eternatus requires Zacian + Zamazenta
     896: {898},            # Glastrier requires Calyrex
     897: {898},            # Spectrier requires Calyrex
     905: {645},            # Enamorus requires Tornadus + Thundurus + Landorus
+    10249: {905},          # Enamorus Therian requires Enamorus
+    10193: {898, 896},     # Calyrex-Ice requires Calyrex + Glastrier
+    10194: {898, 897},     # Calyrex-Shadow requires Calyrex + Spectrier
+    10191: {892},          # Urshifu Rapid Strike requires Urshifu Single Strike
     
     # Generation 9
     1025: {1014, 1015, 1016}, # Pecharunt requires Loyal Three
-    1024: ("OR", {1007, 1008}), # Terapagos requires Koraidon OR Miraidon
+    1024: {1007, 1008}, # Terapagos requires Koraidon OR Miraidon
 
     # Starter Evolutions
     2: {1}, 3: {2},     # Ivysaur requires Bulbasaur, Venusaur requires Ivysaur

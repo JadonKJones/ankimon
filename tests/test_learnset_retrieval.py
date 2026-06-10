@@ -14,7 +14,6 @@ sys.modules["aqt.utils"] = mock_aqt.utils
 sys.modules["aqt.qt"] = MagicMock()
 
 # Mock error_handler and pyobj to avoid loading PyQt/Anki dependencies
-sys.modules["Ankimon.pyobj"] = MagicMock()
 sys.modules["Ankimon.pyobj.error_handler"] = MagicMock()
 
 # Stub resources module with a fake learnset_path and fallback attributes
@@ -60,6 +59,28 @@ FAKE_LEARNSET = {
     "eternatus": {
         "learnset": {
             "dynamaxcannon": ["9L56"],
+        }
+    },
+    "necrozma": {
+        "learnset": {
+            "photongeyser": ["9L1"],
+        }
+    },
+    "necrozmaultra": {
+        "learnset": {
+            "moongeistbeam": ["9R"],
+            "sunsteelstrike": ["9R"],
+        }
+    },
+    "deoxys": {
+        "learnset": {
+            "spikes": ["9L20"],
+            "superpower": ["9L37"],
+            "extremespeed": ["9L73"],
+            "cosmicpower": ["9L35"],
+            "recover": ["9L40"],
+            "teleport": ["9L1"],
+            "zapcannon": ["9L61"],
         }
     }
 }
@@ -191,5 +212,52 @@ class TestLearnsetMismatches:
         moves = _get_learnset_moves("eternatuseternamax", 60, 9)
         assert "dynamaxcannon" in moves
         assert moves["dynamaxcannon"] == 56
+
+    def test_special_form_learnset_merge(self):
+        # Test that necrozmaultra (which only has R/tutor moves) merges necrozma's level-up moves
+        # and correctly resolves its own Relearn (R) moves
+        moves = _get_learnset_moves("necrozmaultra", 50, 9)
+        assert "photongeyser" in moves
+        assert "moongeistbeam" in moves
+        assert "sunsteelstrike" in moves
+
+    def test_deoxys_form_exclusive_moves(self):
+        # 1. Deoxys Normal
+        normal_moves = _get_learnset_moves("deoxys", 100, 9)
+        assert "cosmicpower" in normal_moves
+        assert "recover" in normal_moves
+        assert "teleport" in normal_moves
+        assert "spikes" not in normal_moves
+        assert "superpower" not in normal_moves
+        assert "extremespeed" not in normal_moves
+
+        # 2. Deoxys Attack
+        attack_moves = _get_learnset_moves("deoxysattack", 100, 9)
+        assert "superpower" in attack_moves
+        assert "zapcannon" in attack_moves
+        assert "teleport" in attack_moves
+        assert "recover" not in attack_moves
+        assert "spikes" not in attack_moves
+        assert "extremespeed" not in attack_moves
+        assert "cosmicpower" not in attack_moves
+
+        # 3. Deoxys Defense
+        defense_moves = _get_learnset_moves("deoxysdefense", 100, 9)
+        assert "spikes" in defense_moves
+        assert "recover" in defense_moves
+        assert "teleport" in defense_moves
+        assert "superpower" not in defense_moves
+        assert "extremespeed" not in defense_moves
+        assert "cosmicpower" not in defense_moves
+
+        # 4. Deoxys Speed
+        speed_moves = _get_learnset_moves("deoxysspeed", 100, 9)
+        assert "extremespeed" in speed_moves
+        assert "recover" in speed_moves
+        assert "teleport" in speed_moves
+        assert "spikes" not in speed_moves
+        assert "superpower" not in speed_moves
+        assert "cosmicpower" not in speed_moves
+
 
 

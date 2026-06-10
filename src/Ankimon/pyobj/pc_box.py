@@ -2010,6 +2010,7 @@ class PokemonPC(QDialog):
                     
                     top_r_layout.addWidget(self.move_manager)
                     if evo_btn:
+                        top_r_layout.removeWidget(evo_btn)
                         top_r_layout.addWidget(evo_btn)
 
         except Exception as e:
