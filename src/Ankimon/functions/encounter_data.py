@@ -456,8 +456,8 @@ MEGA = [
     10074,  # glaliemega             (species=362)
     10075,  # dianciemega            (species=719)
     10076,  # metagrossmega          (species=376)
-    10077,  # kyogreprimal           (species=382)
-    10078,  # groudonprimal          (species=383)
+    10077,  # kyogreprimal           (species=382)   not a mega
+    10078,  # groudonprimal          (species=383)   not a mega
     10079,  # rayquazamega           (species=384)
     10087,  # cameruptmega           (species=323)
     10088,  # lopunnymega            (species=428)
@@ -510,6 +510,7 @@ MEGA = [
     10323,  # tatsugiridroopymega    (species=978)
     10324,  # tatsugiristretchymega  (species=978)
     10325,  # baxcaliburmega         (species=998)
+    10190,  # eternatuseternamax     (species=890)   not a mega
 ]
 
 GMAX = [
@@ -567,7 +568,7 @@ UNAVAILABLE = [
     10122, 10128, 10129, # vikavolttotem, lurantistotem, salazzletotem
     10144, 10145, 10146, # mimikyutotem, mimikyubustedtotem, kommoototem
     10150, 10153, 10154, # ribombeetotem, araquanidtotem, togedemarutotem
-    10157, 10181, 10190, # necrozmaultra, zygarde10, eternatuseternamax
+    10157, 10181, # necrozmaultra, zygarde10
     10256,           # palafinhero
     # Alternate Species Forms
     10001, 10002, 10003, # deoxysattack, deoxysdefense, deoxysspeed
