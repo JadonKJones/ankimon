@@ -612,43 +612,43 @@ UNAVAILABLE = [
     # Alolan Forms (10093 = raticatealolatotem, 10149 = marowakalolatotem: stay UNAVAILABLE)
     10093, 10149, 10099, # raticatealolatotem, marowakalolatotem, pikachualola
     # Special & Battle-Only Forms
-    10117, 10121,        # greninjaash, gumshoostotem (zygardecomplete moved to MEGA)
+    10117, 10121,        # greninjaash, gumshoostotem
     10122, 10128, 10129, # vikavolttotem, lurantistotem, salazzletotem
     10144, 10145, 10146, # mimikyutotem, mimikyubustedtotem, kommoototem
     10150, 10153, 10154, # ribombeetotem, araquanidtotem, togedemarutotem
     10256,           # palafinhero
     # Alternate Species Forms
-    10004, 10005,        # wormadamsandy, wormadamtrash (deoxys forms & shayminsky moved to MEGA)
+    10004, 10005,        # wormadamsandy, wormadamtrash 
     10008, 10009,        # rotomheat, rotomwash
     10010, 10011, 10012, # rotomfrost, rotomfan, rotommow
-    10013, 10014, 10015, # castformsunny, castformrainy, castformsnowy
-    10016, 10017,        # basculinbluestriped, darmanitanzen (meloettapirouette moved to MEGA)
-    10025, 10027,        # meowsticf, aegislashblade, pumpkaboosmall (tornadus/thundurus/landorus therians & kyurems & keldeoresolute moved to MEGA)
+    10013, 10014, 10015, # castform sunny, castformrainy, castformsnowy
+    10016, 10017,        # basculinbluestriped, darmanitanzen 
+    10025, 10027,        # meowsticf, aegislashblade, pumpkaboosmall 
     10028, 10029, 10030, # pumpkaboolarge, pumpkaboosuper, gourgeistsmall
     10031, 10032, 10061, # gourgeistlarge, gourgeistsuper, floetteeternal
     10080,               # pikachurockstar
     10081, 10082, 10083, # pikachubelle, pikachupopstar, pikachuphd
-    10084, 10085,        # pikachulibre, pikachucosplay (hoopaunbound moved to MEGA)
+    10084, 10085,        # pikachulibre, pikachucosplay 
     10094, 10095, 10096, # pikachuoriginal, pikachuhoenn, pikachusinnoh
     10097, 10098, 10116, # pikachuunova, pikachukalos, greninjabond
     10123, 10124, 10125, # oricoriopompom, oricoriopau, oricoriosensu
     10126, 10127, 10136, # lycanrocmidnight, wishiwashischool, minior
     10137, 10138, 10139, # miniororange, minioryellow, miniorgreen
     10140, 10141, 10142, # miniorblue, miniorindigo, miniorviolet
-    10143, 10148,        # mimikyubusted, pikachupartner (magearnaoriginal is now mega candidate)
-    10152,               # lycanrocdusk (necrozma fusion forms moved to MEGA)
+    10143, 10148,        # mimikyubusted, pikachupartner
+    10152,               # lycanrocdusk 
     10158, 10159, 10160, # pikachustarter, eeveestarter, pikachuworld
     10182, 10183, 10184, # cramorantgulping, cramorantgorging, toxtricitylowkey
     10185, 10186, 10187, # eiscuenoice, indeedeef, morpekohangry
-    10191,               # urshifurapidstrike (crowned forms & calyrex riders moved to MEGA)
+    10191,               # urshifurapidstrike 
     10192,               # zarudedada
-    10247,               # basculinwhitestriped (dialga/palkia origin & enamorus therian moved to MEGA)
+    10247,               # basculinwhitestriped
     10248, 10254,        # basculegionf, oinkolognef
     10255, 10257, 10258, # dudunsparcethreesegment, maushold, tatsugiridroopy
     10259, 10260, 10261, # tatsugiristretchy, squawkabillyblue, squawkabillyyellow
     10262, 10263, 10272, # squawkabillywhite, gimmighoulroaming, ursalunabloodmoon
     10273, 10274, 10275, # ogerponwellspringtera, ogerponhearthflametera, ogerponcornerstonetera
-    10178,               # darmanitan-galar-zen (terapagos forms moved to MEGA)
+    10178,               # darmanitan-galar-zen
 ]
 
 # =============================================================
