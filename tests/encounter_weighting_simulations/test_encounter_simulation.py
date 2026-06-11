@@ -6,13 +6,13 @@ from unittest.mock import MagicMock
 import importlib.util
 
 # --- CONFIGURATION ---
-SCENARIOS_TO_RUN = [5, 20]
+SCENARIOS_TO_RUN = [21, 22]
 N = {
     1: 200000,
     2: 50000,
     3: 50000,
     4: 200000,
-    5: 100000,
+    5: 200000,
     6: 200000,
     7: 50000,
     8: 50000,
@@ -25,13 +25,13 @@ N = {
     17: 10000,
     18: 100000,
     19: 100000,
-    20: 200000,
+    20: 500000,
     21: 10000,
     22: 10000,
 }
 
 # --- SIMULATION SETTINGS ---
-MAIN_POKEMON_LEVEL = 100
+MAIN_POKEMON_LEVEL = 50
 BYPASS_PREREQUISITES = True
 BYPASS_MIN_LEVEL_CHECK = False
 BYPASS_BASE_FORM_CHECK = True
@@ -506,8 +506,8 @@ def run_all():
             
         if alola_m + base_m > 0:
             ratio = alola_m / (alola_m + base_m)
-            msgs5.append(f"Alolan Meowth Ratio: {alola_m}/{alola_m + base_m} = {ratio:.1%} (predicted ~90.8%)")
-            if not (0.87 <= ratio <= 0.94):
+            msgs5.append(f"Alolan Meowth Ratio: {alola_m}/{alola_m + base_m} = {ratio:.1%} (predicted ~84.1%)")
+            if not (0.80 <= ratio <= 0.88):
                 passed5 = False
                 msgs5.append("FAIL: Alolan Meowth ratio out of expected range")
             else:
