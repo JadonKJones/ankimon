@@ -77,6 +77,7 @@ def _load_friendship_evolution():
         importlib.util.spec_from_loader("Ankimon.singletons", loader=None)
     )
     singletons_stub.settings_obj = fake_settings
+    singletons_stub.get_evo_window = mock.MagicMock
     sys.modules["Ankimon.singletons"] = singletons_stub
 
     # Load resources + pokedex_functions FOR REAL so the bundled CSV lookups work.
@@ -99,6 +100,17 @@ def _load_friendship_evolution():
     sys.modules["Ankimon.functions.pokedex_functions"] = pokedex_functions
     pf_spec.loader.exec_module(pokedex_functions)
 
+    # Mock search_pokedex_by_id to force Eevee (133) to fallback to legacy CSV lookup
+    original_search_by_id = pokedex_functions.search_pokedex_by_id
+    def mock_search_pokedex_by_id(species_id):
+        try:
+            if int(species_id) == 133:
+                return "Pokémon not found"
+        except (ValueError, TypeError):
+            pass
+        return original_search_by_id(species_id)
+    pokedex_functions.search_pokedex_by_id = mock_search_pokedex_by_id
+
     # Load the module under test; its relative imports resolve via conftest's
     # Ankimon / Ankimon.functions stub packages and the real pokedex_functions.
     fe_spec = importlib.util.spec_from_file_location(
@@ -120,12 +132,14 @@ fe, settings = _load_friendship_evolution()
 # ``Ankimon.singletons`` with a ``MagicMock`` at import time. Without restoring
 # our stub, those lazy imports would resolve to the mock and break the clock.
 _SINGLETONS_STUB = sys.modules["Ankimon.singletons"]
+_POKEDEX_FUNCTIONS_STUB = sys.modules["Ankimon.functions.pokedex_functions"]
 
 
 @pytest.fixture(autouse=True)
 def _reset_settings():
     """Restore our singletons stub and default settings before every test."""
     sys.modules["Ankimon.singletons"] = _SINGLETONS_STUB
+    sys.modules["Ankimon.functions.pokedex_functions"] = _POKEDEX_FUNCTIONS_STUB
     settings.values.update(
         {
             "evolution.day_start_hour": 6,
@@ -337,6 +351,9 @@ class _FakeEvoWindow:
 
     def __init__(self):
         self.calls = []
+
+    def objectName(self):
+        return "Fake"
 
     def ask_pokemon_evo(self, individual_id, pokemon_id, evo_id):
         self.calls.append((individual_id, pokemon_id, evo_id))

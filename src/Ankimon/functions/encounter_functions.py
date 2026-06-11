@@ -96,7 +96,6 @@ def _build_regional_lookup() -> None:
     try:
         pokedex_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "user_files",
             "data_files",
             "pokedex.json",
         )
@@ -832,6 +831,12 @@ def generate_random_pokemon(
     except ValueError:
         start_idx = TIER_ORDER.index("Normal")
 
+    active_region = settings_obj.get("misc.active_region")
+    if active_region and isinstance(active_region, str):
+        active_region = active_region.lower().strip()
+    else:
+        active_region = None
+
     # Iterate through tiers starting from the rolled one
     for i in range(start_idx, len(TIER_ORDER)):
         current_tier = TIER_ORDER[i]
@@ -867,7 +872,6 @@ def generate_random_pokemon(
         if not full_pool:
             continue
 
-        active_region = settings_obj.get("misc.active_region")
         boosted_pool = []
 
         if active_region:
@@ -907,17 +911,22 @@ def generate_random_pokemon(
     # Apply 7%-per-variant resolution for base species.
     if selected_pokemon_id < 10000:
         region_forms = encounter_data.REGIONAL_FORM_LOOKUP.get(selected_pokemon_id, {})
-        num_eligible = 0
-        for variants in region_forms.values():
+        eligible_variants = []
+        if active_region and active_region not in ("no region", ""):
+            variants = region_forms.get(active_region, [])
             for v in variants:
                 if check_id_ok(v):
-                    num_eligible += 1
+                    eligible_variants.append(v)
+        else:
+            for variants in region_forms.values():
+                for v in variants:
+                    if check_id_ok(v):
+                        eligible_variants.append(v)
 
+        num_eligible = len(eligible_variants)
         if num_eligible > 0:
             if random.random() < 0.07 * num_eligible:
-                sub = get_regional_substitute(selected_pokemon_id)
-                if sub:
-                    selected_pokemon_id = sub
+                selected_pokemon_id = random.choice(eligible_variants)
     # --- End form resolution ---
 
     pokemon_id = selected_pokemon_id

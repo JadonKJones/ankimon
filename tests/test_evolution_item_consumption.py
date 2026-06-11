@@ -50,15 +50,13 @@ def setup_mocks():
         "Ankimon.functions.update_main_pokemon",
         "Ankimon.functions.badges_functions",
     ]:
-        if name not in sys.modules or isinstance(sys.modules[name], MagicMock):
-            sys.modules[name] = MagicMock()
+        sys.modules[name] = MagicMock()
 
-    # Stub aqt.qt specifically if not already stubbed or if it's a MagicMock
-    if "aqt.qt" not in sys.modules or isinstance(sys.modules["aqt.qt"], MagicMock):
-        aqt_qt = MagicMock()
-        aqt_qt.QWidget = MockQWidget
-        aqt_qt.QDialog = MockQWidget
-        sys.modules["aqt.qt"] = aqt_qt
+    # Stub aqt.qt specifically
+    aqt_qt = MagicMock()
+    aqt_qt.QWidget = MockQWidget
+    aqt_qt.QDialog = MockQWidget
+    sys.modules["aqt.qt"] = aqt_qt
 
 setup_mocks()
 
@@ -71,8 +69,15 @@ _evo_mod = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = _evo_mod
 _spec.loader.exec_module(_evo_mod)
 
-# Retrieve the real EvoWindow class directly from sys.modules to bypass package mock attribute lookup
-EvoWindow = sys.modules["Ankimon.pyobj.evolution_window"].EvoWindow
+def force_load_module(name, filepath):
+    spec = importlib.util.spec_from_file_location(name, filepath)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+# Retrieve the real EvoWindow class directly from the loaded spec
+EvoWindow = _evo_mod.EvoWindow
 
 # Create a test subclass to bypass QWidget and __init__ side effects
 class MockEvoWindow(EvoWindow):
@@ -84,12 +89,22 @@ class MockEvoWindow(EvoWindow):
         self.achievements = {}
 
 def test_evolve_pokemon_consumes_stone():
-    evo_win_module = sys.modules["Ankimon.pyobj.evolution_window"]
+    setup_mocks()
+    pokedex_funcs = force_load_module("Ankimon.functions.pokedex_functions", _src / "Ankimon" / "functions" / "pokedex_functions.py")
+    evo_win_module = force_load_module("Ankimon.pyobj.evolution_window", _src / "Ankimon" / "pyobj" / "evolution_window.py")
     mock_db = MagicMock()
     
     # Directly attach our mock database to whatever mw object the loaded module is referencing
     evo_win_module.mw.ankimon_db = mock_db
     
+    class LocalMockEvoWindow(evo_win_module.EvoWindow):
+        def __init__(self):
+            self.logger = MagicMock()
+            self.translator = MagicMock()
+            self.reviewer_obj = MagicMock()
+            self.test_window = MagicMock()
+            self.achievements = {}
+            
     with patch("Ankimon.pyobj.evolution_window.search_pokedex") as mock_search, \
          patch("Ankimon.pyobj.evolution_window.get_random_moves_for_pokemon") as mock_moves, \
          patch("Ankimon.pyobj.evolution_window.calculate_hp") as mock_hp, \
@@ -100,7 +115,7 @@ def test_evolve_pokemon_consumes_stone():
          patch("Ankimon.pyobj.evolution_window.check_for_badge") as mock_badge, \
          patch("Ankimon.pyobj.evolution_window.is_alive", return_value=False):
          
-         evo_win = MockEvoWindow()
+         evo_win = LocalMockEvoWindow()
          evo_win.display_evo_complete = MagicMock()
          
          mock_db.get_pokemon.return_value = {
@@ -135,10 +150,20 @@ def test_evolve_pokemon_consumes_stone():
          mock_db.update_item_quantity.assert_called_once_with("fire-stone", -1)
 
 def test_evolve_pokemon_nickname_update():
-    evo_win_module = sys.modules["Ankimon.pyobj.evolution_window"]
+    setup_mocks()
+    pokedex_funcs = force_load_module("Ankimon.functions.pokedex_functions", _src / "Ankimon" / "functions" / "pokedex_functions.py")
+    evo_win_module = force_load_module("Ankimon.pyobj.evolution_window", _src / "Ankimon" / "pyobj" / "evolution_window.py")
     mock_db = MagicMock()
     evo_win_module.mw.ankimon_db = mock_db
     
+    class LocalMockEvoWindow(evo_win_module.EvoWindow):
+        def __init__(self):
+            self.logger = MagicMock()
+            self.translator = MagicMock()
+            self.reviewer_obj = MagicMock()
+            self.test_window = MagicMock()
+            self.achievements = {}
+            
     with patch("Ankimon.pyobj.evolution_window.search_pokedex") as mock_search, \
          patch("Ankimon.pyobj.evolution_window.get_random_moves_for_pokemon") as mock_moves, \
          patch("Ankimon.pyobj.evolution_window.calculate_hp") as mock_hp, \
@@ -149,7 +174,7 @@ def test_evolve_pokemon_nickname_update():
          patch("Ankimon.pyobj.evolution_window.check_for_badge") as mock_badge, \
          patch("Ankimon.pyobj.evolution_window.is_alive", return_value=False):
          
-         evo_win = MockEvoWindow()
+         evo_win = LocalMockEvoWindow()
          evo_win.display_evo_complete = MagicMock()
          
          mock_search.side_effect = lambda name, key: ["Psychic"] if key == "types" else {"hp": 40} if key == "baseStats" else {}
@@ -162,7 +187,6 @@ def test_evolve_pokemon_nickname_update():
          mock_badge.return_value = True
          
          # Mock pretty name translation function directly on pokedex_functions module
-         pokedex_funcs = sys.modules["Ankimon.functions.pokedex_functions"]
          def get_pretty_name_mock(sid):
              if sid == 439:
                  return "Mime Jr."
@@ -170,7 +194,7 @@ def test_evolve_pokemon_nickname_update():
                  return "Mr. Mime"
              return "Unknown"
          pokedex_funcs.get_pretty_name_for_id = get_pretty_name_mock
-
+ 
          # Case 1: Nickname matches pretty prevo name ("Mime Jr.") or CSV identifier ("mime-jr")
          # Both should be evolved to the pretty name of the evolved form ("Mr. Mime")
          pokemon_data = {

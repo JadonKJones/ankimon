@@ -6,13 +6,13 @@ from unittest.mock import MagicMock
 import importlib.util
 
 # --- CONFIGURATION ---
-SCENARIOS_TO_RUN = [21, 22]
+SCENARIOS_TO_RUN = [5, 20]
 N = {
     1: 200000,
     2: 50000,
     3: 50000,
     4: 200000,
-    5: 200000,
+    5: 100000,
     6: 200000,
     7: 50000,
     8: 50000,
@@ -25,13 +25,13 @@ N = {
     17: 10000,
     18: 100000,
     19: 100000,
-    20: 500000,
+    20: 200000,
     21: 10000,
     22: 10000,
 }
 
 # --- SIMULATION SETTINGS ---
-MAIN_POKEMON_LEVEL = 50
+MAIN_POKEMON_LEVEL = 100
 BYPASS_PREREQUISITES = True
 BYPASS_MIN_LEVEL_CHECK = False
 BYPASS_BASE_FORM_CHECK = True
@@ -92,12 +92,15 @@ def search_pokedex_by_id(pkmn_id):
 
 def search_pokedex(name, key):
     if not isinstance(name, str):
-        return None
+        return []
     # Normalize name to match JSON keys (e.g., "Darumaka-Galar" -> "darumakagalar")
     name_key = name.lower().replace("-", "").replace(" ", "").replace("'", "")
     if name_key in pokedex_data:
-        return pokedex_data[name_key].get(key)
-    return None
+        val = pokedex_data[name_key].get(key)
+        if val is not None:
+            return val
+    return []
+
 
 def safe_int(val):
     try:
@@ -173,6 +176,11 @@ if BYPASS_MIN_LEVEL_CHECK:
     ef.check_min_generate_level = lambda name: 1
 if BYPASS_BASE_FORM_CHECK:
     ef._player_owns_base_form = lambda actual_id, collected_ids: True
+
+# Mock get_all_pokemon_in_tier to enable Starters in the simulation tests
+original_get_all_pokemon_in_tier = ef.get_all_pokemon_in_tier
+ef.get_all_pokemon_in_tier = lambda tier: ed.STARTERS if tier == "Starter" else original_get_all_pokemon_in_tier(tier)
+
 
 from functools import lru_cache
 # Cache the heavy utility lookups
@@ -489,11 +497,44 @@ def run_all():
             
         alola_m = get_count(stats5, meowth_alola)
         galar_m = get_count(stats5, meowth_galar)
+        base_m = get_count(stats5, meowth_base)
         if alola_m <= galar_m:
             msgs5.append(f"FAIL: Alolan Meowth ({alola_m}) not strictly > Galarian Meowth ({galar_m})")
             passed5 = False
         else:
             msgs5.append(f"PASS: Alolan Meowth ({alola_m}) > Galarian Meowth ({galar_m})")
+            
+        if alola_m + base_m > 0:
+            ratio = alola_m / (alola_m + base_m)
+            msgs5.append(f"Alolan Meowth Ratio: {alola_m}/{alola_m + base_m} = {ratio:.1%} (predicted ~90.8%)")
+            if not (0.87 <= ratio <= 0.94):
+                passed5 = False
+                msgs5.append("FAIL: Alolan Meowth ratio out of expected range")
+            else:
+                msgs5.append("PASS: Alolan Meowth ratio matches prediction")
+            
+        # Additional checks for correct rates of appearance of non-Alolan forms when region = alola
+        if galar_m != 0:
+            msgs5.append(f"FAIL: Galarian Meowth appeared when region is set to Alola (count: {galar_m})")
+            passed5 = False
+        else:
+            msgs5.append("PASS: Galarian Meowth correctly has 0% appearance rate in Alola region")
+
+        ponyta_galar = 10162
+        wooper_paldea = 10253
+        pg_count = get_count(stats5, ponyta_galar)
+        wp_count = get_count(stats5, wooper_paldea)
+        if pg_count != 0:
+            msgs5.append(f"FAIL: Galarian Ponyta appeared when region is set to Alola (count: {pg_count})")
+            passed5 = False
+        else:
+            msgs5.append("PASS: Galarian Ponyta correctly has 0% appearance rate in Alola region")
+            
+        if wp_count != 0:
+            msgs5.append(f"FAIL: Paldean Wooper appeared when region is set to Alola (count: {wp_count})")
+            passed5 = False
+        else:
+            msgs5.append("PASS: Paldean Wooper correctly has 0% appearance rate in Alola region")
             
         log_test("SCENARIO 5 — Region = alola", passed5, msgs5)
 
@@ -736,6 +777,18 @@ def run_all():
         if p_tauros_count == 0:
             passed18 = False
             msgs18.append("FAIL: No Paldean Tauros in Paldea region")
+            
+        # Check that non-Paldean regional forms do not appear
+        meowth_alola = 10107
+        meowth_galar = 10161
+        ma_count = get_count(stats18, meowth_alola)
+        mg_count = get_count(stats18, meowth_galar)
+        if ma_count != 0 or mg_count != 0:
+            passed18 = False
+            msgs18.append(f"FAIL: Non-Paldean regional forms appeared when region is set to Paldea (Alola Meowth: {ma_count}, Galar Meowth: {mg_count})")
+        else:
+            msgs18.append("PASS: Non-Paldean regional forms correctly have 0% appearance rate in Paldea region")
+            
         log_test("SCENARIO 18 — Region = paldea", passed18, msgs18)
 
     # ----------------------------------------------------

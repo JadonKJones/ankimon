@@ -15,7 +15,7 @@ for module in [
     "Ankimon.pyobj.trainer_card", "Ankimon.pyobj.InfoLogger", 
     "Ankimon.pyobj.evolution_window", "Ankimon.pyobj.attack_dialog",
     "Ankimon.pyobj.translator", "Ankimon.pyobj.error_handler",
-    "Ankimon.functions.pokemon_functions", "Ankimon.functions.pokedex_functions",
+    "Ankimon.functions.pokemon_functions",
     "Ankimon.functions.trainer_functions", "Ankimon.functions.badges_functions",
     "Ankimon.functions.drawing_utils", "Ankimon.utils", "Ankimon.business", 
     "Ankimon.const", "Ankimon.singletons", "Ankimon.resources"
@@ -24,6 +24,18 @@ for module in [
 
 # Import the module under test
 _src = Path(__file__).parent.parent / "src"
+
+def force_load_module(name, filepath):
+    spec = importlib.util.spec_from_file_location(name, filepath)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+# Force load encounter_data and pokedex_functions so they are not MagicMocks
+force_load_module("Ankimon.functions.encounter_data", _src / "Ankimon" / "functions" / "encounter_data.py")
+force_load_module("Ankimon.functions.pokedex_functions", _src / "Ankimon" / "functions" / "pokedex_functions.py")
+
 spec = importlib.util.spec_from_file_location(
     "Ankimon.functions.encounter_functions",
     _src / "Ankimon" / "functions" / "encounter_functions.py",
@@ -256,6 +268,17 @@ def test_handle_enemy_faint_auto_catch_regional_disabled():
 
 
 def test_meets_prerequisites_fusion_and_normal():
+    # Ensure the real _player_owns_base_form logic is used (in case simulation tests mutated it)
+    def real_owns_base_form(actual_id, collected_ids):
+        name = ef.search_pokedex_by_id(actual_id)
+        if not name or name == "Pokémon not found":
+            return True
+        species_id = ef.safe_int(ef.search_pokedex(name, "species_id"))
+        if not species_id:
+            return True
+        return species_id in collected_ids
+    ef._player_owns_base_form = real_owns_base_form
+
     # 1. Test normal pokemon prerequisite (e.g. Mewtwo (150) needs Mew (151))
     assert ef._meets_prerequisites(150, {151}) is True
     assert ef._meets_prerequisites(150, set()) is False

@@ -10,14 +10,13 @@ import types
 _src = Path(__file__).parent.parent / "src"
 
 def setup_mocks():
-    # Mock aqt/anki namespaces
+    # Mock aqt/anki namespaces force unconditionally
     for name in [
         "aqt", "aqt.qt", "aqt.utils", "aqt.gui_hooks", "aqt.operations", 
         "aqt.reviewer", "aqt.webview", "aqt.main", "aqt.operations.QueryOp", "aqt.theme",
         "anki", "anki.hooks", "anki.collection", "anki.models", "anki.notes", "anki.template", "anki.buildinfo"
     ]:
-        if name not in sys.modules or isinstance(sys.modules[name], MagicMock):
-            sys.modules[name] = MagicMock()
+        sys.modules[name] = MagicMock()
     
     # 1. Force Register packages with __path__ so relative imports resolve
     for _pkg in ("Ankimon", "Ankimon.functions", "Ankimon.pyobj"):
@@ -44,12 +43,11 @@ def setup_mocks():
     sys.modules["Ankimon.resources"] = MockResources()
     sys.modules["Ankimon.singletons"] = MagicMock()
 
-    # Pre-configure Ankimon.business Mock if it exists or is imported
-    if "Ankimon.business" not in sys.modules or isinstance(sys.modules["Ankimon.business"], MagicMock):
-        business_mock = MagicMock()
-        business_mock.pokemon_go_raw_stats.return_value = (100, 100, 100)
-        business_mock.calculate_pokemon_go_cp.return_value = 500
-        sys.modules["Ankimon.business"] = business_mock
+    # Pre-configure Ankimon.business Mock unconditionally
+    business_mock = MagicMock()
+    business_mock.pokemon_go_raw_stats.return_value = (100, 100, 100)
+    business_mock.calculate_pokemon_go_cp.return_value = 500
+    sys.modules["Ankimon.business"] = business_mock
 
 setup_mocks()
 
@@ -61,14 +59,10 @@ def force_load_module(name, filepath):
     spec.loader.exec_module(mod)
     return mod
 
-# Force load database_manager
+# Retrieve helper globals initially
 db_mod = force_load_module("Ankimon.pyobj.database_manager", _src / "Ankimon" / "pyobj" / "database_manager.py")
 AnkimonDB = db_mod.AnkimonDB
-
-# Force load utils
 utils_mod = force_load_module("Ankimon.utils", _src / "Ankimon" / "utils.py")
-
-# Force load pokemon_obj
 pokemon_obj_mod = force_load_module("Ankimon.pyobj.pokemon_obj", _src / "Ankimon" / "pyobj" / "pokemon_obj.py")
 PokemonObject = pokemon_obj_mod.PokemonObject
 
@@ -80,9 +74,21 @@ class MockLogger:
 @pytest.fixture
 def temp_env(tmp_path):
     """Setup a temporary environment for the DB and its CSV files."""
+    setup_mocks()
     db_file_path = tmp_path / "ankimon.db"
     csv_file_path = tmp_path / "items.csv"
     
+    # Force reload modules fresh inside the fixture to isolate from other tests
+    db_mod_fresh = force_load_module("Ankimon.pyobj.database_manager", _src / "Ankimon" / "pyobj" / "database_manager.py")
+    global AnkimonDB
+    AnkimonDB = db_mod_fresh.AnkimonDB
+    
+    utils_mod_fresh = force_load_module("Ankimon.utils", _src / "Ankimon" / "utils.py")
+    
+    pokemon_obj_mod_fresh = force_load_module("Ankimon.pyobj.pokemon_obj", _src / "Ankimon" / "pyobj" / "pokemon_obj.py")
+    global PokemonObject
+    PokemonObject = pokemon_obj_mod_fresh.PokemonObject
+
     # Create mock items.csv
     headers = ["id", "identifier", "category_id", "cost", "fling_power", "fling_effect_id"]
     rows = [
@@ -93,10 +99,10 @@ def temp_env(tmp_path):
         writer.writerow(headers)
         writer.writerows(rows)
             
-    with patch.object(db_mod, "user_path", tmp_path), \
-         patch.object(db_mod, "csv_file_items_cost", str(csv_file_path)), \
-         patch.object(utils_mod, "csv_file_items_cost", str(csv_file_path)), \
-         patch.object(pokemon_obj_mod, "mw", MagicMock()) as mock_mw:
+    with patch.object(db_mod_fresh, "user_path", tmp_path), \
+         patch.object(db_mod_fresh, "csv_file_items_cost", str(csv_file_path)), \
+         patch.object(utils_mod_fresh, "csv_file_items_cost", str(csv_file_path)), \
+         patch.object(pokemon_obj_mod_fresh, "mw", MagicMock()) as mock_mw:
         
         db = AnkimonDB(MockLogger())
         mock_mw.ankimon_db = db

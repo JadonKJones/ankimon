@@ -88,6 +88,13 @@ def temp_db(tmp_path):
         db = AnkimonDB(MockLogger())
         yield db
 
+def force_load_module(name, filepath):
+    spec = importlib.util.spec_from_file_location(name, filepath)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
 def test_profile_pokedex_completion(temp_db):
     """
     Verifies that the Profile Pokédex count:
@@ -105,9 +112,10 @@ def test_profile_pokedex_completion(temp_db):
     mw.settings_obj = MagicMock()
     mw.settings_obj.get.return_value = "red"
     
-    # Inject pokedex_functions module into sys.modules and wire it
-    import Ankimon.functions.pokedex_functions as pf
+    # Force load pokedex_functions and pokemon_obj fresh to isolate from other tests
+    pf = force_load_module("Ankimon.functions.pokedex_functions", _src / "Ankimon" / "functions" / "pokedex_functions.py")
     sys.modules["Ankimon"].functions.pokedex_functions = pf
+    force_load_module("Ankimon.pyobj.pokemon_obj", _src / "Ankimon" / "pyobj" / "pokemon_obj.py")
     
     with patch("Ankimon.ankimon_profile_web.profile_data.mw", mw), \
          patch("Ankimon.functions.pokedex_functions.mw", mw):
