@@ -72,7 +72,7 @@ except Exception as e:
     # Don't break addon startup if team overview fails
     print(f"Ankimon: Failed to register team overview hooks: {e}")
     if logger:
-        logger.exception("Team overview hook registration failed")
+        logger.log("error", f"Team overview hook registration failed: {e}")
 
 # --- Startup: asynchronous & thread-safe ---
 mw.ankimon_startup_finished = False
