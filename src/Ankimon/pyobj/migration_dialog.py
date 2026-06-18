@@ -156,7 +156,7 @@ class MigrationDialog(QDialog):
                         if self.cancelled: break
                         if not isinstance(pokemon, dict):
                             continue
-                        if "individual_id" not in pokemon:
+                        if not pokemon.get("individual_id"):
                             pokemon["individual_id"] = str(uuid.uuid4())
                         if self.db.save_pokemon(pokemon):
                             stats["pokemon"] += 1
@@ -181,7 +181,7 @@ class MigrationDialog(QDialog):
                     if main_data:
                         main_pokemon = main_data[0] if isinstance(main_data, list) else main_data
                         if isinstance(main_pokemon, dict):
-                            if "individual_id" not in main_pokemon:
+                            if not main_pokemon.get("individual_id"):
                                 main_pokemon["individual_id"] = str(uuid.uuid4())
                             if self.db.save_main_pokemon(main_pokemon):
                                 stats["main"] = 1
@@ -224,12 +224,15 @@ class MigrationDialog(QDialog):
                         badges_list = json.load(f)
                     for badge in badges_list:
                         if self.cancelled: break
-                        if isinstance(badge, int):
-                            badge_id = str(badge); badge_data = {"id": badge, "achieved": True}
-                        else:
+                        if isinstance(badge, (int, str)):
+                            badge_id = str(badge)
+                            badge_data = {"id": badge_id, "achieved": True}
+                        elif isinstance(badge, dict):
                             badge_id = str(badge.get("id", badge.get("badge_id", "")))
                             badge_data = badge
                             badge_data["achieved"] = True
+                        else:
+                            continue
                         if badge_id:
                             self.db.save_badge(badge_id, badge_data)
                             stats["badges"] += 1
@@ -255,7 +258,7 @@ class MigrationDialog(QDialog):
                 valid_team_list = []
                 for member in team_list:
                     if isinstance(member, dict):
-                        if "individual_id" not in member:
+                        if not member.get("individual_id"):
                             member["individual_id"] = str(uuid.uuid4())
                         valid_team_list.append(member)
                 if self.db.save_team(valid_team_list):
