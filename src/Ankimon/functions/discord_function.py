@@ -18,7 +18,7 @@ class DiscordPresence:
             self.ankimon_tracker: AnkimonTracker = ankimon_tracker
             self.logger_obj = mw.logger
             self.settings = settings_obj
-            self.loop = True
+            self.loop = False
             self.start_time = time.time()
             self.thread = None
             self.quotes = [
