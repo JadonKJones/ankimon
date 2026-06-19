@@ -896,7 +896,7 @@ class AnkimonDB:
                 with open(rate_path, 'r', encoding='utf-8') as f:
                     rate_data = json.load(f)
                 
-                if isinstance(rate_data, dict) and rate_data.get("rate_this"):
+                if isinstance(rate_data, dict) and rate_data.get("rate_this") in (True, "true"):
                     self.set_user_data("rate_this", True)
                     self._log("info", "Migrated rate_this.json")
             except Exception as e:

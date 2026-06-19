@@ -113,9 +113,14 @@ def check_and_award_monthly_pokemon(logger):
         if prev_id and threshold:
             logger.log("info", f"Checking for shiny eligibility: prev_id={prev_id}, threshold={threshold}")
             previous_challenge_pokemon = db.get_pokemon(prev_id)
-            if previous_challenge_pokemon and previous_challenge_pokemon.get("pokemon_defeated", 0) >= threshold:
-                logger.log("info", f"Shiny criteria met for {challenge_pokemon_data.get('name')}.")
-                make_shiny = True
+            if previous_challenge_pokemon:
+                try:
+                    meets_threshold = int(previous_challenge_pokemon.get("pokemon_defeated", 0)) >= int(threshold)
+                except (ValueError, TypeError):
+                    meets_threshold = False
+                if meets_threshold:
+                    logger.log("info", f"Shiny criteria met for {challenge_pokemon_data.get('name')}.")
+                    make_shiny = True
         
         new_pokemon = create_monthly_challenge_pokemon(challenge_pokemon_data, make_shiny=make_shiny)
         add_pokemon_to_collection(new_pokemon)
