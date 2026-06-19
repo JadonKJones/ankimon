@@ -19,38 +19,58 @@ _SRC = Path(__file__).parent.parent / "src"
 
 
 def _load_update_manager():
-    # update_manager imports these at module load; only stub if nothing else has.
-    if "aqt" not in sys.modules:
-        aqt = types.ModuleType("aqt")
-        aqt.mw = None
-        sys.modules["aqt"] = aqt
-    if "aqt.operations" not in sys.modules:
-        ops = types.ModuleType("aqt.operations")
-        ops.QueryOp = object
-        sys.modules["aqt.operations"] = ops
+    # This runs at collection time and temporarily overwrites global sys.modules
+    # entries to exec update_manager from source in isolation. Snapshot every key
+    # we touch and RESTORE it in a finally, so collecting this file does not leak a
+    # bare 'Ankimon' namespace / 'aqt' stub into sibling tests (e.g. it would break
+    # test_addon_integrity's import walk -> tip_of_the_day NameError on QDialog).
+    # The returned module object stays valid for the test functions regardless.
+    # (Removing the need for this global stubbing is what the #437 service-registry
+    # refactor targets.)
+    _keys = (
+        "aqt", "aqt.operations", "Ankimon", "Ankimon.pyobj",
+        "Ankimon.resources", "Ankimon.pyobj.update_manager",
+    )
+    _saved = {k: sys.modules.get(k) for k in _keys}
+    try:
+        # update_manager imports these at module load; only stub if nothing else has.
+        if "aqt" not in sys.modules:
+            aqt = types.ModuleType("aqt")
+            aqt.mw = None
+            sys.modules["aqt"] = aqt
+        if "aqt.operations" not in sys.modules:
+            ops = types.ModuleType("aqt.operations")
+            ops.QueryOp = object
+            sys.modules["aqt.operations"] = ops
 
-    # Force real namespace packages (siblings may have replaced them with mocks).
-    # Overwriting sys.modules['Ankimon'] here is safe because this test file
-    # sorts last alphabetically — no other test module is collected/run after it.
-    for name, path in [
-        ("Ankimon", _SRC / "Ankimon"),
-        ("Ankimon.pyobj", _SRC / "Ankimon" / "pyobj"),
-    ]:
-        ns = types.ModuleType(name)
-        ns.__path__ = [str(path)]
-        sys.modules[name] = ns
+        # Force real namespace packages (siblings may have replaced them with mocks).
+        for name, path in [
+            ("Ankimon", _SRC / "Ankimon"),
+            ("Ankimon.pyobj", _SRC / "Ankimon" / "pyobj"),
+        ]:
+            ns = types.ModuleType(name)
+            ns.__path__ = [str(path)]
+            sys.modules[name] = ns
 
-    # Load real resources (provides addon_dir) then update_manager, from disk.
-    for modname, relpath in [
-        ("Ankimon.resources", "resources.py"),
-        ("Ankimon.pyobj.update_manager", "pyobj/update_manager.py"),
-    ]:
-        spec = importlib.util.spec_from_file_location(modname, _SRC / "Ankimon" / relpath)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[modname] = module
-        spec.loader.exec_module(module)
+        # Load real resources (provides addon_dir) then update_manager, from disk.
+        for modname, relpath in [
+            ("Ankimon.resources", "resources.py"),
+            ("Ankimon.pyobj.update_manager", "pyobj/update_manager.py"),
+        ]:
+            spec = importlib.util.spec_from_file_location(modname, _SRC / "Ankimon" / relpath)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[modname] = module
+            spec.loader.exec_module(module)
 
-    return sys.modules["Ankimon.pyobj.update_manager"]
+        return sys.modules["Ankimon.pyobj.update_manager"]
+    finally:
+        # Restore the global module table so this collection-time load can't
+        # corrupt other test modules.
+        for _k, _v in _saved.items():
+            if _v is None:
+                sys.modules.pop(_k, None)
+            else:
+                sys.modules[_k] = _v
 
 
 um = _load_update_manager()
