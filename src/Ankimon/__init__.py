@@ -21,43 +21,7 @@ from aqt import gui_hooks, mw
 from aqt.gui_hooks import webview_will_set_content
 from aqt.webview import WebContent
 
-from .resources import ensure_ankimon_infrastructure, user_path, addon_dir, addon_ver, IS_EXPERIMENTAL_BUILD
-
-ADDON_MIN_COMPATIBLE_VERSION = "2.00"
-
-def _alert_outdated_init(reason: str = "Detected an outdated or corrupted Ankimon __init__.py file.") -> None:
-    from aqt.utils import showWarning
-    error_message = (
-        f"Ankimon Add-on Error: {reason}\n\n"
-        "Your Ankimon installation appears to be partially updated or corrupted. "
-        "This can lead to unexpected errors and instability.\n\n"
-        "Please try reinstalling the add-on to ensure all files are up to date. "
-        "You may need to manually remove the old add-on folder (typically named '1908235722' in Anki's addons21 directory) "
-        "before installing the latest version from AnkiWeb."
-    )
-    if hasattr(mw, "logger") and mw.logger is not None:
-        mw.logger.critical(f"Ankimon Integrity Check Failed: {error_message}")
-    showWarning(error_message, title="Ankimon Add-on Error")
-
-def _verify_addon_integrity() -> None:
-    # Check addon version from manifest.json
-    try:
-        if IS_EXPERIMENTAL_BUILD:
-            # Skip checking for experimental builds that end with "-E" like "2.04-E"
-            return
-
-        # Parse our `2.0x` scheme properly
-        current_version_float = float(addon_ver)
-        min_version_float = float(ADDON_MIN_COMPATIBLE_VERSION)
-
-        if current_version_float < min_version_float:
-            _alert_outdated_init(f"Add-on version {addon_ver} is older than minimum required {ADDON_MIN_COMPATIBLE_VERSION}.")
-    except Exception as e:
-        if hasattr(mw, "logger") and mw.logger is not None:
-            mw.logger.error(f"Ankimon: Failed to parse addon version for integrity check: {e}")
-
-_verify_addon_integrity()
-
+from .resources import ensure_ankimon_infrastructure, user_path, addon_dir
 ensure_ankimon_infrastructure(addon_dir, user_path)
 
 from .singletons import (
