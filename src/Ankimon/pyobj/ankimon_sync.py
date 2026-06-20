@@ -170,6 +170,7 @@ class ImprovedPokemonDataSync(QDialog):
                 }
                 if not db_path.is_file():
                     return stats
+                conn = None
                 try:
                     import sqlite3
                     conn = sqlite3.connect(str(db_path))
@@ -196,25 +197,27 @@ class ImprovedPokemonDataSync(QDialog):
                         cursor.execute("SELECT COUNT(*) as count FROM badges WHERE achieved = 1")
                         stats["badges"] = cursor.fetchone()["count"]
                         
-                    if "user_data" in tables:
-                        cursor.execute("SELECT value FROM user_data WHERE key = 'trainer.name'")
+                    if "config" in tables:
+                        cursor.execute("SELECT value FROM config WHERE key = 'trainer.name'")
                         row = cursor.fetchone()
                         if row:
                             stats["trainer_name"] = row["value"]
                             
-                        cursor.execute("SELECT value FROM user_data WHERE key = 'trainer.level'")
+                        cursor.execute("SELECT value FROM config WHERE key = 'trainer.level'")
                         row = cursor.fetchone()
                         if row:
                             stats["trainer_level"] = int(row["value"])
                             
-                        cursor.execute("SELECT value FROM user_data WHERE key = 'trainer.cash'")
+                        cursor.execute("SELECT value FROM config WHERE key = 'trainer.cash'")
                         row = cursor.fetchone()
                         if row:
                             stats["trainer_cash"] = int(row["value"])
                     
-                    conn.close()
                 except Exception as e:
                     self.logger.log("error", f"Failed to get stats for {db_path.name}: {e}")
+                finally:
+                    if conn is not None:
+                        conn.close()
                 return stats
 
             source_file = self.sync_handler._get_source_path(filename)
