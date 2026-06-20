@@ -1196,11 +1196,15 @@ def save_main_pokemon_progress(
             achievements = receive_badge(5, achievements)
         try:
             mw.logger.game_log(f"Level Up: {msg}")
-            tooltipWithColour(msg, color)
+            from .. import utils
+            if not getattr(utils, "in_bulk_resolve", False):
+                tooltipWithColour(msg, color)
         except:
             pass
-        if settings_obj.get("gui.pop_up_dialog_message_on_defeat") is True:
-            logger.log_and_showinfo("info", f"{msg}")
+        from .. import utils
+        if not getattr(utils, "in_bulk_resolve", False):
+            if settings_obj.get("gui.pop_up_dialog_message_on_defeat") is True:
+                logger.log_and_showinfo("info", f"{msg}")
         main_pokemon.xp = int(max(0, int(main_pokemon.xp) - int(experience)))
 
         # Request to open the pokemon evo window
@@ -1214,15 +1218,17 @@ def save_main_pokemon_progress(
         )
         if evo_id is not None:
             evolution_prompted = True
-            logger.log_and_showinfo(
-                "info",
-                translator.translate(
-                    "pokemon_about_to_evolve",
-                    main_pokemon_name=main_pokemon.name,
-                    evo_pokemon_name=return_name_for_id(evo_id).capitalize(),
-                    main_pokemon_level=main_pokemon.level,
-                ),
-            )
+            from .. import utils
+            if not getattr(utils, "in_bulk_resolve", False):
+                logger.log_and_showinfo(
+                    "info",
+                    translator.translate(
+                        "pokemon_about_to_evolve",
+                        main_pokemon_name=main_pokemon.name,
+                        evo_pokemon_name=return_name_for_id(evo_id).capitalize(),
+                        main_pokemon_level=main_pokemon.level,
+                    ),
+                )
 
         if main_pokemon_data:
             mainpkmndata = main_pokemon_data
@@ -1246,36 +1252,44 @@ def save_main_pokemon_progress(
                             main_pokemon_name=main_pokemon.name.capitalize(),
                         )
                         color = "#6A4DAC"
-                        tooltipWithColour(msg, color)
-                        if (
-                            settings_obj.get("gui.pop_up_dialog_message_on_defeat")
-                            is True
-                        ):
-                            logger.log_and_showinfo("info", f"{msg}")
-                    else:
-                        dialog = AttackDialog(attacks, new_attack)
-                        if dialog.exec() == QDialog.DialogCode.Accepted:
-                            selected_attack = dialog.selected_attack
-                            index_to_replace = None
-                            for index, attack in enumerate(attacks):
-                                if attack == selected_attack:
-                                    index_to_replace = index
-                            # If the attack is found, replace it with 'new_attack'
-                            if index_to_replace is not None:
-                                attacks[index_to_replace] = new_attack
-                                logger.log_and_showinfo(
-                                    "info",
-                                    f"Replaced '{selected_attack}' with '{new_attack}'",
-                                )
-                            else:
-                                logger.log_and_showinfo(
-                                    "info", f"'{selected_attack}' not found in the list"
-                                )
+                        from .. import utils
+                        if not getattr(utils, "in_bulk_resolve", False):
+                            tooltipWithColour(msg, color)
+                            if (
+                                settings_obj.get("gui.pop_up_dialog_message_on_defeat")
+                                is True
+                            ):
+                                logger.log_and_showinfo("info", f"{msg}")
+                    elif new_attack not in attacks:
+                        from .. import utils
+                        if getattr(utils, "in_bulk_resolve", False):
+                            if hasattr(mw, "logger") and mw.logger:
+                                try: mw.logger.log("info", f"[Bulk Resolve] Discarded learning new move {new_attack} on {main_pokemon.name}.")
+                                except: pass
                         else:
-                            # Handle the case where the user cancels the dialog
-                            logger.log_and_showinfo(
-                                "info", f"{new_attack} will be discarded."
-                            )
+                            dialog = AttackDialog(attacks, new_attack)
+                            if dialog.exec() == QDialog.DialogCode.Accepted:
+                                selected_attack = dialog.selected_attack
+                                index_to_replace = None
+                                for index, attack in enumerate(attacks):
+                                    if attack == selected_attack:
+                                        index_to_replace = index
+                                # If the attack is found, replace it with 'new_attack'
+                                if index_to_replace is not None:
+                                    attacks[index_to_replace] = new_attack
+                                    logger.log_and_showinfo(
+                                        "info",
+                                        f"Replaced '{selected_attack}' with '{new_attack}'",
+                                    )
+                                else:
+                                    logger.log_and_showinfo(
+                                        "info", f"'{selected_attack}' not found in the list"
+                                    )
+                            else:
+                                # Handle the case where the user cancels the dialog
+                                logger.log_and_showinfo(
+                                    "info", f"{new_attack} will be discarded."
+                                )
                 mainpkmndata["attacks"] = attacks
     msg = ""
     msg += translator.translate(
@@ -1286,9 +1300,11 @@ def save_main_pokemon_progress(
         main_pokemon_xp=main_pokemon.xp,
     )
     color = "#a17cf7"  # pokemon leveling info color for tooltip
-    tooltipWithColour(msg, color)
-    if settings_obj.get("gui.pop_up_dialog_message_on_defeat") is True:
-        logger.log_and_showinfo("info", f"{msg}")
+    from .. import utils
+    if not getattr(utils, "in_bulk_resolve", False):
+        tooltipWithColour(msg, color)
+        if settings_obj.get("gui.pop_up_dialog_message_on_defeat") is True:
+            logger.log_and_showinfo("info", f"{msg}")
 
     # Load existing Pokémon data if it exists
     if main_pokemon_data:

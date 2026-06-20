@@ -38,6 +38,12 @@ Below is a detailed map of all configuration parameters active in the system:
 | `trainer.name` | `str` | `"Ash"` | Active username displayed on the trainer card GUI. |
 | `trainer.cash` | `int` | `3000` | In-game balance used to buy shop items. |
 | `trainer.daily_average` | `int` | `50` | Active review targets. Reaching this yields daily gold awards. |
+| `trainer.mobile_reviews_resolved_since_payout` | `int` | `0` | Tracks reviews completed during mobile sync since the last cash payout milestone. |
+| **Mobile Reviews** | | | |
+| `mobile.enabled` | `bool` | `true` | Expose reviews completed on AnkiMobile during syncing. |
+| `mobile.resolution_mode` | `str` | `"manual"` | How pending mobile reviews are resolved (`"manual"` or `"auto"`). |
+| `mobile.inactive_companions` | `list[str]` | `[]` | List of companion UUIDs excluded from participating in mobile reviews. |
+
 
 ---
 

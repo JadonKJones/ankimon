@@ -33,12 +33,10 @@ Ankimon integrates tightly with Anki by registering callbacks to `aqt.gui_hooks`
  └─────────────────────┘    └─────────────────────┘    └─────────────────────────────────┘
 ```
 
-| Anki Hook Event | Callback Function | Location | Purpose & Operational Impact |
-| :--- | :--- | :--- | :--- |
-| `gui_hooks.profile_did_open` | `on_profile_loaded` | `profile_hooks.py` | Executed when a user profile is selected. Initiates database loads, starts the backup manager, awards monthly calendar gifts, and initializes sync hooks. |
-| `gui_hooks.reviewer_did_answer_card` | `on_review_card` | `battle_loop.py` | Appends review counters, evaluates round intervals, processes damage simulations with `poke_engine`, and triggers faint/catch actions. |
+| `gui_hooks.profile_did_open` | `on_profile_loaded` | `profile_hooks.py` | Executed when a user profile is selected. Initiates database loads, starts the backup manager, awards monthly calendar gifts, initializes mobile review watermarks, restores the mobile menu badge, and clears the desktop session. |
+| `gui_hooks.reviewer_did_answer_card` | `on_review_card` | `battle_loop.py` | Appends review counters, evaluates round intervals, processes damage simulations with `poke_engine`, triggers faint/catch actions, and records the desktop `revlog_id` for mobile sync tracking. |
 | `gui_hooks.webview_will_set_content` | `on_webview_will_set_content` | `__init__.py` | Injects the Javascript bridge `ankimon_hud_portal.js` and custom CSS overlays directly into the Anki reviewer card iframe. |
-| `gui_hooks.sync_did_finish` | `setup_ankimon_sync_hooks` | `pyobj/ankimon_sync.py` | Initiates database index flushing and transaction validation following an AnkiWeb cloud sync to prevent conflicts. |
+| `gui_hooks.sync_did_finish` | `setup_ankimon_sync_hooks` | `pyobj/ankimon_sync.py` | Initiates database index flushing and transaction validation following an AnkiWeb cloud sync, then triggers the mobile review detection and queueing pipeline. If a developer database exists, displays `MobileReviewsRouterDialog` to let the user route reviews per deck to either the normal or developer database, updating watermarks in both databases. |
 
 ---
 

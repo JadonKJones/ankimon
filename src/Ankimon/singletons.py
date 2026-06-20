@@ -277,6 +277,9 @@ def notify_stats_changed():
     screen is visible, and swallows any error so a UI hiccup can't interfere
     with gameplay. Call it from gameplay write chokepoints via a deferred
     ``from .singletons import notify_stats_changed`` wrapped in try/except."""
+    from .utils import is_main_thread
+    if not is_main_thread():
+        return
     win = getattr(mw, "items_web_window", None)
     if not is_alive(win):
         return
@@ -517,7 +520,7 @@ def swap_ankimon_account():
         if hasattr(mw, "ankidex_window") and is_alive(mw.ankidex_window):
             mw.ankidex_window.update_ui_data()
 
-        if hasattr(mw, "items_web_window") and is_alive(mw.items_web_window):
+        if hasattr(mw, "items_web_window") and is_alive(mw.items_web_window) and mw.items_web_window.isVisible():
             mw.items_web_window.update_ui_data()
 
         # If in reviewer, force HUD update

@@ -258,9 +258,16 @@ def test_new_pokemon_invalidates_cache():
     mock_reviewer = MockReviewerManager()
     mock_reviewer._ownership_cache[25] = False
     
+    import random
+    orig_choice = random.choice
+    def mock_choice(seq):
+        if 25 in seq:
+            return 25
+        return orig_choice(seq)
+
     # Call new_pokemon
     with patch("random.randint", return_value=5), \
-         patch("random.choice", return_value=25), \
+         patch("random.choice", side_effect=mock_choice), \
          patch.object(ef_mod, "get_tier", return_value="Normal"), \
          patch.object(ef_mod, "get_all_pokemon_in_tier", return_value=[25]):
         
@@ -400,9 +407,16 @@ def test_new_pokemon_with_update_hud():
     mock_reviewer._ownership_cache[25] = False
     mock_reviewer.update_life_bar = MagicMock()
     
+    import random
+    orig_choice = random.choice
+    def mock_choice(seq):
+        if 25 in seq:
+            return 25
+        return orig_choice(seq)
+
     # Call new_pokemon with update_hud=True
     with patch("random.randint", return_value=5), \
-         patch("random.choice", return_value=25), \
+         patch("random.choice", side_effect=mock_choice), \
          patch.object(ef_mod, "get_tier", return_value="Normal"), \
          patch.object(ef_mod, "get_all_pokemon_in_tier", return_value=[25]), \
          patch("Ankimon.functions.encounter_functions.mw") as mock_mw:

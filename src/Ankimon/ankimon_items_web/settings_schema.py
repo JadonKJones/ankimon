@@ -156,6 +156,31 @@ GROUPS = [
             ],
         },
     },
+    {
+        "label": "Mobile Reviews",
+        "settings": [
+            {
+                "key": "mobile.enabled",
+                "label": "Mobile Reviews Integration",
+                "description": "Expose reviews completed on AnkiMobile during syncing.",
+                "type": "boolean",
+            },
+            {
+                "key": "mobile.resolution_mode",
+                "label": "Mobile Resolution Mode",
+                "description": (
+                    "Choose how your synced mobile reviews are processed:<br>"
+                    "• <strong>Manual</strong>: Play through battles one-by-one with full combat animations under the Mobile Reviews tab, with the choice to manually override your active companion before starting each battle.<br>"
+                    "• <strong>Auto-Resolve</strong>: Automatically and silently resolve all pending battles in the background immediately after syncing, using optimal team matchups and payouts."
+                ),
+                "type": "select",
+                "options": [
+                    {"value": "manual", "label": "Manual"},
+                    {"value": "auto", "label": "Auto-Resolve"}
+                ]
+            }
+        ]
+    }
 ]
 
 

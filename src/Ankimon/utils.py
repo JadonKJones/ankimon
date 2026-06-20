@@ -49,6 +49,15 @@ with open(pokedex_path, "r", encoding="utf-8") as f:
     POKEMON_NAME_LOOKUP = {x: data[x]["name"] for x in data}
 
 
+def is_main_thread() -> bool:
+    from PyQt6.QtCore import QThread
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if not app:
+        return True
+    return QThread.currentThread() == app.thread()
+
+
 def is_alive(obj):
     """Check if a QObject/QWidget's C++ part is still alive."""
     if obj is None:

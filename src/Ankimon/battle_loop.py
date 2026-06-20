@@ -303,6 +303,20 @@ def on_review_card(*args):
                     win.display_battle()
                 except RuntimeError:
                     pass
+
+        try:
+            if len(args) >= 2:
+                card = args[1]
+                revlog_id = mw.col.db.scalar(
+                    "SELECT id FROM revlog WHERE cid=? ORDER BY id DESC LIMIT 1",
+                    card.id
+                )
+                if revlog_id:
+                    from .functions.mobile_sync import record_desktop_review
+                    record_desktop_review(revlog_id)
+        except Exception:
+            pass
+
     except Exception as e:
         show_warning_with_traceback(
             parent=mw, exception=e, message="An error occurred in reviewer:"

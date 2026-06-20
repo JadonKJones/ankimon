@@ -19,6 +19,25 @@
         return 'open' + screen.charAt(0).toUpperCase() + screen.slice(1);
     }
 
+    window.updateNavSwitcherUnresolvedCount = function (count) {
+        const trigger = document.getElementById('nav-trigger');
+        const menu = document.getElementById('nav-menu');
+        if (!trigger || !menu) return;
+        if (count > 0) {
+            trigger.classList.add('has-unresolved');
+            const mobileItem = menu.querySelector('.nav-menu-item[data-screen="mobile"]');
+            if (mobileItem) {
+                mobileItem.classList.add('has-unresolved');
+            }
+        } else {
+            trigger.classList.remove('has-unresolved');
+            const mobileItem = menu.querySelector('.nav-menu-item[data-screen="mobile"]');
+            if (mobileItem) {
+                mobileItem.classList.remove('has-unresolved');
+            }
+        }
+    };
+
     // Wire the dropdown to a NavBridge. Safe to call with a falsy nav
     // (standalone / no bridge) — it just leaves the switcher hidden via the CSS
     // body:not(.shell-mode) rule. The current screen's menu item carries the
@@ -63,6 +82,13 @@
                 if (fn && typeof nav[fn] === 'function') nav[fn]();
             });
         });
+
+        // Initialize notification dot count
+        if (typeof nav.getPendingReviewsCount === 'function') {
+            nav.getPendingReviewsCount(function (count) {
+                window.updateNavSwitcherUnresolvedCount(count);
+            });
+        }
     };
 
     // For pages that have NO QWebChannel of their own (e.g. Ankidex): build the
@@ -75,3 +101,4 @@
         });
     };
 })();
+

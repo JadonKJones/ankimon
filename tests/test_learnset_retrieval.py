@@ -2,6 +2,16 @@ import json
 import importlib
 import sys
 import types
+_orig_modules = {
+    name: sys.modules.get(name)
+    for name in [
+        "Ankimon.resources",
+        "Ankimon.pyobj.error_handler",
+        "aqt",
+        "aqt.utils",
+        "aqt.qt"
+    ]
+}
 from pathlib import Path
 from unittest.mock import mock_open, patch, MagicMock
 
@@ -44,6 +54,13 @@ from Ankimon.functions.learnset_retrieval import (
     get_levelup_move_for_pokemon,
     get_random_moves_for_pokemon,
 )
+
+# Restore original modules to prevent global mock contamination during test collection
+for name, orig in _orig_modules.items():
+    if orig is None:
+        sys.modules.pop(name, None)
+    else:
+        sys.modules[name] = orig
 
 
 FAKE_LEARNSET = {

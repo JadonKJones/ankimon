@@ -84,6 +84,8 @@ new QWebChannel(qt.webChannelTransport, function (channel) {
 * **Settings (`settings.html`):** Exposes settings categories inside a fast chip-row generation format. Validates configurations inside `settings_schema.py:validate_and_clamp()`.
 * **Profile (`profile.html`):** Displays overall accomplishments, trainer statistics, unlocked badges, and contains the custom character sprite picker dialog.
 * **Team Builder (`team.html`):** Allows dragging and dropping roster configurations, setting cycle limits, toggling animated sprites, and auditing active move indexes.
+* **Mobile Reviews (`mobile.html` & `history.html`):** Renders State 1 (no reviews pending), State 2 (landing page with pending counts, ease breakdown, and roster selector), and State 3 (post-resolve summary showing XP, encounters, cash, trainer XP, and a detailed caught list). Supports Auto-Resolve (optimal team matchup selection based on moves, power, and speed matchup simulation) and Manual Replay (step-by-step resolution with full battle animations and a drop-down active companion override selector). Also hosts a **Battle History** tab (`history.html`) showing logs, companion levels, outcomes, and rewards for the last 200 resolved mobile battles. Communicates with `MobileBridge` to query statuses, handle batch dismissals, and deterministically run the battle resolution and reward calculations.
+
 
 ### C. PC Box Box Grid (`pyobj/pc_box.py`)
 * **Visual Elements:** Native PyQt window displaying boxed inventory slots.
@@ -92,6 +94,9 @@ new QWebChannel(qt.webChannelTransport, function (channel) {
 ### D. Evolution Window (`pyobj/evolution_window.py`)
 * **Visual Elements:** Animated native transition modals showing level, stone, or move-based evolution checks.
 
+### E. Menu Badge (`menu_buttons.py` & `update_mobile_badge`)
+* **Visual Elements:** Displays a pending battle count suffix in the main Anki menu bar (e.g. `Ankimon ⚔47` or `Ankimon` when empty).
+* **Logical Bindings:** Refreshes on sync finish, startup profile loaded, or battle resolution via `update_mobile_badge(count)`.
 ---
 
 ## 4. Live Updates and notify_stats_changed()

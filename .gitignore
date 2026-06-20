@@ -37,6 +37,8 @@ src/Ankimon/user_files/ankimon.db-wal
 src/Ankimon/user_files/ankimonDEV.db
 src/Ankimon/user_files/ankimonDEV.db-shm
 src/Ankimon/user_files/ankimonDEV.db-wal
+src/Ankimon/user_files/ankimon - Copy.db
+src/Ankimon/user_files/ankimonDEV - Copy.db
 src/Ankimon/user_files/json/*
 # Sprites are downloaded on first run, not tracked in git.
 # Source of truth: https://github.com/h0tp-ftw/ankimon-sprites

@@ -41,6 +41,13 @@
 - **Role:** Config / Utility
 - **Confidence Level:** High
 
+### `functions/mobile_sync.py`
+- **Primary Responsibility:** Sync engine logic for mobile reviews, including in-memory tracking of desktop reviews, detecting reviews processed on mobile, and orchestrating the post-sync import and queuing pipeline. It also handles companion deep-cloning, move/type-effectiveness auto-selection, and mobile battle simulations.
+- **Why it matters:** The core data-processing controller of the mobile sync system, keeping desktop and mobile sessions disjointed and cleanly tracked, and determining optimal companion selection.
+- **Major Symbols:** `record_desktop_review`, `detect_mobile_reviews`, `process_mobile_reviews_after_sync`, `load_active_team_clones`, `select_best_companion`, `simulate_pending_mobile_battles`, `_desktop_session_revlog_ids`.
+- **Role:** Mobile Sync Engine & Battle Simulator
+- **Confidence Level:** High
+
 ---
 
 ## Core Domain & State
@@ -98,9 +105,16 @@
 ### `ankimon_items_web/shop_obj.py`
 - **Primary Responsibility:** Controls the unified HTML5/QtWebEngine web-based shell window (`AnkimonItemsWeb`), which acts as a multi-view host for Items, Ankidex, Settings, Profile, and Team screens.
 - **Why it matters:** It manages QWebChannel bridge callbacks, screen URL loading, shop stock/rerolls, and key state transitions, removing visual flicker during navigation.
-- **Major Symbols:** `AnkimonItemsWeb`, `ItemsBridge`, `SettingsBridge`, `NavBridge`, `TrainerBridge`, `TeamBridge`, `load_screen`, `push_screen_data`, `refresh_live_screen`.
+- **Major Symbols:** `AnkimonItemsWeb`, `ItemsBridge`, `SettingsBridge`, `NavBridge`, `TrainerBridge`, `TeamBridge`, `MobileBridge`, `load_screen`, `push_screen_data`, `refresh_live_screen`.
 - **Role:** Web Shell Orchestrator / Bridge Controller
 - **Confidence Level:** High
+
+### `ankimon_mobile_web/` (mobile.html, mobile.css, mobile.js, history.html, history.js)
+- **Primary Responsibility:** HTML/CSS/JS frontend views and controllers for the Mobile Reviews and Battle History tabs inside the web shell.
+- **Why it matters:** Implements the visual rendering for State 1 (no reviews pending), State 2 (pending reviews landing page with rewards estimate and manual replay trigger), and the Battle History panel displaying recent outcomes and logs.
+- **Role:** Web View Interface
+- **Confidence Level:** High
+
 
 ### `ankimon_profile_web/profile_data.py`
 - **Primary Responsibility:** Extracts, transforms, and loads trainer profile statistics and team rosters from the SQLite database to supply the web views.

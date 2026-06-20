@@ -34,7 +34,8 @@ def force_load_module(name, filepath):
 
 # Force load encounter_data and pokedex_functions so they are not MagicMocks
 force_load_module("Ankimon.functions.encounter_data", _src / "Ankimon" / "functions" / "encounter_data.py")
-force_load_module("Ankimon.functions.pokedex_functions", _src / "Ankimon" / "functions" / "pokedex_functions.py")
+pdx = force_load_module("Ankimon.functions.pokedex_functions", _src / "Ankimon" / "functions" / "pokedex_functions.py")
+pdx.pokedex_path = _src / "Ankimon" / "data_files" / "pokedex.json"
 
 spec = importlib.util.spec_from_file_location(
     "Ankimon.functions.encounter_functions",
@@ -289,9 +290,9 @@ def test_meets_prerequisites_fusion_and_normal():
     assert ef._meets_prerequisites(10155, {800}) is False
     assert ef._meets_prerequisites(10155, {791}) is False
     
-    # 3. Test fallback for forms not explicitly in PREREQUISITES (e.g. Venusaur Mega (10033) has base species Venusaur (3))
-    # Venusaur has no prerequisites, so Venusaur Mega should meet prerequisites unconditionally.
-    assert ef._meets_prerequisites(10033, set()) is True
+    # 3. Test fallback for forms not explicitly in PREREQUISITES (e.g. Aerodactyl Mega (10038) has base species Aerodactyl (142))
+    # Aerodactyl has no prerequisites, so Aerodactyl Mega should meet prerequisites unconditionally.
+    assert ef._meets_prerequisites(10038, set()) is True
 
     # 4. Test stat-redistribution forms requiring their base forms
     # Dialga Origin (10245) requires Dialga (483)

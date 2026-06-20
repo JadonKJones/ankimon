@@ -1025,3 +1025,34 @@ body {
     border-color: var(--accent-blue);
     background: var(--bg-card);
 }
+
+/* Iframe mode overrides for embedded team page */
+body.in-iframe .sidebar-header {
+    display: none !important;
+}
+body.in-iframe .top-bar {
+    display: none !important;
+}
+
+/* Companion picker mode overrides */
+body.companion-picker-only .app-container {
+    display: none !important;
+}
+body.companion-picker-only #picker {
+    position: absolute;
+    inset: 0;
+    background: transparent;
+    display: flex;
+    align-items: stretch;
+    justify-content: stretch;
+    z-index: 500;
+}
+body.companion-picker-only #picker .picker-modal {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    border: none;
+    border-radius: 0;
+}
+
+

@@ -351,9 +351,10 @@ def special_pokemon_names_for_min_level(name):
 
 def search_pokedex(pokemon_name, variable):
     try:
-        if isinstance(pokemon_name, str):
-            pokemon_name = pokemon_name.lower()
+        if not isinstance(pokemon_name, str):
+            return []
             
+        pokemon_name = pokemon_name.lower()
         pokemon_name = special_pokemon_names_for_min_level(pokemon_name)
         pokedex_data = _load_pokedex_cache()  # Use cache instead of file I/O
 
@@ -436,6 +437,27 @@ def format_lore_name(name: str) -> str:
         "-Primal": "Primal ",
         "-Origin": "Origin ",
         "-Therian": "Therian ",
+        "-Attack": "Attack ",
+        "-Defense": "Defense ",
+        "-Speed": "Speed ",
+        "-Sky": "Sky ",
+        "-Pirouette": "Pirouette ",
+        "-Resolute": "Resolute ",
+        "-Black": "Black ",
+        "-White": "White ",
+        "-Crowned": "Crowned ",
+        "-Ice": "Ice Rider ",
+        "-Shadow": "Shadow Rider ",
+        "-Terastal": "Terastal ",
+        "-Stellar": "Stellar ",
+        "-Dusk-Mane": "Dusk Mane ",
+        "-Dawn-Wings": "Dawn Wings ",
+        "-Ultra": "Ultra ",
+        "-Unbound": "Unbound ",
+        "-Original": "Original Color ",
+        "-Rapid-Strike": "Rapid Strike ",
+        "-10%": "10% ",
+        "-Complete": "Complete ",
     }
     
     for suffix, prefix in replacements.items():
@@ -710,12 +732,8 @@ def check_evolution_for_pokemon(
     Check if a Pokémon evolves using level condition.
     Relying exclusively on pokedex.json.
     """
-    from ..utils import is_alive
-    if not is_alive(evo_window):
-        from ..singletons import get_evo_window
-        evo_window = get_evo_window()
-
-    if evolution_rejected or everstone:
+    from .. import utils
+    if getattr(utils, "in_bulk_resolve", False) or evolution_rejected or everstone:
         return None
 
     try:

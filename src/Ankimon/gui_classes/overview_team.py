@@ -215,9 +215,10 @@ def _build_card_html(pokemon: dict[str, Any], id_prefix: str) -> str:
     Returns:
         An HTML string representing one ``.poke-item`` element.
     """
+    from ..functions.pokedex_functions import format_lore_name
     name = pokemon.get("name", "Unknown")
     nickname = pokemon.get("nickname", "")
-    display_name = nickname or name
+    display_name = nickname or format_lore_name(name)
     level = pokemon.get("level", 1)
     gender = pokemon.get("gender", "M")
     current_hp = pokemon.get("current_hp", 0)

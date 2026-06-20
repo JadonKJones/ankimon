@@ -159,3 +159,43 @@ This document traces the most important execution and behavior paths in the Anki
 - **Integrations Involved:** Network access to AnkiWeb/GitHub.
 - **Why it matters:** Ensures data consistency and recurring engagement features.
 - **Confidence Level:** High
+
+---
+
+## 8. Mobile Reviews Sync & Routing Path
+- **Trigger:** Anki sync completes (`gui_hooks.sync_did_finish`).
+- **Start File/Symbol:** `pyobj/ankimon_sync.py` -> `on_sync_did_finish()`.
+- **Intermediate Steps:**
+  1. Detects new review logs synced from mobile devices (using `detect_mobile_reviews`).
+  2. If new mobile reviews are found, and the developer database (`ankimonDEV.db`) exists in the profile:
+     - Prompts the user/developer with `MobileReviewsRouterDialog` displaying review counts grouped by deck.
+     - The user/developer selects a routing target for each deck: **Normal Account (ankimon.db)**, **Developer Account (ankimonDEV.db)**, or **Skip**.
+     - Queues the reviews into the respective database files.
+     - Advances the mobile watermark in both databases, synchronizing them directly using a lightweight SQLite connection to the inactive database to avoid slow global connection switching.
+  3. If the developer database does not exist, queues all reviews directly into the active database and advances its watermark.
+- **Endpoint/Effect:** Mobile reviews are successfully routed to their designated accounts, and both databases maintain matching watermarks without redundant global database swaps.
+- **State Changes Involved:** Mobile pending review queue counts update; mobile watermarks advanced.
+- **Persistence Involved:** Direct writes to SQLite database files.
+- **Why it matters:** Allows developers to test features or play in both Normal and DEV modes in parallel while reviewing cards on AnkiMobile.
+- **Confidence Level:** High
+
+---
+
+## 9. Mobile Battle Simulation & Resolution Path
+- **Trigger:** User initiates battle resolution via Auto-Resolve (`resolveAll`) or Manual Replay (`resolveNext` / `commitReplayOutcome`) in the Mobile Reviews web tab.
+- **Start File/Symbol:** `functions/mobile_sync.py` -> `simulate_pending_mobile_battles()`.
+- **Intermediate Steps:**
+  1. Loads all active team clones using `load_active_team_clones()`. This excludes team members flagged in `mobile.inactive_companions`.
+  2. For each pending mobile review battle, simulates the encounter by rolling a random opponent (respecting prerequisites).
+  3. In **Auto-Resolve** mode:
+     - Automatically selects the optimal companion using `select_best_companion()`, which simulates matchups against the opponent based on move type effectiveness, move power, and speed stats.
+     - Simulates combat: calculates damage, faints, catches, and faints. The companion clone is healed back to full HP upon victory.
+  4. In **Manual Replay** mode:
+     - Prompts the user to preview the opponent, select or override the active companion, and play through the battle.
+  5. Computes experience and cash rewards continuously, clamping them using `validate_and_clamp()`.
+  6. Writes battle log entries to the `mobile_battle_history` table (and keeps only the 200 most recent records).
+- **Endpoint/Effect:** Pending mobile battles are cleared from the queue, companions earn XP/levels, and the trainer receives cash rewards.
+- **Persistence Involved:** Pending queue entries updated to resolved; new history logs created; companion data saved.
+- **Why it matters:** Offloads mobile study reviews into standard Ankimon gameplay rewards.
+- **Confidence Level:** High
+

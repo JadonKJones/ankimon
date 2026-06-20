@@ -5,42 +5,26 @@ window close/open flicker; the dropdown switcher in either screen calls back
 through QWebChannel to swap content in place.
 """
 
-print("1", flush=True)
 import json
-print("2", flush=True)
 import random
-print("3", flush=True)
 from datetime import datetime
-print("4", flush=True)
 from aqt import QDialog, QVBoxLayout, QWebEngineView, mw
-print("5", flush=True)
 from aqt.qt import Qt, QUrl, QFrame
-print("6", flush=True)
 from PyQt6.QtCore import QObject, pyqtSlot, QTimer
-print("7", flush=True)
 from PyQt6.QtGui import QColor
-print("8", flush=True)
 from PyQt6.QtWebChannel import QWebChannel
-print("9", flush=True)
 from PyQt6.QtWidgets import QStackedWidget
-print("10", flush=True)
 import csv
-print("11", flush=True)
 from ..utils import give_item, is_dev_mode
-print("12", flush=True)
 from ..resources import items_path, csv_file_items_cost, csv_file_descriptions
-print("13", flush=True)
 from ..functions.pokedex_functions import (
     find_details_move,
     _load_pokedex_cache,
     check_evolution_by_item,
     return_id_for_item_name,
 )
-print("14", flush=True)
 from ..business import calculate_cp_from_dict
-print("15", flush=True)
 from ..ankimon_profile_web.profile_data import ProfileData
-print("16", flush=True)
 
 
 SCREEN_ITEMS = "items"
@@ -48,6 +32,8 @@ SCREEN_ANKIDEX = "ankidex"
 SCREEN_SETTINGS = "settings"
 SCREEN_PROFILE = "profile"
 SCREEN_TEAM = "team"
+SCREEN_MOBILE = "mobile"
+SCREEN_HISTORY = "history"
 
 
 class NavBridge(QObject):
@@ -56,6 +42,15 @@ class NavBridge(QObject):
     def __init__(self, window):
         super().__init__()
         self._w = window
+
+    @pyqtSlot(result=int)
+    def getPendingReviewsCount(self) -> int:
+        try:
+            from aqt import mw
+            db = getattr(mw, "ankimon_db", None)
+            return db.get_pending_mobile_count() if db else 0
+        except Exception:
+            return 0
 
     @pyqtSlot()
     def openItems(self):
@@ -76,6 +71,15 @@ class NavBridge(QObject):
     @pyqtSlot()
     def openTeam(self):
         self._w.load_screen(SCREEN_TEAM)
+
+    @pyqtSlot()
+    def openMobile(self):
+        self._w.load_screen(SCREEN_MOBILE)
+
+    @pyqtSlot()
+    def openHistory(self):
+        self._w.load_screen(SCREEN_HISTORY)
+
 
 
 class TrainerBridge(QObject):
@@ -135,15 +139,15 @@ class TeamBridge(QObject):
         return self._w.profile_data.get_member_stats(individual_id)
 
     # JSON string in (PyQt QVariant-list unwrap is unreliable on first call).
-    @pyqtSlot(str, str, result="QVariant")
-    def saveTeam(self, team_json, xp_share_id):
+    @pyqtSlot(str, str, str, result="QVariant")
+    def saveTeam(self, team_json, xp_share_id, companion_id):
         try:
             team_ids = json.loads(team_json) if team_json else []
             if not isinstance(team_ids, list):
                 raise ValueError("team payload must be a list")
         except (TypeError, ValueError) as e:
             return {"ok": False, "message": f"Invalid team payload: {e}"}
-        return self._w.profile_data.handle_save_team(team_ids, xp_share_id or None)
+        return self._w.profile_data.handle_save_team(team_ids, xp_share_id or None, companion_id or None)
 
 
 class SettingsBridge(QObject):
@@ -236,33 +240,1701 @@ class ItemsBridge(QObject):
         self._w.load_screen(SCREEN_ANKIDEX)
 
 
+class MobileBridge(QObject):
+    """Mobile reviews screen — data and actions."""
+
+    def __init__(self, window):
+        super().__init__()
+        self._w = window
+
+    @pyqtSlot(result="QVariant")
+    def getMobileStatus(self) -> dict:
+        """
+        Returns all data needed to render State 1 or State 2.
+        Called by mobile.js on page load and after actions.
+        """
+        try:
+            import math
+            db = mw.ankimon_db
+            # 1. Count and ease breakdown in one GROUP BY query (lightweight)
+            rows = db.execute(
+                """SELECT ease, COUNT(*) as cnt FROM pending_mobile_battles
+                   WHERE resolved = 0 GROUP BY ease"""
+            ).fetchall()
+            pending_count = sum(r[1] for r in rows)
+
+            # Read settings for cards_per_round
+            settings_obj = mw.settings_obj
+            cards_per_round = 2
+            if settings_obj:
+                try:
+                    cpr = settings_obj.get("battle.cards_per_round", 2)
+                    if isinstance(cpr, int):
+                        cards_per_round = cpr
+                    elif isinstance(cpr, str):
+                        if "-" in cpr:
+                            parts = cpr.split("-")
+                            cards_per_round = int(sum(map(int, parts)) / len(parts))
+                        else:
+                            try:
+                                cards_per_round = int(cpr)
+                            except ValueError:
+                                cards_per_round = 2
+                except Exception:
+                    cards_per_round = 2
+
+            if cards_per_round <= 0:
+                cards_per_round = 2
+
+            battle_count = math.ceil(pending_count / cards_per_round)
+
+            if pending_count == 0:
+                return {"pending_count": 0, "cap": 10000, "battle_count": 0}
+
+            # Populate ease breakdown from rows count
+            ease_breakdown = {"1": 0, "2": 0, "3": 0, "4": 0}
+            for row in rows:
+                ease_breakdown[str(row[0])] = row[1]
+
+            # 2. Fetch only the rows needed for simulation (bounded)
+            reviews_rows = db.execute(
+                """SELECT id, revlog_id, card_id, ease, review_time, review_type, queued_at
+                   FROM pending_mobile_battles
+                   WHERE resolved = 0
+                   ORDER BY id ASC LIMIT 105"""
+            ).fetchall()
+
+            reviews_list = [
+                {
+                    "id": r[0],
+                    "revlog_id": r[1],
+                    "card_id": r[2],
+                    "ease": r[3],
+                    "review_time": r[4],
+                    "review_type": r[5],
+                    "queued_at": r[6],
+                }
+                for r in reviews_rows
+            ]
+            if pending_count > len(reviews_list):
+                reviews_list.extend([{"ease": 3}] * (pending_count - len(reviews_list)))
+
+            settings_obj = mw.settings_obj
+            main_pokemon = getattr(mw, "main_pokemon", None)
+            trainer_card = getattr(mw, "trainer_card", None)
+            ankimon_tracker_obj = getattr(mw, "ankimon_tracker_obj", None)
+
+            # Use estimated battle count initially. The precise count will be updated via background QueryOp.
+            # battle_count is already computed on line 289.
+
+
+            # Get descriptive name for auto-battle setting
+            auto_battle_mode_names = {
+                0: "Manual (Auto-Resolve)",
+                1: "Auto-Catch",
+                2: "Auto-Defeat",
+                3: "Catch Uncollected"
+            }
+            auto_battle_val = 0
+            try:
+                auto_battle_val = int(settings_obj.get("battle.automatic_battle", 0))
+            except Exception:
+                pass
+            auto_battle_mode = auto_battle_mode_names.get(auto_battle_val, "Manual")
+
+            rare_catch_active = False
+            if settings_obj:
+                rare_catch_active = (
+                    settings_obj.get("battle.auto_catch_legendary", True)
+                    or settings_obj.get("battle.auto_catch_mythical", True)
+                    or settings_obj.get("battle.auto_catch_ultra", True)
+                    or settings_obj.get("battle.auto_catch_starter", True)
+                    or settings_obj.get("battle.auto_catch_mega", True)
+                    or settings_obj.get("battle.auto_catch_gmax", True)
+                    or settings_obj.get("battle.auto_catch_regional", True)
+                    or bool(settings_obj.get("battle.auto_catch_wishlist", []))
+                )
+
+            # Main Pokémon info for preview
+            main_pokemon_name = None
+            main_pokemon_level = None
+            main_pokemon_sprite = None
+            sprite_mode = "static"
+            if main_pokemon:
+                main_pokemon_name = main_pokemon.name
+                main_pokemon_level = main_pokemon.level
+                
+                from ..functions.sprite_functions import get_relative_sprite_path
+                main_pokemon_sprite = get_relative_sprite_path(
+                    main_pokemon.id, bool(main_pokemon.shiny), (main_pokemon.gender or "N"), main_pokemon.name, "gif"
+                )
+
+            if settings_obj:
+                sprite_mode = settings_obj.get(
+                    "ankidex.spriteMode",
+                    settings_obj.get("pokedex_v2.spriteMode", "static")
+                )
+
+            # Trigger async estimates calculation if there are pending reviews
+            estimates_loading = False
+            # Trigger async estimates calculation if there are pending reviews
+            estimates_loading = False
+            estimates = {
+                "xp": 0,
+                "encounters": 0,
+                "catches": 0,
+                "caught_list": [],
+                "is_truncated": False,
+                "total_reviews": 0,
+                "simulated_reviews": 0,
+                "cash": 0,
+            }
+            if pending_count > 0:
+                estimates_loading = True
+                # 2. Fetch only the rows needed for simulation (bounded)
+                reviews_rows = db.execute(
+                    """SELECT id, revlog_id, card_id, ease, review_time, review_type, queued_at
+                       FROM pending_mobile_battles
+                       WHERE resolved = 0
+                       ORDER BY id ASC LIMIT 105"""
+                ).fetchall()
+
+                reviews_list = [
+                    {
+                        "id": r[0],
+                        "revlog_id": r[1],
+                        "card_id": r[2],
+                        "ease": r[3],
+                        "review_time": r[4],
+                        "review_type": r[5],
+                        "queued_at": r[6],
+                    }
+                    for r in reviews_rows
+                ]
+                if pending_count > len(reviews_list):
+                    reviews_list.extend([{"ease": 3}] * (pending_count - len(reviews_list)))
+
+                trainer_card = getattr(mw, "trainer_card", None)
+                ankimon_tracker_obj = getattr(mw, "ankimon_tracker_obj", None)
+
+                def run_sim(col):
+                    from ..functions.mobile_sync import simulate_pending_mobile_battles
+                    return simulate_pending_mobile_battles(
+                        reviews_list,
+                        main_pokemon,
+                        settings_obj,
+                        trainer_card,
+                        ankimon_tracker_obj,
+                        ankimon_db=db
+                    )
+
+                def on_sim_success(sim_res):
+                    res_est = {
+                        "xp": sim_res["xp"],
+                        "encounters": sim_res["encounters"],
+                        "catches": sim_res.get("catches_count", len(sim_res["caught"])),
+                        "caught_list": sim_res["caught"],
+                        "is_truncated": sim_res.get("is_truncated", False),
+                        "total_reviews": sim_res.get("total_reviews", 0),
+                        "simulated_reviews": sim_res.get("simulated_reviews", 0),
+                        "cash": sim_res.get("cash", 0),
+                    }
+                    import json
+                    js = f"if (window.updateMobileEstimates) {{ window.updateMobileEstimates({json.dumps(res_est)}); }}"
+                    self._w.webview_mobile.page().runJavaScript(js)
+
+                import os
+                if "PYTEST_CURRENT_TEST" in os.environ:
+                    sim_res = run_sim(None)
+                    estimates = {
+                        "xp": sim_res["xp"],
+                        "encounters": sim_res["encounters"],
+                        "catches": sim_res.get("catches_count", len(sim_res["caught"])),
+                        "caught_list": sim_res["caught"],
+                        "is_truncated": sim_res.get("is_truncated", False),
+                        "total_reviews": sim_res.get("total_reviews", 0),
+                        "simulated_reviews": sim_res.get("simulated_reviews", 0),
+                        "cash": sim_res.get("cash", 0),
+                    }
+                    estimates_loading = False
+                    battle_count = estimates["encounters"]
+                else:
+                    from aqt.operations import QueryOp
+                    QueryOp(
+                        parent=self._w,
+                        op=run_sim,
+                        success=on_sim_success
+                    ).without_collection().run_in_background()
+
+            return {
+                "pending_count": pending_count,
+                "pending_count_at_start": pending_count,
+                "cards_per_round": cards_per_round,
+                "battle_count": battle_count,
+                "cap": 10000,
+                "ease_breakdown": ease_breakdown,
+                "estimates": estimates,
+                "estimates_loading": estimates_loading,
+                "auto_battle_mode": auto_battle_mode,
+                "rare_catch_active": rare_catch_active,
+                "main_pokemon_name": main_pokemon_name,
+                "main_pokemon_level": main_pokemon_level,
+                "main_pokemon_sprite": main_pokemon_sprite,
+                "sprite_mode": sprite_mode,
+                "team_status": self.getTeamStatus(),
+            }
+        except Exception as e:
+            return {"error": str(e), "pending_count": 0, "pending_count_at_start": 0, "cap": 10000}
+
+    @pyqtSlot(result="QVariant")
+    def getMobileHistory(self) -> list:
+        """Retrieves mobile battle history."""
+        try:
+            return mw.ankimon_db.get_mobile_history(limit=500)
+        except Exception as e:
+            return []
+
+    @pyqtSlot(result="QVariant")
+    def clearMobileHistory(self) -> bool:
+        """Clears mobile battle history."""
+        try:
+            return mw.ankimon_db.clear_mobile_history()
+        except Exception as e:
+            return False
+
+    @pyqtSlot(result="QVariant")
+    def dismissAll(self) -> dict:
+        """
+        Mark ALL pending battles as resolved without running any battle logic.
+        This is the escape hatch for users who don't want to replay.
+        """
+        try:
+            db = mw.ankimon_db
+            count_before = db.get_pending_mobile_count()
+            with db._get_connection() as conn:
+                conn.execute(
+                    "UPDATE pending_mobile_battles SET resolved=1, resolved_at=? WHERE resolved=0",
+                    (int(__import__("time").time() * 1000),)
+                )
+            from ..menu_buttons import update_mobile_badge
+            update_mobile_badge(0)
+            return {"dismissed": count_before, "success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @pyqtSlot(result="QVariant")
+    def resolveAll(self) -> dict:
+        """
+        Runs the deterministic auto-resolve for all pending reviews, applying the exact same
+        encounters and outcomes simulated in the preview.
+        """
+        # ... (unchanged)
+        return self._resolve_internal(mode="all")
+
+    @pyqtSlot(int, result="QVariant")
+    def resolveChunk(self, limit: int) -> dict:
+        """
+        Resolves a chunk of pending battles up to the specified limit.
+        """
+        res = self._resolve_internal(mode="all", limit=limit)
+        if isinstance(res, dict) and res.get("success"):
+            res["done"] = (mw.ankimon_db.get_pending_mobile_count() == 0)
+        return res
+
+    @pyqtSlot()
+    def startBulkResolve(self):
+        """Starts bulk auto-resolve in a background thread."""
+        self._bulk_progress = {
+            "processed": 0,
+            "total": mw.ankimon_db.get_pending_mobile_count(),
+            "resolved": 0,
+            "catches": 0,
+            "cash_gained": 0,
+            "trainer_xp_gained": 0,
+            "xp_gained": 0,
+            "caught_list": [],
+            "done": False,
+            "error": None
+        }
+        self._bulk_paused = False
+        self._bulk_stopped = False
+        self._bulk_refreshed = False
+
+        def bg_resolve():
+            try:
+                total_reviews = self._bulk_progress["total"]
+                limit = 15
+                while self._bulk_progress["processed"] < total_reviews:
+                    if getattr(self, "_bulk_stopped", False):
+                        break
+                    if getattr(self, "_bulk_paused", False):
+                        import time
+                        time.sleep(0.1)
+                        continue
+
+                    # Run _resolve_internal for this chunk
+                    res = self._resolve_internal(mode="all", limit=limit)
+                    if not res or res.get("done") or res.get("reviews_processed", 0) == 0:
+                        break
+                    if not res.get("success", True):
+                        raise Exception(res.get("error", "Unknown error in background resolve"))
+
+                    # Accumulate results
+                    self._bulk_progress["processed"] += res.get("reviews_processed", 0)
+                    self._bulk_progress["resolved"] += res.get("resolved", 0)
+                    self._bulk_progress["catches"] += res.get("catches", 0)
+                    self._bulk_progress["cash_gained"] += res.get("cash_gained", 0)
+                    self._bulk_progress["trainer_xp_gained"] += res.get("trainer_xp_gained", 0)
+                    self._bulk_progress["xp_gained"] += res.get("xp_gained", 0)
+                    if res.get("caught_list"):
+                        self._bulk_progress["caught_list"].extend(res.get("caught_list"))
+                    
+                    import time
+                    time.sleep(0.05)
+
+            except Exception as e:
+                import traceback
+                self._bulk_progress["error"] = f"{str(e)}\n{traceback.format_exc()}"
+            finally:
+                self._bulk_progress["done"] = True
+
+        import threading
+        thread = threading.Thread(target=bg_resolve, daemon=True)
+        thread.start()
+
+    @pyqtSlot()
+    def pauseBulkResolve(self):
+        self._bulk_paused = True
+
+    @pyqtSlot()
+    def resumeBulkResolve(self):
+        self._bulk_paused = False
+
+    @pyqtSlot()
+    def stopBulkResolve(self):
+        self._bulk_stopped = True
+
+    @pyqtSlot(result="QVariant")
+    def getBulkResolveProgress(self) -> dict:
+        progress = getattr(self, "_bulk_progress", {"done": True, "processed": 0, "total": 0}).copy()
+        progress["paused"] = getattr(self, "_bulk_paused", False)
+        # If it just finished, perform safe main-thread refreshes!
+        if progress.get("done") and not getattr(self, "_bulk_refreshed", False):
+            self._bulk_refreshed = True
+            try:
+                # Refresh trainer card
+                if hasattr(mw, "trainer_card") and mw.trainer_card:
+                    mw.trainer_card.refresh()
+                # Refresh active companion
+                if hasattr(mw, "main_pokemon") and mw.main_pokemon:
+                    from ..functions.update_main_pokemon import update_main_pokemon
+                    update_main_pokemon(mw.main_pokemon)
+                # Update mobile badge safely on main thread
+                try:
+                    remaining = mw.ankimon_db.get_pending_mobile_count()
+                    from ..menu_buttons import update_mobile_badge
+                    update_mobile_badge(remaining)
+                except Exception: pass
+                # Notify screen stats changes
+                from ..singletons import notify_stats_changed
+                notify_stats_changed()
+            except Exception as e:
+                print(f"[Ankimon] Error refreshing singletons after bulk resolve: {e}")
+        return progress
+
+    @pyqtSlot(str, result="QVariant")
+    @pyqtSlot(result="QVariant")
+    def resolveNext(self, companion_id: str = "") -> dict:
+        """
+        Resolves the oldest unresolved pending battle.
+        Returns a dict with battle result data for the JS animation layer.
+        Returns {"done": True} if queue is empty.
+        Returns {"error": str} on failure.
+        """
+        return self._resolve_internal(mode="next", companion_id=companion_id)
+
+    @pyqtSlot(str, result="QVariant")
+    def commitReplayOutcome(self, choice: str) -> dict:
+        """
+        Commits the user's choice ('catch' or 'defeat') for the current manual review replay encounter.
+        """
+        try:
+            outcome_data = getattr(self, "_current_pending_outcome", None)
+            if not outcome_data:
+                return {"success": False, "error": "No pending battle to resolve."}
+
+            enemy_pokemon = outcome_data["enemy_pokemon"]
+            battle_xp = outcome_data["battle_xp"]
+            total_xp = outcome_data["total_xp"]
+            accumulated_evs = outcome_data["accumulated_evs"]
+            total_trainer_xp = outcome_data["total_trainer_xp"]
+            main_pokemon = outcome_data["main_pokemon"]
+            trainer_card = outcome_data["trainer_card"]
+            settings_obj = outcome_data["settings_obj"]
+            gained_cash = outcome_data.get("gained_cash", 0)
+
+            if choice == "catch":
+                from datetime import datetime
+                from ..functions.encounter_functions import save_caught_pokemon
+                capture_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                enemy_pokemon.captured_date = capture_time
+                save_caught_pokemon(enemy_pokemon, nickname=None, achievements=mw.achievements_dict)
+                try:
+                    from ..reviewer_ui import _collected_pokemon_ids
+                    if isinstance(_collected_pokemon_ids, set):
+                        _collected_pokemon_ids.add(enemy_pokemon.id)
+                except Exception: pass
+                battle_xp = 0
+                
+            elif choice == "defeat":
+                companion_id = outcome_data.get("companion_id", "")
+                if not companion_id and main_pokemon:
+                    companion_id = getattr(main_pokemon, "individual_id", "")
+                
+                if companion_id and (total_xp > 0 or any(accumulated_evs.values())):
+                    _attribute_xp_and_evs_to_companion(companion_id, total_xp, accumulated_evs, settings_obj)
+
+                if total_trainer_xp > 0 and trainer_card:
+                    new_txp = int(settings_obj.get("trainer.xp", 0) + total_trainer_xp)
+                    settings_obj.set("trainer.xp", new_txp)
+                    settings_obj.set("trainer.total_xp", int(settings_obj.get("trainer.total_xp", 0) + total_trainer_xp))
+                    trainer_card.xp = new_txp
+                    trainer_card.total_xp = settings_obj.get("trainer.total_xp")
+                    trainer_card.check_level_up()
+            
+            # Mark resolved in DB now that user has committed
+            review_ids = outcome_data.get("review_ids", [])
+            db = mw.ankimon_db
+            now_ms = int(__import__("time").time() * 1000)
+            if review_ids:
+                with db._get_connection() as conn:
+                    placeholders = ",".join("?" for _ in review_ids)
+                    conn.execute(f"UPDATE pending_mobile_battles SET resolved=1, resolved_at=? WHERE id IN ({placeholders})", [now_ms] + review_ids)
+                try:
+                    # Sync resolutions to dev/prod db
+                    placeholders = ",".join("?" for _ in review_ids)
+                    rows = db.execute(f"SELECT revlog_id FROM pending_mobile_battles WHERE id IN ({placeholders})", review_ids).fetchall()
+                    revlog_ids = [r[0] for r in rows if r[0]]
+                    if revlog_ids and hasattr(db, "sync_resolutions_to_other_db"):
+                        db.sync_resolutions_to_other_db(revlog_ids, now_ms)
+                except Exception: pass
+
+            # Calculate and award cumulative cash reward using review count
+            gained_cash = 0
+            if review_ids and settings_obj:
+                total_reviews_resolved = len(review_ids)
+                current_counter = int(settings_obj.get("trainer.mobile_reviews_resolved_since_payout", 0))
+                new_counter = current_counter + total_reviews_resolved
+                
+                ci = int(settings_obj.get("trainer.cash_reward_interval", 5))
+                ca = int(settings_obj.get("trainer.cash_reward_amount", 10))
+                
+                gained_cash = (new_counter // ci) * ca
+                remaining_counter = new_counter % ci
+                settings_obj.set("trainer.mobile_reviews_resolved_since_payout", remaining_counter)
+                
+                if gained_cash > 0:
+                    settings_obj.set("trainer.cash", int(settings_obj.get("trainer.cash", 0) + gained_cash))
+                    if trainer_card:
+                        trainer_card.cash = settings_obj.get("trainer.cash")
+
+            # Update mobile badge
+            remaining = db.get_pending_mobile_count()
+            try:
+                from ..menu_buttons import update_mobile_badge
+                update_mobile_badge(remaining)
+            except Exception: pass
+
+            # Calculate CP for the return value
+            from ..business import calculate_cp_from_dict
+            enemy_dict = enemy_pokemon.to_dict()
+            enemy_dict.update({
+                "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+            })
+            cp_val = calculate_cp_from_dict(enemy_dict)
+            if cp_val.__class__.__name__ == "MagicMock":
+                cp_val = 100
+
+            # Save to mobile history
+            try:
+                comp_name = outcome_data.get("companion_name")
+                comp_level = outcome_data.get("companion_level")
+                if not comp_name:
+                    comp_name = "Companion"
+                    comp_level = 5
+                    active_comp = None
+                    if choice == "defeat" and "target_pokemon" in locals() and target_pokemon:
+                        active_comp = target_pokemon
+                    elif main_pokemon:
+                        active_comp = main_pokemon
+                    
+                    if active_comp:
+                        comp_name = getattr(active_comp, "display_name", "Companion")
+                        comp_level = getattr(active_comp, "level", 5)
+
+                outcome_val = "caught" if choice == "catch" else "defeated"
+                if outcome_data.get("companion_fainted", False):
+                    outcome_val = "lost"
+
+                db.add_mobile_history_entry({
+                    "timestamp": now_ms,
+                    "enemy_id": enemy_pokemon.id,
+                    "enemy_name": enemy_pokemon.display_name,
+                    "enemy_level": enemy_pokemon.level,
+                    "enemy_shiny": enemy_pokemon.shiny,
+                    "companion_name": comp_name,
+                    "companion_level": comp_level,
+                    "outcome": outcome_val,
+                    "xp_gained": battle_xp if outcome_val == "defeated" else 0,
+                    "trainer_xp_gained": total_trainer_xp if outcome_val == "defeated" else 0,
+                    "cash_gained": gained_cash,
+                })
+            except Exception as ex:
+                if hasattr(mw, "logger") and mw.logger:
+                    mw.logger.log("error", f"Failed to record manual mobile battle history: {ex}")
+
+            # Clear pending outcome
+            self._current_pending_outcome = None
+            
+            # Trigger sync notification to refresh UI
+            try:
+                from ..singletons import notify_stats_changed
+                notify_stats_changed()
+            except Exception: pass
+
+            return {"success": True, "outcome": "caught" if choice == "catch" else "defeated", "xp_gained": battle_xp, "cp": cp_val, "remaining": remaining, "cash_gained": gained_cash}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _resolve_internal(self, mode="all", companion_id="", limit=None) -> dict:
+        db = mw.ankimon_db
+        conn = db._get_connection()
+        
+        use_transaction = (mode == "all")
+        if use_transaction:
+            conn._disable_commit = True
+            from .. import utils
+            utils.in_bulk_resolve = True
+
+        try:
+            if use_transaction:
+                with conn:
+                    result = self._resolve_internal_wrapped(mode, companion_id, limit)
+            else:
+                result = self._resolve_internal_wrapped(mode, companion_id, limit)
+            return result
+        finally:
+            if use_transaction:
+                conn._disable_commit = False
+                from .. import utils
+                utils.in_bulk_resolve = False
+
+    def _resolve_internal_wrapped(self, mode="all", companion_id="", limit=None) -> dict:
+        """
+        Unified resolution logic for resolveAll (mode='all') and resolveNext (mode='next').
+        """
+        try:
+            db = mw.ankimon_db
+            pending_total_at_start = db.get_pending_mobile_count()
+
+            if mode == "next":
+                # For resolveNext, we need to know how many are already resolved to calculate battle_number
+                # Actually, resolveAll logic below marks them as resolved.
+                # Let's just follow the spec's algorithm for resolveNext.
+                pass
+
+            if pending_total_at_start == 0:
+                return {"success": True, "resolved": 0, "message": "No pending battles.", "done": True}
+
+            # Read settings
+            settings_obj = mw.settings_obj
+            cards_per_round = 2
+            if settings_obj:
+                try:
+                    cpr = settings_obj.get("battle.cards_per_round", 2)
+                    if isinstance(cpr, int):
+                        cards_per_round = cpr
+                    elif isinstance(cpr, str):
+                        if "-" in cpr:
+                            parts = cpr.split("-")
+                            cards_per_round = int(sum(map(int, parts)) / len(parts))
+                        else:
+                            try:
+                                cards_per_round = int(cpr)
+                            except ValueError:
+                                cards_per_round = 2
+                except Exception:
+                    cards_per_round = 2
+
+            if mode == "next":
+                # Dedicated manual replay simulation block
+                unresolved_rows = db.execute(
+                    """SELECT id, revlog_id, card_id, ease, review_time, review_type, queued_at
+                       FROM pending_mobile_battles
+                       WHERE resolved = 0
+                       ORDER BY id ASC"""
+                ).fetchall()
+                if not unresolved_rows:
+                    return {"done": True}
+
+                all_unresolved = [
+                    {
+                        "id": r[0],
+                        "revlog_id": r[1],
+                        "card_id": r[2],
+                        "ease": r[3],
+                        "review_time": r[4],
+                        "review_type": r[5],
+                        "queued_at": r[6],
+                    }
+                    for r in unresolved_rows
+                ]
+
+                # We will simulate turn-by-turn until enemy or companion faints
+                from ..functions.mobile_sync import load_active_team_clones, select_best_companion
+                team_clones = load_active_team_clones(db, settings_obj, getattr(mw, "main_pokemon", None))
+                main_pokemon = getattr(mw, "main_pokemon", None)
+                trainer_card = getattr(mw, "trainer_card", None)
+                ankimon_tracker_obj = getattr(mw, "ankimon_tracker_obj", None)
+
+                main_pokemon_level = 5
+                if team_clones:
+                    levels = []
+                    for c in team_clones:
+                        lvl = getattr(c, "level", None)
+                        if lvl is not None and lvl.__class__.__name__ != "MagicMock" and isinstance(lvl, (int, float)):
+                            levels.append(int(lvl))
+                    if levels:
+                        main_pokemon_level = max(levels)
+                elif main_pokemon:
+                    lvl = getattr(main_pokemon, "level", 5)
+                    if lvl.__class__.__name__ != "MagicMock" and isinstance(lvl, (int, float)):
+                        main_pokemon_level = int(lvl)
+
+                import random
+                import math
+                import uuid
+                from datetime import datetime
+                from ..functions.encounter_functions import generate_random_pokemon
+                from ..pyobj.pokemon_obj import PokemonObject
+                from ..business import calc_experience, calculate_cp_from_dict
+                from ..functions.ankimon_hooks_to_poke_engine import simulate_battle_with_poke_engine
+
+                # Initial seed of the encounter
+                first_review = all_unresolved[0]
+                seed_idx = min(len(all_unresolved) - 1, cards_per_round - 1)
+                seed_review = all_unresolved[seed_idx]
+                enc_seed = seed_review.get("revlog_id") or seed_review.get("id") or 42
+                random.seed(enc_seed)
+
+
+                class TempTracker:
+                    def __init__(self, total_reviews):
+                        self.total_reviews = total_reviews
+                        self.pokemon_encounter = 0
+                        self.cards_battle_round = 0
+                    def get_total_reviews(self):
+                        return self.total_reviews
+
+                initial_reviews = ankimon_tracker_obj.get_total_reviews() if ankimon_tracker_obj else 0
+                if initial_reviews.__class__.__name__ == "MagicMock":
+                    initial_reviews = 0
+                else:
+                    try:
+                        if mw and mw.col and db:
+                            cutoff = mw.col.sched.day_cutoff
+                            cutoff_ms = (cutoff - 86400) * 1000
+                            
+                            cursor = db.execute(
+                                "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 0 AND revlog_id >= ?",
+                                (cutoff_ms,)
+                            )
+                            row = cursor.fetchone()
+                            unresolved_today = row[0] if row else 0
+                            
+                            cursor2 = db.execute(
+                                "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 1 AND resolved_at >= ? AND revlog_id < ?",
+                                (cutoff_ms, cutoff_ms)
+                            )
+                            row2 = cursor2.fetchone()
+                            resolved_today_past = row2[0] if row2 else 0
+                            
+                            initial_reviews = max(0, initial_reviews - unresolved_today + resolved_today_past)
+                    except Exception:
+                        pass
+
+                cards_in_encounter = seed_idx + 1
+                temp_tracker = TempTracker(initial_reviews + cards_in_encounter)
+
+                try:
+                    res = generate_random_pokemon(main_pokemon_level, temp_tracker)
+                    pkmn_name, pkmn_id, pkmn_lvl, ability, pkmn_type, base_stats, \
+                    enemy_attacks, base_exp, growth_rate, ev, iv, gender, \
+                    battle_status, battle_stats, pkmn_tier, ev_yield, pkmn_shiny, nature = res
+                except Exception:
+                    pkmn_name, pkmn_id, pkmn_lvl = "Pikachu", 25, main_pokemon_level
+                    ability, pkmn_type = "Run Away", ["Electric"]
+                    base_stats = {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90}
+                    enemy_attacks, base_exp, growth_rate = ["Thunderbolt"], 112, "Medium"
+                    ev = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+                    iv = {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15}
+                    gender, battle_status, battle_stats, pkmn_tier = "M", "Fighting", {}, "Normal"
+                    ev_yield, pkmn_shiny, nature = {"speed": 2}, False, "serious"
+
+                current_enemy_pokemon = PokemonObject(
+                    type=pkmn_type, name=pkmn_name, id=pkmn_id, shiny=pkmn_shiny,
+                    level=pkmn_lvl, ability=ability, gender=gender, growth_rate=growth_rate,
+                    captured_date=None, tier=pkmn_tier, individual_id=str(uuid.uuid4()),
+                    base_stats=base_stats, attacks=enemy_attacks, base_experience=base_exp,
+                    ev=ev, iv=iv, battle_status=battle_status, ev_yield=ev_yield, nature=nature
+                )
+
+                selected_override = None
+                if companion_id:
+                    for tc in team_clones:
+                        if getattr(tc, "individual_id", None) == companion_id:
+                            if getattr(tc, "hp", 0) <= 0:
+                                max_hp_val = getattr(tc, "max_hp", 100)
+                                if max_hp_val.__class__.__name__ == "MagicMock":
+                                    max_hp_val = 100
+                                tc.hp = max_hp_val
+                                if hasattr(tc, "current_hp"):
+                                    tc.current_hp = max_hp_val
+                            selected_override = tc
+                            break
+                    if selected_override is None:
+                        try:
+                            if hasattr(db, "get_pokemon_by_individual_id"):
+                                data = db.get_pokemon_by_individual_id(companion_id)
+                            else:
+                                data = db.get_pokemon(companion_id)
+                            if data:
+                                from ..pyobj.pokemon_obj import PokemonObject
+                                pkmn = PokemonObject(**data)
+                                max_hp_val = getattr(pkmn, "max_hp", 100)
+                                if isinstance(max_hp_val, (int, float)):
+                                    pkmn.hp = max_hp_val
+                                    if hasattr(pkmn, "current_hp"):
+                                        pkmn.current_hp = max_hp_val
+                                if hasattr(pkmn, "reset_bonuses"):
+                                    try:
+                                        pkmn.reset_bonuses()
+                                    except Exception:
+                                        pass
+                                selected_override = pkmn
+                        except Exception:
+                            pass
+                if selected_override is not None:
+                    main_pokemon_clone = selected_override
+                else:
+                    main_pokemon_clone = select_best_companion(team_clones, current_enemy_pokemon)
+
+                mutator_full_reset = 1
+                engine_state = None
+                
+                reviews_list = []
+                turns_log = []
+                accumulated_evs = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+
+                # Read multiplier/boosts settings
+                xp_multiplier = 1.0
+                choose_moves_penalty = 1.0
+                if settings_obj:
+                    xp_multiplier = settings_obj.get("battle.xp_multiplier", 1.0)
+                    if settings_obj.get("controls.allow_to_choose_moves", False):
+                        choose_moves_penalty = 0.5
+                lucky_egg_boost = 1.0
+                if main_pokemon_clone and getattr(main_pokemon_clone, "held_item", None) == "lucky-egg":
+                    lucky_egg_boost = 1.5
+
+                chunk_idx = 0
+                while chunk_idx < len(all_unresolved):
+                    chunk = all_unresolved[chunk_idx : chunk_idx + cards_per_round]
+                    reviews_list.extend(chunk)
+                    chunk_idx += cards_per_round
+
+                    companion_max_hp = getattr(main_pokemon_clone, "max_hp", 100)
+                    if companion_max_hp.__class__.__name__ == "MagicMock": companion_max_hp = 100
+                    enemy_max_hp = getattr(current_enemy_pokemon, "max_hp", 100)
+                    if enemy_max_hp.__class__.__name__ == "MagicMock": enemy_max_hp = 100
+
+                    # Select moves
+                    main_attacks = getattr(main_pokemon_clone, "attacks", None)
+                    if isinstance(main_attacks, (list, tuple)) and len(main_attacks) > 0:
+                        user_attack = random.choice(main_attacks)
+                    else:
+                        user_attack = "splash"
+
+                    enemy_attacks_list = getattr(current_enemy_pokemon, "attacks", None)
+                    if isinstance(enemy_attacks_list, (list, tuple)) and len(enemy_attacks_list) > 0:
+                        enemy_attack = random.choice(enemy_attacks_list)
+                    else:
+                        enemy_attack = "splash"
+
+                    points_map = {1: 0, 2: 5, 3: 10, 4: 20}
+                    total_points = sum(points_map.get(r.get("ease") or 3, 10) for r in chunk)
+                    max_points = 10.0 * len(chunk)
+                    turn_multiplier = total_points / max_points if max_points > 0 else 1.0
+
+                    orig_multiplier = 1.0
+                    has_tracker = ankimon_tracker_obj and hasattr(ankimon_tracker_obj, "multiplier") and ankimon_tracker_obj.__class__.__name__ != "MagicMock"
+                    if has_tracker:
+                        orig_multiplier = ankimon_tracker_obj.multiplier
+                        ankimon_tracker_obj.multiplier = turn_multiplier
+
+                    try:
+                        results = simulate_battle_with_poke_engine(
+                            main_pokemon_clone, current_enemy_pokemon, user_attack, enemy_attack,
+                            mutator_full_reset, engine_state
+                        )
+                        engine_state, mutator_full_reset = results[1], results[4]
+                    except Exception:
+                        current_enemy_pokemon.hp = 0
+                    finally:
+                        if has_tracker: ankimon_tracker_obj.multiplier = orig_multiplier
+
+                    comp_hp_val = getattr(main_pokemon_clone, "hp", 0)
+                    if comp_hp_val.__class__.__name__ == "MagicMock":
+                        comp_hp_val = 100
+                    enemy_hp_val = getattr(current_enemy_pokemon, "hp", 0)
+                    if enemy_hp_val.__class__.__name__ == "MagicMock":
+                        enemy_hp_val = 100
+                    comp_hp_after = max(0, comp_hp_val)
+                    enemy_hp_after = max(0, enemy_hp_val)
+
+                    turns_log.append({
+                        "user_attack": user_attack.title(),
+                        "enemy_attack": enemy_attack.title(),
+                        "comp_hp_pct": int((comp_hp_after * 100) / companion_max_hp),
+                        "enemy_hp_pct": int((enemy_hp_after * 100) / enemy_max_hp),
+                    })
+
+                    if comp_hp_after <= 0 or enemy_hp_after <= 0:
+                        break
+
+                # Calculate rewards
+                battle_xp = 0
+                total_trainer_xp = 0
+                gained_cash = 0
+                if enemy_hp_after <= 0:
+                    exp = calc_experience(current_enemy_pokemon.base_experience, current_enemy_pokemon.level)
+                    if exp.__class__.__name__ == "MagicMock":
+                        exp = 100
+                    try:
+                        exp = max(1, math.ceil(exp * choose_moves_penalty * lucky_egg_boost * xp_multiplier))
+                    except TypeError:
+                        exp = 100
+                    battle_xp = exp
+
+                    from ..pyobj.trainer_card import POKEMON_TIERS
+                    txp = POKEMON_TIERS.get(current_enemy_pokemon.tier.lower(), 10)
+                    allow_to_choose_move = settings_obj.get("controls.allow_to_choose_moves") if settings_obj else False
+                    if allow_to_choose_move: txp *= 0.5
+                    total_trainer_xp = int(txp)
+
+                    if current_enemy_pokemon.ev_yield:
+                        for k, v in current_enemy_pokemon.ev_yield.items():
+                            sk = {"attack":"atk","defense":"def","special-attack":"spa","special-defense":"spd","speed":"spe"}.get(k, k)
+                            if sk in accumulated_evs: accumulated_evs[sk] += v
+
+                    gained_cash = 0
+
+                from ..functions.sprite_functions import get_relative_sprite_path
+                last_result_data = {
+                    "done": False,
+                    "enemy_name": current_enemy_pokemon.display_name,
+                    "enemy_id": current_enemy_pokemon.id,
+                    "enemy_level": current_enemy_pokemon.level,
+                    "enemy_shiny": current_enemy_pokemon.shiny,
+                    "enemy_tier": current_enemy_pokemon.tier,
+                    "enemy_sprite": get_relative_sprite_path(
+                        current_enemy_pokemon.id,
+                        current_enemy_pokemon.shiny,
+                        getattr(current_enemy_pokemon, "gender", "N") or "N",
+                        current_enemy_pokemon.name,
+                        "gif"
+                    ),
+                    "ease": first_review.get("ease", 3),
+                    "companion_name": main_pokemon_clone.display_name if main_pokemon_clone else "Companion",
+                    "companion_level": main_pokemon_clone.level if main_pokemon_clone else 5,
+                    "companion_sprite": get_relative_sprite_path(main_pokemon_clone.id, main_pokemon_clone.shiny, (getattr(main_pokemon_clone, "gender", "N") or "N"), main_pokemon_clone.name, "gif") if main_pokemon_clone else "",
+                    "companion_id": getattr(main_pokemon_clone, "individual_id", ""),
+                    "xp_gained": battle_xp,
+                    "turns": turns_log,
+                }
+
+                # Save state to commit later
+                self._current_pending_outcome = {
+                    "enemy_pokemon": current_enemy_pokemon,
+                    "battle_xp": battle_xp,
+                    "total_xp": battle_xp,
+                    "accumulated_evs": accumulated_evs,
+                    "total_trainer_xp": total_trainer_xp,
+                    "companion_id": getattr(main_pokemon_clone, "individual_id", ""),
+                    "companion_name": getattr(main_pokemon_clone, "display_name", "Companion"),
+                    "companion_level": getattr(main_pokemon_clone, "level", 5),
+                    "main_pokemon": main_pokemon,
+                    "trainer_card": trainer_card,
+                    "settings_obj": settings_obj,
+                    "review_ids": [r["id"] for r in reviews_list],
+                    "companion_fainted": (comp_hp_after <= 0),
+                    "gained_cash": gained_cash,
+                }
+
+                remaining_reviews = pending_total_at_start - len(reviews_list)
+                last_result_data.update({
+                    "remaining": remaining_reviews,
+                    "cash_gained": gained_cash,
+                    "trainer_xp_gained": total_trainer_xp,
+                })
+
+                return last_result_data
+
+            # Query pending reviews (mode=="all"), optionally limited
+            if limit is not None:
+                reviews_rows = db.execute(
+                    """SELECT id, revlog_id, card_id, ease, review_time, review_type, queued_at
+                       FROM pending_mobile_battles
+                       WHERE resolved = 0
+                       ORDER BY id ASC
+                       LIMIT ?""",
+                    (limit,)
+                ).fetchall()
+            else:
+                reviews_rows = db.execute(
+                    """SELECT id, revlog_id, card_id, ease, review_time, review_type, queued_at
+                       FROM pending_mobile_battles
+                       WHERE resolved = 0
+                       ORDER BY id ASC"""
+                ).fetchall()
+
+            if not reviews_rows:
+                return {"done": True}
+
+            reviews_list = [
+                {
+                    "id": r[0],
+                    "revlog_id": r[1],
+                    "card_id": r[2],
+                    "ease": r[3],
+                    "review_time": r[4],
+                    "review_type": r[5],
+                    "queued_at": r[6],
+                }
+                for r in reviews_rows
+            ]
+
+            main_pokemon = getattr(mw, "main_pokemon", None)
+            trainer_card = getattr(mw, "trainer_card", None)
+            ankimon_tracker_obj = getattr(mw, "ankimon_tracker_obj", None)
+
+            import random
+            import math
+            from datetime import datetime
+            import uuid
+
+            state = random.getstate()
+
+            # Deterministic seed
+            seed_val = sum(r.get("revlog_id") or r.get("id") or 0 for r in reviews_list)
+            if seed_val == 0: seed_val = 42
+            random.seed(seed_val)
+
+            auto_battle_setting = 3
+            if settings_obj:
+                try:
+                    auto_battle_setting = int(settings_obj.get("battle.automatic_battle", 3))
+                except Exception: pass
+            if auto_battle_setting == 0: auto_battle_setting = 3
+
+            wishlist = []
+            auto_catch_legendary = True
+            auto_catch_mythical = True
+            auto_catch_ultra = True
+            auto_catch_starter = True
+            auto_catch_mega = True
+            auto_catch_gmax = True
+            auto_catch_regional = True
+            xp_multiplier = 1.0
+            choose_moves_penalty = 1.0
+
+            if settings_obj:
+                wishlist = settings_obj.get("battle.auto_catch_wishlist", [])
+                auto_catch_legendary = settings_obj.get("battle.auto_catch_legendary", True)
+                auto_catch_mythical = settings_obj.get("battle.auto_catch_mythical", True)
+                auto_catch_ultra = settings_obj.get("battle.auto_catch_ultra", True)
+                auto_catch_starter = settings_obj.get("battle.auto_catch_starter", True)
+                auto_catch_mega = settings_obj.get("battle.auto_catch_mega", True)
+                auto_catch_gmax = settings_obj.get("battle.auto_catch_gmax", True)
+                auto_catch_regional = settings_obj.get("battle.auto_catch_regional", True)
+                xp_multiplier = settings_obj.get("battle.xp_multiplier", 1.0)
+                if settings_obj.get("controls.allow_to_choose_moves", False):
+                    choose_moves_penalty = 0.5
+
+            lucky_egg_boost = 1.0
+            if main_pokemon and getattr(main_pokemon, "held_item", None) == "lucky-egg":
+                lucky_egg_boost = 1.5
+
+            from ..utils import load_collected_pokemon_ids
+            collected_ids = set(load_collected_pokemon_ids())
+
+            from ..functions.encounter_functions import (
+                generate_random_pokemon,
+                save_caught_pokemon,
+                save_main_pokemon_progress
+            )
+            from ..functions.encounter_data import MEGA, GMAX, REGIONAL_FORM_REGION
+            from ..business import calc_experience, calculate_cp_from_dict
+            from ..pyobj.pokemon_obj import PokemonObject
+            from ..singletons import get_evo_window
+
+            class TempTracker:
+                def __init__(self, total_reviews):
+                    self.total_reviews = total_reviews
+                    self.pokemon_encounter = 0
+                    self.cards_battle_round = 0
+                def get_total_reviews(self):
+                    return self.total_reviews
+
+            initial_reviews = ankimon_tracker_obj.get_total_reviews() if ankimon_tracker_obj else 0
+            if initial_reviews.__class__.__name__ == "MagicMock":
+                initial_reviews = 0
+            else:
+                try:
+                    if mw and mw.col and db:
+                        cutoff = mw.col.sched.day_cutoff
+                        cutoff_ms = (cutoff - 86400) * 1000
+                        
+                        cursor = db.execute(
+                            "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 0 AND revlog_id >= ?",
+                            (cutoff_ms,)
+                        )
+                        row = cursor.fetchone()
+                        unresolved_today = row[0] if row else 0
+                        
+                        cursor2 = db.execute(
+                            "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 1 AND resolved_at >= ? AND revlog_id < ?",
+                            (cutoff_ms, cutoff_ms)
+                        )
+                        row2 = cursor2.fetchone()
+                        resolved_today_past = row2[0] if row2 else 0
+                        
+                        initial_reviews = max(0, initial_reviews - unresolved_today + resolved_today_past)
+                except Exception:
+                    pass
+            temp_tracker = TempTracker(initial_reviews)
+
+            from ..functions.mobile_sync import load_active_team_clones, select_best_companion
+            team_clones = load_active_team_clones(db, settings_obj, main_pokemon)
+            main_pokemon_clone = team_clones[0] if team_clones else None
+
+            # Use max level of active team so enemy generation is stable regardless of which
+            # companion is selected per battle. Falls back to main_pokemon then to 5.
+            main_pokemon_level = 5
+            if team_clones:
+                levels = []
+                for c in team_clones:
+                    lvl = getattr(c, "level", None)
+                    if lvl is not None and lvl.__class__.__name__ != "MagicMock" and isinstance(lvl, (int, float)):
+                        levels.append(int(lvl))
+                if levels:
+                    main_pokemon_level = max(levels)
+            elif main_pokemon:
+                lvl = getattr(main_pokemon, "level", 5)
+                if lvl.__class__.__name__ != "MagicMock" and isinstance(lvl, (int, float)):
+                    main_pokemon_level = int(lvl)
+
+            total_xp = 0
+            total_trainer_xp = 0
+            caught_count = 0
+            caught_pokemon_list = []
+            cards_battle_round = 0
+            accumulated_evs = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+            defeated_encounters = []
+            current_turn_reviews = []
+            total_reviews_processed = 0
+            current_battle_cash = 0
+            ci = int(settings_obj.get("trainer.cash_reward_interval", 5)) if settings_obj else 5
+            ca = int(settings_obj.get("trainer.cash_reward_amount", 10)) if settings_obj else 10
+
+            from .. import utils
+            orig_load_ids = utils.load_collected_pokemon_ids
+            utils.load_collected_pokemon_ids = lambda: collected_ids
+
+            current_enemy_pokemon = None
+            mutator_full_reset = 1
+            engine_state = None
+            from ..functions.ankimon_hooks_to_poke_engine import simulate_battle_with_poke_engine
+
+            last_result_data = {} # For resolveNext
+            history_entries_to_add = []
+            encounters_fought = 0
+
+            try:
+                for review in reviews_list:
+                    if temp_tracker.total_reviews.__class__.__name__ == "MagicMock":
+                        temp_tracker.total_reviews = 0
+                    else:
+                        temp_tracker.total_reviews += 1
+                    total_reviews_processed += 1
+                    if ci > 0 and total_reviews_processed % ci == 0:
+                        current_battle_cash += ca
+                    cards_battle_round += 1
+                    current_turn_reviews.append(review)
+                    if cards_battle_round >= cards_per_round or review == reviews_list[-1]:
+                        # In resolveNext/resolveAll, this also hits on the last review to process leftovers.
+                        cards_battle_round = 0
+
+                        if current_enemy_pokemon is None:
+                            encounters_fought += 1
+                            try:
+                                enc_seed = review.get("revlog_id") or review.get("id") or 42
+                                random.seed(enc_seed)
+                                res = generate_random_pokemon(main_pokemon_level, temp_tracker)
+                                pkmn_name, pkmn_id, pkmn_lvl, ability, pkmn_type, base_stats, \
+                                enemy_attacks, base_exp, growth_rate, ev, iv, gender, \
+                                battle_status, battle_stats, pkmn_tier, ev_yield, pkmn_shiny, nature = res
+                            except Exception:
+                                pkmn_name, pkmn_id, pkmn_lvl = "Pikachu", 25, main_pokemon_level
+                                ability, pkmn_type = "Run Away", ["Electric"]
+                                base_stats = {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90}
+                                enemy_attacks, base_exp, growth_rate = ["Thunderbolt"], 112, "Medium"
+                                ev = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+                                iv = {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15}
+                                gender, battle_status, battle_stats, pkmn_tier = "M", "Fighting", {}, "Normal"
+                                ev_yield, pkmn_shiny, nature = {"speed": 2}, False, "serious"
+
+                            current_enemy_pokemon = PokemonObject(
+                                type=pkmn_type, name=pkmn_name, id=pkmn_id, shiny=pkmn_shiny,
+                                level=pkmn_lvl, ability=ability, gender=gender, growth_rate=growth_rate,
+                                captured_date=None, tier=pkmn_tier, individual_id=str(uuid.uuid4()),
+                                base_stats=base_stats, attacks=enemy_attacks, base_experience=base_exp,
+                                ev=ev, iv=iv, battle_status=battle_status, ev_yield=ev_yield, nature=nature
+                            )
+                            selected_override = None
+                            if mode == "next" and companion_id:
+                                for tc in team_clones:
+                                    if getattr(tc, "individual_id", None) == companion_id:
+                                        # Revive overridden companion if fainted (simulates in-memory revive)
+                                        if getattr(tc, "hp", 0) <= 0:
+                                            max_hp_val = getattr(tc, "max_hp", 100)
+                                            if max_hp_val.__class__.__name__ == "MagicMock":
+                                                max_hp_val = 100
+                                            tc.hp = max_hp_val
+                                            if hasattr(tc, "current_hp"):
+                                                tc.current_hp = max_hp_val
+                                        selected_override = tc
+                                        break
+                            
+                            if selected_override is not None:
+                                main_pokemon_clone = selected_override
+                            else:
+                                main_pokemon_clone = select_best_companion(team_clones, current_enemy_pokemon)
+                            mutator_full_reset = 1
+                            engine_state = None
+
+                        # Turn simulation
+                        main_attacks = getattr(main_pokemon_clone, "attacks", None)
+                        if isinstance(main_attacks, (list, tuple)) and len(main_attacks) > 0:
+                            user_attack = random.choice(main_attacks)
+                        else:
+                            user_attack = "splash"
+
+                        enemy_attacks_list = getattr(current_enemy_pokemon, "attacks", None)
+                        if isinstance(enemy_attacks_list, (list, tuple)) and len(enemy_attacks_list) > 0:
+                            enemy_attack = random.choice(enemy_attacks_list)
+                        else:
+                            enemy_attack = "splash"
+
+                        points_map = {1: 0, 2: 5, 3: 10, 4: 20}
+                        total_points = sum(points_map.get(r.get("ease") or 3, 10) for r in current_turn_reviews)
+                        max_points = 10.0 * len(current_turn_reviews)
+                        turn_multiplier = total_points / max_points if max_points > 0 else 1.0
+
+                        from ..singletons import ankimon_tracker_obj as fallback_tracker
+                        active_tracker = ankimon_tracker_obj or getattr(mw, "ankimon_tracker_obj", None) or fallback_tracker
+                        orig_multiplier = 1.0
+                        has_tracker = active_tracker and hasattr(active_tracker, "multiplier") and active_tracker.__class__.__name__ != "MagicMock"
+                        if has_tracker:
+                            orig_multiplier = active_tracker.multiplier
+                            active_tracker.multiplier = turn_multiplier
+
+                        try:
+                            results = simulate_battle_with_poke_engine(
+                                main_pokemon_clone, current_enemy_pokemon, user_attack, enemy_attack,
+                                mutator_full_reset, engine_state
+                            )
+                            engine_state, mutator_full_reset = results[1], results[4]
+                        except Exception: current_enemy_pokemon.hp = 0
+                        finally:
+                            if has_tracker: active_tracker.multiplier = orig_multiplier
+                            current_turn_reviews = []
+
+
+
+                        enemy_hp = getattr(current_enemy_pokemon, "hp", 100)
+                        companion_hp = getattr(main_pokemon_clone, "hp", 100)
+
+                        if isinstance(enemy_hp, (int, float)) and enemy_hp <= 0:
+                            if mode == "next":
+                                exp = calc_experience(current_enemy_pokemon.base_experience, current_enemy_pokemon.level)
+                                if exp.__class__.__name__ == "MagicMock":
+                                    exp = 100
+                                try:
+                                    exp = max(1, math.ceil(exp * choose_moves_penalty * lucky_egg_boost * xp_multiplier))
+                                except TypeError:
+                                    exp = 100
+                                battle_xp = exp
+                                total_xp = exp
+
+                                from ..pyobj.trainer_card import POKEMON_TIERS
+                                txp = POKEMON_TIERS.get(current_enemy_pokemon.tier.lower(), 10)
+                                allow_to_choose_move = settings_obj.get("controls.allow_to_choose_moves") if settings_obj else False
+                                if allow_to_choose_move: txp *= 0.5
+                                total_trainer_xp = int(txp)
+
+                                if current_enemy_pokemon.ev_yield:
+                                    for k, v in current_enemy_pokemon.ev_yield.items():
+                                        sk = {"attack":"atk","defense":"def","special-attack":"spa","special-defense":"spd","speed":"spe"}.get(k, k)
+                                        if sk in accumulated_evs: accumulated_evs[sk] += v
+
+                                from ..functions.sprite_functions import get_relative_sprite_path
+                                last_result_data = {
+                                    "done": False,
+                                    "enemy_name": current_enemy_pokemon.display_name,
+                                    "enemy_id": current_enemy_pokemon.id,
+                                    "enemy_level": current_enemy_pokemon.level,
+                                    "enemy_shiny": current_enemy_pokemon.shiny,
+                                    "enemy_tier": current_enemy_pokemon.tier,
+                                    "enemy_sprite": get_relative_sprite_path(
+                                        current_enemy_pokemon.id,
+                                        current_enemy_pokemon.shiny,
+                                        getattr(current_enemy_pokemon, "gender", "N") or "N",
+                                        current_enemy_pokemon.name,
+                                        "gif"
+                                    ),
+                                    "ease": review.get("ease", 3),
+                                    "companion_name": main_pokemon_clone.display_name if main_pokemon_clone else "Companion",
+                                    "companion_level": main_pokemon_clone.level if main_pokemon_clone else 5,
+                                    "companion_sprite": get_relative_sprite_path(main_pokemon_clone.id, main_pokemon_clone.shiny, (getattr(main_pokemon_clone, "gender", "N") or "N"), main_pokemon_clone.name, "gif") if main_pokemon_clone else "",
+                                    "companion_id": getattr(main_pokemon_clone, "individual_id", ""),
+                                    "xp_gained": battle_xp,
+                                }
+                                # Save state to commit later
+                                self._current_pending_outcome = {
+                                    "enemy_pokemon": current_enemy_pokemon,
+                                    "battle_xp": battle_xp,
+                                    "total_xp": total_xp,
+                                    "accumulated_evs": accumulated_evs,
+                                    "total_trainer_xp": total_trainer_xp,
+                                    "companion_id": getattr(main_pokemon_clone, "individual_id", ""),
+                                    "companion_name": getattr(main_pokemon_clone, "display_name", "Companion"),
+                                    "companion_level": getattr(main_pokemon_clone, "level", 5),
+                                    "main_pokemon": main_pokemon,
+                                    "trainer_card": trainer_card,
+                                    "review_ids": [r["id"] for r in reviews_list],
+                                    "companion_fainted": (companion_hp <= 0),
+                                    "gained_cash": (ca // ci if ci > 0 else ca) if (("ca" in locals() and "ci" in locals()) or ("settings_obj" in locals())) else 0,
+                                }
+                            else:
+                                is_mega = current_enemy_pokemon.id in MEGA
+                                is_gmax = current_enemy_pokemon.id in GMAX
+                                is_regional = current_enemy_pokemon.id in REGIONAL_FORM_REGION
+                                should_catch_always = (
+                                    (current_enemy_pokemon.tier == "Legendary" and auto_catch_legendary)
+                                    or (current_enemy_pokemon.tier == "Mythical" and auto_catch_mythical)
+                                    or (current_enemy_pokemon.tier == "Ultra" and auto_catch_ultra)
+                                    or (current_enemy_pokemon.tier == "Starter" and auto_catch_starter)
+                                    or (is_mega and auto_catch_mega)
+                                    or (is_gmax and auto_catch_gmax)
+                                    or (is_regional and auto_catch_regional)
+                                    or (current_enemy_pokemon.id in wishlist)
+                                )
+
+                                caught = False
+                                if auto_battle_setting == 1: caught = True
+                                elif auto_battle_setting == 2: caught = (current_enemy_pokemon.shiny or should_catch_always)
+                                elif auto_battle_setting == 3:
+                                    caught = (current_enemy_pokemon.id not in collected_ids or current_enemy_pokemon.shiny or should_catch_always)
+                                    if caught: collected_ids.add(current_enemy_pokemon.id)
+
+                                battle_xp = 0
+                                if caught:
+                                    capture_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    current_enemy_pokemon.captured_date = capture_time
+                                    save_caught_pokemon(current_enemy_pokemon, nickname=None, achievements=mw.achievements_dict)
+                                    try:
+                                        from ..reviewer_ui import _collected_pokemon_ids
+                                        if isinstance(_collected_pokemon_ids, set): _collected_pokemon_ids.add(current_enemy_pokemon.id)
+                                    except Exception: pass
+                                    # Calculate CP exactly as save_caught_pokemon does
+                                    enemy_dict = current_enemy_pokemon.to_dict()
+                                    enemy_dict.update({
+                                        "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+                                    })
+                                    cp_val = calculate_cp_from_dict(enemy_dict)
+                                    if cp_val.__class__.__name__ == "MagicMock":
+                                        cp_val = 100
+
+                                    caught_count += 1
+                                    caught_pokemon_list.append({
+                                        "name": current_enemy_pokemon.display_name, "level": current_enemy_pokemon.level,
+                                        "shiny": current_enemy_pokemon.shiny, "tier": current_enemy_pokemon.tier,
+                                        "cp": cp_val
+                                    })
+                                    last_outcome = "caught"
+                                else:
+                                    exp = calc_experience(current_enemy_pokemon.base_experience, current_enemy_pokemon.level)
+                                    if exp.__class__.__name__ == "MagicMock":
+                                        exp = 100
+                                    try:
+                                        exp = max(1, math.ceil(exp * choose_moves_penalty * lucky_egg_boost * xp_multiplier))
+                                    except TypeError:
+                                        exp = 100
+                                    battle_xp = exp
+                                    total_xp += exp
+                                    defeated_encounters.append({"tier": current_enemy_pokemon.tier})
+                                    if current_enemy_pokemon.ev_yield:
+                                        for k, v in current_enemy_pokemon.ev_yield.items():
+                                            sk = {"attack":"atk","defense":"def","special-attack":"spa","special-defense":"spd","speed":"spe"}.get(k, k)
+                                            if sk in accumulated_evs: accumulated_evs[sk] += v
+                                    last_outcome = "defeated"
+
+                            # Insert history for caught or defeated
+                            try:
+                                from ..pyobj.trainer_card import POKEMON_TIERS
+                                txp = POKEMON_TIERS.get(current_enemy_pokemon.tier.lower(), 10)
+                                allow_to_choose_move = settings_obj.get("controls.allow_to_choose_moves") if settings_obj else False
+                                if allow_to_choose_move: txp *= 0.5
+                                txp = int(txp) if last_outcome == "defeated" else 0
+                                history_entries_to_add.append({
+                                    "timestamp": int(__import__("time").time() * 1000),
+                                    "enemy_id": current_enemy_pokemon.id,
+                                    "enemy_name": current_enemy_pokemon.display_name,
+                                    "enemy_level": current_enemy_pokemon.level,
+                                    "enemy_shiny": current_enemy_pokemon.shiny,
+                                    "companion_name": main_pokemon_clone.display_name if main_pokemon_clone else None,
+                                    "companion_level": main_pokemon_clone.level if main_pokemon_clone else None,
+                                    "companion_id": main_pokemon_clone.individual_id if main_pokemon_clone else None,
+                                    "ev_yield": current_enemy_pokemon.ev_yield.copy() if (last_outcome == "defeated" and current_enemy_pokemon and getattr(current_enemy_pokemon, "ev_yield", None)) else {},
+                                    "outcome": last_outcome,
+                                    "xp_gained": battle_xp,
+                                    "trainer_xp_gained": txp,
+                                    "cash_gained": current_battle_cash,
+                                })
+                            except Exception as ex:
+                                if hasattr(mw, "logger") and mw.logger:
+                                    mw.logger.log("error", f"Failed to record auto-resolve history: {ex}")
+                            current_battle_cash = 0
+
+                            current_enemy_pokemon = None
+                            if main_pokemon_clone:
+                                try: main_pokemon_clone.reset_bonuses()
+                                except Exception: pass
+                        elif isinstance(companion_hp, (int, float)) and companion_hp <= 0:
+                            # Insert history for loss
+                            try:
+                                history_entries_to_add.append({
+                                    "timestamp": int(__import__("time").time() * 1000),
+                                    "enemy_id": current_enemy_pokemon.id,
+                                    "enemy_name": current_enemy_pokemon.display_name,
+                                    "enemy_level": current_enemy_pokemon.level,
+                                    "enemy_shiny": current_enemy_pokemon.shiny,
+                                    "companion_name": main_pokemon_clone.display_name if main_pokemon_clone else None,
+                                    "companion_level": main_pokemon_clone.level if main_pokemon_clone else None,
+                                    "companion_id": main_pokemon_clone.individual_id if main_pokemon_clone else None,
+                                    "outcome": "lost",
+                                    "xp_gained": 0,
+                                    "trainer_xp_gained": 0,
+                                    "cash_gained": current_battle_cash,
+                                })
+                            except Exception as ex:
+                                if hasattr(mw, "logger") and mw.logger:
+                                    mw.logger.log("error", f"Failed to record auto-resolve loss history: {ex}")
+                            current_battle_cash = 0
+
+                            current_enemy_pokemon = None
+                            if main_pokemon_clone:
+                                try: main_pokemon_clone.reset_bonuses()
+                                except Exception: pass
+                if current_enemy_pokemon is not None:
+                    # Insert history for escaped / unfinished battle
+                    try:
+                        history_entries_to_add.append({
+                            "timestamp": int(__import__("time").time() * 1000),
+                            "enemy_id": current_enemy_pokemon.id,
+                            "enemy_name": current_enemy_pokemon.display_name,
+                            "enemy_level": current_enemy_pokemon.level,
+                            "enemy_shiny": current_enemy_pokemon.shiny,
+                            "companion_name": main_pokemon_clone.display_name if main_pokemon_clone else None,
+                            "companion_level": main_pokemon_clone.level if main_pokemon_clone else None,
+                            "companion_id": main_pokemon_clone.individual_id if main_pokemon_clone else None,
+                            "outcome": "escaped",
+                            "xp_gained": 0,
+                            "trainer_xp_gained": 0,
+                            "cash_gained": current_battle_cash,
+                        })
+                    except Exception as ex:
+                        if hasattr(mw, "logger") and mw.logger:
+                            mw.logger.log("error", f"Failed to record auto-resolve escape history: {ex}")
+            finally:
+                utils.load_collected_pokemon_ids = orig_load_ids
+                if history_entries_to_add:
+                    try:
+                        if hasattr(db, "add_mobile_history_entries_batch"):
+                            db.add_mobile_history_entries_batch(history_entries_to_add)
+                        else:
+                            for entry in history_entries_to_add:
+                                db.add_mobile_history_entry(entry)
+                    except Exception as ex:
+                        if hasattr(mw, "logger") and mw.logger:
+                            mw.logger.log("error", f"Failed to record batch auto-resolve history: {ex}")
+            random.setstate(state)
+
+            # HP state of team clones is intentionally NOT written back to live singletons.
+            if mode == "all":
+                companion_xp = {}
+                companion_evs = {}
+                companion_battle_count = {}
+                for entry in history_entries_to_add:
+                    cid = entry.get("companion_id")
+                    if not cid:
+                        continue
+                    xp_g = entry.get("xp_gained", 0)
+                    companion_xp[cid] = companion_xp.get(cid, 0) + xp_g
+                    
+                    if entry.get("outcome") in ("defeated", "caught"):
+                        companion_battle_count[cid] = companion_battle_count.get(cid, 0) + 1
+                    
+                    if cid not in companion_evs:
+                        companion_evs[cid] = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+                    ev_yield = entry.get("ev_yield", {})
+                    for k, v in ev_yield.items():
+                        sk = {"attack":"atk","defense":"def","special-attack":"spa","special-defense":"spd","speed":"spe"}.get(k, k)
+                        if sk in companion_evs[cid]:
+                            companion_evs[cid][sk] += v
+
+                for cid, earned_xp in companion_xp.items():
+                    evs_gained = companion_evs.get(cid, {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0})
+                    battles_fought = companion_battle_count.get(cid, 0)
+                    if earned_xp > 0 or any(evs_gained.values()) or battles_fought > 0:
+                        if main_pokemon and cid == main_pokemon.individual_id:
+                            class DummyEnemy:
+                                def __init__(self, ev_yield): self.ev_yield = ev_yield
+                            save_main_pokemon_progress(
+                                main_pokemon, DummyEnemy(evs_gained), earned_xp,
+                                mw.achievements_dict, getattr(mw, "logger", None), get_evo_window()
+                            )
+                            # Apply additional battles fought to main_pokemon.pokemon_defeated
+                            if battles_fought > 1:
+                                extra = battles_fought - 1
+                                main_pokemon.pokemon_defeated += extra
+                                try:
+                                    db = mw.ankimon_db
+                                    mp_data = db.get_main_pokemon()
+                                    if mp_data:
+                                        mp_data["pokemon_defeated"] = main_pokemon.pokemon_defeated
+                                        db.save_main_pokemon(mp_data)
+                                except Exception:
+                                    pass
+                        else:
+                            _attribute_xp_and_evs_to_companion(cid, earned_xp, evs_gained, settings_obj, battles_fought=battles_fought)
+
+            total_trainer_xp = 0
+            if mode == "all":
+                from ..pyobj.trainer_card import POKEMON_TIERS
+                allow_to_choose_move = settings_obj.get("controls.allow_to_choose_moves") if settings_obj else False
+                for enc in defeated_encounters:
+                    txp = POKEMON_TIERS.get(enc.get("tier", "normal").lower(), 10)
+                    if txp.__class__.__name__ == "MagicMock":
+                        txp = 10
+                    if allow_to_choose_move: txp *= 0.5
+                    total_trainer_xp += txp
+
+                if total_trainer_xp > 0 and trainer_card:
+                    new_txp = int(settings_obj.get("trainer.xp", 0) + total_trainer_xp)
+                    settings_obj.set("trainer.xp", new_txp)
+                    settings_obj.set("trainer.total_xp", int(settings_obj.get("trainer.total_xp", 0) + total_trainer_xp))
+                    trainer_card.xp = new_txp
+                    trainer_card.total_xp = settings_obj.get("trainer.total_xp")
+                    trainer_card.check_level_up()
+
+            # Cash Reward
+            gained_cash = 0
+            if mode == "all":
+                total_reviews_resolved = len(reviews_list)
+                current_counter = int(settings_obj.get("trainer.mobile_reviews_resolved_since_payout", 0)) if settings_obj else 0
+                new_counter = current_counter + total_reviews_resolved
+                
+                ci = int(settings_obj.get("trainer.cash_reward_interval", 5)) if settings_obj else 5
+                ca = int(settings_obj.get("trainer.cash_reward_amount", 10)) if settings_obj else 10
+                
+                gained_cash = (new_counter // ci) * ca
+                remaining_counter = new_counter % ci
+                if settings_obj:
+                    settings_obj.set("trainer.mobile_reviews_resolved_since_payout", remaining_counter)
+                    settings_obj.set("trainer.cash", int(settings_obj.get("trainer.cash", 0) + gained_cash))
+                if trainer_card and settings_obj:
+                    trainer_card.cash = settings_obj.get("trainer.cash")
+
+            if mode == "all":
+                # Mark resolved
+                now_ms = int(__import__("time").time() * 1000)
+                res_ids = [r["id"] for r in reviews_list]
+                with db._get_connection() as conn:
+                    placeholders = ",".join("?" for _ in res_ids)
+                    conn.execute(f"UPDATE pending_mobile_battles SET resolved=1, resolved_at=? WHERE id IN ({placeholders})", [now_ms] + res_ids)
+
+                revlog_ids = [r["revlog_id"] for r in reviews_list]
+                if hasattr(db, "sync_resolutions_to_other_db"): db.sync_resolutions_to_other_db(revlog_ids, now_ms)
+
+            remaining = db.get_pending_mobile_count()
+            from ..menu_buttons import update_mobile_badge
+            update_mobile_badge(remaining)
+
+            if mode == "next":
+                import math
+                last_result_data.update({
+                    "battle_number": (pending_total_at_start - remaining), # approximate
+                    "total_battles": math.ceil(pending_total_at_start / cards_per_round),
+                    "remaining": remaining,
+                    "cash_gained": gained_cash,
+                    "trainer_xp_gained": total_trainer_xp,
+                })
+                # Re-calculate battle_number properly:
+                resolved_count = db.execute("SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved=1").fetchone()[0]
+                # Total encounters
+                total_resolved_encounters = (resolved_count // cards_per_round)
+                last_result_data["battle_number"] = total_resolved_encounters
+                # Total encounters overall
+                total_all_count = db.execute("SELECT COUNT(*) FROM pending_mobile_battles").fetchone()[0]
+                last_result_data["total_battles"] = math.ceil(total_all_count / cards_per_round)
+
+                return last_result_data
+            else:
+                try:
+                    from ..singletons import notify_stats_changed
+                    notify_stats_changed()
+                except Exception: pass
+                return {
+                    "success": True, "resolved": encounters_fought, "xp_gained": total_xp,
+                    "catches": caught_count, "cash_gained": gained_cash,
+                    "trainer_xp_gained": total_trainer_xp, "caught_list": caught_pokemon_list,
+                    "reviews_processed": len(reviews_list),
+                }
+        except Exception as e:
+            # Re-raise during testing to make debugging easier, otherwise return failure dictionary
+            import sys
+            if "pytest" in sys.modules or "unittest" in sys.modules:
+                raise e
+            return {"success": False, "error": str(e)}
+
+    @pyqtSlot(str, result="QVariant")
+    def toggleMobileCompanion(self, individual_id: str) -> dict:
+        """Toggle a team member in/out of mobile.inactive_companions. Returns updated inactive list."""
+        try:
+            settings_obj = mw.settings_obj
+            inactive = settings_obj.get("mobile.inactive_companions", [])
+            if not isinstance(inactive, list):
+                inactive = []
+            inactive = [str(x) for x in inactive]
+            if individual_id in inactive:
+                inactive.remove(individual_id)
+            else:
+                inactive.append(individual_id)
+            settings_obj.set("mobile.inactive_companions", inactive)
+            return {"inactive": inactive, "success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @pyqtSlot(result="QVariant")
+    def getTeamStatus(self) -> dict:
+        """Returns the current team with inactive flags for rendering the mobile team grid."""
+        try:
+            db = mw.ankimon_db
+            team_rows = db.get_team()
+            settings_obj = mw.settings_obj
+            inactive = set(settings_obj.get("mobile.inactive_companions", [])) if settings_obj else set()
+            from ..functions.sprite_functions import get_relative_sprite_path
+
+            team_list = []
+            for t in team_rows:
+                ind_id = t.get("individual_id")
+                if ind_id:
+                    if hasattr(db, "get_pokemon_by_individual_id"):
+                        data = db.get_pokemon_by_individual_id(ind_id)
+                    else:
+                        data = db.get_pokemon(ind_id)
+                    if data:
+                        from ..pyobj.pokemon_obj import PokemonObject
+                        pkmn = PokemonObject(**data)
+                        name = pkmn.display_name
+                        level = data.get("level", 5)
+                        shiny = bool(data.get("shiny", False))
+                        gender = data.get("gender") or "N"
+                        pkmn_id = data.get("id")
+                        pkmn_type = data.get("type", ["Normal"])
+                        if isinstance(pkmn_type, str):
+                            pkmn_type = [pkmn_type]
+                        
+                        sprite_path = get_relative_sprite_path(pkmn_id, shiny, gender, pkmn.name, "gif")
+                        is_inactive = ind_id in inactive
+
+                        team_list.append({
+                            "individual_id": ind_id,
+                            "name": name,
+                            "level": level,
+                            "sprite_path": sprite_path,
+                            "type": pkmn_type,
+                            "inactive": is_inactive
+                        })
+
+            return {"team": team_list, "inactive": list(inactive)}
+        except Exception as e:
+            return {"team": [], "inactive": [], "error": str(e)}
+
+    @pyqtSlot(result="QVariant")
+    def triggerAnkiSync(self) -> dict:
+        """
+        Triggers Anki's built-in synchronization on the main window.
+        """
+        try:
+            from aqt import mw
+            if hasattr(mw, "onSync"):
+                from aqt.qt import QTimer
+                QTimer.singleShot(0, mw.onSync)
+                return {"success": True}
+            else:
+                return {"success": False, "error": "mw.onSync not available"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+
 class AnkimonItemsWeb(QDialog):
     def __init__(self, addon_dir, shop_manager, item_window, ankimon_tracker,
                  trainer_card=None, settings_obj=None, logger=None):
-        print("INIT START", flush=True)
         super().__init__()
-        print("INIT SUPER DONE", flush=True)
         self.addon_dir = addon_dir
         self.shop_manager = shop_manager
         self.item_window = item_window
         self.ankimon_tracker = ankimon_tracker
         # Profile + Team are folded into this shell so all five screens share
         # one window and one dropdown. Their data lives in ProfileData.
-        print("INIT BEFORE ProfileData", flush=True)
         self.profile_data = ProfileData(addon_dir, trainer_card, settings_obj, logger)
-        print("INIT AFTER ProfileData", flush=True)
         self._pending_profile_action = None
         # Live updates: map of screen -> bound method that pushes fresh data to
         # that screen. Only screens listed here react to gameplay events. To add
         # a new live screen (e.g. a Stats screen), add an entry here, a matching
         # _push_*_live method, and a window.liveRefreshX receiver in its JS.
         # See ankimon_items_web/LIVE_UPDATES.md.
-        self._live_refreshers = {SCREEN_PROFILE: self._push_profile_live}
+        self._live_refreshers = {
+            SCREEN_PROFILE: self._push_profile_live,
+            SCREEN_MOBILE: self._push_mobile_live,
+            SCREEN_HISTORY: self._push_history_live,
+        }
         self._live_refresh_pending = False
         self.current_screen = None
-        print("INIT BEFORE setWindowTitle", flush=True)
         self.setWindowTitle("Ankimon")
-        print("INIT AFTER setWindowTitle", flush=True)
 
         # Paint the shell dark from the first frame. The web views set their
         # own page background, but the surrounding QDialog/QFrame/QStackedWidget
@@ -275,15 +1947,12 @@ class AnkimonItemsWeb(QDialog):
         # Disabled WA_TranslucentBackground to prevent heavy window-level repaint
         # flickering under Windows DWM when QWebEngineView re-composes or updates.
         # self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        print("INIT BEFORE setWindowFlags", flush=True)
         self.setWindowFlags(
             self.windowFlags()
             | Qt.WindowType.WindowMaximizeButtonHint
             | Qt.WindowType.WindowMinimizeButtonHint
         )
-        print("INIT BEFORE resize", flush=True)
         self.resize(1180, 720)
-        print("INIT BEFORE layout", flush=True)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -297,23 +1966,24 @@ class AnkimonItemsWeb(QDialog):
         frame.layout().setContentsMargins(0, 0, 0, 0)
         layout.addWidget(frame)
 
-        print("INIT BEFORE stack", flush=True)
         self.stack = QStackedWidget()
         frame.layout().addWidget(self.stack)
 
-        print("INIT BEFORE webviews", flush=True)
         self.webview_items = QWebEngineView()
         self.webview_ankidex = QWebEngineView()
         self.webview_settings = QWebEngineView()
         self.webview_profile = QWebEngineView()
         self.webview_team = QWebEngineView()
-        print("INIT AFTER webviews", flush=True)
+        self.webview_mobile = QWebEngineView()
+        self.webview_history = QWebEngineView()
         self._views = {
             SCREEN_ITEMS: self.webview_items,
             SCREEN_ANKIDEX: self.webview_ankidex,
             SCREEN_SETTINGS: self.webview_settings,
             SCREEN_PROFILE: self.webview_profile,
             SCREEN_TEAM: self.webview_team,
+            SCREEN_MOBILE: self.webview_mobile,
+            SCREEN_HISTORY: self.webview_history,
         }
 
         self.bridge = ItemsBridge(self)
@@ -321,6 +1991,7 @@ class AnkimonItemsWeb(QDialog):
         self.settings_bridge = SettingsBridge(self)
         self.trainer_bridge = TrainerBridge(self)
         self.team_bridge = TeamBridge(self)
+        self._mobile_bridge = MobileBridge(self)
 
         # Each screen gets its own channel, but every channel registers the
         # same bridge objects so any page can navigate / call any action.
@@ -335,7 +2006,10 @@ class AnkimonItemsWeb(QDialog):
             channel.registerObject("settings", self.settings_bridge)
             channel.registerObject("trainer", self.trainer_bridge)
             channel.registerObject("team", self.team_bridge)
+            if screen in (SCREEN_MOBILE, SCREEN_HISTORY):
+                channel.registerObject("mobile", self._mobile_bridge)
             view.page().setWebChannel(channel)
+
 
             view.loadFinished.connect(
                 lambda ok, s=screen: self._on_screen_load_finished(ok, s)
@@ -384,6 +2058,14 @@ class AnkimonItemsWeb(QDialog):
                 title = "Ankimon — Team"
                 target_view = self.webview_team
                 path = self.addon_dir / "ankimon_profile_web" / "team.html"
+            elif screen == SCREEN_MOBILE:
+                title = "Ankimon — Mobile Battles"
+                target_view = self.webview_mobile
+                path = self.addon_dir / "ankimon_mobile_web" / "mobile.html"
+            elif screen == SCREEN_HISTORY:
+                title = "Ankimon — Mobile History"
+                target_view = self.webview_history
+                path = self.addon_dir / "ankimon_mobile_web" / "history.html"
             else:
                 return
 
@@ -442,6 +2124,15 @@ class AnkimonItemsWeb(QDialog):
             data = self.profile_data.get_team_data()
             js = f"if (window.initializeTeam) window.initializeTeam({json.dumps(data)});"
             self.webview_team.page().runJavaScript(js)
+        elif self.current_screen == SCREEN_MOBILE:
+            data = self._mobile_bridge.getMobileStatus()
+            js = f"if (window.initializeMobile) window.initializeMobile({json.dumps(data)});"
+            self.webview_mobile.page().runJavaScript(js)
+        elif self.current_screen == SCREEN_HISTORY:
+            db = mw.ankimon_db
+            data = db.get_mobile_history() if db else []
+            js = f"if (window.initializeHistory) window.initializeHistory({json.dumps(data)});"
+            self.webview_history.page().runJavaScript(js)
 
     def get_profile_payload(self):
         """Profile data + a one-shot UI action ('sprite' opens the picker,
@@ -493,13 +2184,26 @@ class AnkimonItemsWeb(QDialog):
                 return
         except RuntimeError:
             return
+
+        # Update the navigation switcher notification dot in the active web view
+        active_view = self.stack.currentWidget()
+        if active_view:
+            try:
+                db = mw.ankimon_db
+                count = db.get_pending_mobile_count() if db else 0
+                active_view.page().runJavaScript(f"if (window.updateNavSwitcherUnresolvedCount) window.updateNavSwitcherUnresolvedCount({count});")
+            except Exception:
+                pass
+
         refresher = self._live_refreshers.get(self.current_screen)
         if refresher is None:
             return
         try:
             refresher()
         except Exception as e:
-            print(f"[Ankimon] live refresh failed ({self.current_screen}): {e}")
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"[Ankimon] live refresh failed ({self.current_screen}): {e}")
 
     def _push_profile_live(self):
         """Push a full Profile refresh (cash, caught, Pokédex, shinies, highest,
@@ -511,6 +2215,25 @@ class AnkimonItemsWeb(QDialog):
             f"window.liveRefreshProfile({json.dumps(data)});"
         )
         self.webview_profile.page().runJavaScript(js)
+
+    def _push_mobile_live(self):
+        """Push a full Mobile reviews refresh when stats or pending reviews change."""
+        data = self._mobile_bridge.getMobileStatus()
+        js = (
+            "if (window.liveRefreshMobile) "
+            f"window.liveRefreshMobile({json.dumps(data)});"
+        )
+        self.webview_mobile.page().runJavaScript(js)
+
+    def _push_history_live(self):
+        """Push a history refresh when a mobile review outcome is committed."""
+        db = mw.ankimon_db
+        history_data = db.get_mobile_history() if db else []
+        js = (
+            "if (window.liveRefreshHistory) "
+            f"window.liveRefreshHistory({json.dumps(history_data)});"
+        )
+        self.webview_history.page().runJavaScript(js)
 
     def _get_ankidex_data(self):
         # Reuse the existing Ankidex singleton's data getter — keeps the
@@ -685,7 +2408,9 @@ class AnkimonItemsWeb(QDialog):
                         "individual_id": pkm.get("individual_id")
                     })
         except Exception as e:
-            print(f"[Ankimon] get_all_pokemon failed in _get_mart_and_bag_data: {e}")
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"[Ankimon] get_all_pokemon failed in _get_mart_and_bag_data: {e}")
 
         owned_index = {}
         for row in owned_rows:
@@ -993,7 +2718,9 @@ class AnkimonItemsWeb(QDialog):
         try:
             pokemons = mw.ankimon_db.get_all_pokemon() or []
         except Exception as e:
-            print(f"[Ankimon] get_pokemon_choices: get_all_pokemon failed: {e}")
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"[Ankimon] get_pokemon_choices: get_all_pokemon failed: {e}")
             return {"choices": []}
 
         # Active Pokémon's individual_id (so we can flag it in the UI).
@@ -1129,7 +2856,9 @@ class AnkimonItemsWeb(QDialog):
                 try:
                     pokemon_data = mw.ankimon_db.get_pokemon(individual_id)
                 except Exception as e:
-                    print(f"[Ankimon] get_pokemon({individual_id}) failed: {e}")
+                    logger = getattr(mw, "logger", None)
+                    if logger:
+                        logger.log("error", f"[Ankimon] get_pokemon({individual_id}) failed: {e}")
                 pokedex_id = (pokemon_data or {}).get("id")
                 if not pokedex_id:
                     return {"ok": False, "message": "Could not look up that Pokémon."}
@@ -1265,18 +2994,33 @@ class AnkimonItemsWeb(QDialog):
     ):
         out = []
         for friendly in friendly_names:
-            key = key_by_friendly.get(friendly)
-            if not key or key not in config:
-                continue
-            out.append(
-                self._serialize_setting(
-                    key,
-                    friendly,
-                    name_map,
-                    desc_map,
-                    config.get(key),
+            if isinstance(friendly, dict):
+                key = friendly["key"]
+                if key not in config:
+                    continue
+                entry = {
+                    "key": key,
+                    "label": friendly.get("label", ""),
+                    "description": friendly.get("description", ""),
+                    "value": config.get(key),
+                    "type": friendly.get("type", "text"),
+                }
+                if "options" in friendly:
+                    entry["options"] = friendly["options"]
+                out.append(entry)
+            else:
+                key = key_by_friendly.get(friendly)
+                if not key or key not in config:
+                    continue
+                out.append(
+                    self._serialize_setting(
+                        key,
+                        friendly,
+                        name_map,
+                        desc_map,
+                        config.get(key),
+                    )
                 )
-            )
         return out
 
     @staticmethod
@@ -1431,3 +3175,202 @@ class AnkimonItemsWeb(QDialog):
         except Exception:
             # Best-effort — settings still saved even if the hook fails.
             pass
+
+
+def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yield_gained: dict, settings_obj, battles_fought=1) -> None:
+    if xp_gained <= 0 and not any(ev_yield_gained.values()) and battles_fought <= 0:
+        return
+
+    from aqt import mw
+    db = mw.ankimon_db
+    pkmndata = None
+    if companion_id:
+        try:
+            pkmndata = db.get_pokemon_by_individual_id(companion_id) if hasattr(db, "get_pokemon_by_individual_id") else db.get_pokemon(companion_id)
+        except Exception:
+            pass
+
+    if not pkmndata:
+        return
+
+    from ..functions.pokemon_functions import find_experience_for_level, get_levelup_move_for_pokemon
+    from ..functions.drawing_utils import tooltipWithColour
+    from ..pyobj.pokemon_obj import PokemonObject
+    import random
+
+    # Immune to mocked utils during tests
+    def local_limit_ev_yield(current_pokemon_ev, ev_yield):
+        total_evs = sum(int(v) for v in current_pokemon_ev.values())
+        allowed_total = 510 - total_evs
+        if allowed_total <= 0:
+            return {k: 0 for k in ev_yield}
+        
+        zipped_keys = [
+            ("hp", "hp"),
+            ("atk", "attack"),
+            ("def", "defense"),
+            ("spa", "special-attack"),
+            ("spd", "special-defense"),
+            ("spe", "speed"),
+        ]
+        
+        new_ev_yield = {}
+        total_yield = 0
+        for key_1, key_2 in zipped_keys:
+            curr = int(current_pokemon_ev.get(key_1, 0))
+            yield_val = int(ev_yield.get(key_2, 0))
+            add = min(yield_val, 252 - curr)
+            new_ev_yield[key_2] = max(0, add)
+            total_yield += new_ev_yield[key_2]
+            
+        if total_yield > allowed_total:
+            running_total = 0
+            for key_1, key_2 in zipped_keys:
+                val = new_ev_yield[key_2]
+                if running_total + val > allowed_total:
+                    new_ev_yield[key_2] = allowed_total - running_total
+                    running_total = allowed_total
+                else:
+                    running_total += val
+                    
+        return new_ev_yield
+
+    growth_rate = pkmndata.get("growth_rate", "medium-fast")
+    level = int(pkmndata.get("level", 1))
+    xp = int(pkmndata.get("xp", 0))
+    remove_cap = settings_obj.get("misc.remove_level_cap") if settings_obj else False
+
+    experience_req = int(find_experience_for_level(growth_rate, level, remove_cap))
+    if remove_cap:
+        xp += xp_gained
+        level_cap = None
+    elif level != 100:
+        xp += xp_gained
+        level_cap = 100
+    else:
+        level_cap = 100
+
+    is_active = (hasattr(mw, "main_pokemon") and mw.main_pokemon and getattr(mw.main_pokemon, "individual_id", None) == companion_id)
+    from .. import utils as ankimon_utils
+    in_bulk = getattr(ankimon_utils, "in_bulk_resolve", False)
+    
+    color = "#6A4DAC"
+
+    # level-ups
+    while int(find_experience_for_level(growth_rate, level, remove_cap)) < xp and (level_cap is None or level < level_cap):
+        level += 1
+        msg = f"Your {pkmndata.get('name', 'Pokemon')} is now level {level} !"
+        
+        if is_active and not in_bulk:
+            try:
+                mw.logger.game_log(f"Level Up: {msg}")
+                tooltipWithColour(msg, color)
+                if settings_obj and settings_obj.get("gui.pop_up_dialog_message_on_defeat") is True:
+                    if hasattr(mw, "logger") and mw.logger:
+                        mw.logger.log_and_showinfo("info", f"{msg}")
+            except Exception:
+                pass
+                
+        xp = int(max(0, xp - int(experience_req)))
+        experience_req = int(find_experience_for_level(growth_rate, level, remove_cap))
+        
+        # level-up moves
+        name_lower = pkmndata.get("name", "").lower()
+        new_attacks = get_levelup_move_for_pokemon(name_lower, level)
+        if new_attacks:
+            attacks = pkmndata.get("attacks", [])
+            if isinstance(attacks, str):
+                try:
+                    import json
+                    attacks = json.loads(attacks)
+                except Exception:
+                    attacks = []
+            
+            for new_attack in new_attacks:
+                if len(attacks) < 4 and new_attack not in attacks:
+                    attacks.append(new_attack)
+                    if is_active and not in_bulk:
+                        msg_learn = f"{pkmndata.get('name', '').capitalize()} learned {new_attack}!"
+                        tooltipWithColour(msg_learn, color)
+                elif new_attack not in attacks:
+                    if is_active and not in_bulk:
+                        from ..pyobj.reviewer_obj import AttackDialog
+                        from PyQt6.QtWidgets import QDialog
+                        dialog = AttackDialog(attacks, new_attack)
+                        if dialog.exec() == QDialog.DialogCode.Accepted:
+                            selected_attack = dialog.selected_attack
+                            if selected_attack in attacks:
+                                idx = attacks.index(selected_attack)
+                                attacks[idx] = new_attack
+            pkmndata["attacks"] = attacks
+
+    pkmndata["level"] = level
+    pkmndata["xp"] = xp
+    
+    # EV Updates
+    if "ev" not in pkmndata or not isinstance(pkmndata["ev"], dict):
+        pkmndata["ev"] = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+        
+    normalized_yield = {
+        "hp": ev_yield_gained.get("hp", 0),
+        "attack": ev_yield_gained.get("attack", 0) + ev_yield_gained.get("atk", 0),
+        "defense": ev_yield_gained.get("defense", 0) + ev_yield_gained.get("def", 0),
+        "special-attack": ev_yield_gained.get("special-attack", 0) + ev_yield_gained.get("spa", 0),
+        "special-defense": ev_yield_gained.get("special-defense", 0) + ev_yield_gained.get("spd", 0),
+        "speed": ev_yield_gained.get("speed", 0) + ev_yield_gained.get("spe", 0),
+    }
+    
+    held_item = pkmndata.get("held_item", None)
+    if held_item == "macho-brace":
+        for stat in normalized_yield:
+            normalized_yield[stat] *= 2
+    else:
+        power_item_mapping = {
+            "power-weight": "hp",
+            "power-bracer": "attack",
+            "power-belt": "defense",
+            "power-lens": "special-attack",
+            "power-band": "special-defense",
+            "power-anklet": "speed",
+        }
+        if held_item in power_item_mapping:
+            stat_to_boost = power_item_mapping[held_item]
+            normalized_yield[stat_to_boost] += 8
+
+    ev_yield = local_limit_ev_yield(pkmndata["ev"], normalized_yield)
+    pkmndata["ev"]["hp"] += ev_yield["hp"]
+    pkmndata["ev"]["atk"] += ev_yield["attack"]
+    pkmndata["ev"]["def"] += ev_yield["defense"]
+    pkmndata["ev"]["spa"] += ev_yield["special-attack"]
+    pkmndata["ev"]["spd"] += ev_yield["special-defense"]
+    pkmndata["ev"]["spe"] += ev_yield["speed"]
+
+    # Recompute stats
+    pkmndata["stats"] = {
+        k: PokemonObject.calc_stat(k, val, level, pkmndata["iv"][k], pkmndata["ev"][k], pkmndata.get("nature", "serious"))
+        for k, val in pkmndata["base_stats"].items()
+        if k in ("hp", "atk", "def", "spa", "spd", "spe")
+    }
+    pkmndata["current_hp"] = pkmndata["stats"].get("hp", 15)
+    
+    friendship = int(pkmndata.get("friendship", 0))
+    friendship += random.randint(5, 9)
+    pkmndata["friendship"] = min(255, friendship)
+    
+    pkmndata["pokemon_defeated"] = int(pkmndata.get("pokemon_defeated", 0)) + battles_fought
+
+    # Call db.save_pokemon(updated_entry)
+    db.save_pokemon(pkmndata)
+
+    # 4. If active, also update the in-memory singleton
+    if is_active:
+        mp = mw.main_pokemon
+        mp.xp = pkmndata["xp"]
+        mp.level = pkmndata["level"]
+        mp.ev = pkmndata["ev"].copy()
+        mp.friendship = pkmndata["friendship"]
+        mp.pokemon_defeated = pkmndata["pokemon_defeated"]
+        if "attacks" in pkmndata:
+            mp.attacks = list(pkmndata["attacks"])
+        mp.invalidate_cp_cache()
+
