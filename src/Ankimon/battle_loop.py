@@ -111,11 +111,11 @@ def on_review_card(*args):
             today_str = str(date.today())
             last_reward_date = settings_obj.get("trainer.last_cash_reward_date", "")
             cash_earned_today = settings_obj.get("trainer.cash_earned_today", 0)
-            
+
             if last_reward_date != today_str:
                 cash_earned_today = 0
                 settings_obj.set("trainer.last_cash_reward_date", today_str)
-            
+
             if cash_earned_today < 400:
                 allowed_amount = min(cash_amount, 400 - cash_earned_today)
                 if allowed_amount > 0:

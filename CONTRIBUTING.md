@@ -32,7 +32,7 @@ We wish to maintain a welcoming, inclusive, and collaborative environment. Pleas
 ## How to Contribute
 
 1. **Report Bugs / Request Features**: Check existing issues first. If your issue is new, open a detailed issue describing the problem, steps to reproduce, or the feature request.
-2. **Submit Pull Requests (PRs)**: 
+2. **Submit Pull Requests (PRs)**:
    - Fork the repository.
    - Create a feature branch (`git checkout -b feature/amazing-feature`).
    - Implement your changes while following our development guidelines.

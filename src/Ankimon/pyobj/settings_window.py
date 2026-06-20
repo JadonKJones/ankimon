@@ -493,7 +493,7 @@ class SettingsWindow(QMainWindow):
     def on_save(self) -> Union[int, str]:
         # Refresh self.config with latest values before modifying
         self.config = self.load_config()
-        
+
         # Update self.config from the current state of all UI widgets
         for key, widget in self.input_widgets.items():
             original_value = self.original_config.get(key)
@@ -557,7 +557,7 @@ class SettingsWindow(QMainWindow):
                 orig_amount = int(self.config["trainer.cash_reward_amount"])
                 # Hard bounds
                 new_amount = max(10, min(400, orig_amount))
-                
+
                 # Cheat Threshold
                 interval = int(self.config.get("trainer.cash_reward_interval", 10))
                 daily_average = int(self.config.get("battle.daily_average", 100))
@@ -572,7 +572,7 @@ class SettingsWindow(QMainWindow):
                 elif new_amount != orig_amount:
                     has_adjustments = True
                     adjustment_msg += f"- Reward Amount: Adjusted to {new_amount}¥ (Range: 10-400)\n"
-                
+
                 self.config["trainer.cash_reward_amount"] = new_amount
             except (ValueError, TypeError):
                 self.config["trainer.cash_reward_amount"] = 100
@@ -583,7 +583,7 @@ class SettingsWindow(QMainWindow):
                 if key in self.input_widgets and isinstance(self.input_widgets[key], QLineEdit):
                     self.input_widgets[key].setText(str(self.config[key]))
 
-            QMessageBox.warning(self, "Settings Adjusted", 
+            QMessageBox.warning(self, "Settings Adjusted",
                               f"Some values were adjusted to stay within fair play bounds:\n\n{adjustment_msg}")
 
         # Check if all generations are disabled
@@ -603,6 +603,7 @@ class SettingsWindow(QMainWindow):
                             button.setChecked(True)
                         elif button.text() == "Disabled" and not self.config[key]:
                             button.setChecked(True)
+
 
         # Now that self.config is up-to-date, call the save callback
         self.save_config_callback(self.config)

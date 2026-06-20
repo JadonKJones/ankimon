@@ -81,11 +81,11 @@ def _load_pokedex_id_index():
             for entry_name, attributes in pokedex_data.items():
                 species_id = safe_int(attributes.get("species_id"))
                 actual_id = safe_int(attributes.get("actual_id"))
-                
+
                 # Use internal names (keys) for logic consistency
                 if actual_id is not None:
                     _pokedex_id_index[actual_id] = entry_name
-                
+
                 if species_id is not None:
                     if species_id not in _pokedex_id_index:
                         _pokedex_id_index[species_id] = entry_name
@@ -211,7 +211,7 @@ def _load_pokemon_descriptions_csv():
                     species_id = safe_int(row.get("species_id"))
                     lang_id = safe_int(row.get("language_id"))
                     flavor_text = row.get("flavor_text", "").replace("\x0c", " ")
-                    
+
                     # Store all descriptions for this (species_id, lang_id) pair
                     key = (species_id, lang_id)
                     if key not in _pokemon_descriptions_cache:
@@ -320,7 +320,7 @@ def search_pokedex(pokemon_name, variable):
     try:
         if isinstance(pokemon_name, str):
             pokemon_name = pokemon_name.lower()
-            
+
         pokemon_name = special_pokemon_names_for_min_level(pokemon_name)
         pokedex_data = _load_pokedex_cache()  # Use cache instead of file I/O
 
@@ -334,7 +334,7 @@ def search_pokedex(pokemon_name, variable):
                 var = pokemon_info.get(variable)
                 if var is not None:
                     return var
-            
+
             # 2. Try normalized version (no spaces, hyphens, or apostrophes)
             # This handles cases like "Venusaur-Mega" matching "venusaurmega"
             normalized_name = current_name.replace(" ", "").replace("-", "").replace("'", "")
@@ -381,7 +381,7 @@ def format_lore_name(name: str) -> str:
     """Transform internal hyphenated names into lore-accurate ones (e.g. Venusaur-Mega -> Mega Venusaur)."""
     if not name or not isinstance(name, str):
         return name
-        
+
     # Order matters: check more specific ones first
     if "-Mega-X" in name:
         return "Mega " + name.replace("-Mega-X", " X")
@@ -389,7 +389,7 @@ def format_lore_name(name: str) -> str:
         return "Mega " + name.replace("-Mega-Y", " Y")
     if "-Mega-Z" in name:
         return "Mega " + name.replace("-Mega-Z", " Z")
-    
+
     replacements = {
         "-Mega": "Mega ",
         "-Gmax": "Gigantamax ",
@@ -401,12 +401,12 @@ def format_lore_name(name: str) -> str:
         "-Origin": "Origin ",
         "-Therian": "Therian ",
     }
-    
+
     for suffix, prefix in replacements.items():
         if suffix in name:
             base = name.replace(suffix, "")
             return prefix + base
-            
+
     return name
 
 def get_pretty_name_for_id(species_id):
@@ -427,11 +427,11 @@ def get_pretty_name_for_name(pokemon_name):
         pokedex_data = _load_pokedex_cache()
         # Use aggressive normalization (isalnum) to match cache keys
         internal_name = "".join(c for c in str(pokemon_name).lower() if c.isalnum())
-        
+
         if internal_name in pokedex_data:
             raw_name = pokedex_data[internal_name].get("name", pokemon_name.title())
             return format_lore_name(raw_name)
-            
+
         # Fallback: try removing common suffixes if direct match fails
         for suffix in ["-mega", "-gmax", "-alola", "-galar", "-hisui", "-paldea"]:
             if suffix in pokemon_name.lower():
@@ -480,7 +480,7 @@ def get_base_experience(actual_id: int) -> int:
 def get_effort_values(actual_id: int) -> dict[str, int]:
     evs = {}
     stats_data = _load_stats_csv_cache()  # Use cache instead of file I/O
-    
+
     pokemon_stats = stats_data.get(actual_id, {})
     for stat_id, effort in pokemon_stats.items():
         if stat_id in STATS:
@@ -498,13 +498,13 @@ def get_effort_values(actual_id: int) -> dict[str, int]:
 def get_pokemon_descriptions(species_id, language):
     """Get pokemon descriptions from cache. Returns a random description if multiple exist."""
     language = _normalize_language_id(language)
-    
+
     # Load all descriptions into cache
     all_descriptions = _load_pokemon_descriptions_csv()
-    
+
     # Get descriptions for this species and language
     descriptions = all_descriptions.get((species_id, language), [])
-    
+
     if descriptions:
         if len(descriptions) > 1:
             return random.choice(descriptions)
@@ -517,15 +517,15 @@ def get_pokemon_descriptions(species_id, language):
 def get_pokemon_diff_lang_name(pokemon_id: int, language: int):
     """Get pokemon name in specified language from cache."""
     language = _normalize_language_id(language)
-    
+
     # Load all names into cache
     names_cache = _load_pokemon_names_csv()
-    
+
     # Look up the name
     name = names_cache.get((pokemon_id, language))
     if name:
         return format_lore_name(name)
-        
+
     # If not found and it's a form ID (>= 10000), fall back to species ID
     if pokemon_id >= 10000:
         internal_name = search_pokedex_by_id(pokemon_id)
@@ -533,7 +533,7 @@ def get_pokemon_diff_lang_name(pokemon_id: int, language: int):
         pokedex_data = _load_pokedex_cache()
         info = pokedex_data.get(internal_name, {})
         raw_pokedex_name = info.get("name", "")
-        
+
         species_id = safe_int(info.get("species_id"))
         if species_id:
             base_lang_name = names_cache.get((species_id, language))
@@ -659,11 +659,11 @@ def get_time_of_day():
     try:
         from datetime import datetime, timedelta, timezone
         from ..singletons import settings_obj
-        
+
         # Check if settings_obj exists and is fully initialized
         if settings_obj is None:
             return "day"
-            
+
         offset_str = settings_obj.get("evolution.timezone_offset", "auto")
         if offset_str == "auto":
             moment = datetime.now()
@@ -674,18 +674,18 @@ def get_time_of_day():
                 moment = datetime.now(tz)
             except Exception:
                 moment = datetime.now()
-                
+
         hour = moment.hour
-        
+
         def coerce_hour(val, default):
             try:
                 return max(0, min(23, int(float(val))))
             except Exception:
                 return default
-                
+
         day_start = coerce_hour(settings_obj.get("evolution.day_start_hour", 6), 6)
         night_start = coerce_hour(settings_obj.get("evolution.night_start_hour", 18), 18)
-        
+
         return "day" if day_start <= hour < night_start else "night"
     except Exception:
         # Fallback to local system time in case of any exception/import error
@@ -737,16 +737,16 @@ def check_evolution_for_pokemon(
         # This handles Alolan/Galarian etc. forms that aren't in the base species CSV
         pokedex_data = _load_pokedex_cache()
         internal_name = search_pokedex_by_id(pokemon_id)
-        
+
         if internal_name in pokedex_data:
             details = pokedex_data[internal_name]
             evo_list = details.get("evos")
-            
+
             if evo_list:
                 for target_evo_name in evo_list:
                     normalized_target = target_evo_name.lower().replace(" ", "").replace("-", "").replace("'", "")
                     target_data = pokedex_data.get(normalized_target) or pokedex_data.get(target_evo_name.lower())
-                    
+
                     if target_data:
                         # In Smogon-style pokedex.json, evoLevel is stored on the evolved species
                         condition = (target_data.get("evoCondition") or "").lower()
@@ -765,7 +765,7 @@ def check_evolution_for_pokemon(
                             continue
 
                         min_level = safe_int(target_data.get("evoLevel"))
-                        
+
                         if min_level > 0 and level >= min_level:
 
                             time_of_day = None
@@ -798,7 +798,7 @@ def check_evolution_for_pokemon(
 
         return None
 
-        
+
     except Exception as e:
         show_warning_with_traceback(
             parent=mw,

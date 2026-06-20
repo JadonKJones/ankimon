@@ -138,25 +138,25 @@ class PokemonTeamDialog(QDialog):
     def _calculate_pokemon_cp(self, individual_id):
         """Calculate CP for a Pokémon by fetching full data"""
         from ..business import calculate_pokemon_go_cp, pokemon_go_raw_stats
-        
+
         try:
             pokemon_data = mw.ankimon_db.get_pokemon(individual_id)
             if not pokemon_data:
                 return 0
-            
+
             base_stats = pokemon_data.get('base_stats', {})
             if not base_stats:
                 base_stats = pokemon_data.get('detail_stats', {})
-            
+
             iv = pokemon_data.get('iv', {})
             ev = pokemon_data.get('ev', {})
             level = pokemon_data.get('level', 1)
-            
+
             if not iv:
                 iv = {stat: 0 for stat in ['hp', 'atk', 'def', 'spa', 'spd', 'spe']}
             if not ev:
                 ev = {stat: 0 for stat in ['hp', 'atk', 'def', 'spa', 'spd', 'spe']}
-            
+
             attack, defense, stamina = pokemon_go_raw_stats(base_stats, iv, ev)
             cp = calculate_pokemon_go_cp(attack, defense, stamina, level)
             return cp
@@ -248,7 +248,7 @@ class PokemonTeamDialog(QDialog):
         for i, pokemon in enumerate(self.team_pokemon):
             if pokemon is not None and i != slot:
                 used_pokemon_ids.append(pokemon['individual_id'])
-        
+
         available_pokemon = [pokemon for pokemon in self.my_pokemon if pokemon and pokemon['individual_id'] not in used_pokemon_ids]
 
         # Label and preview for image
@@ -256,7 +256,7 @@ class PokemonTeamDialog(QDialog):
         layout.addWidget(QLabel("Select Pokémon:"))
         layout.addWidget(combo_box)
         layout.addWidget(preview_label)
-        
+
         image_label = QLabel()
         image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(image_label)
@@ -265,10 +265,10 @@ class PokemonTeamDialog(QDialog):
         def update_pokemon_list():
             search_text = search_input.text().lower()
             sort_option = sort_combo.currentText()
-            
+
             # Filter by search text
             filtered = [p for p in available_pokemon if search_text in p['name'].lower()]
-            
+
             # Sort based on selection
             if "Name" in sort_option:
                 filtered.sort(key=lambda p: p['name'])
@@ -279,23 +279,23 @@ class PokemonTeamDialog(QDialog):
             elif "CP" in sort_option:
                 # Calculate CP for each and sort
                 filtered.sort(key=lambda p: self._calculate_pokemon_cp(p['individual_id']), reverse=True)
-            
+
             # Update combo_box
             combo_box.blockSignals(True)  # Prevent triggering update_preview while updating
             combo_box.clear()
-            
+
             if filtered:
                 for pokemon in filtered:
                     cp_value = self._calculate_pokemon_cp(pokemon['individual_id'])
                     display_text = f"{pokemon['name']} (Level {pokemon['level']}) - CP {cp_value}"
-                    
+
                     combo_box.addItem(display_text, pokemon)
                     sprite_path = get_sprite_path("front", "png", pokemon['id'], pokemon["shiny"], pokemon["gender"])
                     pixmap = QPixmap(sprite_path)
                     combo_box.setItemData(combo_box.count() - 1, pixmap, Qt.ItemDataRole.DecorationRole)
             else:
                 combo_box.addItem("No Pokémon found", None)
-            
+
             combo_box.blockSignals(False)
             update_preview(0)
 
@@ -446,7 +446,7 @@ class PokemonTeamDialog(QDialog):
         layout.addWidget(QLabel("Select Pokémon:"))
         layout.addWidget(combo_box)
         layout.addWidget(preview_label)
-        
+
         image_label = QLabel()
         image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(image_label)
@@ -455,10 +455,10 @@ class PokemonTeamDialog(QDialog):
         def update_pokemon_list():
             search_text = search_input.text().lower()
             sort_option = sort_combo.currentText()
-            
+
             # Filter by search text
             filtered = [p for p in available_pokemon if search_text in p['name'].lower()]
-            
+
             # Sort based on selection
             if "Name" in sort_option:
                 filtered.sort(key=lambda p: p['name'])
@@ -468,22 +468,22 @@ class PokemonTeamDialog(QDialog):
                 filtered.sort(key=lambda p: p['id'])
             elif "CP" in sort_option:
                 filtered.sort(key=lambda p: self._calculate_pokemon_cp(p['individual_id']), reverse=True)
-            
+
             # Update combo_box
             combo_box.blockSignals(True)
             combo_box.clear()
             combo_box.addItem("No XP Share", None)
-            
+
             if filtered:
                 for pokemon in filtered:
                     cp_value = self._calculate_pokemon_cp(pokemon['individual_id'])
                     display_text = f"{pokemon['name']} (Level {pokemon['level']}) - CP {cp_value}"
-                    
+
                     combo_box.addItem(display_text, pokemon['individual_id'])
                     sprite_path = get_sprite_path("front", "png", pokemon['id'], pokemon["shiny"], pokemon["gender"])
                     pixmap = QPixmap(sprite_path)
                     combo_box.setItemData(combo_box.count() - 1, pixmap, Qt.ItemDataRole.DecorationRole)
-            
+
             combo_box.blockSignals(False)
             update_preview(0)
 
@@ -528,5 +528,5 @@ class PokemonTeamDialog(QDialog):
                 self.xp_share_label.setText(f"XP Share: {pokemon['name']} (Level {pokemon['level']})")
         else:
             self.xp_share_label.setText("XP Share: None")
-    
+
         dialog.accept()

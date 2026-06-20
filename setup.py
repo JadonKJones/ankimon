@@ -25,20 +25,20 @@ def check_prerequisites():
     if sys.version_info < (3, 9):
         print_red(f"Error: Python 3.9 or higher is required. You are using {sys.version.split()[0]}.")
         sys.exit(1)
-    
+
     # Check if git is installed
     try:
         subprocess.run(["git", "--version"], capture_output=True, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
         print_red("Error: Git is not installed or not in your PATH.")
         sys.exit(1)
-    
+
     print_green("Prerequisites met!")
 
 def initialize_submodules():
     print_cyan("\n--- Step 1: Initializing Git Submodules ---")
     poke_engine_dir = Path("src/Ankimon/poke_engine")
-    
+
     # Check if submodules are checked out
     if not (poke_engine_dir / "README.md").exists() and not (poke_engine_dir / "poke_engine").exists():
         print_yellow("Submodules (poke-engine) are not initialized. Initializing now...")
@@ -54,7 +54,7 @@ def initialize_submodules():
 def setup_virtual_environment():
     print_cyan("\n--- Step 2: Setting up Virtual Environment ---")
     venv_dir = Path("venv")
-    
+
     # Determine the python/pip paths inside the venv
     if sys.platform == "win32":
         venv_python = venv_dir / "Scripts" / "python.exe"
@@ -84,7 +84,7 @@ def setup_virtual_environment():
         except Exception as e:
             print_red(f"Failed to remove broken venv directory: {e}")
             sys.exit(1)
-            
+
     if not venv_dir.exists():
         print_yellow("Creating virtual environment at 'venv'...")
         try:
@@ -95,7 +95,7 @@ def setup_virtual_environment():
             sys.exit(1)
     else:
         print_green("Virtual environment already exists and is healthy.")
-    
+
     print_cyan("Upgrading pip inside virtual environment...")
     try:
         subprocess.run([str(venv_python), "-m", "pip", "install", "--upgrade", "pip"], check=True)
@@ -116,7 +116,7 @@ def setup_virtual_environment():
 def detect_anki_addons_dir():
     print_cyan("\n--- Step 3: Detecting Anki Addons Directory ---")
     addons_dir = None
-    
+
     # Common locations depending on platform
     if sys.platform == "win32":
         possible_dirs = [
@@ -132,19 +132,19 @@ def detect_anki_addons_dir():
             os.path.expanduser("~/.local/share/Anki2/addons21"),
             os.path.expanduser("~/.var/app/net.ankiweb.Anki/data/Anki2/addons21")  # Flatpak
         ]
-    
+
     for directory in possible_dirs:
         path = Path(directory)
         if path.exists() and path.is_dir():
             addons_dir = path
             break
-            
+
     if addons_dir:
         print_green(f"Detected Anki addons directory: {addons_dir}")
         use_detected = input("Use this detected directory? [Y/n]: ").strip().lower()
         if use_detected not in ("", "y", "yes"):
             addons_dir = None
-            
+
     if not addons_dir:
         while True:
             custom_path = input("Please enter the absolute path to your Anki 'addons21' directory: ").strip()
@@ -157,7 +157,7 @@ def detect_anki_addons_dir():
                 break
             else:
                 print_red(f"Error: Directory '{path}' does not exist. Please try again.")
-                
+
     return addons_dir
 
 def create_addon_symlink(addons_dir: Path):
@@ -165,11 +165,11 @@ def create_addon_symlink(addons_dir: Path):
     addon_folder_name = "1908235722"  # Ankimon addon folder name
     target_link = addons_dir / addon_folder_name
     source_dir = Path("src/Ankimon").resolve()
-    
+
     if not source_dir.exists():
         print_red(f"Error: Source directory '{source_dir}' does not exist.")
         sys.exit(1)
-        
+
     # Safely clean up existing target link/directory
     if target_link.exists() or target_link.is_symlink():
         print_yellow(f"An existing addon folder or link was found at: {target_link}")
@@ -177,7 +177,7 @@ def create_addon_symlink(addons_dir: Path):
         if confirm not in ("y", "yes"):
             print_yellow("Skipping symlink creation.")
             return
-            
+
         print_cyan("Removing existing file/link...")
         if target_link.is_symlink():
             target_link.unlink()
@@ -189,7 +189,7 @@ def create_addon_symlink(addons_dir: Path):
                 shutil.rmtree(target_link)
         else:
             target_link.unlink()
-                
+
     # Create the link
     print_cyan(f"Linking {source_dir} -> {target_link}")
     try:
@@ -208,10 +208,10 @@ def configure_vscode_settings(addons_dir: Path):
     print_cyan("\n--- Step 5: Configuring VS Code Settings ---")
     vscode_dir = Path(".vscode")
     vscode_dir.mkdir(exist_ok=True)
-    
+
     settings_file = vscode_dir / "settings.json"
     launch_file = vscode_dir / "launch.json"
-    
+
     # Paths for interpreter
     if sys.platform == "win32":
         venv_python_path = "${workspaceFolder}/venv/Scripts/python.exe"
@@ -221,9 +221,9 @@ def configure_vscode_settings(addons_dir: Path):
         venv_python_path = "${workspaceFolder}/venv/bin/python"
         venv_python_abs = str(Path("venv/bin/python").resolve())
         venv_anki_path = str(Path("venv/bin/anki").resolve())
-        
+
     anki_base_dir = str(addons_dir.parent.resolve())
-    
+
     # 1. settings.json configuration
     settings_data = {}
     if settings_file.exists():
@@ -232,20 +232,20 @@ def configure_vscode_settings(addons_dir: Path):
                 settings_data = json.load(f)
         except json.JSONDecodeError:
             print_yellow("Warning: Existing settings.json is not valid JSON. Overwriting it.")
-            
+
     # Update settings
     settings_data["python.defaultInterpreterPath"] = venv_python_abs
-    
+
     extra_paths = settings_data.get("python.analysis.extraPaths", [])
     if "./src" not in extra_paths:
         extra_paths.append("./src")
     settings_data["python.analysis.extraPaths"] = extra_paths
-    
+
     settings_data["python.testing.pytestEnabled"] = True
     settings_data["python.testing.pytestArgs"] = ["tests"]
     settings_data["python.testing.unittestEnabled"] = False
     settings_data["editor.formatOnSave"] = True
-    
+
     # Python specific formatter (Ruff)
     python_block = settings_data.get("[python]", {})
     python_block["editor.defaultFormatter"] = "charliermarsh.ruff"
@@ -254,12 +254,12 @@ def configure_vscode_settings(addons_dir: Path):
         "source.fixAll": "always"
     }
     settings_data["[python]"] = python_block
-    
+
     # Save settings.json
     with open(settings_file, "w", encoding="utf-8") as f:
         json.dump(settings_data, f, indent=4)
     print_green("VS Code settings.json configured.")
-    
+
     # 2. launch.json configuration
     launch_data = {"version": "0.2.0", "configurations": []}
     if launch_file.exists():
@@ -268,7 +268,7 @@ def configure_vscode_settings(addons_dir: Path):
                 launch_data = json.load(f)
         except json.JSONDecodeError:
             print_yellow("Warning: Existing launch.json is not valid JSON. Overwriting it.")
-            
+
     # Check if "Python Anki" launch configuration already exists
     has_anki_config = False
     for config in launch_data.get("configurations", []):
@@ -279,7 +279,7 @@ def configure_vscode_settings(addons_dir: Path):
             config["args"] = ["-b", anki_base_dir]
             has_anki_config = True
             break
-            
+
     if not has_anki_config:
         anki_config = {
             "name": "Python Anki",
@@ -297,7 +297,7 @@ def configure_vscode_settings(addons_dir: Path):
             "envFile": "${workspaceRoot}/.env"
         }
         launch_data["configurations"].append(anki_config)
-        
+
     # Save launch.json
     with open(launch_file, "w", encoding="utf-8") as f:
         json.dump(launch_data, f, indent=4)
@@ -307,16 +307,16 @@ def main():
     print_green("=========================================================")
     print_green("          Ankimon Development Environment Setup          ")
     print_green("=========================================================")
-    
+
     check_prerequisites()
     initialize_submodules()
     setup_virtual_environment()
-    
+
     addons_dir = detect_anki_addons_dir()
     if addons_dir:
         create_addon_symlink(addons_dir)
         configure_vscode_settings(addons_dir)
-        
+
     print_green("\n=========================================================")
     print_green("  Setup Complete! Your development environment is ready. ")
     print_green("=========================================================")

@@ -63,10 +63,10 @@ Key tables: `captured_pokemon`, `items`, `badges`, `team`, `pokemon_history`, `m
 pip install pytest pytest-qt PyQt6 markdown
 
 # Run all tests
-python -m pytest tests/ 
+python -m pytest tests/
 
 # Run just the integrity test (imports every module)
-python -m pytest tests/test_addon_integrity.py 
+python -m pytest tests/test_addon_integrity.py
 ```
 
 All tests should pass. The integrity test dynamically imports every module to catch ImportError/AttributeError at load time.

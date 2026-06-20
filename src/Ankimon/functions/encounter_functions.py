@@ -127,7 +127,7 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
     _percentages_cache['total_reviews'] = total_reviews
     _percentages_cache['trainer_level'] = trainer_level
     _percentages_cache['main_pokemon_level'] = main_pokemon.level
-    
+
     # this function gets called maybe 10 times per battle round, which is concerning.
     # it could be rewritten to run ONLY when the change in review ratio is detected.
     return percentages
@@ -623,7 +623,7 @@ def save_main_pokemon_progress(
         mainpkmndata["level"] = int(main_pokemon.level)
         # Clone raw EV yield to avoid mutating the in-memory enemy template
         raw_ev_yield = enemy_pokemon.ev_yield.copy()
-        
+
         # Normalize keys to the standard long form expected by limit_ev_yield
         normalized_yield = {
             "hp": raw_ev_yield.get("hp", 0),

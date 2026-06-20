@@ -125,11 +125,11 @@ jobs:
               content = re.sub(r'\[(#\d+)\]\([^)]+\)', r'\1', content)
           else:
               content = 'No changelog available for this release.'
-          
+
           # Append Full Changelog link
           compare_link = '\n\n---\n\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.previoustag.outputs.tag }}...${{ github.ref_name }}'
           content += compare_link
-          
+
           with open('patched_changelog.md', 'w', encoding='utf-8') as f:
               f.write(content)
           "

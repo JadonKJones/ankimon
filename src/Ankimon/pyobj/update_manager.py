@@ -356,7 +356,7 @@ def _download_and_extract_submodule(sha: str, dest_dir: Path, status_cb=None):
 
     url = f"https://github.com/ArdentRoe/poke-engine/archive/{sha}.zip"
     log("Downloading poke_engine submodule package...")
-    
+
     zip_path = _download_zip_to_temp(url)
     if not zip_path:
         raise Exception("Failed to download poke_engine submodule zip archive.")
@@ -370,19 +370,19 @@ def _download_and_extract_submodule(sha: str, dest_dir: Path, status_cb=None):
                 raise Exception("poke_engine submodule archive is empty.")
             # The root directory in zip is e.g. "poke-engine-{sha}"
             root_prefix = names[0].split("/")[0] + "/"
-            
+
             for name in names:
                 if not name.startswith(root_prefix) or name == root_prefix:
                     continue
                 rel_path = name[len(root_prefix):]
                 if not rel_path or rel_path.endswith("/"):
                     continue
-                
+
                 dest_file = temp_extract_dir / rel_path
                 dest_file.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(name) as source, dest_file.open("wb") as target:
                     shutil.copyfileobj(source, target)
-        
+
         # Atomic swap: Delete old dest_dir if it exists, rename temp_extract_dir to dest_dir
         if dest_dir.exists():
             shutil.rmtree(dest_dir)
@@ -504,7 +504,7 @@ def apply_update(zip_path: str, status_cb=None) -> tuple[bool, str]:
             ref = _extract_ref_from_prefix(src_prefix)
             log(f"Resolving poke_engine submodule for ref '{ref}'...")
             sub_sha = _fetch_submodule_sha(ref) or DEFAULT_SUBMODULE_SHA
-            
+
             _download_and_extract_submodule(sub_sha, addon_dir / "poke_engine", status_cb)
 
             cleanup()
