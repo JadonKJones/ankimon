@@ -41,6 +41,7 @@ python3 harness/checks/probe_core.py        # build_core() boots the whole game 
 python3 harness/scenarios/smoke_play.py     # answer cards, catch + defeat
 python3 harness/scenarios/auto_battle.py    # automatic_battle modes 1/2/3
 python3 harness/scenarios/economy.py        # cash + buying items
+python3 harness/checks/probe_fixtures.py    # load a save, seed state, reproduce a bug
 
 # Interactive REPL — one JSON request per line in, one JSON response per line out
 python3 -m harness.server
@@ -130,7 +131,8 @@ d.defeat()                    # or d.catch()  -> spawns the next encounter
 |---|---|
 | `answer(ease)` | answer a card (`1-4` or `again/hard/good/easy`) → runs the battle loop |
 | `catch()` / `defeat()` | resolve a fainted wild Pokemon, then spawn the next |
-| `encounter()` | force a brand-new wild encounter |
+| `encounter()` | force a brand-new (random) wild encounter |
+| `set_enemy(species=, level=, ability=, moves=, …)` | force a **specific** wild encounter (dev fixtures) — for reproducing a reported bug |
 | `set_setting(key, value)` | change a settings key (e.g. `battle.automatic_battle`) |
 | `set_move(move)` | script the move chosen next turn (needs `controls.allow_to_choose_moves`) |
 | `add_cash(n)` / `buy_item(name)` | drive the shop economy |
@@ -140,6 +142,45 @@ d.defeat()                    # or d.catch()  -> spawns the next encounter
 | `drain_events()` | events since the last drain |
 
 Each action returns the events it produced; `get_state()` returns the snapshot.
+
+## Existing progress, custom saves & bug repro (`harness/fixtures.py`)
+
+Sessions don't have to start blank. You can **boot on an existing save** or
+**construct an exact starting state**, then drive a reported bug to its conclusion
+and watch it resolve in the event stream — no Anki, no clicking.
+
+```python
+from harness.driver import Driver
+
+# Load arbitrary existing progress: the given ankimon.db is COPIED into a throwaway
+# profile and booted on, so the source save is never mutated.
+d = Driver(db="reports/issue361.ankimon.db")
+
+# ...or construct a precise state. Pokemon are built from the game's OWN pokedex
+# data (base stats, types, learnset, abilities), so only the fields you pin change.
+d = Driver(seed={
+    "main": {"species": "Gengar", "level": 50, "ability": "Levitate", "moves": ["Shadow Ball"]},
+    "team": [{"species": "Pikachu", "level": 40}],
+    "box":  [{"species": "Bulbasaur", "level": 5}],
+    "items": {"great-ball": 10},
+})
+
+# Force the exact wild Pokemon a bug needs, then battle it:
+d.set_enemy(species="Golem", level=50, moves=["Earthquake"])
+d.answer("again")   # poor answers drop the multiplier < 1, so the wild Pokemon swings
+```
+
+`spec` fields (all optional except a species id): `species`|`id`, `level`, `ability`,
+`moves`, `ivs`/`evs`, `nature`, `shiny`, `gender`, `held_item`, `hp` (pin a low HP to
+reproduce a low-HP bug). Worked example + assertions: `harness/checks/probe_fixtures.py`
+(e.g. it verifies Gengar's Levitate nullifies a forced Golem's Earthquake while a
+non-immune control takes damage).
+
+> **Dev-only, by design.** This lives in `harness/` and is **never shipped** — the
+> add-on adds no "spawn Pokemon" affordance. It only writes the same plain-JSON
+> `ankimon.db` a user can already edit by hand, and only from this unshipped tool.
+> Keep generated saves as throwaway fixtures (temp dirs); never commit one or attach
+> it to a release. Don't move any of this into `src/`.
 
 ## For agents: events, long-horizon runs, and time
 
