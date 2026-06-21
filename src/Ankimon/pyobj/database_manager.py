@@ -1286,85 +1286,14 @@ class AnkimonDB:
         if revlog_id:
             self.sync_resolutions_to_other_db([revlog_id], now)
 
-    def _ensure_history_table(self):
-        """Ensures the mobile_battle_history table exists."""
-        try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='mobile_battle_history'")
-            if not cursor.fetchone():
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS mobile_battle_history (
-                        id                INTEGER PRIMARY KEY AUTOINCREMENT,
-                        timestamp         INTEGER NOT NULL,
-                        enemy_id          INTEGER NOT NULL,
-                        enemy_name        TEXT NOT NULL,
-                        enemy_level       INTEGER NOT NULL,
-                        enemy_shiny       INTEGER NOT NULL,
-                        companion_name    TEXT,
-                        companion_level   INTEGER,
-                        outcome           TEXT NOT NULL,
-                        xp_gained         INTEGER DEFAULT 0,
-                        trainer_xp_gained INTEGER DEFAULT 0,
-                        cash_gained       INTEGER DEFAULT 0
-                    )
-                """)
-                cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_timestamp ON mobile_battle_history(timestamp)")
-                conn.commit()
-                self._log("info", "Created mobile_battle_history table on the fly.")
-        except Exception as e:
-            self._log("error", f"Failed to ensure mobile_battle_history table: {e}")
-
     def add_mobile_history_entry(self, entry: Dict[str, Any]) -> bool:
-        """Saves a mobile battle outcome to history."""
-        self._ensure_history_table()
-
-        def _clean_val(v, default):
-            if v is None or v.__class__.__name__ == "MagicMock":
-                return default
-            return v
-
-        try:
-            conn = self._get_connection()
-            with conn:
-                conn.execute(
-                    """INSERT INTO mobile_battle_history (
-                        timestamp, enemy_id, enemy_name, enemy_level, enemy_shiny,
-                        companion_name, companion_level, outcome, xp_gained,
-                        trainer_xp_gained, cash_gained
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        _clean_val(entry.get("timestamp"), 0),
-                        _clean_val(entry.get("enemy_id"), 0),
-                        str(_clean_val(entry.get("enemy_name"), "")),
-                        _clean_val(entry.get("enemy_level"), 0),
-                        1 if entry.get("enemy_shiny") else 0,
-                        str(_clean_val(entry.get("companion_name"), "")),
-                        _clean_val(entry.get("companion_level"), 0),
-                        str(_clean_val(entry.get("outcome"), "")),
-                        _clean_val(entry.get("xp_gained"), 0),
-                        _clean_val(entry.get("trainer_xp_gained"), 0),
-                        _clean_val(entry.get("cash_gained"), 0),
-                    )
-                )
-                conn.execute(
-                    """DELETE FROM mobile_battle_history
-                       WHERE id NOT IN (
-                           SELECT id FROM mobile_battle_history
-                           ORDER BY timestamp DESC, id DESC
-                           LIMIT 500
-                       )"""
-                )
-            return True
-        except Exception as e:
-            self._log("error", f"Failed to add mobile history entry: {e}")
-            return False
+        """Saves a single mobile battle outcome to history."""
+        return self.add_mobile_history_entries_batch([entry])
 
     def add_mobile_history_entries_batch(self, entries: List[Dict[str, Any]]) -> bool:
         """Saves a batch of mobile battle outcomes to history in a single transaction."""
         if not entries:
             return True
-        self._ensure_history_table()
 
         def _clean_val(v, default):
             if v is None or v.__class__.__name__ == "MagicMock":
@@ -1412,7 +1341,6 @@ class AnkimonDB:
 
     def get_mobile_history(self, limit: int = 500) -> List[Dict[str, Any]]:
         """Retrieves recent mobile battle history entries, newest first."""
-        self._ensure_history_table()
         try:
             rows = self.execute(
                 """SELECT id, timestamp, enemy_id, enemy_name, enemy_level, enemy_shiny,
@@ -1440,7 +1368,6 @@ class AnkimonDB:
 
     def clear_mobile_history(self) -> bool:
         """Clears all entries from the mobile battle history."""
-        self._ensure_history_table()
         try:
             conn = self._get_connection()
             with conn:
