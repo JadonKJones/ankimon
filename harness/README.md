@@ -171,6 +171,38 @@ churn), which is what you actually fix. **Wall time and RSS are indicative on th
 box only** — for the felt milliseconds, measure the real window on real hardware.
 This profiles the data/logic layer, not Qt rendering.
 
+## Extending: other tooling & live debugging
+
+The harness is a plain Python process driving the real game code, so any analysis or
+debug tool that works on a Python program plugs into the same `Driver` workload.
+
+**Profiler backends.** `profile(d, backend="pyinstrument")` swaps the engine; an
+unknown or uninstalled backend falls back to stdlib cProfile with a note. The core
+stays stdlib-only — optional tools live in a **venv**, never an add-on dependency:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r harness/requirements-dev.txt
+```
+
+That list includes pyinstrument, scalene, memray, py-spy, line_profiler, objgraph,
+debugpy — point any of them at a `Driver` loop the way cProfile is wired.
+
+**Live debugging — breakpoints + variable inspection.** Because it's a normal
+process, set breakpoints in `src/Ankimon` and step through them while a *simulated*
+review runs — no Anki:
+
+```bash
+# stdlib pdb (zero deps) — or drop breakpoint() anywhere in src/Ankimon:
+python3 -m pdb harness/scenarios/smoke_play.py
+
+# debugpy (VS Code / PyCharm / any DAP client): set breakpoints in the editor, then:
+python3 -m debugpy --listen 5678 --wait-for-client harness/scenarios/smoke_play.py
+#   ...or inside your own script:  from harness.debug import wait_for_client; wait_for_client()
+```
+
+See `harness/debug.py`. **Rule:** tooling/debug packages live in the venv + `harness/`,
+**never** in `src/` — the shipped add-on must stay dependency-free.
+
 ## For agents: events, long-horizon runs, and time
 
 **Minimal loop** (Tier 1):
