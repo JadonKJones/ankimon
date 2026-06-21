@@ -722,6 +722,19 @@ class AnkimonDB:
         conn.commit()
         return True
 
+    def set_config_value(self, key: str, value: Any) -> bool:
+        """Upsert a SINGLE config key (incremental). Avoids rewriting all ~60 config
+        rows on every Settings.set — the battle loop awards cash per review, so the
+        old save_all_config path rewrote the whole table dozens of times per battle."""
+        str_value = json.dumps(value) if isinstance(value, (dict, list, bool)) else str(value)
+        conn = self._get_connection()
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+            (key, str_value),
+        )
+        conn.commit()
+        return True
+
     def has_config(self) -> bool:
         """Checks if config data exists in the database."""
         cursor = self.execute("SELECT COUNT(*) FROM config")

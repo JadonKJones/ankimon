@@ -176,31 +176,49 @@ class Settings:
                 print(f"Ankimon: Failed to save config to database: {e}")
 
         # 2. Also save to obfuscated file if it exists (legacy support)
-        # Note: Once moved to the archive folder, this will no longer be found here.
-        obfuscated_config_path = user_path / "config.obf"
-        if obfuscated_config_path.is_file():
-            try:
-                # Imported lazily, and only when a legacy config.obf is present, so
-                # this module never drags in ankimon_sync (and thus aqt) at import.
-                from ..pyobj.ankimon_sync import AnkimonDataSync
-                sync_handler = AnkimonDataSync()  # Re-use the obfuscation logic
-                obfuscated_str = sync_handler._obfuscate_data(config)
-                warning_message = "WARNING: This file contains important user data. Do not delete or modify this file. Deleting or modifying this file can lead to data loss in the Ankimon addon.\n---"
-                file_content = warning_message + obfuscated_str
-                with open(obfuscated_config_path, "w", encoding="utf-8") as f:
-                    f.write(file_content)
-            except Exception as e:
-                print(f"Ankimon: Could not save obfuscated config: {e}")
-
         self.config = config
+        self._save_legacy_obf_if_present()
         self.compute_gui_config()
+
+    def _save_legacy_obf_if_present(self):
+        """Mirror self.config into a legacy config.obf, only if one still exists
+        (pre-migration profiles). Migrated profiles archived it, so this is a no-op.
+        Note: once moved to the archive folder this file is no longer found here."""
+        obfuscated_config_path = user_path / "config.obf"
+        if not obfuscated_config_path.is_file():
+            return
+        try:
+            # Imported lazily, and only when a legacy config.obf is present, so this
+            # module never drags in ankimon_sync (and thus aqt) at import time.
+            from ..pyobj.ankimon_sync import AnkimonDataSync
+            sync_handler = AnkimonDataSync()  # Re-use the obfuscation logic
+            obfuscated_str = sync_handler._obfuscate_data(self.config)
+            warning_message = "WARNING: This file contains important user data. Do not delete or modify this file. Deleting or modifying this file can lead to data loss in the Ankimon addon.\n---"
+            file_content = warning_message + obfuscated_str
+            with open(obfuscated_config_path, "w", encoding="utf-8") as f:
+                f.write(file_content)
+        except Exception as e:
+            print(f"Ankimon: Could not save obfuscated config: {e}")
 
     def get(self, key, default=None):
         return self.config.get(key, default)
 
     def set(self, key, value):
         self.config[key] = value
-        self.save_config(self.config)
+        # Persist ONLY the changed key. The previous implementation re-saved the
+        # entire config (~60 rows + a commit) on every set; the battle loop awards
+        # cash per review, so a single battle rewrote all of config dozens of times.
+        if services.db is not None:
+            try:
+                services.db.set_config_value(key, value)
+            except Exception as e:
+                print(f"Ankimon: Failed to save config key '{key}': {e}")
+        else:
+            # No DB yet (very early boot / legacy) — fall back to the full save.
+            self.save_config(self.config)
+            return
+        self._save_legacy_obf_if_present()
+        self.compute_gui_config()
 
     def compute_gui_config(self):
         # Manage conditional GUI settings
