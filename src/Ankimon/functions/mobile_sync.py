@@ -170,12 +170,13 @@ def load_active_team_clones(ankimon_db, settings_obj, main_pokemon_fallback) -> 
 
 def select_best_companion(team_clones: list, enemy_pokemon) -> object:
     """
-    Pick the team member most likely to finish the battle fastest.
+    Pick the team member with the highest estimated damage output against this enemy.
 
-    EDO (Estimated Damage Output) is calculated as the average of the scores of all active moves:
-    Move Score = Base Power * Stat (Atk/Sp.Atk based on category) * Move Type Matchup * STAB
-
-    The final score is EDO * Companion Type Matchup * Speed * HP Fraction.
+    Per move: Base Power * Stat (Atk or Sp.Atk by category) * type effectiveness vs
+    the enemy * STAB. EDO (Estimated Damage Output) is the average of those move
+    scores. The final score is EDO * Speed -- HP is intentionally excluded so a
+    low-HP-but-strong companion isn't passed over. Ties break on Speed, then level.
+    Fainted members are skipped; if the whole team has fainted they are revived first.
     """
     from ..business import _load_type_chart
     from .pokedex_functions import _load_moves_cache
@@ -242,9 +243,6 @@ def select_best_companion(team_clones: list, enemy_pokemon) -> object:
         hp = get_hp_safe(c)
         if hp <= 0:
             continue  # Skip fainted
-
-        max_hp = get_max_hp_safe(c)
-        hp_fraction = (hp / max_hp) if max_hp > 0 else 1.0
 
         stats = getattr(c, "stats", {}) or {}
         if stats.__class__.__name__ == "MagicMock":
