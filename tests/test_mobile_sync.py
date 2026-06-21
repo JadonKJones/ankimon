@@ -6,6 +6,69 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 import types
 
+class FakePokemon:
+    def __init__(self, **kwargs):
+        self.individual_id = kwargs.get("individual_id", "active-uuid")
+        self.name = kwargs.get("name", "Pikachu")
+        self.display_name = self.name
+        self.id = kwargs.get("id", 25)
+        self.level = kwargs.get("level", 30)
+        self.attacks = kwargs.get("attacks", ["Thunderbolt"])
+        self.hp = kwargs.get("hp", 100)
+        self.max_hp = kwargs.get("max_hp", 100)
+        self.type = kwargs.get("type", ["Electric"])
+        self.base_stats = kwargs.get("base_stats", {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90})
+        self.stats = kwargs.get("stats", {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90})
+        self.ev = kwargs.get("ev", {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0})
+        self.iv = kwargs.get("iv", {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15})
+        self.ev_yield = kwargs.get("ev_yield", {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0})
+        self.tier = kwargs.get("tier", "normal")
+        self.shiny = kwargs.get("shiny", False)
+        self.held_item = kwargs.get("held_item", None)
+        self.gender = kwargs.get("gender", "M")
+        self.ability = kwargs.get("ability", "Static")
+        self.growth_rate = kwargs.get("growth_rate", "medium-fast")
+        self.friendship = kwargs.get("friendship", 50)
+        self.everstone = kwargs.get("everstone", False)
+        self.evolution_rejected = kwargs.get("evolution_rejected", False)
+        self.pokemon_defeated = kwargs.get("pokemon_defeated", 0)
+        self.is_favorite = kwargs.get("is_favorite", False)
+        self.xp = kwargs.get("xp", 0)
+
+    def invalidate_cp_cache(self):
+        pass
+
+    def to_dict(self):
+        return {
+            "individual_id": self.individual_id,
+            "name": self.name,
+            "id": self.id,
+            "level": self.level,
+            "ability": self.ability,
+            "type": self.type,
+            "base_stats": self.base_stats,
+            "stats": self.stats,
+            "attacks": self.attacks,
+            "base_experience": 112,
+            "growth_rate": self.growth_rate,
+            "ev": self.ev,
+            "iv": self.iv,
+            "gender": self.gender,
+            "battle_status": "Fighting",
+            "ev_yield": self.ev_yield,
+            "friendship": self.friendship,
+            "everstone": self.everstone,
+            "evolution_rejected": self.evolution_rejected,
+            "pokemon_defeated": self.pokemon_defeated,
+            "is_favorite": self.is_favorite,
+            "hp": self.hp,
+            "max_hp": self.max_hp,
+            "shiny": self.shiny,
+            "tier": self.tier,
+            "held_item": self.held_item,
+            "xp": self.xp,
+        }
+
 # Capture original aqt/anki modules before we mock them
 _original_sys_modules = {k: v for k, v in sys.modules.items() if k.startswith("aqt") or k.startswith("anki")}
 
@@ -307,9 +370,7 @@ def test_mobile_bridge(temp_env):
 
     # Set singletons on mw mock
     mw.ankimon_db = db
-    mw.main_pokemon = MagicMock(name="Charizard", level=50)
-    mw.main_pokemon.name = "Charizard"
-    mw.main_pokemon.level = 50
+    mw.main_pokemon = FakePokemon(name="Charizard", level=50, id=6, attacks=["Slash"])
 
     settings_mock = MagicMock()
     mock_settings_dict = {
@@ -377,13 +438,11 @@ def test_mobile_bridge_resolve_all(temp_env):
     db, tmp_path = temp_env
     from Ankimon.ankimon_items_web.shop_obj import MobileBridge
     from aqt import mw
-
+ 
     # Set singletons on mw mock
     mw.ankimon_db = db
-    mw.main_pokemon = MagicMock(name="Charizard", level=50)
-    mw.main_pokemon.name = "Charizard"
-    mw.main_pokemon.level = 50
-
+    mw.main_pokemon = FakePokemon(name="Charizard", level=50, id=6, attacks=["Slash"], individual_id=1003)
+ 
     settings_mock = MagicMock()
     mock_settings_dict = {
         "battle.cards_per_round": 2,
@@ -410,13 +469,13 @@ def test_mobile_bridge_resolve_all(temp_env):
     )
     mw.settings_obj = settings_mock
     mw.logger = MagicMock()
-
+ 
     trainer_card_mock = MagicMock()
     trainer_card_mock.xp = 100
     trainer_card_mock.total_xp = 100
     trainer_card_mock.cash = 200
     mw.trainer_card = trainer_card_mock
-
+ 
     # Queue some reviews
     reviews = [
         {"id": 601, "cid": 1001, "ease": 1, "time": 10000, "type": 1},
@@ -425,17 +484,18 @@ def test_mobile_bridge_resolve_all(temp_env):
     ]
     db.queue_mobile_battles(reviews)
     assert db.get_pending_mobile_count() == 3
-
+ 
     bridge = MobileBridge(MagicMock())
-
+ 
     # We patch save_main_pokemon_progress, save_caught_pokemon, generate_random_pokemon, simulate_battle_with_poke_engine
     from unittest.mock import patch
     with patch("Ankimon.functions.encounter_functions.save_main_pokemon_progress") as mock_save_progress, \
          patch("Ankimon.functions.encounter_functions.save_caught_pokemon") as mock_save_caught, \
          patch("Ankimon.functions.encounter_functions.generate_random_pokemon") as mock_gen_random, \
          patch("Ankimon.functions.ankimon_hooks_to_poke_engine.simulate_battle_with_poke_engine", side_effect=Exception("mocked error")) as mock_simulate_battle, \
-         patch("Ankimon.menu_buttons.update_mobile_badge") as mock_update_badge:
-
+         patch("Ankimon.menu_buttons.update_mobile_badge") as mock_update_badge, \
+         patch("Ankimon.business.calculate_cp_from_dict", return_value=100):
+ 
         # Let generate_random_pokemon return a mockup (pikachu id = 25, level 5)
         mock_gen_random.return_value = (
             "Pikachu", 25, 5, "Run Away", ["Electric"], 
@@ -445,9 +505,9 @@ def test_mobile_bridge_resolve_all(temp_env):
             {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15},
             "M", "Fighting", {}, "Normal", {"speed": 2}, False, "serious"
         )
-
+ 
         res = bridge.resolveAll()
-
+ 
         assert res.get("success") is True, f"resolveAll failed: {res.get('error')}"
         assert res.get("resolved") == 2
         assert len(res.get("caught_list")) == 1
@@ -641,9 +701,7 @@ def test_simulate_extrapolation(temp_env):
         "controls.allow_to_choose_moves": False,
     }.get(key, default)
 
-    main_pokemon = MagicMock()
-    main_pokemon.level = 30
-    main_pokemon.held_item = None
+    main_pokemon = FakePokemon(level=30, held_item=None)
 
     from unittest.mock import patch
     with patch("Ankimon.functions.ankimon_hooks_to_poke_engine.simulate_battle_with_poke_engine", side_effect=Exception("mocked error")):
@@ -693,12 +751,10 @@ def test_companion_strength_scaling(temp_env):
     }.get(key, default)
 
     # 1. Weak companion (level 5)
-    weak_companion = MagicMock()
-    weak_companion.level = 5
-    weak_companion.held_item = None
-    weak_companion.attacks = ["Tackle"]
-    weak_companion.hp = 20
-    weak_companion.max_hp = 20
+    weak_companion = FakePokemon(
+        name="Pikachu", level=5, attacks=["Tackle"], hp=20, max_hp=20,
+        stats={"hp": 20, "atk": 5, "def": 5, "spa": 5, "spd": 5, "spe": 5}
+    )
     weak_companion.stat_stages = {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "accuracy": 0, "evasion": 0}
     weak_companion.volatile_status = set()
 
@@ -733,12 +789,10 @@ def test_companion_strength_scaling(temp_env):
         res_weak = simulate_pending_mobile_battles(reviews, weak_companion, settings_obj, None, None)
 
     # 2. Strong companion (level 50)
-    strong_companion = MagicMock()
-    strong_companion.level = 50
-    strong_companion.held_item = None
-    strong_companion.attacks = ["Thunderbolt"]
-    strong_companion.hp = 100
-    strong_companion.max_hp = 100
+    strong_companion = FakePokemon(
+        name="Charizard", level=50, attacks=["Thunderbolt"], hp=100, max_hp=100,
+        stats={"hp": 100, "atk": 50, "def": 50, "spa": 50, "spd": 50, "spe": 50}
+    )
     strong_companion.stat_stages = {"atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "accuracy": 0, "evasion": 0}
     strong_companion.volatile_status = set()
 
@@ -997,13 +1051,7 @@ def test_mobile_bridge_resolve_next(temp_env):
     from aqt import mw
 
     mw.ankimon_db = db
-    mw.main_pokemon = MagicMock()
-    mw.main_pokemon.name = "Charizard"
-    mw.main_pokemon.level = 50
-    mw.main_pokemon.id = 6
-    mw.main_pokemon.shiny = False
-    mw.main_pokemon.gender = "M"
-    mw.main_pokemon.attacks = ["Slash"]
+    mw.main_pokemon = FakePokemon(name="Charizard", level=50, id=6, shiny=False, gender="M", attacks=["Slash"])
 
     settings_mock = MagicMock()
     mock_settings_dict = {
@@ -1066,13 +1114,7 @@ def test_mobile_bridge_commit_replay_outcome(temp_env):
     from aqt import mw
 
     mw.ankimon_db = db
-    mw.main_pokemon = MagicMock()
-    mw.main_pokemon.name = "Charizard"
-    mw.main_pokemon.level = 50
-    mw.main_pokemon.id = 6
-    mw.main_pokemon.shiny = False
-    mw.main_pokemon.gender = "M"
-    mw.main_pokemon.attacks = ["Slash"]
+    mw.main_pokemon = FakePokemon(name="Charizard", level=50, id=6, shiny=False, gender="M", attacks=["Slash"])
 
     settings_mock = MagicMock()
     mock_settings_dict = {
@@ -1110,7 +1152,8 @@ def test_mobile_bridge_commit_replay_outcome(temp_env):
          patch("Ankimon.functions.encounter_functions.save_caught_pokemon") as mock_save_caught, \
          patch("Ankimon.functions.encounter_functions.generate_random_pokemon") as mock_gen_random, \
          patch("Ankimon.functions.ankimon_hooks_to_poke_engine.simulate_battle_with_poke_engine", side_effect=Exception("mocked error")) as mock_simulate_battle, \
-         patch("Ankimon.menu_buttons.update_mobile_badge") as mock_update_badge:
+         patch("Ankimon.menu_buttons.update_mobile_badge") as mock_update_badge, \
+         patch("Ankimon.business.calculate_cp_from_dict", return_value=100):
 
         mock_gen_random.return_value = (
             "Pikachu", 25, 5, "Run Away", ["Electric"], 
@@ -1372,13 +1415,7 @@ def test_mobile_bridge_resolve_next_companion_override(temp_env):
     from aqt import mw
 
     mw.ankimon_db = db
-    mw.main_pokemon = MagicMock()
-    mw.main_pokemon.name = "Charizard"
-    mw.main_pokemon.level = 50
-    mw.main_pokemon.id = 6
-    mw.main_pokemon.shiny = False
-    mw.main_pokemon.gender = "M"
-    mw.main_pokemon.attacks = ["Slash"]
+    mw.main_pokemon = FakePokemon(name="Charizard", level=50, id=6, shiny=False, gender="M", attacks=["Slash"])
 
     settings_mock = MagicMock()
     mock_settings_dict = {
@@ -1504,7 +1541,7 @@ def test_resolve_chunk_limit(temp_env):
     from aqt import mw
 
     mw.ankimon_db = db
-    mw.main_pokemon = MagicMock(name="Charizard", level=50)
+    mw.main_pokemon = FakePokemon(name="Charizard", level=50, id=6, attacks=["Slash"])
     
     settings_mock = MagicMock()
     mock_settings_dict = {
@@ -1604,8 +1641,7 @@ def test_dynamic_total_reviews_calculation(temp_env):
     # Say today's get_total_reviews() from revlog is 10
     tracker_mock.get_total_reviews.return_value = 10
 
-    main_pokemon = MagicMock()
-    main_pokemon.level = 10
+    main_pokemon = FakePokemon(level=10)
     
     captured_trackers = []
     def mock_gen(level, tracker):

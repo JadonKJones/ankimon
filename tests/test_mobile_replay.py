@@ -122,7 +122,7 @@ class TestResolveNext:
         # Instead we test the queue dequeue logic by calling get_next_pending_batch directly.
         from src.Ankimon.pyobj.database_manager import AnkimonDB
         db = AnkimonDB(db_path=db_path)
-        batch = db.get_next_pending_batch(limit=2)
+        batch = db.get_next_pending_mobile_batch(limit=2)
         assert len(batch) == 2
         ids = [r["queue_id"] for r in batch] # keys in get_next_pending_mobile_batch are ["queue_id", ...]
         now_ms = int(time.time() * 1000)
@@ -142,7 +142,7 @@ class TestResolveNext:
         _make_db(db_path)
         from src.Ankimon.pyobj.database_manager import AnkimonDB
         db = AnkimonDB(db_path=db_path)
-        batch = db.get_next_pending_batch(limit=2)
+        batch = db.get_next_pending_mobile_batch(limit=2)
         assert batch == []
 
     def test_pending_count_decrements_after_each_resolve(self, tmp_path):
@@ -155,7 +155,7 @@ class TestResolveNext:
         
         # Simulate two sequential single resolves (2 reviews each)
         for _ in range(2):
-            batch = db.get_next_pending_batch(limit=2)
+            batch = db.get_next_pending_mobile_batch(limit=2)
             if not batch:
                 break
             ids = [r["queue_id"] for r in batch]

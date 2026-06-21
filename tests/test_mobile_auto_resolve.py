@@ -4,53 +4,72 @@ import pytest
 from unittest.mock import MagicMock, patch
 import types
 
+class FakePokemon:
+    def __init__(self, **kwargs):
+        self.individual_id = kwargs.get("individual_id", "active-uuid")
+        self.name = kwargs.get("name", "Pikachu")
+        self.display_name = self.name
+        self.id = kwargs.get("id", 25)
+        self.level = kwargs.get("level", 30)
+        self.attacks = kwargs.get("attacks", ["Thunderbolt"])
+        self.hp = kwargs.get("hp", 100)
+        self.max_hp = kwargs.get("max_hp", 100)
+        self.type = kwargs.get("type", ["Electric"])
+        self.base_stats = kwargs.get("base_stats", {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90})
+        self.stats = kwargs.get("stats", {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90})
+        self.ev = kwargs.get("ev", {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0})
+        self.iv = kwargs.get("iv", {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15})
+        self.ev_yield = kwargs.get("ev_yield", {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0})
+        self.tier = kwargs.get("tier", "normal")
+        self.shiny = kwargs.get("shiny", False)
+        self.held_item = kwargs.get("held_item", None)
+        self.gender = kwargs.get("gender", "M")
+        self.ability = kwargs.get("ability", "Static")
+        self.growth_rate = kwargs.get("growth_rate", "medium-fast")
+        self.friendship = kwargs.get("friendship", 50)
+        self.everstone = kwargs.get("everstone", False)
+        self.evolution_rejected = kwargs.get("evolution_rejected", False)
+        self.pokemon_defeated = kwargs.get("pokemon_defeated", 0)
+        self.is_favorite = kwargs.get("is_favorite", False)
+        self.xp = kwargs.get("xp", 0)
+
+    def invalidate_cp_cache(self):
+        pass
+
+    def to_dict(self):
+        return {
+            "individual_id": self.individual_id,
+            "name": self.name,
+            "id": self.id,
+            "level": self.level,
+            "ability": self.ability,
+            "type": self.type,
+            "base_stats": self.base_stats,
+            "stats": self.stats,
+            "attacks": self.attacks,
+            "base_experience": 112,
+            "growth_rate": self.growth_rate,
+            "ev": self.ev,
+            "iv": self.iv,
+            "gender": self.gender,
+            "battle_status": "Fighting",
+            "ev_yield": self.ev_yield,
+            "friendship": self.friendship,
+            "everstone": self.everstone,
+            "evolution_rejected": self.evolution_rejected,
+            "pokemon_defeated": self.pokemon_defeated,
+            "is_favorite": self.is_favorite,
+            "hp": self.hp,
+            "max_hp": self.max_hp,
+            "shiny": self.shiny,
+            "tier": self.tier,
+            "held_item": self.held_item,
+            "xp": self.xp,
+        }
+
 # Import test_database_manager first (which triggers its setup_mocks() and writes over sys.modules)
 from tests.test_database_manager import MockLogger, temp_env
 
-# Restore resources, utils and singletons immediately so subsequent imports load normally!
-import importlib.util
-from pathlib import Path
-_src = Path(__file__).parent.parent / "src"
-
-res_spec = importlib.util.spec_from_file_location(
-    "Ankimon.resources", _src / "Ankimon" / "resources.py"
-)
-resources = importlib.util.module_from_spec(res_spec)
-sys.modules["Ankimon.resources"] = resources
-try:
-    res_spec.loader.exec_module(resources)
-except Exception:
-    pass
-
-utils_spec = importlib.util.spec_from_file_location(
-    "Ankimon.utils", _src / "Ankimon" / "utils.py"
-)
-utils_mod = importlib.util.module_from_spec(utils_spec)
-sys.modules["Ankimon.utils"] = utils_mod
-try:
-    utils_spec.loader.exec_module(utils_mod)
-except Exception:
-    pass
-
-sing_spec = importlib.util.spec_from_file_location(
-    "Ankimon.singletons", _src / "Ankimon" / "singletons.py"
-)
-sing_mod = importlib.util.module_from_spec(sing_spec)
-sys.modules["Ankimon.singletons"] = sing_mod
-try:
-    sing_spec.loader.exec_module(sing_mod)
-except Exception:
-    pass
-
-# Force reload encounter_functions and shop_obj so they import clean dependencies
-sys.modules.pop("Ankimon.functions.pokedex_functions", None)
-sys.modules.pop("Ankimon.functions.encounter_functions", None)
-sys.modules.pop("Ankimon.functions.learnset_retrieval", None)
-sys.modules.pop("Ankimon.functions.mobile_sync", None)
-sys.modules.pop("Ankimon.ankimon_items_web.shop_obj", None)
-
-# Ensure aqt.theme is mocked to avoid ImportError when shop_obj is imported
-sys.modules["aqt.theme"] = MagicMock()
 
 
 def test_serialize_settings_list_with_dict():
@@ -269,10 +288,7 @@ def test_mobile_cumulative_cash_rewards(temp_env):
     from unittest.mock import MagicMock, patch
 
     mw.ankimon_db = db
-    mw.main_pokemon = MagicMock()
-    mw.main_pokemon.level = 30
-    mw.main_pokemon.id = 25
-    mw.main_pokemon.attacks = ["Thunderbolt"]
+    mw.main_pokemon = FakePokemon(name="Pikachu", level=30, id=25, attacks=["Thunderbolt"])
 
     settings_mock = MagicMock()
     # Payout is 10 cash every 5 reviews
@@ -317,6 +333,7 @@ def test_mobile_cumulative_cash_rewards(temp_env):
         # Resolve Battle 1 (2 reviews): counter becomes 2, cash is 0
         bridge.resolveNext()
         res1 = bridge.commitReplayOutcome("defeat")
+        print("RES1 VALUE IS:", res1)
         assert res1["cash_gained"] == 0
         assert mock_settings_dict["trainer.cash"] == 0
         assert mock_settings_dict["trainer.mobile_reviews_resolved_since_payout"] == 2
@@ -339,7 +356,6 @@ def test_mobile_cumulative_cash_rewards(temp_env):
 def test_commit_replay_outcome_override_companion(temp_env):
     db, _ = temp_env
     from Ankimon.ankimon_items_web.shop_obj import MobileBridge
-    from Ankimon.pyobj.pokemon_obj import PokemonObject
     from aqt import mw
     from unittest.mock import MagicMock, patch
 
@@ -372,7 +388,7 @@ def test_commit_replay_outcome_override_companion(temp_env):
         "gender": "M",
     }
     db.save_pokemon(active_pika)
-    mw.main_pokemon = PokemonObject(**active_pika)
+    mw.main_pokemon = FakePokemon(**active_pika)
 
     # Setup override companion (Bulbasaur)
     override_bulba = {
@@ -481,8 +497,7 @@ def test_auto_resolve_xp_attribution_multi_companion(temp_env):
     db.set_main_pokemon("active-uuid")
     
     # Mock mw.main_pokemon
-    from Ankimon.pyobj.pokemon_obj import PokemonObject
-    mw.main_pokemon = PokemonObject(**active_pika)
+    mw.main_pokemon = FakePokemon(**active_pika)
 
     # Inactive/Team companion (Bulbasaur)
     override_bulba = {

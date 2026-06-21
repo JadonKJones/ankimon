@@ -1266,10 +1266,6 @@ class AnkimonDB:
         keys = ["queue_id", "revlog_id", "card_id", "ease", "review_time", "review_type"]
         return [dict(zip(keys, r)) for r in rows]
 
-    def get_next_pending_batch(self, limit: int = 1) -> list[dict]:
-        """Alias for get_next_pending_mobile_batch (used in tests)."""
-        return self.get_next_pending_mobile_batch(limit)
-
     def mark_mobile_battle_resolved(self, queue_id: int) -> None:
         import time
         now = int(time.time() * 1000)
@@ -1296,7 +1292,7 @@ class AnkimonDB:
             return True
 
         def _clean_val(v, default):
-            if v is None or v.__class__.__name__ == "MagicMock":
+            if v is None:
                 return default
             return v
 

@@ -45,30 +45,27 @@ def _parse_cards_per_round(settings_obj) -> tuple[int, int]:
 def _compute_initial_reviews(db, tracker, day_cutoff: int) -> int:
     """Computes the adjusted total review count for encounter seeding based on day_cutoff."""
     initial_reviews = tracker.get_total_reviews() if tracker else 0
-    if initial_reviews.__class__.__name__ == "MagicMock":
-        initial_reviews = 0
-    else:
-        try:
-            if db:
-                cutoff_ms = (day_cutoff - 86400) * 1000
-                
-                cursor = db.execute(
-                    "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 0 AND revlog_id >= ?",
-                    (cutoff_ms,)
-                )
-                row = cursor.fetchone()
-                unresolved_today = row[0] if row else 0
-                
-                cursor2 = db.execute(
-                    "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 1 AND resolved_at >= ? AND revlog_id < ?",
-                    (cutoff_ms, cutoff_ms)
-                )
-                row2 = cursor2.fetchone()
-                resolved_today_past = row2[0] if row2 else 0
-                
-                initial_reviews = max(0, initial_reviews - unresolved_today + resolved_today_past)
-        except Exception:
-            pass
+    try:
+        if db:
+            cutoff_ms = (day_cutoff - 86400) * 1000
+            
+            cursor = db.execute(
+                "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 0 AND revlog_id >= ?",
+                (cutoff_ms,)
+            )
+            row = cursor.fetchone()
+            unresolved_today = row[0] if row else 0
+            
+            cursor2 = db.execute(
+                "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 1 AND resolved_at >= ? AND revlog_id < ?",
+                (cutoff_ms, cutoff_ms)
+            )
+            row2 = cursor2.fetchone()
+            resolved_today_past = row2[0] if row2 else 0
+            
+            initial_reviews = max(0, initial_reviews - unresolved_today + resolved_today_past)
+    except Exception:
+        pass
     return initial_reviews
 
 def _generate_encounter(level: int, tracker, collected_ids=None, settings_obj=None, pokedex_cache=None) -> dict | None:
@@ -111,13 +108,6 @@ def _generate_encounter(level: int, tracker, collected_ids=None, settings_obj=No
         nature = "serious"
     finally:
         utils.load_collected_pokemon_ids = orig_load_ids
-
-    # MagicMock sanitization wrapping
-    if pkmn_id.__class__.__name__ == "MagicMock": pkmn_id = 25
-    if pkmn_lvl.__class__.__name__ == "MagicMock": pkmn_lvl = 5
-    if pkmn_shiny.__class__.__name__ == "MagicMock": pkmn_shiny = False
-    if pkmn_tier.__class__.__name__ == "MagicMock": pkmn_tier = "Normal"
-    if base_exp.__class__.__name__ == "MagicMock": base_exp = 112
 
     return {
         "name": pkmn_name,
@@ -287,9 +277,6 @@ def load_active_team_clones(ankimon_db, settings_obj, main_pokemon_fallback) -> 
     def heal_clone(p):
         p_clone = make_safe_clone(p)
             
-        if p.__class__.__name__ == "MagicMock":
-            return p_clone
-
         max_hp_val = getattr(p_clone, "max_hp", 100)
         if isinstance(max_hp_val, (int, float)):
             p_clone.hp = max_hp_val
@@ -350,14 +337,10 @@ def select_best_companion(team_clones: list, enemy_pokemon) -> object:
 
     def get_hp_safe(c):
         val = getattr(c, "hp", 100)
-        if val.__class__.__name__ == "MagicMock":
-            return 100.0
         return float(val) if isinstance(val, (int, float)) else 100.0
 
     def get_max_hp_safe(c):
         val = getattr(c, "max_hp", None) or getattr(c, "hp", 100)
-        if val.__class__.__name__ == "MagicMock":
-            return 100.0
         return float(val) if isinstance(val, (int, float)) else 100.0
 
     # Revive all if the whole team has fainted
@@ -375,8 +358,6 @@ def select_best_companion(team_clones: list, enemy_pokemon) -> object:
                     pass
 
     enemy_type = getattr(enemy_pokemon, "type", ["Normal"])
-    if enemy_type.__class__.__name__ == "MagicMock":
-        enemy_type = ["Normal"]
 
     best_clone = None
     best_score = -1.0
@@ -387,15 +368,11 @@ def select_best_companion(team_clones: list, enemy_pokemon) -> object:
             continue  # Skip fainted
 
         stats = getattr(c, "stats", {}) or {}
-        if stats.__class__.__name__ == "MagicMock":
-            stats = {}
         atk = float(stats.get("atk", 10) or 10)
         spa = float(stats.get("spa", 10) or 10)
         spe = float(stats.get("spe", 10) or 10)
 
         c_type = getattr(c, "type", ["Normal"])
-        if c_type.__class__.__name__ == "MagicMock":
-            c_type = ["Normal"]
 
         # Retrieve moves
         moves = getattr(c, "attacks", None)
@@ -406,7 +383,7 @@ def select_best_companion(team_clones: list, enemy_pokemon) -> object:
                 moves = []
         if not moves:
             moves = getattr(c, "moves", [])
-        if not moves or moves.__class__.__name__ == "MagicMock":
+        if not moves:
             moves = ["Tackle"]
 
         move_scores = []
@@ -435,8 +412,6 @@ def select_best_companion(team_clones: list, enemy_pokemon) -> object:
 
             # Move type compatibility against the enemy (multiplied for dual types, real multipliers)
             move_type_mult = get_real_move_effectiveness(move_type, enemy_type)
-            if move_type_mult.__class__.__name__ == "MagicMock":
-                move_type_mult = 1.0
 
             # STAB (1.5x if move matches companion's type)
             stab = 1.5 if move_type in c_type else 1.0
@@ -529,13 +504,13 @@ def run_mobile_battles(
             levels = []
             for c in team_clones:
                 lvl = getattr(c, "level", None)
-                if lvl is not None and lvl.__class__.__name__ != "MagicMock" and isinstance(lvl, (int, float)):
+                if lvl is not None and isinstance(lvl, (int, float)):
                     levels.append(int(lvl))
             if levels:
                 main_pokemon_level = max(levels)
         elif main_pokemon:
             lvl = getattr(main_pokemon, "level", 5)
-            if lvl.__class__.__name__ != "MagicMock" and isinstance(lvl, (int, float)):
+            if isinstance(lvl, (int, float)):
                 main_pokemon_level = int(lvl)
 
         import random
@@ -578,8 +553,6 @@ def run_mobile_battles(
                 if getattr(tc, "individual_id", None) == companion_override_id:
                     if getattr(tc, "hp", 0) <= 0:
                         max_hp_val = getattr(tc, "max_hp", 100)
-                        if max_hp_val.__class__.__name__ == "MagicMock":
-                            max_hp_val = 100
                         tc.hp = max_hp_val
                         if hasattr(tc, "current_hp"):
                             tc.current_hp = max_hp_val
@@ -637,9 +610,7 @@ def run_mobile_battles(
             chunk_idx += cards_per_round
 
             companion_max_hp = getattr(main_pokemon_clone, "max_hp", 100)
-            if companion_max_hp.__class__.__name__ == "MagicMock": companion_max_hp = 100
             enemy_max_hp = getattr(current_enemy_pokemon, "max_hp", 100)
-            if enemy_max_hp.__class__.__name__ == "MagicMock": enemy_max_hp = 100
 
             # Select moves
             main_attacks = getattr(main_pokemon_clone, "attacks", None)
@@ -660,7 +631,7 @@ def run_mobile_battles(
             turn_multiplier = total_points / max_points if max_points > 0 else 1.0
 
             orig_multiplier = 1.0
-            has_tracker = tracker and hasattr(tracker, "multiplier") and tracker.__class__.__name__ != "MagicMock"
+            has_tracker = tracker and hasattr(tracker, "multiplier")
             if has_tracker:
                 orig_multiplier = tracker.multiplier
                 tracker.multiplier = turn_multiplier
@@ -677,11 +648,7 @@ def run_mobile_battles(
                 if has_tracker: tracker.multiplier = orig_multiplier
 
             comp_hp_val = getattr(main_pokemon_clone, "hp", 0)
-            if comp_hp_val.__class__.__name__ == "MagicMock":
-                comp_hp_val = 100
             enemy_hp_val = getattr(current_enemy_pokemon, "hp", 0)
-            if enemy_hp_val.__class__.__name__ == "MagicMock":
-                enemy_hp_val = 100
             comp_hp_after = max(0, comp_hp_val)
             enemy_hp_after = max(0, enemy_hp_val)
 
@@ -701,8 +668,6 @@ def run_mobile_battles(
         gained_cash = 0
         if enemy_hp_after <= 0:
             exp = calc_experience(current_enemy_pokemon.base_experience, current_enemy_pokemon.level)
-            if exp.__class__.__name__ == "MagicMock":
-                exp = 100
             try:
                 exp = max(1, math.ceil(exp * choose_moves_penalty * lucky_egg_boost * xp_multiplier))
             except TypeError:
@@ -898,14 +863,17 @@ def run_mobile_battles(
     from ..pyobj.pokemon_obj import PokemonObject
     from ..singletons import get_evo_window
 
+    print(">>> run_mobile_battles: before _compute_initial_reviews", flush=True)
     initial_reviews = _compute_initial_reviews(
         db,
         tracker,
         day_cutoff
     )
+    print(">>> run_mobile_battles: before TempTracker", flush=True)
     temp_tracker = TempTracker(initial_reviews)
-
+    print(">>> run_mobile_battles: before load_active_team_clones", flush=True)
     team_clones = load_active_team_clones(db, settings_obj, main_pokemon)
+    print(">>> run_mobile_battles: after load_active_team_clones", flush=True)
     main_pokemon_clone = team_clones[0] if team_clones else None
 
     main_pokemon_level = 5
@@ -913,13 +881,13 @@ def run_mobile_battles(
         levels = []
         for c in team_clones:
             lvl = getattr(c, "level", None)
-            if lvl is not None and lvl.__class__.__name__ != "MagicMock" and isinstance(lvl, (int, float)):
+            if lvl is not None and isinstance(lvl, (int, float)):
                 levels.append(int(lvl))
         if levels:
             main_pokemon_level = max(levels)
     elif main_pokemon:
         lvl = getattr(main_pokemon, "level", 5)
-        if lvl.__class__.__name__ != "MagicMock" and isinstance(lvl, (int, float)):
+        if isinstance(lvl, (int, float)):
             main_pokemon_level = int(lvl)
 
     total_xp = 0
@@ -960,10 +928,7 @@ def run_mobile_battles(
 
     try:
         for review in reviews_to_process:
-            if temp_tracker.total_reviews.__class__.__name__ == "MagicMock":
-                temp_tracker.total_reviews = 0
-            else:
-                temp_tracker.total_reviews += 1
+            temp_tracker.total_reviews += 1
             total_reviews_processed += 1
             if commit and ci > 0 and total_reviews_processed % ci == 0:
                 current_battle_cash += ca
@@ -1008,7 +973,7 @@ def run_mobile_battles(
                 turn_multiplier = total_points / max_points if max_points > 0 else 1.0
 
                 orig_multiplier = 1.0
-                has_tracker = tracker and hasattr(tracker, "multiplier") and tracker.__class__.__name__ != "MagicMock"
+                has_tracker = tracker and hasattr(tracker, "multiplier")
                 if has_tracker:
                     orig_multiplier = tracker.multiplier
                     tracker.multiplier = turn_multiplier
@@ -1019,7 +984,8 @@ def run_mobile_battles(
                         mutator_full_reset, engine_state
                     )
                     engine_state, mutator_full_reset = results[1], results[4]
-                except Exception: current_enemy_pokemon.hp = 0
+                except Exception:
+                    current_enemy_pokemon.hp = 0
                 finally:
                     if has_tracker: tracker.multiplier = orig_multiplier
                     current_turn_reviews = []
@@ -1054,8 +1020,6 @@ def run_mobile_battles(
                         "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
                     })
                     cp_val = calculate_cp_from_dict(enemy_dict)
-                    if cp_val.__class__.__name__ == "MagicMock":
-                        cp_val = 100
 
                     pkmn_info = {
                         "name": str(current_enemy_pokemon.display_name),
@@ -1083,8 +1047,6 @@ def run_mobile_battles(
                             caught_pokemon.append(pkmn_info)
                     else:
                         exp = calc_experience(current_enemy_pokemon.base_experience, current_enemy_pokemon.level)
-                        if exp.__class__.__name__ == "MagicMock":
-                            exp = 100
                         try:
                             exp = max(1, math.ceil(exp * choose_moves_penalty * lucky_egg_boost * xp_multiplier))
                         except TypeError:
@@ -1255,8 +1217,6 @@ def run_mobile_battles(
         allow_to_choose_move = settings_obj.get("controls.allow_to_choose_moves") if settings_obj else False
         for enc in defeated_encounters:
             txp = POKEMON_TIERS.get(enc.get("tier", "normal").lower(), 10)
-            if txp.__class__.__name__ == "MagicMock":
-                txp = 10
             if allow_to_choose_move: txp *= 0.5
             total_trainer_xp += txp
 
@@ -1501,8 +1461,6 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
             "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
         })
         cp_val = calculate_cp_from_dict(enemy_dict)
-        if cp_val.__class__.__name__ == "MagicMock":
-            cp_val = 100
 
         # Save to mobile history
         try:

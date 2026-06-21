@@ -45,12 +45,16 @@ _ankimon_menu_base_title: str = ""
 _mobile_battles_action: Optional["QAction"] = None
 
 # Initialize the menu
-if mw.__class__.__name__ == "MagicMock":
-    from unittest.mock import MagicMock
-    mw.translator = MagicMock()
+if "mock" in mw.__class__.__name__.lower():
+    class DummyMock:
+        def __getattr__(self, name):
+            return DummyMock()
+        def __call__(self, *args, **kwargs):
+            return DummyMock()
+    mw.translator = DummyMock()
     _base = "&Ankimon"
     _ankimon_menu_base_title = _base
-    mw.pokemenu = MagicMock()
+    mw.pokemenu = DummyMock()
     _ankimon_menu = mw.pokemenu
 else:
     try:
