@@ -176,8 +176,14 @@
                     </div>
                   </div>
                   <div class="estimates-footer">
-                    <div>Auto-Battle: <span id="auto-battle-status" class="status-val">OFF</span></div>
-                    <div>Rare Catch: <span id="rare-catch-status" class="status-val">OFF</span></div>
+                    <div style="display: flex; align-items: center; gap: 4px;">
+                      Auto-Battle: <span id="auto-battle-status" class="status-val">OFF</span>
+                      <span class="info-indicator" data-tooltip="This shows your current automated battle setting. You can change this behavior in the Settings tab.">ⓘ</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 4px;">
+                      Rare Catch: <span id="rare-catch-status" class="status-val">OFF</span>
+                      <span class="info-indicator tooltip-right" data-tooltip="This shows if you have configured any auto-catch settings. You can change this behavior in the Settings tab.">ⓘ</span>
+                    </div>
                   </div>
                   <div id="caught-list-container" class="caught-list-container">
                     <h4>Captures Preview:</h4>
