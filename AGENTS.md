@@ -19,8 +19,13 @@ src/Ankimon/              # The Anki addon (symlinked to addons21/ for dev)
   profile_hooks.py        # Profile lifecycle: tip of the day, monthly pokemon, sync
   reviewer_ui.py          # Reviewer shortcut keys + bottom bar buttons
   startup.py              # Boot sequence: backup, migration, assets, first enemy
-  singletons.py           # All singleton objects (settings, pokemon, tracker, etc.)
-  resources.py            # File paths, constants, version detection
+  singletons.py           # Production composition root: build_core() + builds Qt windows + back-compat names
+  core.py                 # [NEW] aqt-free composition (build_core) — builds game state with NO Qt
+  services.py             # [NEW] service registry: db/logger/settings/game-state + UI/window ports
+  events.py               # [NEW] structured event bus — OFF by default, zero-cost; observability seam
+  ui_port.py              # [NEW] UI presenter port (HeadlessPresenter, aqt-free)
+  gui_presenter.py        # [NEW] QtPresenter — production implementation of the UI port
+  resources.py            # File paths (honors ANKIMON_USER_PATH override), constants, version detection
   business.py             # CP calculation, experience formulas
   functions/              # Game logic functions (encounters, battles, badges, etc.)
   pyobj/                  # Qt dialog classes (settings, shop, PC box, evolution, etc.)
@@ -29,8 +34,14 @@ src/Ankimon/              # The Anki addon (symlinked to addons21/ for dev)
   user_files/             # User data directory (gitignored — DB, sprites, saves)
     sprites/              # Pokemon sprites (gitignored, downloaded on first run)
     ankimon.db            # SQLite database (all user data post-migration)
-tests/                    # Test suite
+tests/                    # Test suite                          (DEV-ONLY — not shipped)
+harness/                  # Headless agent harness — DEV-ONLY, OUTSIDE src/, NEVER in the .ankiaddon
+.tier2/                   # Tier-2 env (venv + Qt libs + sprite cache + screenshots) — gitignored
 ```
+
+> **What ships:** the `.ankiaddon` is built from `src/Ankimon/` only. Everything an agent
+> uses to test (`harness/`, `tests/`, `.tier2/`) lives **outside** `src/` and is never packaged.
+> Keep it that way — see "Headless agent harness" below.
 
 ## Architecture
 
@@ -49,6 +60,33 @@ tests/                    # Test suite
 - `ankimon_tracker_obj` — Tracks reviews, battles, multipliers
 - `ankimon_db` — AnkimonDB (SQLite database manager)
 - `trainer_card` — Player profile (level, cash, badges)
+
+These now live in the `services` registry too (see below); `singletons.py` keeps the
+module-level names for back-compat.
+
+### Core / GUI split (the headless seam)
+
+The addon's own logic is being decoupled from Anki/Qt so it can run and be tested
+headless (this is what the harness drives):
+
+- `services.py` — a small registry holding db/logger/settings/translator, the live
+  game state (tracker, pokemon, trainer card, achievements) and the UI ports. **Read
+  shared objects from `services`, not by reaching into `mw`.**
+- `core.py` `build_core()` — aqt-free composition of the game state, called by BOTH
+  `singletons.py` (production — then it builds the Qt windows) and the harness (which
+  wires recording fakes instead). One source of truth so they can't drift.
+- `events.py` — a structured event bus. Off by default (a single bool check, zero
+  cost in production); the harness enables it to observe outcomes. Emit a semantic
+  event at notable moments (encounter/battle/catch/defeat/faint/levelup/evolution).
+- `ui_port.py` / `gui_presenter.py` — the UI presenter port. Input dialogs and error
+  reporting go through `services.ui` (QtPresenter in production, a headless presenter
+  in the harness) instead of importing Qt dialogs inside the logic.
+- Pure-output GUI helpers (tooltips, sounds, popups) are **self-adapting**: guard the
+  Qt import, always emit an event, render only when Qt is present.
+
+**When adding logic:** read shared state from `services`; route any new dialog/popup
+through `services.ui`; emit an event for any notable outcome; keep `aqt`/`PyQt6` out of
+core modules' top-level imports (guard or lazy-import) so they stay headless-importable.
 
 ### Data Storage
 
@@ -83,6 +121,58 @@ timeout 20 <PATH_TO_ANKI_EXECUTABLE> -b "<PATH_TO_ANKI_PROFILE>" 2>&1 || true
 
 Clean startup should show: `AnkimonDB: Database schema initialized.` and `Ankimon Startup.` with no tracebacks.
 
+## Headless agent harness (`harness/` — DEV-ONLY, never shipped)
+
+Lets an agent **play and test Ankimon with no Anki and no clicking** — and observe
+every outcome as a structured event stream. It lives in `harness/` (a sibling of
+`src/`), so it is never part of the `.ankiaddon`. Full docs: **`harness/README.md`**.
+Two tiers:
+
+**Tier 1 — fast, zero-deps (no Anki, no Qt).** Imports the aqt-free core directly and
+drives the real battle loop with recording fake windows. Runs under plain `python3`.
+Best for logic/PR validation (and CI without Qt).
+
+```bash
+python3 harness/checks/probe_leaves.py        # all core modules import without aqt
+python3 harness/scenarios/smoke_play.py       # answer cards, catch + defeat
+python3 harness/scenarios/longrun.py 2000     # thousands of turns; aggregates events
+python3 tests/test_headless_harness.py        # pytest-compatible regression test
+```
+
+**Tier 2 — the REAL add-on, headless (offscreen Qt).** Boots the genuine
+`import Ankimon` (real `__init__` → `singletons` → every real Qt window) with only the
+Anki host faked (`harness/fake_aqt.py`) and real PyQt6 in offscreen mode. Reproduces
+real-Qt behaviour — widget memory, glitches, crashes — and runs window-internal logic
+(PC box, etc.). Sudo-free setup (venv + locally-extracted Qt libs under `.tier2/`):
+
+```bash
+bash harness/setup_tier2.sh                 # one-time: venv + native Qt libs (no sudo)
+python3 harness/fetch_sprites.py            # optional: real sprite set (~600MB), pixel-accurate
+source .tier2/env.sh                        # LD_LIBRARY_PATH + QT_QPA_PLATFORM=offscreen + venv
+python -m harness.checks.probe_real_play    # boot + play the real add-on
+python -m harness.scenarios.pc_box_moves    # open the real PC box, change a Pokemon's moves
+python -m harness.scenarios.soak 5000       # memory soak — watch RSS for leaks
+python -m harness.scenarios.screenshots     # PNGs of the real battle window + PC box
+```
+
+**Using it to validate changes:**
+- Editing core/game logic → run a Tier-1 scenario (or `tests/test_headless_harness.py`)
+  and confirm: no `error` events, HP stays in `[0, max]`, caught-count/levels move as
+  expected. `drain_events()` after each action is how you observe.
+- Editing a real window → run the matching Tier-2 scenario + a screenshot.
+- Hunting bugs/leaks/regressions → fuzz actions, soak for memory, or diff the event
+  stream of two branches.
+
+**Harness rules (important):**
+- It MUST stay outside `src/`. **Never move harness/test tooling into `src/Ankimon`** —
+  that directory is the shipped add-on.
+- Dependency is one-way: `harness/` imports `src/Ankimon`, never the reverse. (`src/`
+  only *mentions* the harness in explanatory comments.)
+- `.tier2/` is gitignored (large, machine-specific); recreate with `setup_tier2.sh` /
+  `fetch_sprites.py`.
+- Tier 2 prerequisites: PyQt6 + native Qt libs (the setup script handles both without
+  sudo); poke_engine submodule initialized (`git submodule update --init`).
+
 ## Making Changes
 
 ### Rules
@@ -91,8 +181,10 @@ Clean startup should show: `AnkimonDB: Database schema initialized.` and `Ankimo
 - Run the Anki smoke test for anything touching startup, imports, or singletons.
 - Never modify user data files (anything gitignored).
 - The `__init__.py` is a thin orchestrator — add new logic to the appropriate extracted module, not to init.
-- `singletons.py` instantiates objects — don't add logic there.
+- `singletons.py` / `core.py` instantiate objects — don't add game logic there.
 - Imports from `poke_engine/` should only happen via `functions/ankimon_hooks_to_poke_engine.py` (the bridge file). The engine itself has zero ankimon imports.
+- Keep core modules aqt-free: read db/logger/settings/state from `services`, route dialogs/popups through `services.ui`, and guard or lazy-import any `aqt`/`PyQt6` so the modules stay headless-importable.
+- You can validate most logic changes WITHOUT launching Anki via the headless harness (see "Headless agent harness") — much faster than the Anki smoke test.
 
 ### PR Workflow
 
