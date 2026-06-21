@@ -126,6 +126,13 @@ Clean startup should show: `AnkimonDB: Database schema initialized.` and `Ankimo
 Lets an agent **play and test Ankimon with no Anki and no clicking** — and observe
 every outcome as a structured event stream. It lives in `harness/` (a sibling of
 `src/`), so it is never part of the `.ankiaddon`. Full docs: **`harness/README.md`**.
+
+**The one command (use this):** `python3 harness/check.py` runs the entire Tier-1 suite
+(import probes + smoke play-through + regression test) — no Anki/Qt/pip — and exits non-zero
+on any failure. CI runs it on **every PR** (`.github/workflows/harness.yml`), so the loop is:
+write code → `python3 harness/check.py` → green → review → ship. `--doctor` diagnoses setup;
+`make check` is equivalent if you have make. New `probe_*.py` files join the gate automatically.
+
 Two tiers:
 
 **Tier 1 — fast, zero-deps (no Anki, no Qt).** Imports the aqt-free core directly and

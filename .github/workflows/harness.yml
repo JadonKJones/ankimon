@@ -1,0 +1,24 @@
+name: Harness (Tier 1)
+
+# Runs the zero-dep headless harness on EVERY pull request (any base branch) and on
+# pushes to main, so every change — agent-authored or human — is validated automatically.
+# No Anki, no Qt, no pip deps: just python3 + the poke_engine submodule. Fast (seconds).
+# This is the merge gate; the heavier real-Qt suite stays in integrity_tests.yml.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  tier1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Tier-1 harness gate
+        run: python3 harness/check.py
