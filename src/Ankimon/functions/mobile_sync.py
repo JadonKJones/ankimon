@@ -11,6 +11,148 @@ def get_desktop_session_revlog_ids() -> frozenset[int]:
 def clear_desktop_session() -> None:
     _desktop_session_revlog_ids.clear()
 
+class TempTracker:
+    def __init__(self, total_reviews: int):
+        self.total_reviews = total_reviews
+        self.pokemon_encounter = 0
+        self.cards_battle_round = 0
+
+    def get_total_reviews(self) -> int:
+        return self.total_reviews
+
+def _parse_cards_per_round(settings_obj) -> tuple[int, int]:
+    """Reads settings_obj.get('battle.cards_per_round', 2) and returns (cards_per_round, cpr_split)."""
+    cards_per_round = 2
+    if settings_obj:
+        try:
+            cpr = settings_obj.get("battle.cards_per_round", 2)
+            if isinstance(cpr, int):
+                cards_per_round = cpr
+            elif isinstance(cpr, str):
+                if "-" in cpr:
+                    parts = cpr.split("-")
+                    cards_per_round = int(sum(map(int, parts)) / len(parts))
+                else:
+                    try:
+                        cards_per_round = int(cpr)
+                    except ValueError:
+                        cards_per_round = 2
+        except Exception:
+            cards_per_round = 2
+    cpr_split = cards_per_round
+    return cards_per_round, cpr_split
+
+def _compute_initial_reviews(db, tracker, day_cutoff: int) -> int:
+    """Computes the adjusted total review count for encounter seeding based on day_cutoff."""
+    initial_reviews = tracker.get_total_reviews() if tracker else 0
+    if initial_reviews.__class__.__name__ == "MagicMock":
+        initial_reviews = 0
+    else:
+        try:
+            if db:
+                cutoff_ms = (day_cutoff - 86400) * 1000
+                
+                cursor = db.execute(
+                    "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 0 AND revlog_id >= ?",
+                    (cutoff_ms,)
+                )
+                row = cursor.fetchone()
+                unresolved_today = row[0] if row else 0
+                
+                cursor2 = db.execute(
+                    "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 1 AND resolved_at >= ? AND revlog_id < ?",
+                    (cutoff_ms, cutoff_ms)
+                )
+                row2 = cursor2.fetchone()
+                resolved_today_past = row2[0] if row2 else 0
+                
+                initial_reviews = max(0, initial_reviews - unresolved_today + resolved_today_past)
+        except Exception:
+            pass
+    return initial_reviews
+
+def _generate_encounter(level: int, tracker, collected_ids=None, settings_obj=None, pokedex_cache=None) -> dict | None:
+    """Generates a random wild Pokémon encounter."""
+    import random
+    from Ankimon.functions.encounter_functions import generate_random_pokemon
+    from Ankimon import utils
+
+    if collected_ids is None:
+        try:
+            collected_ids = set(utils.load_collected_pokemon_ids())
+        except Exception:
+            collected_ids = set()
+
+    orig_load_ids = utils.load_collected_pokemon_ids
+    utils.load_collected_pokemon_ids = lambda: collected_ids
+    try:
+        res = generate_random_pokemon(level, tracker)
+        pkmn_name, pkmn_id, pkmn_lvl, ability, pkmn_type, base_stats, \
+        enemy_attacks, base_exp, growth_rate, ev, iv, gender, \
+        battle_status, battle_stats, pkmn_tier, ev_yield, pkmn_shiny, nature = res
+    except Exception:
+        pkmn_name = "Pikachu"
+        pkmn_id = 25
+        pkmn_lvl = level
+        ability = "Run Away"
+        pkmn_type = ["Electric"]
+        base_stats = {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90}
+        enemy_attacks = ["Thunderbolt"]
+        base_exp = 112
+        growth_rate = "Medium"
+        ev = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+        iv = {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15}
+        gender = "M"
+        battle_status = "Fighting"
+        battle_stats = {}
+        pkmn_tier = "Normal"
+        ev_yield = {"speed": 2}
+        pkmn_shiny = False
+        nature = "serious"
+    finally:
+        utils.load_collected_pokemon_ids = orig_load_ids
+
+    # MagicMock sanitization wrapping
+    if pkmn_id.__class__.__name__ == "MagicMock": pkmn_id = 25
+    if pkmn_lvl.__class__.__name__ == "MagicMock": pkmn_lvl = 5
+    if pkmn_shiny.__class__.__name__ == "MagicMock": pkmn_shiny = False
+    if pkmn_tier.__class__.__name__ == "MagicMock": pkmn_tier = "Normal"
+    if base_exp.__class__.__name__ == "MagicMock": base_exp = 112
+
+    return {
+        "name": pkmn_name,
+        "id": pkmn_id,
+        "level": pkmn_lvl,
+        "ability": ability,
+        "type": pkmn_type,
+        "base_stats": base_stats,
+        "attacks": enemy_attacks,
+        "base_experience": base_exp,
+        "growth_rate": growth_rate,
+        "ev": ev,
+        "iv": iv,
+        "gender": gender,
+        "battle_status": battle_status,
+        "battle_stats": battle_stats,
+        "tier": pkmn_tier,
+        "ev_yield": ev_yield,
+        "shiny": pkmn_shiny,
+        "nature": nature
+    }
+
+def _normalize_ev_yield(raw: dict) -> dict:
+    """Renames EV keys and returns the normalized dict."""
+    if not raw:
+        return {}
+    mapping = {
+        "attack": "atk",
+        "defense": "def",
+        "special-attack": "spa",
+        "special-defense": "spd",
+        "speed": "spe"
+    }
+    return {mapping.get(k.lower(), k.lower()): v for k, v in raw.items()}
+
 def detect_mobile_reviews(col, watermark_ms: int, desktop_revlog_ids: frozenset[int]) -> list[dict]:
     """
     Returns revlog rows that are:
@@ -358,23 +500,7 @@ def simulate_pending_mobile_battles(pending_reviews: list[dict], main_pokemon, s
     random.seed(seed_val)
 
     # Read settings
-    cards_per_round = 2
-    if settings_obj:
-        try:
-            cpr = settings_obj.get("battle.cards_per_round", 2)
-            if isinstance(cpr, int):
-                cards_per_round = cpr
-            elif isinstance(cpr, str):
-                if "-" in cpr:
-                    parts = cpr.split("-")
-                    cards_per_round = int(sum(map(int, parts)) / len(parts))
-                else:
-                    try:
-                        cards_per_round = int(cpr)
-                    except ValueError:
-                        cards_per_round = 2
-        except Exception:
-            cards_per_round = 2
+    cards_per_round, _ = _parse_cards_per_round(settings_obj)
 
     auto_battle_setting = 3  # Default fallback
     if settings_obj:
@@ -432,42 +558,11 @@ def simulate_pending_mobile_battles(pending_reviews: list[dict], main_pokemon, s
     encounters_count = 0
     caught_pokemon = []
     defeated_pokemon = []
-
-    # Setup temporary mock tracker to avoid modifying global state
-    class TempTracker:
-        def __init__(self, total_reviews):
-            self.total_reviews = total_reviews
-            self.pokemon_encounter = 0
-            self.cards_battle_round = 0
-        def get_total_reviews(self):
-            return self.total_reviews
-
-    initial_reviews = ankimon_tracker_obj.get_total_reviews() if ankimon_tracker_obj else 0
-    if initial_reviews.__class__.__name__ == "MagicMock":
-        initial_reviews = 0
-    else:
-        try:
-            if mw and mw.col and ankimon_db:
-                cutoff = mw.col.sched.day_cutoff
-                cutoff_ms = (cutoff - 86400) * 1000
-                
-                cursor = ankimon_db.execute(
-                    "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 0 AND revlog_id >= ?",
-                    (cutoff_ms,)
-                )
-                row = cursor.fetchone()
-                unresolved_today = row[0] if row else 0
-                
-                cursor2 = ankimon_db.execute(
-                    "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 1 AND resolved_at >= ? AND revlog_id < ?",
-                    (cutoff_ms, cutoff_ms)
-                )
-                row2 = cursor2.fetchone()
-                resolved_today_past = row2[0] if row2 else 0
-                
-                initial_reviews = max(0, initial_reviews - unresolved_today + resolved_today_past)
-        except Exception:
-            pass
+    initial_reviews = _compute_initial_reviews(
+        ankimon_db,
+        ankimon_tracker_obj,
+        mw.col.sched.day_cutoff if (mw and mw.col) else 0
+    )
     temp_tracker = TempTracker(initial_reviews)
 
     # Clone companion to isolate HP and stat stages
@@ -553,76 +648,29 @@ def simulate_pending_mobile_battles(pending_reviews: list[dict], main_pokemon, s
                     current_encounter_reviews = cards_per_round
 
                     # Generate wild pokemon
-                    try:
-                        enc_seed = review.get("revlog_id") or review.get("id") or 42
-                        random.seed(enc_seed)
-                        res = generate_random_pokemon(main_pokemon_level, temp_tracker)
-                        pkmn_name = res[0]
-                        pkmn_id = res[1]
-                        pkmn_lvl = res[2]
-                        ability = res[3]
-                        pkmn_type = res[4]
-                        base_stats = res[5]
-                        enemy_attacks = res[6]
-                        base_exp = res[7]
-                        growth_rate = res[8]
-                        ev = res[9]
-                        iv = res[10]
-                        gender = res[11]
-                        battle_status = res[12]
-                        battle_stats = res[13]
-                        pkmn_tier = res[14]
-                        ev_yield = res[15]
-                        pkmn_shiny = res[16]
-                        nature = res[17]
-                    except Exception as ge:
-                        # Safe fallback
-                        pkmn_name = "Pikachu"
-                        pkmn_id = 25
-                        pkmn_lvl = main_pokemon_level
-                        ability = "Run Away"
-                        pkmn_type = ["Electric"]
-                        base_stats = {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90}
-                        enemy_attacks = ["Thunderbolt"]
-                        base_exp = 112
-                        growth_rate = "Medium"
-                        ev = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
-                        iv = {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15}
-                        gender = "M"
-                        battle_status = "Fighting"
-                        battle_stats = {}
-                        pkmn_tier = "Normal"
-                        ev_yield = {"speed": 2}
-                        pkmn_shiny = False
-                        nature = "serious"
-
-                    # Ensure none of these are MagicMock values due to deep mock imports in unit tests
-                    if pkmn_id.__class__.__name__ == "MagicMock": pkmn_id = 25
-                    if pkmn_lvl.__class__.__name__ == "MagicMock": pkmn_lvl = 5
-                    if pkmn_shiny.__class__.__name__ == "MagicMock": pkmn_shiny = False
-                    if pkmn_tier.__class__.__name__ == "MagicMock": pkmn_tier = "Normal"
-                    if base_exp.__class__.__name__ == "MagicMock": base_exp = 112
-
+                    enc_seed = review.get("revlog_id") or review.get("id") or 42
+                    random.seed(enc_seed)
+                    enc_data = _generate_encounter(main_pokemon_level, temp_tracker, collected_ids, settings_obj, None)
                     current_enemy_pokemon = PokemonObject(
-                        type=pkmn_type,
-                        name=pkmn_name,
-                        id=pkmn_id,
-                        shiny=pkmn_shiny,
-                        level=pkmn_lvl,
-                        ability=ability,
-                        gender=gender,
-                        growth_rate=growth_rate,
+                        type=enc_data["type"],
+                        name=enc_data["name"],
+                        id=enc_data["id"],
+                        shiny=enc_data["shiny"],
+                        level=enc_data["level"],
+                        ability=enc_data["ability"],
+                        gender=enc_data["gender"],
+                        growth_rate=enc_data["growth_rate"],
                         captured_date=None,
-                        tier=pkmn_tier,
+                        tier=enc_data["tier"],
                         individual_id=str(uuid.uuid4()),
-                        base_stats=base_stats,
-                        attacks=enemy_attacks,
-                        base_experience=base_exp,
-                        ev=ev,
-                        iv=iv,
-                        battle_status=battle_status,
-                        ev_yield=ev_yield,
-                        nature=nature
+                        base_stats=enc_data["base_stats"],
+                        attacks=enc_data["attacks"],
+                        base_experience=enc_data["base_experience"],
+                        ev=enc_data["ev"],
+                        iv=enc_data["iv"],
+                        battle_status=enc_data["battle_status"],
+                        ev_yield=enc_data["ev_yield"],
+                        nature=enc_data["nature"]
                     )
                     
                     main_pokemon_clone = select_best_companion(team_clones, current_enemy_pokemon)
@@ -738,14 +786,10 @@ def simulate_pending_mobile_battles(pending_reviews: list[dict], main_pokemon, s
                     else:
                         # Defeat
                         exp = calc_experience(current_enemy_pokemon.base_experience, current_enemy_pokemon.level)
-                        exp *= choose_moves_penalty
-                        exp *= lucky_egg_boost
-                        exp *= xp_multiplier
-
                         if exp.__class__.__name__ == "MagicMock":
                             exp = 100
                         try:
-                            exp = max(1, math.ceil(exp))
+                            exp = max(1, math.ceil(exp * choose_moves_penalty * lucky_egg_boost * xp_multiplier))
                         except TypeError:
                             exp = 100
 
@@ -812,11 +856,8 @@ def simulate_pending_mobile_battles(pending_reviews: list[dict], main_pokemon, s
             extra_caught_count = int(extra_encounters * caught_ratio)
 
             est_exp = calc_experience(130, main_pokemon_level)
-            est_exp *= choose_moves_penalty
-            est_exp *= lucky_egg_boost
-            est_exp *= xp_multiplier
             try:
-                est_exp = max(1, math.ceil(est_exp))
+                est_exp = max(1, math.ceil(est_exp * choose_moves_penalty * lucky_egg_boost * xp_multiplier))
             except TypeError:
                 est_exp = 100
             total_xp += int(extra_defeated * est_exp)

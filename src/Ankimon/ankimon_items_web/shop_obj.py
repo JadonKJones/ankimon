@@ -25,6 +25,7 @@ from ..functions.pokedex_functions import (
 )
 from ..business import calculate_cp_from_dict
 from ..ankimon_profile_web.profile_data import ProfileData
+from ..functions import mobile_sync
 
 
 SCREEN_ITEMS = "items"
@@ -264,27 +265,9 @@ class MobileBridge(QObject):
             pending_count = sum(r[1] for r in rows)
 
             # Read settings for cards_per_round
+            from ..functions import mobile_sync
             settings_obj = mw.settings_obj
-            cards_per_round = 2
-            if settings_obj:
-                try:
-                    cpr = settings_obj.get("battle.cards_per_round", 2)
-                    if isinstance(cpr, int):
-                        cards_per_round = cpr
-                    elif isinstance(cpr, str):
-                        if "-" in cpr:
-                            parts = cpr.split("-")
-                            cards_per_round = int(sum(map(int, parts)) / len(parts))
-                        else:
-                            try:
-                                cards_per_round = int(cpr)
-                            except ValueError:
-                                cards_per_round = 2
-                except Exception:
-                    cards_per_round = 2
-
-            if cards_per_round <= 0:
-                cards_per_round = 2
+            cards_per_round, _ = mobile_sync._parse_cards_per_round(settings_obj)
 
             battle_count = math.ceil(pending_count / cards_per_round)
 
@@ -848,23 +831,7 @@ class MobileBridge(QObject):
 
             # Read settings
             settings_obj = mw.settings_obj
-            cards_per_round = 2
-            if settings_obj:
-                try:
-                    cpr = settings_obj.get("battle.cards_per_round", 2)
-                    if isinstance(cpr, int):
-                        cards_per_round = cpr
-                    elif isinstance(cpr, str):
-                        if "-" in cpr:
-                            parts = cpr.split("-")
-                            cards_per_round = int(sum(map(int, parts)) / len(parts))
-                        else:
-                            try:
-                                cards_per_round = int(cpr)
-                            except ValueError:
-                                cards_per_round = 2
-                except Exception:
-                    cards_per_round = 2
+            cards_per_round, _ = mobile_sync._parse_cards_per_round(settings_obj)
 
             if mode == "next":
                 # Dedicated manual replay simulation block
@@ -928,65 +895,21 @@ class MobileBridge(QObject):
                 random.seed(enc_seed)
 
 
-                class TempTracker:
-                    def __init__(self, total_reviews):
-                        self.total_reviews = total_reviews
-                        self.pokemon_encounter = 0
-                        self.cards_battle_round = 0
-                    def get_total_reviews(self):
-                        return self.total_reviews
-
-                initial_reviews = ankimon_tracker_obj.get_total_reviews() if ankimon_tracker_obj else 0
-                if initial_reviews.__class__.__name__ == "MagicMock":
-                    initial_reviews = 0
-                else:
-                    try:
-                        if mw and mw.col and db:
-                            cutoff = mw.col.sched.day_cutoff
-                            cutoff_ms = (cutoff - 86400) * 1000
-                            
-                            cursor = db.execute(
-                                "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 0 AND revlog_id >= ?",
-                                (cutoff_ms,)
-                            )
-                            row = cursor.fetchone()
-                            unresolved_today = row[0] if row else 0
-                            
-                            cursor2 = db.execute(
-                                "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 1 AND resolved_at >= ? AND revlog_id < ?",
-                                (cutoff_ms, cutoff_ms)
-                            )
-                            row2 = cursor2.fetchone()
-                            resolved_today_past = row2[0] if row2 else 0
-                            
-                            initial_reviews = max(0, initial_reviews - unresolved_today + resolved_today_past)
-                    except Exception:
-                        pass
-
+                initial_reviews = mobile_sync._compute_initial_reviews(
+                    db,
+                    ankimon_tracker_obj,
+                    mw.col.sched.day_cutoff if (mw and mw.col) else 0
+                )
                 cards_in_encounter = seed_idx + 1
-                temp_tracker = TempTracker(initial_reviews + cards_in_encounter)
+                temp_tracker = mobile_sync.TempTracker(initial_reviews + cards_in_encounter)
 
-                try:
-                    res = generate_random_pokemon(main_pokemon_level, temp_tracker)
-                    pkmn_name, pkmn_id, pkmn_lvl, ability, pkmn_type, base_stats, \
-                    enemy_attacks, base_exp, growth_rate, ev, iv, gender, \
-                    battle_status, battle_stats, pkmn_tier, ev_yield, pkmn_shiny, nature = res
-                except Exception:
-                    pkmn_name, pkmn_id, pkmn_lvl = "Pikachu", 25, main_pokemon_level
-                    ability, pkmn_type = "Run Away", ["Electric"]
-                    base_stats = {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90}
-                    enemy_attacks, base_exp, growth_rate = ["Thunderbolt"], 112, "Medium"
-                    ev = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
-                    iv = {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15}
-                    gender, battle_status, battle_stats, pkmn_tier = "M", "Fighting", {}, "Normal"
-                    ev_yield, pkmn_shiny, nature = {"speed": 2}, False, "serious"
-
+                enc_data = mobile_sync._generate_encounter(main_pokemon_level, temp_tracker, None, settings_obj, None)
                 current_enemy_pokemon = PokemonObject(
-                    type=pkmn_type, name=pkmn_name, id=pkmn_id, shiny=pkmn_shiny,
-                    level=pkmn_lvl, ability=ability, gender=gender, growth_rate=growth_rate,
-                    captured_date=None, tier=pkmn_tier, individual_id=str(uuid.uuid4()),
-                    base_stats=base_stats, attacks=enemy_attacks, base_experience=base_exp,
-                    ev=ev, iv=iv, battle_status=battle_status, ev_yield=ev_yield, nature=nature
+                    type=enc_data["type"], name=enc_data["name"], id=enc_data["id"], shiny=enc_data["shiny"],
+                    level=enc_data["level"], ability=enc_data["ability"], gender=enc_data["gender"], growth_rate=enc_data["growth_rate"],
+                    captured_date=None, tier=enc_data["tier"], individual_id=str(uuid.uuid4()),
+                    base_stats=enc_data["base_stats"], attacks=enc_data["attacks"], base_experience=enc_data["base_experience"],
+                    ev=enc_data["ev"], iv=enc_data["iv"], battle_status=enc_data["battle_status"], ev_yield=enc_data["ev_yield"], nature=enc_data["nature"]
                 )
 
                 selected_override = None
@@ -1133,8 +1056,7 @@ class MobileBridge(QObject):
                     total_trainer_xp = int(txp)
 
                     if current_enemy_pokemon.ev_yield:
-                        for k, v in current_enemy_pokemon.ev_yield.items():
-                            sk = {"attack":"atk","defense":"def","special-attack":"spa","special-defense":"spd","speed":"spe"}.get(k, k)
+                        for sk, v in mobile_sync._normalize_ev_yield(current_enemy_pokemon.ev_yield).items():
                             if sk in accumulated_evs: accumulated_evs[sk] += v
 
                     gained_cash = 0
@@ -1288,41 +1210,12 @@ class MobileBridge(QObject):
             from ..pyobj.pokemon_obj import PokemonObject
             from ..singletons import get_evo_window
 
-            class TempTracker:
-                def __init__(self, total_reviews):
-                    self.total_reviews = total_reviews
-                    self.pokemon_encounter = 0
-                    self.cards_battle_round = 0
-                def get_total_reviews(self):
-                    return self.total_reviews
-
-            initial_reviews = ankimon_tracker_obj.get_total_reviews() if ankimon_tracker_obj else 0
-            if initial_reviews.__class__.__name__ == "MagicMock":
-                initial_reviews = 0
-            else:
-                try:
-                    if mw and mw.col and db:
-                        cutoff = mw.col.sched.day_cutoff
-                        cutoff_ms = (cutoff - 86400) * 1000
-                        
-                        cursor = db.execute(
-                            "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 0 AND revlog_id >= ?",
-                            (cutoff_ms,)
-                        )
-                        row = cursor.fetchone()
-                        unresolved_today = row[0] if row else 0
-                        
-                        cursor2 = db.execute(
-                            "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 1 AND resolved_at >= ? AND revlog_id < ?",
-                            (cutoff_ms, cutoff_ms)
-                        )
-                        row2 = cursor2.fetchone()
-                        resolved_today_past = row2[0] if row2 else 0
-                        
-                        initial_reviews = max(0, initial_reviews - unresolved_today + resolved_today_past)
-                except Exception:
-                    pass
-            temp_tracker = TempTracker(initial_reviews)
+            initial_reviews = mobile_sync._compute_initial_reviews(
+                db,
+                ankimon_tracker_obj,
+                mw.col.sched.day_cutoff if (mw and mw.col) else 0
+            )
+            temp_tracker = mobile_sync.TempTracker(initial_reviews)
 
             from ..functions.mobile_sync import load_active_team_clones, select_best_companion
             team_clones = load_active_team_clones(db, settings_obj, main_pokemon)
@@ -1387,29 +1280,15 @@ class MobileBridge(QObject):
 
                         if current_enemy_pokemon is None:
                             encounters_fought += 1
-                            try:
-                                enc_seed = review.get("revlog_id") or review.get("id") or 42
-                                random.seed(enc_seed)
-                                res = generate_random_pokemon(main_pokemon_level, temp_tracker)
-                                pkmn_name, pkmn_id, pkmn_lvl, ability, pkmn_type, base_stats, \
-                                enemy_attacks, base_exp, growth_rate, ev, iv, gender, \
-                                battle_status, battle_stats, pkmn_tier, ev_yield, pkmn_shiny, nature = res
-                            except Exception:
-                                pkmn_name, pkmn_id, pkmn_lvl = "Pikachu", 25, main_pokemon_level
-                                ability, pkmn_type = "Run Away", ["Electric"]
-                                base_stats = {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90}
-                                enemy_attacks, base_exp, growth_rate = ["Thunderbolt"], 112, "Medium"
-                                ev = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
-                                iv = {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15}
-                                gender, battle_status, battle_stats, pkmn_tier = "M", "Fighting", {}, "Normal"
-                                ev_yield, pkmn_shiny, nature = {"speed": 2}, False, "serious"
-
+                            enc_seed = review.get("revlog_id") or review.get("id") or 42
+                            random.seed(enc_seed)
+                            enc_data = mobile_sync._generate_encounter(main_pokemon_level, temp_tracker, None, settings_obj, None)
                             current_enemy_pokemon = PokemonObject(
-                                type=pkmn_type, name=pkmn_name, id=pkmn_id, shiny=pkmn_shiny,
-                                level=pkmn_lvl, ability=ability, gender=gender, growth_rate=growth_rate,
-                                captured_date=None, tier=pkmn_tier, individual_id=str(uuid.uuid4()),
-                                base_stats=base_stats, attacks=enemy_attacks, base_experience=base_exp,
-                                ev=ev, iv=iv, battle_status=battle_status, ev_yield=ev_yield, nature=nature
+                                type=enc_data["type"], name=enc_data["name"], id=enc_data["id"], shiny=enc_data["shiny"],
+                                level=enc_data["level"], ability=enc_data["ability"], gender=enc_data["gender"], growth_rate=enc_data["growth_rate"],
+                                captured_date=None, tier=enc_data["tier"], individual_id=str(uuid.uuid4()),
+                                base_stats=enc_data["base_stats"], attacks=enc_data["attacks"], base_experience=enc_data["base_experience"],
+                                ev=enc_data["ev"], iv=enc_data["iv"], battle_status=enc_data["battle_status"], ev_yield=enc_data["ev_yield"], nature=enc_data["nature"]
                             )
                             selected_override = None
                             if mode == "next" and companion_id:
@@ -1494,8 +1373,7 @@ class MobileBridge(QObject):
                                 total_trainer_xp = int(txp)
 
                                 if current_enemy_pokemon.ev_yield:
-                                    for k, v in current_enemy_pokemon.ev_yield.items():
-                                        sk = {"attack":"atk","defense":"def","special-attack":"spa","special-defense":"spd","speed":"spe"}.get(k, k)
+                                    for sk, v in mobile_sync._normalize_ev_yield(current_enemy_pokemon.ev_yield).items():
                                         if sk in accumulated_evs: accumulated_evs[sk] += v
 
                                 from ..functions.sprite_functions import get_relative_sprite_path
@@ -1595,8 +1473,7 @@ class MobileBridge(QObject):
                                     total_xp += exp
                                     defeated_encounters.append({"tier": current_enemy_pokemon.tier})
                                     if current_enemy_pokemon.ev_yield:
-                                        for k, v in current_enemy_pokemon.ev_yield.items():
-                                            sk = {"attack":"atk","defense":"def","special-attack":"spa","special-defense":"spd","speed":"spe"}.get(k, k)
+                                        for sk, v in mobile_sync._normalize_ev_yield(current_enemy_pokemon.ev_yield).items():
                                             if sk in accumulated_evs: accumulated_evs[sk] += v
                                     last_outcome = "defeated"
 
@@ -1709,8 +1586,7 @@ class MobileBridge(QObject):
                     if cid not in companion_evs:
                         companion_evs[cid] = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
                     ev_yield = entry.get("ev_yield", {})
-                    for k, v in ev_yield.items():
-                        sk = {"attack":"atk","defense":"def","special-attack":"spa","special-defense":"spd","speed":"spe"}.get(k, k)
+                    for sk, v in mobile_sync._normalize_ev_yield(ev_yield).items():
                         if sk in companion_evs[cid]:
                             companion_evs[cid][sk] += v
 
