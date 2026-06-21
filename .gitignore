@@ -44,3 +44,5 @@ src/Ankimon/user_files/json/*
 # Source of truth: https://github.com/h0tp-ftw/ankimon-sprites
 src/Ankimon/user_files/sprites/
 src/Ankimon/user_files/update_state.json
+tests/encounter_weighting_simulations/simulation_report.txt
+tests/encounter_weighting_simulations/simulation_results.json
