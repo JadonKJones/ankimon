@@ -38,9 +38,10 @@ python3 harness/checks/probe_leaves.py      # 26 core modules import aqt-free
 python3 harness/checks/probe_core.py        # build_core() boots the whole game state
 
 # Scripted play sessions
-python3 harness/scenarios/smoke_play.py     # answer cards, catch + defeat
-python3 harness/scenarios/auto_battle.py    # automatic_battle modes 1/2/3
-python3 harness/scenarios/economy.py        # cash + buying items
+python3 harness/scenarios/smoke_play.py       # answer cards, catch + defeat
+python3 harness/scenarios/auto_battle.py      # automatic_battle modes 1/2/3
+python3 harness/scenarios/economy.py          # cash + buying items
+python3 harness/scenarios/profile_battles.py 10000   # cProfile + DB queries + memory
 
 # Interactive REPL — one JSON request per line in, one JSON response per line out
 python3 -m harness.server
@@ -140,6 +141,35 @@ d.defeat()                    # or d.catch()  -> spawns the next encounter
 | `drain_events()` | events since the last drain |
 
 Each action returns the events it produced; `get_state()` returns the snapshot.
+
+## Profiling a workload (`harness/diagnostics.py`)
+
+Wrap any sequence of actions and get a machine-readable report — **DB queries**
+(grouped by normalized statement, so an N+1 collapses to one big-count row),
+**cProfile** hotspots, **memory** (RSS delta + tracemalloc top allocators), and
+wall time:
+
+```python
+from harness.driver import Driver
+from harness.diagnostics import profile
+
+d = Driver(settings_overrides={"battle.cards_per_round": 1})
+with profile(d, label="10k battles", memory=True) as report:
+    for _ in range(10_000):
+        d.answer("good")
+        if d.services.enemy_pokemon.hp <= 0:
+            d.catch()
+report.print()          # human-readable; report.as_dict() for assertions
+```
+
+Or just: `python3 harness/scenarios/profile_battles.py 10000`.
+
+**Read it right:** the **query counts** and the **cProfile shape** are
+hardware-independent — they tell you *where* the cost is and *how it scales*
+(e.g. queries growing per page = an N+1; `copy.deepcopy` dominating = state-copy
+churn), which is what you actually fix. **Wall time and RSS are indicative on this
+box only** — for the felt milliseconds, measure the real window on real hardware.
+This profiles the data/logic layer, not Qt rendering.
 
 ## For agents: events, long-horizon runs, and time
 

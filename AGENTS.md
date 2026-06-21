@@ -162,6 +162,10 @@ python -m harness.scenarios.screenshots     # PNGs of the real battle window + P
 - Editing a real window → run the matching Tier-2 scenario + a screenshot.
 - Hunting bugs/leaks/regressions → fuzz actions, soak for memory, or diff the event
   stream of two branches.
+- Profiling perf/leaks → wrap a workload in `harness/diagnostics.py` `profile(d, memory=True)`
+  (or `scenarios/profile_battles.py N`) for DB-query counts (spots N+1s/rescans), cProfile
+  hotspots, and RSS/tracemalloc growth. Query counts + cProfile shape are hardware-independent;
+  wall/RSS are indicative on this box, not the user's felt latency.
 - Long-horizon: the session is persistent — issue thousands of sequential actions
   (`longrun.py` / `soak.py` do 10k+; ~900 turns/s in Tier 1). Real-time delays are
   skipped (full speed); the **calendar** is controllable — pass `clock_start=datetime(...)`
