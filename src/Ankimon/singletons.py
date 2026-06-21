@@ -1,33 +1,31 @@
 """
-singletons.py
+singletons.py — the production composition root (Anki / Qt).
 
-This module groups up some of the global variables that originally wer ein the __init__.py.
-This module, hopefully, does not have vocation to remain permanently. This is but a transition step
-in the splitting of the __init__.py file.
+Originally this module both *built* every Ankimon object and *held* it as a
+module global. It has since been split:
 
-More detailed explanation if needed:
-- Any important classes/functions
-- Special behaviors, assumptions, or usage notes
+* The aqt-free core (logger, DB, settings, translator, the Pokemon, trainer
+  card, tracker, achievements) is built by :func:`Ankimon.core.build_core`.
+* This module builds the Qt **windows** on top of that core and registers
+  everything — core objects, GUI windows, and the Qt UI presenter — in the
+  service registry (:mod:`Ankimon.services`).
 
-Author: Axil
-Created: 2025-06-03 (YYY-MM-DD)
+It also keeps the historical module-level names (``settings_obj``, ``logger``,
+``test_window``, …) and the ``mw.<service>`` shims so the not-yet-migrated
+importers and ``__init__.py`` keep working unchanged.
+
+The agent harness is the *other* root: it calls the same ``build_core()`` but
+wires recording fakes + the headless presenter instead of the Qt windows below.
+
+Author: Axil (original); split into core/gui 2026-06.
 """
-
-import json
-import uuid
 
 from aqt import mw
 
-from .pyobj.ankimon_tracker import AnkimonTracker
-from .pyobj.settings import Settings
+# GUI window/widget classes (all import Qt).
 from .pyobj.settings_window import SettingsWindow
-from .pyobj.pokemon_obj import PokemonObject
-from .pyobj.InfoLogger import ShowInfoLogger
-from .pyobj.trainer_card import TrainerCard
-from .pyobj.translator import Translator
 from .pyobj.test_window import TestWindow
 from .pyobj.achievement_window import AchievementWindow
-from .pyobj.settings_window import SettingsWindow
 from .pyobj.ankimon_tracker_window import AnkimonTrackerWindow
 from .pyobj.ankimon_shop import PokemonShopManager
 from .pokedex.pokedex_obj import Pokedex
@@ -36,7 +34,6 @@ from .pyobj.evolution_window import EvoWindow
 from .pyobj.starter_window import StarterWindow
 from .pyobj.item_window import ItemWindow
 from .pyobj.pc_box import PokemonPC
-from .pyobj.database_manager import get_db
 from .gui_entities import (
     License,
     Credits,
@@ -45,124 +42,43 @@ from .gui_entities import (
     Pokedex_Widget,
     Version_Dialog,
 )
-from .functions.update_main_pokemon import update_main_pokemon
-from .functions.badges_functions import populate_achievements_from_badges
 from .resources import addon_dir
 from .services import services
+from .core import build_core, bind_runtime_globals
+from .gui_presenter import QtPresenter
 
-# start loggerobject for Ankimon
-logger = ShowInfoLogger()
+# --- Core (aqt-free) composition. Populates services.{db,logger,settings,
+#     translator,tracker,main_pokemon,enemy_pokemon,trainer_card,achievements}. ---
+_core = build_core()
+logger = _core.logger
+ankimon_db = _core.ankimon_db
+settings_obj = _core.settings_obj
+translator = _core.translator
+main_pokemon = _core.main_pokemon
+mainpokemon_empty = _core.mainpokemon_empty
+enemy_pokemon = _core.enemy_pokemon
+trainer_card = _core.trainer_card
+ankimon_tracker_obj = _core.ankimon_tracker_obj
+achievements = _core.achievements
 
-# Initialize the database (this also runs migrations on first startup)
-ankimon_db = get_db(logger)
-# Publish the DB on mw BEFORE Settings() — Settings.load_config / save_config gate
-# their DB access on hasattr(mw, 'ankimon_db'), so setting it later means the very
-# first load_config on every startup silently falls through to defaults and the
-# subsequent save_config skips the write. That clobbered the user's saved
-# settings on every save and made them appear to "revert" after restart.
+# Back-compat shims: modules not yet migrated still read mw.<service>. These
+# mirror the registry and are removed file-by-file as call sites move to
+# `services`. (NOTE: menu_buttons.py re-creates mw.translator at its own import
+# time; __init__.py re-points mw.translator back afterwards. Both go away when
+# menu_buttons is migrated.)
 mw.ankimon_db = ankimon_db
+mw.logger = logger
+mw.translator = translator
+mw.settings_obj = settings_obj
 
-# Create the Settings object
-settings_obj = Settings()
-
-# Pass the correct attributes to SettingsWindow
+# --- GUI windows (Qt), built on top of the core objects above. ---
 settings_window = SettingsWindow(
     config=settings_obj.config,  # Use settings_obj.config instead of settings_obj.settings.config
     set_config_callback=settings_obj.set,
     save_config_callback=settings_obj.save_config,
     load_config_callback=settings_obj.load_config,
 )
-
-# Init Translator
-translator = Translator(language=int(settings_obj.get("misc.language")))
-
-# --- Composition root: populate the aqt-free service registry ONCE. ---
-# This is the single source of truth for the addon's own services. Code should
-# read these from `services` (see services.py) rather than reaching into `mw`,
-# which is what makes that code testable without an Anki runtime.
-services.populate(
-    db=ankimon_db,
-    logger=logger,
-    settings=settings_obj,
-    translator=translator,
-)
-
-# Back-compat shims: modules not yet migrated still read `mw.<service>`. These
-# mirror the registry and are removed file-by-file as call sites move to
-# `services`. Do NOT add new writes here — populate the registry above instead.
-# (NOTE: menu_buttons.py:45 re-creates mw.translator at its own import time;
-# __init__.py re-points mw.translator back to this registry instance afterwards.
-# Both that clobber and the compensation go away when menu_buttons is migrated.)
 mw.settings_ankimon = settings_window
-mw.logger = logger
-mw.translator = translator
-mw.settings_obj = settings_obj
-# mw.ankimon_db is already set above (before Settings() construction)
-
-main_pokemon, mainpokemon_empty = update_main_pokemon()
-
-enemy_pokemon = PokemonObject(
-    name="Rattata",  # Name of the Pokémon
-    shiny=False,  # Shiny status (False for normal appearance)
-    id=19,  # ID number
-    level=5,  # Level
-    ability="Run Away",  # Ability specific to Rattata
-    type=["Normal"],  # Type (Normal type for Rattata)
-    stats={  # Base stats for Rattata
-        "hp": 39,
-        "atk": 52,
-        "def": 43,
-        "spa": 60,
-        "spd": 50,
-        "spe": 65,
-        "xp": 101,
-    },
-    attacks=["Quick Attack", "Tackle", "Tail Whip"],  # Typical moves for Rattata
-    base_experience=58,  # Base experience points
-    growth_rate="medium-slow",  # Growth rate
-    hp=30,  # Hit points (HP)
-    ev={
-        "hp": 3,
-        "atk": 5,
-        "def": 4,
-        "spa": 1,
-        "spd": 2,
-        "spe": 3,
-    },  # EVs (Effort Values) for stats
-    iv={
-        "hp": 27,
-        "atk": 24,
-        "def": 3,
-        "spa": 24,
-        "spd": 16,
-        "spe": 21,
-    },  # IVs (Individual Values) for stats
-    gender="M",  # Gender
-    battle_status="Fighting",  # Status during battle
-    xp=0,  # XP (experience points)
-    position=(5, 5),  # Position in battle
-    tier="Normal",
-    captured_date=None,
-    individual_id=str(uuid.uuid4()),
-)
-
-# Create a sample trainer card to test
-trainer_card = TrainerCard(
-    logger,
-    main_pokemon,
-    settings_obj,
-    trainer_name=settings_obj.get("trainer.name"),
-    trainer_id="".join(filter(str.isdigit, str(uuid.uuid4()).replace("-", ""))),
-    team="Pikachu (Level 25), Charizard (Level 50), Bulbasaur (Level 15)",
-    league="Unranked",
-)
-
-ankimon_tracker_obj = AnkimonTracker(
-    trainer_card=trainer_card,
-)
-# Set Pokémon in the tracker
-ankimon_tracker_obj.set_main_pokemon(main_pokemon)
-ankimon_tracker_obj.set_enemy_pokemon(enemy_pokemon)
 
 # Create an instance of the MainWindow
 test_window = TestWindow(
@@ -201,8 +117,6 @@ license = License()
 credits = Credits()
 version_dialog = Version_Dialog()
 
-achievements = populate_achievements_from_badges({str(i): False for i in range(1, 69)})
-
 evo_window = EvoWindow(
     logger,
     settings_obj,
@@ -231,3 +145,18 @@ pokemon_pc = PokemonPC(
     settings=settings_obj,
     main_pokemon=main_pokemon,
 )
+
+# --- Register the GUI windows + the Qt UI presenter in the registry, so the
+#     core logic (battle_loop / encounter_functions) reaches them via services. ---
+services.populate(
+    ui=QtPresenter(),
+    test_window=test_window,
+    evo_window=evo_window,
+    pokemon_pc=pokemon_pc,
+    reviewer=reviewer_obj,
+)
+
+# Bind the core logic modules' bare globals (main_pokemon, settings_obj,
+# test_window, …) to the now-fully-populated registry. Must run after the
+# services.populate above so the GUI window bindings are non-None.
+bind_runtime_globals()
