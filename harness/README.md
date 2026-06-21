@@ -82,6 +82,18 @@ d.catch()            # the real reviewer catch shortcut
 d.get_state()
 ```
 
+Tier-2 scenarios (drive + see the real windows):
+
+```bash
+python -m harness.scenarios.pc_box_moves   # open the real PC box, change a caught
+                                           # Pokemon's moves (persists to DB) + screenshot
+python -m harness.scenarios.screenshots    # PNGs of the real battle window + PC box
+```
+
+`harness/screenshot.py` (`grab(widget, path)`) renders any real widget to a PNG via
+`widget.grab()` — offscreen Qt still paints to a buffer, so you get the genuine UI
+(real sprites + layout) with no display.
+
 ### Real sprites (pixel-accurate)
 
 By default a fresh profile has no sprites, so `real_env` seeds one placeholder
