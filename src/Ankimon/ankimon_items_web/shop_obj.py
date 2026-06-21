@@ -586,8 +586,17 @@ class MobileBridge(QObject):
                         time.sleep(0.1)
                         continue
 
-                    # Run _resolve_internal for this chunk
-                    res = self._resolve_internal(mode="all", limit=limit)
+                    # Run resolve_all for this chunk
+                    res = resolve_all(
+                        db=mw.ankimon_db,
+                        settings_obj=mw.settings_obj,
+                        tracker=getattr(mw, "ankimon_tracker_obj", None),
+                        trainer_card=getattr(mw, "trainer_card", None),
+                        main_pokemon=getattr(mw, "main_pokemon", None),
+                        logger=getattr(mw, "logger", None),
+                        day_cutoff=mw.col.sched.day_cutoff if (mw and mw.col) else 0,
+                        limit=limit
+                    )
                     if not res or res.get("done") or res.get("reviews_processed", 0) == 0:
                         break
                     if not res.get("success", True):
