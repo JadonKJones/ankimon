@@ -162,6 +162,11 @@ python -m harness.scenarios.screenshots     # PNGs of the real battle window + P
 - Editing a real window → run the matching Tier-2 scenario + a screenshot.
 - Hunting bugs/leaks/regressions → fuzz actions, soak for memory, or diff the event
   stream of two branches.
+- Long-horizon: the session is persistent — issue thousands of sequential actions
+  (`longrun.py` / `soak.py` do 10k+; ~900 turns/s in Tier 1). Real-time delays are
+  skipped (full speed); the **calendar** is controllable — pass `clock_start=datetime(...)`
+  and call `advance_time(days=…, hours=…)` to drive day/night evolutions, daily resets,
+  and streaks. Full **event + action reference** is in `harness/README.md`.
 
 **Harness rules (important):**
 - It MUST stay outside `src/`. **Never move harness/test tooling into `src/Ankimon`** —

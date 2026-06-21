@@ -134,10 +134,73 @@ d.defeat()                    # or d.catch()  -> spawns the next encounter
 | `set_setting(key, value)` | change a settings key (e.g. `battle.automatic_battle`) |
 | `set_move(move)` | script the move chosen next turn (needs `controls.allow_to_choose_moves`) |
 | `add_cash(n)` / `buy_item(name)` | drive the shop economy |
+| `advance_time(days=, hours=, …)` | fast-forward the controllable clock (needs `clock_start=`) — drives day/night, daily resets, streaks |
+| `time_of_day()` | Ankimon's current day/night reading |
 | `get_state()` | snapshot of the world |
 | `drain_events()` | events since the last drain |
 
 Each action returns the events it produced; `get_state()` returns the snapshot.
+
+## For agents: events, long-horizon runs, and time
+
+**Minimal loop** (Tier 1):
+
+```python
+from harness.driver import Driver
+d = Driver(settings_overrides={"battle.cards_per_round": 1})
+for _ in range(50):
+    for e in d.answer("good"):
+        if e["type"] == "error":          # a crash during play surfaces here
+            raise RuntimeError(e["exception"])
+    if d.get_state()["enemy"]["hp"] == 0:
+        d.catch()                          # or d.defeat() — spawns the next encounter
+```
+
+**Event types** (returned by each action / `drain_events()` / the REPL):
+
+| type | when | key fields |
+|---|---|---|
+| `encounter` | a wild Pokémon appears | pokemon, id, level, tier, shiny, hp, max_hp |
+| `battle` | a battle turn resolves | user, enemy, user_move, enemy_move, dmg_to_enemy, dmg_to_user, user_hp, enemy_hp, multiplier |
+| `faint` | a Pokémon faints | who (`enemy`/`main`), pokemon |
+| `catch` / `defeat` | resolution | pokemon, id, tier (catch also: shiny, nickname) |
+| `levelup` | the main levels up | pokemon, level |
+| `evolution_offered` | evolution eligible | pokemon, trigger (`level`/`friendship`), evo_id |
+| `tooltip` | on-screen battle/level text | message, color |
+| `sound` | a cry/effect would play | kind, sound / pokemon_id |
+| `hud` | HUD repaint | action |
+| `log` / `notify` | log line / would-be popup | level, message |
+| `dialog` | a move/attack/evolution choice point | dialog, options, chosen |
+| `error` | an exception in the game loop (= Anki's error dialog) | message, exception, traceback |
+| `buy` | shop purchase | item, ok, price/reason |
+
+So: drive an action, scan the returned events for `error` (a real crash), and
+assert invariants from `get_state()` (HP in `[0, max]`, caught-count grows, …).
+
+**Long-horizon (thousands of turns).** The driver and the REPL keep ONE
+persistent session, so you can issue thousands of sequential actions. `longrun.py`
+and `soak.py` do exactly that (`python3 harness/scenarios/longrun.py 10000` — ~11s
+in Tier 1; Tier 2 is slower but the same API). Drain + check events as you go.
+
+**Time.** Two different things:
+- Real-time *delays* (animations, tooltip/card timers) are **skipped** — the Qt
+  event loop isn't pumped continuously, so actions run at full CPU speed (10k
+  Tier-1 turns in ~11s). Nothing to speed up; the waiting just doesn't happen.
+- The *calendar* (`datetime.now`/`date.today`, used for day/night evolutions, the
+  daily cash reset, streaks, capture stamps) is **controllable**. Create the
+  driver with `clock_start=datetime(...)` and fast-forward with `advance_time()`:
+
+```python
+from datetime import datetime
+d = Driver(clock_start=datetime(2026, 6, 1, 12, 0))
+d.time_of_day()           # "day"
+d.advance_time(hours=10)  # -> 22:00
+d.time_of_day()           # "night"
+d.advance_time(days=7)    # a week later — streaks, daily resets, day/night evolutions
+```
+
+(`harness/clock.py` swaps in a faithful `datetime` subclass; harness-only, no
+`src/` change. Off unless you pass `clock_start`.)
 
 ## How it boots (architecture)
 
