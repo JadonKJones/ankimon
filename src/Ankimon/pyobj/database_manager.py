@@ -979,3 +979,18 @@ def get_db(logger=None) -> AnkimonDB:
     if _db_instance is None:
         _db_instance = AnkimonDB(logger)
     return _db_instance
+
+
+def reset_db() -> None:
+    """Drop the cached singleton (closing its connection).
+
+    For test / agent-harness isolation: lets a fresh ``user_path`` produce a
+    fresh database within the same process. Never called in normal Anki use.
+    """
+    global _db_instance
+    if _db_instance is not None:
+        try:
+            _db_instance.close()
+        except Exception:
+            pass
+    _db_instance = None

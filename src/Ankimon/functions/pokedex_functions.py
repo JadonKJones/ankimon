@@ -11,8 +11,12 @@ from ..resources import (
     stats_csv,
     pokemon_csv,
 )
-from aqt.utils import showWarning
-from aqt import mw
+from ..services import services
+try:
+    # Only used as a parent for the error dialog; None when headless.
+    from aqt import mw
+except Exception:
+    mw = None
 import json
 import random
 import csv
@@ -549,7 +553,7 @@ def get_pokemon_diff_lang_name(pokemon_id: int, language: int):
 def extract_ids_from_file():
     try:
         # get_all_pokemon_ids returns a set of integer IDs natively from SQLite virtual columns
-        ids = mw.ankimon_db.get_all_pokemon_ids()
+        ids = services.db.get_all_pokemon_ids()
         return sorted(list(ids))
     except Exception as e:
         show_warning_with_traceback(
@@ -580,7 +584,7 @@ def find_details_move(move_name: str) -> dict:
             return move
         else:
             move = moves_data.get("tackle")
-            showWarning(f"Move '{move_name}' not found. Returning default move 'tackle'.")
+            services.ui.warn(f"Move '{move_name}' not found. Returning default move 'tackle'.")
             return move
                 
     except Exception as e:
@@ -623,7 +627,7 @@ def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
         pokemon_id
     )  # Ensure this returns a list of possible evolutions
     if not possible_evos:
-        showWarning("No possible evos found")
+        services.ui.warn("No possible evos found")
         return None
 
     target_item = str(item_id)
@@ -658,8 +662,8 @@ def get_time_of_day():
     """Return the current time of day as 'day' or 'night' self-contained without friendship_evolution dependency."""
     try:
         from datetime import datetime, timedelta, timezone
-        from ..singletons import settings_obj
-        
+        settings_obj = services.settings  # registry-backed; no singletons/aqt import
+
         # Check if settings_obj exists and is fully initialized
         if settings_obj is None:
             return "day"
@@ -727,7 +731,7 @@ def check_evolution_for_pokemon(
             pokemon_id
         )  # Ensure this returns a list of possible evolutions
         if not possible_evos:
-            # showWarning("No possible evolutions found")
+            # services.ui.warn("No possible evolutions found")
             return None
 
     try:
@@ -754,7 +758,7 @@ def check_evolution_for_pokemon(
                         if condition == "minimumdefeated":
                             evo_defeated = safe_int(target_data.get("evoDefeated"))
                             if evo_defeated > 0:
-                                pokemon_data = mw.ankimon_db.get_pokemon(individual_id)
+                                pokemon_data = services.db.get_pokemon(individual_id)
                                 if pokemon_data:
                                     pokemon_obj = PokemonObject.from_dict(pokemon_data)
                                     if (pokemon_obj.pokemon_defeated or 0) >= evo_defeated:
@@ -813,7 +817,7 @@ def check_if_evolution_exists(pokemon_id):
         pokemon_id
     )  # Ensure this returns a list of possible evolutions
     if not possible_evos:
-        showWarning("No possible evos found")
+        services.ui.warn("No possible evos found")
         return False
     else:
         return possible_evos
@@ -840,9 +844,9 @@ def pokemon_evolves_from_id(pokemon_id):
 
         # Return the list of evolves_from_species_id or an empty list if no matches
         # if evolves_from_ids:
-        # showWarning(f"Evolves from IDs: {evolves_from_ids}")
+        # services.ui.warn(f"Evolves from IDs: {evolves_from_ids}")
         # else:
-        #    showWarning(f"No evolutions found for Pokémon ID '{pokemon_id}'")
+        #    services.ui.warn(f"No evolutions found for Pokémon ID '{pokemon_id}'")
 
         return evolves_from_ids
     except Exception as e:
@@ -874,7 +878,7 @@ def get_pokemon_evolution_data(pokemon_id):
 
         # Check if evolution data was found, log a message if not
         if not evolution_data:
-            # showWarning(f"No evolution data found for Pokémon ID '{pokemon_id}'")
+            # services.ui.warn(f"No evolution data found for Pokémon ID '{pokemon_id}'")
             pass
     except Exception as e:
         show_warning_with_traceback(
@@ -1002,7 +1006,7 @@ def return_name_for_id(pokemon_id):
             return row["identifier"]
 
         # Log a message if the item is not found
-        showWarning(f"Name for Pokemon with ID '{pokemon_id}' not found in the CSV.")
+        services.ui.warn(f"Name for Pokemon with ID '{pokemon_id}' not found in the CSV.")
         return None
     except Exception as e:
         # Log any unexpected errors
@@ -1032,7 +1036,7 @@ def return_id_for_item_name(item_name):
                 return row["id"]
 
         # Log a message if the item is not found
-        showWarning("warning", f"Item '{item_name}' not found in the CSV.")
+        services.ui.warn(f"Item '{item_name}' not found in the CSV.")
         return None
     except Exception as e:
         show_warning_with_traceback(
