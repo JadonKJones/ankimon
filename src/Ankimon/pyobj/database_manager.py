@@ -172,23 +172,12 @@ class AnkimonDB:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        # Check if database is already fully initialized to avoid redundant CREATE TABLE/INDEX statements
-        try:
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            existing_tables = {row[0] for row in cursor.fetchall()}
-            required_tables = {
-                "captured_pokemon", "items", "badges", "metadata", "team", 
-                "pokemon_history", "user_data", "config", "pending_mobile_battles",
-                "mobile_battle_history"
-            }
-            if required_tables.issubset(existing_tables):
-                cursor.execute("PRAGMA table_info(captured_pokemon)")
-                columns = {row[1] for row in cursor.fetchall()}
-                if "is_main" in columns:
-                    # Fully initialized and migrated! Skip setup.
-                    return
-        except Exception as e:
-            self._log("warning", f"Failed to check database initialization status: {e}")
+        # NOTE: do NOT early-return here based on a hard-coded "fully initialized"
+        # table set. Every statement below is idempotent (CREATE TABLE/INDEX IF NOT
+        # EXISTS, guarded ALTER TABLE), so re-running them on each init is cheap and,
+        # crucially, keeps _setup_database the single place schema migrations live.
+        # A short-circuit on an allow-list of table names would silently skip any
+        # future migration (new column/index/table) on already-initialized DBs.
 
         # Table for captured pokemon (replaces mypokemon.json AND mainpokemon.json)
         # is_main flag: 0 = not main, 1 = main pokemon
