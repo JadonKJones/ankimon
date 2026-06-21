@@ -7,10 +7,16 @@ through QWebChannel to swap content in place.
 
 import json
 import random
+import math
+import os
+import time
+import traceback
+import threading
+import base64
 from datetime import datetime
 from aqt import QDialog, QVBoxLayout, QWebEngineView, mw
 from aqt.qt import Qt, QUrl, QFrame
-from PyQt6.QtCore import QObject, pyqtSlot, QTimer
+from PyQt6.QtCore import QObject, pyqtSlot, QTimer, QByteArray
 from PyQt6.QtGui import QColor
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWidgets import QStackedWidget
@@ -256,7 +262,6 @@ class MobileBridge(QObject):
         Called by mobile.js on page load and after actions.
         """
         try:
-            import math
             db = mw.ankimon_db
             # 1. Count and ease breakdown in one GROUP BY query (lightweight)
             rows = db.execute(
@@ -423,11 +428,9 @@ class MobileBridge(QObject):
                         "simulated_reviews": sim_res.get("simulated_reviews", 0),
                         "cash": sim_res.get("cash", 0),
                     }
-                    import json
                     js = f"if (window.updateMobileEstimates) {{ window.updateMobileEstimates({json.dumps(res_est)}); }}"
                     self._w.webview_mobile.page().runJavaScript(js)
 
-                import os
                 if "PYTEST_CURRENT_TEST" in os.environ:
                     sim_res = run_sim(None)
                     estimates = {
@@ -498,7 +501,7 @@ class MobileBridge(QObject):
             with db._get_connection() as conn:
                 conn.execute(
                     "UPDATE pending_mobile_battles SET resolved=1, resolved_at=? WHERE resolved=0",
-                    (int(__import__("time").time() * 1000),)
+                    (int(time.time() * 1000),)
                 )
             from ..menu_buttons import update_mobile_badge
             update_mobile_badge(0)
@@ -582,7 +585,6 @@ class MobileBridge(QObject):
                     if getattr(self, "_bulk_stopped", False):
                         break
                     if getattr(self, "_bulk_paused", False):
-                        import time
                         time.sleep(0.1)
                         continue
 
@@ -612,16 +614,13 @@ class MobileBridge(QObject):
                     if res.get("caught_list"):
                         self._bulk_progress["caught_list"].extend(res.get("caught_list"))
                     
-                    import time
                     time.sleep(0.05)
 
             except Exception as e:
-                import traceback
                 self._bulk_progress["error"] = f"{str(e)}\n{traceback.format_exc()}"
             finally:
                 self._bulk_progress["done"] = True
 
-        import threading
         thread = threading.Thread(target=bg_resolve, daemon=True)
         thread.start()
 
@@ -1157,9 +1156,6 @@ class AnkimonItemsWeb(QDialog):
         self.activateWindow()
 
     def _restore_geometry(self):
-        import base64
-        from PyQt6.QtCore import QByteArray
-
         try:
             geo = mw.pm.profile.get("ankimon.items_web_window.geometry")
             if geo:
@@ -1168,8 +1164,6 @@ class AnkimonItemsWeb(QDialog):
             pass
 
     def _save_geometry(self):
-        import base64
-
         try:
             if not self.isMinimized():
                 mw.pm.profile["ankimon.items_web_window.geometry"] = base64.b64encode(

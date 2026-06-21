@@ -1,3 +1,11 @@
+import random
+import math
+import uuid
+import copy
+import json
+import time
+from datetime import datetime
+
 _desktop_session_revlog_ids: set[int] = set()
 MOBILE_QUEUE_CAP = 10_000
 
@@ -70,7 +78,6 @@ def _compute_initial_reviews(db, tracker, day_cutoff: int) -> int:
 
 def _generate_encounter(level: int, tracker, collected_ids=None, settings_obj=None, pokedex_cache=None) -> dict | None:
     """Generates a random wild Pokémon encounter."""
-    import random
     from .encounter_functions import generate_random_pokemon
     from .. import utils
 
@@ -223,7 +230,6 @@ def load_active_team_clones(ankimon_db, settings_obj, main_pokemon_fallback) -> 
     - None of the team members can be hydrated into PokemonObjects
     - All team members are in the inactive list
     """
-    import copy
     from ..pyobj.pokemon_obj import PokemonObject
 
     clones = []
@@ -513,10 +519,6 @@ def run_mobile_battles(
             if isinstance(lvl, (int, float)):
                 main_pokemon_level = int(lvl)
 
-        import random
-        import math
-        import uuid
-        from datetime import datetime
         from ..pyobj.pokemon_obj import PokemonObject
         from ..business import calc_experience
         from .ankimon_hooks_to_poke_engine import simulate_battle_with_poke_engine
@@ -801,10 +803,7 @@ def run_mobile_battles(
                 "total_reviews": 0, "cash": 0
             }
 
-    import random
-    import math
-    from datetime import datetime
-    import uuid
+
 
     state = random.getstate()
 
@@ -1074,7 +1073,7 @@ def run_mobile_battles(
                             if allow_to_choose_move: txp *= 0.5
                             txp = int(txp) if last_outcome == "defeated" else 0
                             history_entries_to_add.append({
-                                "timestamp": int(__import__("time").time() * 1000),
+                                "timestamp": int(time.time() * 1000),
                                 "enemy_id": current_enemy_pokemon.id,
                                 "enemy_name": current_enemy_pokemon.display_name,
                                 "enemy_level": current_enemy_pokemon.level,
@@ -1105,7 +1104,7 @@ def run_mobile_battles(
                         # Insert history for loss
                         try:
                             history_entries_to_add.append({
-                                "timestamp": int(__import__("time").time() * 1000),
+                                "timestamp": int(time.time() * 1000),
                                 "enemy_id": current_enemy_pokemon.id,
                                 "enemy_name": current_enemy_pokemon.display_name,
                                 "enemy_level": current_enemy_pokemon.level,
@@ -1134,7 +1133,7 @@ def run_mobile_battles(
             # Insert history for escaped / unfinished battle
             try:
                 history_entries_to_add.append({
-                    "timestamp": int(__import__("time").time() * 1000),
+                    "timestamp": int(time.time() * 1000),
                     "enemy_id": current_enemy_pokemon.id,
                     "enemy_name": current_enemy_pokemon.display_name,
                     "enemy_level": current_enemy_pokemon.level,
@@ -1380,10 +1379,9 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
         total_trainer_xp = outcome_data["total_trainer_xp"]
         gained_cash = outcome_data.get("gained_cash", 0)
 
-        now_ms = int(__import__("time").time() * 1000)
+        now_ms = int(time.time() * 1000)
 
         if choice == "catch":
-            from datetime import datetime
             from .encounter_functions import save_caught_pokemon
             capture_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             enemy_pokemon.captured_date = capture_time
@@ -1577,7 +1575,6 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
     from Ankimon.functions.pokemon_functions import find_experience_for_level, get_levelup_move_for_pokemon
     from Ankimon.functions.drawing_utils import tooltipWithColour
     from ..pyobj.pokemon_obj import PokemonObject
-    import random
     from .. import utils
 
     growth_rate = pkmndata.get("growth_rate", "medium-fast")
@@ -1626,7 +1623,6 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
             attacks = pkmndata.get("attacks", [])
             if isinstance(attacks, str):
                 try:
-                    import json
                     attacks = json.loads(attacks)
                 except Exception:
                     attacks = []
