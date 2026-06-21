@@ -26,6 +26,7 @@ def start_session(
     evolution_policy: str = "decline",
     event_sink=None,
     first_encounter: bool = True,
+    clock_start=None,
 ) -> SimpleNamespace:
     """Boot a headless session and return a namespace of handles for the Driver.
 
@@ -39,6 +40,12 @@ def start_session(
         user_path = tempfile.mkdtemp(prefix="ankimon_session_")
 
     bootstrap(user_path=user_path)
+
+    # Controllable clock must be installed BEFORE any Ankimon module imports
+    # `datetime` (e.g. ankimon_tracker at module top), so they pick up the fake.
+    if clock_start is not None:
+        from .clock import install_clock
+        install_clock(clock_start)
 
     # Safe to import the aqt-free core now that the stub + env are in place.
     from Ankimon.events import events

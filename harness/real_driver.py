@@ -93,6 +93,18 @@ class RealDriver:
             self.services.settings.set(key, value)
         return {"ok": True, "key": key, "value": self.services.settings.get(key)}
 
+    def advance_time(self, days=0, hours=0, minutes=0, seconds=0):
+        """Fast-forward the controllable clock (create with clock_start=datetime(...))."""
+        from .clock import advance, is_installed, now
+        if not is_installed():
+            return {"error": "clock not installed; create the RealDriver with clock_start=datetime(...)"}
+        advance(days=days, hours=hours, minutes=minutes, seconds=seconds)
+        return {"ok": True, "now": str(now())}
+
+    def time_of_day(self):
+        from Ankimon.functions.pokedex_functions import get_time_of_day
+        return get_time_of_day()
+
     # --- observation -------------------------------------------------------
 
     def drain_events(self):

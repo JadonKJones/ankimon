@@ -103,6 +103,20 @@ class Driver:
             s.settings.set("trainer.cash", cash)
         return {"ok": True, "cash": cash}
 
+    def advance_time(self, days=0, hours=0, minutes=0, seconds=0):
+        """Fast-forward the controllable clock (create the Driver with
+        clock_start=datetime(...)). Drives day/night, daily resets, streaks."""
+        from .clock import advance, is_installed, now
+        if not is_installed():
+            return {"error": "clock not installed; create the Driver with clock_start=datetime(...)"}
+        advance(days=days, hours=hours, minutes=minutes, seconds=seconds)
+        return {"ok": True, "now": str(now())}
+
+    def time_of_day(self):
+        """Ankimon's day/night reading at the current (controllable) clock."""
+        from Ankimon.functions.pokedex_functions import get_time_of_day
+        return get_time_of_day()
+
     def buy_item(self, name, item_type=None):
         """Buy an item: check cash, deduct the catalogue price, add to inventory.
 
