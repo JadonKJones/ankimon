@@ -1014,7 +1014,9 @@ def run_mobile_battles(
                     elif auto_battle_setting == 2: caught = (current_enemy_pokemon.shiny or should_catch_always)
                     elif auto_battle_setting == 3:
                         caught = (current_enemy_pokemon.id not in collected_ids or current_enemy_pokemon.shiny or should_catch_always)
-                        if caught: collected_ids.add(current_enemy_pokemon.id)
+                    
+                    if caught:
+                        collected_ids.add(current_enemy_pokemon.id)
 
                     enemy_dict = current_enemy_pokemon.to_dict()
                     enemy_dict.update({
