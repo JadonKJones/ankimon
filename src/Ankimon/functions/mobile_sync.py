@@ -912,6 +912,7 @@ def run_mobile_battles(
     encounters_fought = 0
     reviews_spent_for_resolved = 0
     resolved_encounters = 0
+    current_encounter_reviews = 0
 
     if not commit:
         reviews_to_process = reviews_list[:100]
@@ -930,12 +931,16 @@ def run_mobile_battles(
                 current_battle_cash += ca
             cards_battle_round += 1
             current_turn_reviews.append(review)
+            
+            if current_enemy_pokemon is not None:
+                current_encounter_reviews += 1
+
             if cards_battle_round >= cards_per_round or review == reviews_to_process[-1]:
                 cards_battle_round = 0
 
                 if current_enemy_pokemon is None:
                     encounters_fought += 1
-                    current_encounter_reviews = cards_per_round
+                    current_encounter_reviews = len(current_turn_reviews)
                     enc_seed = review.get("revlog_id") or review.get("id") or 42
                     random.seed(enc_seed)
                     enc_data = _generate_encounter(main_pokemon_level, temp_tracker, None, settings_obj, None)
