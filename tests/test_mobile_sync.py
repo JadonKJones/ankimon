@@ -1682,3 +1682,19 @@ def test_dynamic_total_reviews_calculation(temp_env):
     assert captured_trackers[1] == 14
 
 
+
+
+def test_attribute_xp_and_evs_to_companion_legacy_evs():
+    from Ankimon.functions.mobile_sync import _attribute_xp_and_evs_to_companion
+    companion = {
+        "level": 50,
+        "xp": 1000,
+        "base_stats": {"hp": 50, "atk": 50, "def": 50, "spa": 50, "spd": 50, "spe": 50},
+        "iv": {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15},
+        "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "special-attack": 252},
+    }
+    ev_yield_gained = {"special-attack": 2}
+    _attribute_xp_and_evs_to_companion(companion, 10, ev_yield_gained, 1)
+    assert companion["ev"]["spa"] == 252
+    assert "special-attack" not in companion["ev"]
+

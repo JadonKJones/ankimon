@@ -1648,6 +1648,8 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
     # EV Updates
     if "ev" not in pkmndata or not isinstance(pkmndata["ev"], dict):
         pkmndata["ev"] = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+    else:
+        pkmndata["ev"] = _normalize_ev_yield(pkmndata["ev"])
         
     normalized_yield = {
         "hp": ev_yield_gained.get("hp", 0),
