@@ -471,6 +471,10 @@ class MobileBridge(QObject):
                 "team_status": self.getTeamStatus(),
             }
         except Exception as e:
+            import traceback
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"getMobileStatus failed: {e}\n{traceback.format_exc()}")
             return {"error": str(e), "pending_count": 0, "pending_count_at_start": 0, "cap": 10000}
 
     @pyqtSlot(result="QVariant")
@@ -515,22 +519,29 @@ class MobileBridge(QObject):
         Runs the deterministic auto-resolve for all pending reviews, applying the exact same
         encounters and outcomes simulated in the preview.
         """
-        db = mw.ankimon_db
-        settings_obj = mw.settings_obj
-        tracker = getattr(mw, "ankimon_tracker_obj", None)
-        trainer_card = getattr(mw, "trainer_card", None)
-        main_pokemon = getattr(mw, "main_pokemon", None)
-        day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
+        try:
+            db = mw.ankimon_db
+            settings_obj = mw.settings_obj
+            tracker = getattr(mw, "ankimon_tracker_obj", None)
+            trainer_card = getattr(mw, "trainer_card", None)
+            main_pokemon = getattr(mw, "main_pokemon", None)
+            day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
 
-        return resolve_all(
-            db=db,
-            settings_obj=settings_obj,
-            tracker=tracker,
-            trainer_card=trainer_card,
-            main_pokemon=main_pokemon,
-            logger=getattr(mw, "logger", None),
-            day_cutoff=day_cutoff
-        )
+            return resolve_all(
+                db=db,
+                settings_obj=settings_obj,
+                tracker=tracker,
+                trainer_card=trainer_card,
+                main_pokemon=main_pokemon,
+                logger=getattr(mw, "logger", None),
+                day_cutoff=day_cutoff
+            )
+        except Exception as e:
+            import traceback
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"resolveAll failed: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
 
     @pyqtSlot(int, result="QVariant")
     def resolveChunk(self, limit: int) -> dict:
@@ -617,6 +628,10 @@ class MobileBridge(QObject):
                     time.sleep(0.05)
 
             except Exception as e:
+                import traceback
+                logger = getattr(mw, "logger", None)
+                if logger:
+                    logger.log("error", f"bg_resolve failed: {e}\n{traceback.format_exc()}")
                 self._bulk_progress["error"] = f"{str(e)}\n{traceback.format_exc()}"
             finally:
                 self._bulk_progress["done"] = True
@@ -661,37 +676,47 @@ class MobileBridge(QObject):
                 from ..singletons import notify_stats_changed
                 notify_stats_changed()
             except Exception as e:
-                print(f"[Ankimon] Error refreshing singletons after bulk resolve: {e}")
+                import traceback
+                logger = getattr(mw, "logger", None)
+                if logger:
+                    logger.log("error", f"Error refreshing singletons after bulk resolve: {e}\n{traceback.format_exc()}")
     @pyqtSlot(str, result="QVariant")
     def resolveNext(self, companion_id: str = "") -> dict:
-        db = mw.ankimon_db
-        settings_obj = mw.settings_obj
-        tracker = getattr(mw, "ankimon_tracker_obj", None)
-        trainer_card = getattr(mw, "trainer_card", None)
-        main_pokemon = getattr(mw, "main_pokemon", None)
-        day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
+        try:
+            db = mw.ankimon_db
+            settings_obj = mw.settings_obj
+            tracker = getattr(mw, "ankimon_tracker_obj", None)
+            trainer_card = getattr(mw, "trainer_card", None)
+            main_pokemon = getattr(mw, "main_pokemon", None)
+            day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
 
-        res = resolve_next(
-            companion_id=companion_id,
-            db=db,
-            settings_obj=settings_obj,
-            tracker=tracker,
-            trainer_card=trainer_card,
-            main_pokemon=main_pokemon,
-            logger=getattr(mw, "logger", None),
-            day_cutoff=day_cutoff
-        )
-        if isinstance(res, dict) and "current_pending_outcome" in res:
-            outcome = res["current_pending_outcome"]
-            if outcome:
-                outcome.update({
-                    "main_pokemon": main_pokemon,
-                    "trainer_card": trainer_card,
-                    "settings_obj": settings_obj,
-                })
-            self._current_pending_outcome = outcome
-            return res["result"]
-        return res
+            res = resolve_next(
+                companion_id=companion_id,
+                db=db,
+                settings_obj=settings_obj,
+                tracker=tracker,
+                trainer_card=trainer_card,
+                main_pokemon=main_pokemon,
+                logger=getattr(mw, "logger", None),
+                day_cutoff=day_cutoff
+            )
+            if isinstance(res, dict) and "current_pending_outcome" in res:
+                outcome = res["current_pending_outcome"]
+                if outcome:
+                    outcome.update({
+                        "main_pokemon": main_pokemon,
+                        "trainer_card": trainer_card,
+                        "settings_obj": settings_obj,
+                    })
+                self._current_pending_outcome = outcome
+                return res["result"]
+            return res
+        except Exception as e:
+            import traceback
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"resolveNext failed: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
 
     @pyqtSlot(str, result="QVariant")
     def commitReplayOutcome(self, choice: str) -> dict:
@@ -718,6 +743,10 @@ class MobileBridge(QObject):
                 self._current_pending_outcome = None
             return res
         except Exception as e:
+            import traceback
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"commitReplayOutcome failed: {e}\n{traceback.format_exc()}")
             return {"success": False, "error": str(e)}
 
     @pyqtSlot(str, result="QVariant")
