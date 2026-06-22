@@ -680,6 +680,7 @@ class MobileBridge(QObject):
                 logger = getattr(mw, "logger", None)
                 if logger:
                     logger.log("error", f"Error refreshing singletons after bulk resolve: {e}\n{traceback.format_exc()}")
+        return progress
     @pyqtSlot(str, result="QVariant")
     def resolveNext(self, companion_id: str = "") -> dict:
         try:
