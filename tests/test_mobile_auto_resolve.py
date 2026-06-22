@@ -419,18 +419,14 @@ def test_commit_replay_outcome_override_companion(temp_env):
     db.save_pokemon(override_bulba)
 
     bridge = MobileBridge(MagicMock())
-    enemy_mock = MagicMock(id=19, display_name="Rattata", level=3, shiny=False, ev_yield={"atk": 1}, tier="normal")
-    enemy_mock.to_dict.return_value = {
-        "id": 19,
-        "name": "Rattata",
-        "level": 3,
-        "shiny": False,
-        "base_stats": {"hp": 30, "atk": 56, "def": 35, "spa": 25, "spd": 35, "spe": 72},
-        "stats": {"hp": 30, "atk": 56, "def": 35, "spa": 25, "spd": 35, "spe": 72},
-        "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
-        "iv": {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15},
-        "nature": "serious",
-    }
+    enemy_mock = FakePokemon(
+        id=19, name="Rattata", level=3, shiny=False, ev_yield={"atk": 1}, tier="normal",
+        base_stats={"hp": 30, "atk": 56, "def": 35, "spa": 25, "spd": 35, "spe": 72},
+        stats={"hp": 30, "atk": 56, "def": 35, "spa": 25, "spd": 35, "spe": 72},
+        ev={"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        iv={"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15},
+        nature="serious"
+    )
     bridge._current_pending_outcome = {
         "enemy_pokemon": enemy_mock,
         "battle_xp": 150,
@@ -551,19 +547,14 @@ def test_auto_resolve_xp_attribution_multi_companion(temp_env):
     db.queue_mobile_battles(reviews)
 
     # Mock the poke engine simulator to return that companion 1 wins one battle, companion 2 wins the other
-    enemy_mock = MagicMock(id=19, name="Rattata", display_name="Rattata", level=3, shiny=False, ev_yield={"atk": 1}, tier="normal")
-    enemy_mock.to_dict.return_value = {
-        "id": 19,
-        "name": "Rattata",
-        "level": 3,
-        "shiny": False,
-        "base_stats": {"hp": 30, "atk": 56, "def": 35, "spa": 25, "spd": 35, "spe": 72},
-        "stats": {"hp": 30, "atk": 56, "def": 35, "spa": 25, "spd": 35, "spe": 72},
-        "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
-        "iv": {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15},
-        "nature": "serious",
-        "ev_yield": {"atk": 1},
-    }
+    enemy_mock = FakePokemon(
+        id=19, name="Rattata", level=3, shiny=False, ev_yield={"atk": 1}, tier="normal",
+        base_stats={"hp": 30, "atk": 56, "def": 35, "spa": 25, "spd": 35, "spe": 72},
+        stats={"hp": 30, "atk": 56, "def": 35, "spa": 25, "spd": 35, "spe": 72},
+        ev={"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        iv={"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15},
+        nature="serious"
+    )
     
     # We patch simulate_battle_with_poke_engine and load_active_team_clones
     with patch("Ankimon.functions.encounter_functions.generate_random_pokemon", return_value=enemy_mock), \
@@ -576,19 +567,9 @@ def test_auto_resolve_xp_attribution_multi_companion(temp_env):
          patch("Ankimon.functions.encounter_functions.limit_ev_yield", side_effect=lambda ev, y: {"hp": 0, "attack": 0, "defense": 0, "special-attack": 0, "special-defense": 0, "speed": 0}):
 
         # In auto-resolve, select_best_companion will be called. Let's mock it to return Pikachu first, Bulbasaur second and third
-        pika_clone = MagicMock()
-        pika_clone.individual_id = "active-uuid"
-        pika_clone.display_name = "Pikachu"
-        pika_clone.level = 30
-        pika_clone.shiny = False
-        pika_clone.to_dict.return_value = active_pika
+        pika_clone = FakePokemon(**active_pika)
         
-        bulba_clone = MagicMock()
-        bulba_clone.individual_id = "override-uuid"
-        bulba_clone.display_name = "Bulbasaur"
-        bulba_clone.level = 10
-        bulba_clone.shiny = False
-        bulba_clone.to_dict.return_value = override_bulba
+        bulba_clone = FakePokemon(**override_bulba)
         
         assert db.get_main_pokemon() is not None
         with patch("Ankimon.functions.mobile_sync.select_best_companion", side_effect=[pika_clone, pika_clone, bulba_clone]):
