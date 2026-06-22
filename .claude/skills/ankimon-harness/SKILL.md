@@ -31,8 +31,11 @@ python3 harness/check.py --doctor     # python>=3.10 + poke_engine submodule pre
 python3 harness/check.py              # the whole Tier-1 gate, ~5s, exit 0 = green
 ```
 If `--doctor` flags the submodule: `git submodule update --init --recursive`.
-Full API + event reference: **`harness/README.md`** (read it for depth; this skill
-is the quick playbook).
+
+**Complete reference** — every module, action, event, scenario, and setting key — is in
+**`${CLAUDE_SKILL_DIR}/reference.md`**. This file is the quick playbook; open `reference.md`
+whenever you need an exact signature or the full surface. (Prose/architecture:
+`harness/README.md`; contributor rules: `AGENTS.md`.)
 
 ## The two tiers (pick the cheapest that answers the question)
 - **Tier 1** — `from harness.driver import Driver`. No Anki, no Qt, no deps; ~900
