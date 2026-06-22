@@ -914,11 +914,11 @@ def run_mobile_battles(
     resolved_encounters = 0
     current_encounter_reviews = 0
 
+    caught_pokemon = []
+    defeated_pokemon = []
     if not commit:
         reviews_to_process = reviews_list[:100]
         extra_reviews = reviews_list[100:]
-        caught_pokemon = []
-        defeated_pokemon = []
     else:
         reviews_to_process = reviews_list
         extra_reviews = []
