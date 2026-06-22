@@ -37,6 +37,16 @@ cd /tmp/pr-$ARGUMENTS && git submodule update --init --recursive
 - a real Qt/WebEngine window → Tier 2 (needs a GUI machine; if headless, flag it)
 - new setting / input → **fuzz** it
 
+## 2.5 Check the existing CI (do NOT skip — this is the easy miss)
+```bash
+gh pr checks $ARGUMENTS
+```
+If any check is **failing**, dig in before judging: `gh run view <run-id> --log-failed`
+or `gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs`. **Red CI is part of the
+verdict** — never say MERGE over a red check without explaining why it's a false negative.
+Running green **locally is not the same as CI green** (deps/env differ — e.g. a module that
+imports `requests`, or an RNG-flaky scenario). When in doubt, re-trigger and re-check.
+
 ## 3. ACTUALLY RUN IT — this is the real testing
 Use the **`ankimon-harness`** skill for the how-to (its `reference.md` has every API).
 Minimum bar, always:
@@ -66,6 +76,7 @@ gh pr comment $ARGUMENTS --body-file /tmp/verdict-$ARGUMENTS.md
 # (if gh pr comment errors, use: gh api -X POST repos/<owner>/<repo>/issues/$ARGUMENTS/comments -F body=@/tmp/verdict-$ARGUMENTS.md)
 ```
 The verdict MUST contain:
+- **GitHub CI status** (`gh pr checks`) — every check green, or which is red and why,
 - **what you RAN** (exact commands) and the key results (event counts, numbers, any `error`),
 - pass/fail per check,
 - any bug found, with a **minimal repro** (the `seed`/`set_enemy` to reproduce it),
