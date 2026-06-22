@@ -1693,8 +1693,13 @@ def test_attribute_xp_and_evs_to_companion_legacy_evs():
         "iv": {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15},
         "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0, "special-attack": 252},
     }
+    class FakeDB:
+        def get_pokemon_by_individual_id(self, cid):
+            return companion
+        def save_pokemon(self, pkmndata):
+            pass
     ev_yield_gained = {"special-attack": 2}
-    _attribute_xp_and_evs_to_companion(companion, 10, ev_yield_gained, 1)
+    _attribute_xp_and_evs_to_companion("mock_id", 10, ev_yield_gained, None, 1, db=FakeDB())
     assert companion["ev"]["spa"] == 252
     assert "special-attack" not in companion["ev"]
 
