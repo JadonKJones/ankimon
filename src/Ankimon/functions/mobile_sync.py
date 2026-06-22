@@ -863,17 +863,13 @@ def run_mobile_battles(
     from ..pyobj.pokemon_obj import PokemonObject
     from ..singletons import get_evo_window
 
-    print(">>> run_mobile_battles: before _compute_initial_reviews", flush=True)
     initial_reviews = _compute_initial_reviews(
         db,
         tracker,
         day_cutoff
     )
-    print(">>> run_mobile_battles: before TempTracker", flush=True)
     temp_tracker = TempTracker(initial_reviews)
-    print(">>> run_mobile_battles: before load_active_team_clones", flush=True)
     team_clones = load_active_team_clones(db, settings_obj, main_pokemon)
-    print(">>> run_mobile_battles: after load_active_team_clones", flush=True)
     main_pokemon_clone = team_clones[0] if team_clones else None
 
     main_pokemon_level = 5
@@ -1042,6 +1038,7 @@ def run_mobile_battles(
                                 if isinstance(_collected_pokemon_ids, set): _collected_pokemon_ids.add(current_enemy_pokemon.id)
                             except Exception: pass
                             caught_pokemon_list.append(pkmn_info)
+                            caught_count += 1  # else resolveAll/the UI report "0 caught"
                             last_outcome = "caught"
                         else:
                             caught_pokemon.append(pkmn_info)
@@ -1402,16 +1399,9 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
             if companion_id and (total_xp > 0 or any(accumulated_evs.values())):
                 _attribute_xp_and_evs_to_companion(companion_id, total_xp, accumulated_evs, settings_obj, db=db, logger=logger)
 
-            if total_xp > 0 and main_pokemon and companion_id == main_pokemon.individual_id:
-                # Add main_pokemon.pokemon_defeated increment
-                main_pokemon.pokemon_defeated += 1
-                try:
-                    mp_data = db.get_main_pokemon()
-                    if mp_data:
-                        mp_data["pokemon_defeated"] = main_pokemon.pokemon_defeated
-                        db.save_main_pokemon(mp_data)
-                except Exception:
-                    pass
+            # NOTE: pokemon_defeated is already incremented (DB row + in-memory
+            # singleton) by _attribute_xp_and_evs_to_companion above. Incrementing it
+            # again here double-counted the active companion's defeats on replay.
 
             if total_trainer_xp > 0 and trainer_card:
                 new_txp = int(settings_obj.get("trainer.xp", 0) + total_trainer_xp)
@@ -1553,7 +1543,13 @@ def _resolve_internal(mode="all", companion_id="", limit=None, db=None, settings
     finally:
         if use_transaction:
             conn._disable_commit = False
+            # Reset the bulk-resolve flag. If this is dropped, in_bulk_resolve
+            # stays True for the rest of the session and silently suppresses
+            # level-up tooltips, evolution prompts and learn-move dialogs in
+            # normal desktop play (encounter_functions / pokedex_functions gate
+            # those on `not in_bulk_resolve`).
             from .. import utils
+            utils.in_bulk_resolve = False
 
 
 def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yield_gained: dict, settings_obj, battles_fought=1, db=None, logger=None) -> None:
