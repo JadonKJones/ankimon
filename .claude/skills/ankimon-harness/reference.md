@@ -67,8 +67,9 @@ from harness.real_driver import RealDriver           # needs the .tier2 env
 d = RealDriver(settings_overrides={...}, first_encounter=True)
 ```
 Boots the genuine add-on (`start_real_session(user_path=None, settings_overrides=None,
-neuter_network=True, first_run=False, webengine=False, clock_start=None)`) with real Qt
-windows offscreen; actions fire the **real** `gui_hooks` / reviewer shortcuts.
+neuter_network=True, first_run=False, webengine=False)`) with real Qt windows offscreen;
+actions fire the **real** `gui_hooks` / reviewer shortcuts. (The controllable clock is
+Tier-1 only — `Driver(clock_start=…)`; not wired into `start_real_session` yet.)
 - `first_run=True` seeds sprite assets BEFORE the import → `database_complete=True` → the
   genuine new-user path (full menu + the real "Choose a Starter" window). Needs the sprite
   cache (`env.sh` exports `ANKIMON_SPRITE_CACHE`; else a null starter pixmap → ZeroDivisionError).
