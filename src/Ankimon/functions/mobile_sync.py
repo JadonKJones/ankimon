@@ -151,6 +151,29 @@ def _normalize_ev_yield(raw: dict) -> dict:
     }
     return {mapping.get(k.lower(), k.lower()): v for k, v in raw.items()}
 
+def _heal_to_full(p) -> None:
+    """Restore a companion clone to full HP and clear its battle bonuses.
+
+    Run after every resolved encounter so each encounter begins with the
+    companion at full health — exactly the way manual replay behaves (it reloads
+    the team fresh on every call). Without this heal, damage carries across
+    encounters, so battle length (and therefore the encounter count and the seed
+    of every subsequent encounter) starts to depend on how many companions are
+    active and on the odd/even fainting-revival cycle, and the preview /
+    auto-resolve / manual-replay sequences drift apart.
+    """
+    if p is None:
+        return
+    max_hp_val = getattr(p, "max_hp", 100)
+    if isinstance(max_hp_val, (int, float)):
+        p.hp = max_hp_val
+        if hasattr(p, "current_hp"):
+            p.current_hp = max_hp_val
+    try:
+        p.reset_bonuses()
+    except Exception:
+        pass
+
 def detect_mobile_reviews(col, watermark_ms: int, desktop_revlog_ids: frozenset[int]) -> list[dict]:
     """
     Returns revlog rows that are:
@@ -1100,9 +1123,7 @@ def run_mobile_battles(
                     reviews_spent_for_resolved += current_encounter_reviews
                     resolved_encounters += 1
                     current_enemy_pokemon = None
-                    if main_pokemon_clone:
-                        try: main_pokemon_clone.reset_bonuses()
-                        except Exception: pass
+                    _heal_to_full(main_pokemon_clone)
 
                 elif isinstance(companion_hp, (int, float)) and companion_hp <= 0:
                     if commit:
@@ -1130,9 +1151,7 @@ def run_mobile_battles(
                     reviews_spent_for_resolved += current_encounter_reviews
                     resolved_encounters += 1
                     current_enemy_pokemon = None
-                    if main_pokemon_clone:
-                        try: main_pokemon_clone.reset_bonuses()
-                        except Exception: pass
+                    _heal_to_full(main_pokemon_clone)
         
         if commit and current_enemy_pokemon is not None:
             # Insert history for escaped / unfinished battle
@@ -1576,8 +1595,8 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
     if not pkmndata:
         return
 
-    from Ankimon.functions.pokemon_functions import find_experience_for_level, get_levelup_move_for_pokemon
-    from Ankimon.functions.drawing_utils import tooltipWithColour
+    from .pokemon_functions import find_experience_for_level, get_levelup_move_for_pokemon
+    from .drawing_utils import tooltipWithColour
     from ..pyobj.pokemon_obj import PokemonObject
     from .. import utils
 
@@ -1639,7 +1658,7 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
                         tooltipWithColour(msg_learn, color)
                 elif new_attack not in attacks:
                     if is_active and not in_bulk:
-                        from Ankimon.pyobj.reviewer_obj import AttackDialog
+                        from ..pyobj.attack_dialog import AttackDialog
                         from PyQt6.QtWidgets import QDialog
                         dialog = AttackDialog(attacks, new_attack)
                         if dialog.exec() == QDialog.DialogCode.Accepted:
