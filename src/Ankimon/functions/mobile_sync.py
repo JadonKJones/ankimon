@@ -831,12 +831,13 @@ def run_mobile_battles(
 
     state = random.getstate()
 
-    # Deterministic seed
-    seed_val = sum(r.get("revlog_id") or r.get("id") or 0 for r in reviews_list)
-    if seed_val == 0: seed_val = 42
-    random.seed(seed_val)
-
     cards_per_round, _ = _parse_cards_per_round(settings_obj)
+
+    # Unified deterministic seed for the first encounter
+    seed_idx = min(len(reviews_list) - 1, cards_per_round - 1)
+    seed_review = reviews_list[seed_idx]
+    enc_seed = seed_review.get("revlog_id") or seed_review.get("id") or 42
+    random.seed(enc_seed)
 
     auto_battle_setting = 3
     if settings_obj:
