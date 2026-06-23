@@ -38,3 +38,8 @@ venv/
 # harness/setup_tier2.sh. Large + machine-specific, never committed.
 .tier2/
 __pycache__/
+# coverage.py artifacts from `harness/check.py --coverage` (dev-only measurement)
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml

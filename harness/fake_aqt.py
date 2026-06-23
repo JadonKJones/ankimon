@@ -284,7 +284,8 @@ def _make_fake_mw(app, user_path):
             self.reviewer = SimpleNamespace(web=_Web(), card=None, mw=self)
             self.taskman = _Taskman()
             self.addonManager = _AddonManager()
-            self.pm = SimpleNamespace(name="headless", profileFolder=lambda: str(user_path))
+            self.pm = SimpleNamespace(name="headless", profileFolder=lambda: str(user_path),
+                                      night_mode=lambda: False)
             self.progress = SimpleNamespace(
                 timer=lambda *a, **k: SimpleNamespace(stop=lambda: None, start=lambda *a, **k: None),
                 start=lambda *a, **k: None, finish=lambda: None, update=lambda *a, **k: None,
@@ -303,8 +304,14 @@ def _make_fake_mw(app, user_path):
 
 # --- top-level install -----------------------------------------------------
 
-def install(app, user_path):
-    """Install the fake aqt/anki into sys.modules. Call before `import Ankimon`."""
+def install(app, user_path, real_webengine=False):
+    """Install the fake aqt/anki into sys.modules. Call before `import Ankimon`.
+
+    real_webengine=True wires the REAL QWebEngineView (so the Pokedex / HUD render
+    for real) instead of the lightweight stub — requires WebEngine to be importable
+    and already imported before the QApplication (real_env handles that). Falls back
+    to the stub if the real one isn't available.
+    """
     import PyQt6.QtCore
     import PyQt6.QtGui
     import PyQt6.QtWidgets
@@ -316,7 +323,15 @@ def install(app, user_path):
     def qconnect(signal, func):
         signal.connect(func)
 
-    web_view, web_page, web_settings = _make_webengine_stubs(QWidget)
+    web_view = web_page = web_settings = None
+    if real_webengine:
+        try:
+            from PyQt6.QtWebEngineWidgets import QWebEngineView as web_view
+            from PyQt6.QtWebEngineCore import QWebEnginePage as web_page, QWebEngineSettings as web_settings
+        except Exception:
+            web_view = web_page = web_settings = None
+    if web_view is None:
+        web_view, web_page, web_settings = _make_webengine_stubs(QWidget)
 
     # aqt.qt — faithful re-export of real PyQt6 (+ qconnect, sip, webengine stubs).
     qt = ModuleType("aqt.qt")

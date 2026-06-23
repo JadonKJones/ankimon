@@ -79,8 +79,16 @@ def _seed_assets(user_path):
         img.save(str(substitute), "PNG")
 
 
-def start_real_session(user_path=None, settings_overrides=None, neuter_network=True):
-    """Boot the real add-on and return handles (app, aqt, services, events)."""
+def start_real_session(user_path=None, settings_overrides=None, neuter_network=True,
+                       first_run=False, webengine=False):
+    """Boot the real add-on and return handles (app, aqt, services, events).
+
+    first_run=True seeds the sprite assets BEFORE the import, so startup's
+    _check_assets passes (database_complete=True) and a blank profile gets the
+    genuine new-user path: the full menu populates and the starter-selection
+    window opens — the state a real user is in once sprites are present. (Default
+    False keeps the lean "assets incomplete" boot for fast play tests.)
+    """
     if user_path is None:
         user_path = tempfile.mkdtemp(prefix="ankimon_real_")
     os.environ["ANKIMON_USER_PATH"] = str(user_path)
@@ -103,16 +111,31 @@ def start_real_session(user_path=None, settings_overrides=None, neuter_network=T
         except Exception:
             pass
 
+    # Real WebEngine (to render the Pokedex / HUD) MUST be imported before the
+    # QApplication exists. Only when requested + importable; else fall back to the stub.
+    if webengine:
+        os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+        os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS",
+                              "--no-sandbox --disable-gpu --disable-dev-shm-usage "
+                              "--in-process-gpu --single-process")
+        try:
+            import PyQt6.QtWebEngineWidgets  # noqa: F401  (must precede QApplication)
+        except Exception:
+            webengine = False
+
     # Real PyQt6 first (needs the offscreen platform + native libs already loadable).
-    from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
+    from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QInputDialog
 
     app = QApplication.instance() or QApplication(["ankimon-harness"])
 
-    # NOTE: assets are seeded AFTER boot (by the driver), not here. Seeding the
-    # sprite dirs makes startup's _check_assets pass, which would trigger the
-    # first-run starter window on an empty profile. Booting with no sprite dirs
-    # keeps startup on its "assets incomplete" path (no first-run UI); the driver
-    # seeds the placeholder sprite before it starts play.
+    # Assets: by default seeded AFTER boot (by the driver), so startup stays on its
+    # "assets incomplete" path and skips the first-run UI. With first_run=True we
+    # seed them BEFORE the import — startup's _check_assets then passes
+    # (database_complete=True), the menu fully populates, and a blank profile gets
+    # the genuine new-user flow (starter selection). _seed_assets symlinks to the
+    # real sprite cache if present, so this renders with genuine art.
+    if first_run:
+        _seed_assets(user_path)
 
     # Neuter blocking dialogs so a real boot can never hang on a modal .exec().
     QDialog.exec = lambda self: 0
@@ -125,13 +148,39 @@ def start_real_session(user_path=None, settings_overrides=None, neuter_network=T
     except Exception:
         pass
 
+    # QInputDialog.* are blocking static modals too (e.g. item_window's "Select
+    # Pokemon" getItem). Auto-accept with a valid default so a real boot / a GUI
+    # fuzzer can't hang on them (mirrors the QMessageBox auto-answers above).
+    def _fuzz_get_item(parent, title, label, items, current=0, editable=True, *a, **k):
+        items = list(items)
+        chosen = items[current] if 0 <= current < len(items) else (items[0] if items else "")
+        return chosen, True
+    try:
+        QInputDialog.getItem = staticmethod(_fuzz_get_item)
+        QInputDialog.getText = staticmethod(lambda *a, **k: ("Ankimon", True))
+        QInputDialog.getMultiLineText = staticmethod(lambda *a, **k: ("Ankimon", True))
+        QInputDialog.getInt = staticmethod(lambda *a, **k: (1, True))
+        QInputDialog.getDouble = staticmethod(lambda *a, **k: (1.0, True))
+    except Exception:
+        pass
+
     # Install the fake Anki host (mw, gui_hooks, aqt.* ) BEFORE importing Ankimon.
     from . import fake_aqt
 
-    aqt = fake_aqt.install(app, user_path)
+    aqt = fake_aqt.install(app, user_path, real_webengine=webengine)
 
     # REAL boot — runs Ankimon/__init__.py just as Anki would.
     import Ankimon  # noqa: F401
+
+    # Anki fires "profileLoaded" after the add-on imports; the harness must too, or
+    # mw.catchpokemon / mw.defeatpokemon (set by profile_hooks.on_profile_loaded) stay
+    # unset and the test_window catch/defeat buttons AttributeError-crash. (This is the
+    # faithful boot order — the same hook the real client runs on profile open.)
+    try:
+        from anki.hooks import runHook
+        runHook("profileLoaded")
+    except Exception:
+        pass
 
     # Turn on event capture (emits are no-ops until enabled).
     from Ankimon.events import events
