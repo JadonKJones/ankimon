@@ -12,9 +12,33 @@ Runs under pytest (CI) or as a plain script:  python3 tests/test_headless_harnes
 import sys
 import pathlib
 
+import pytest
+
 _repo = pathlib.Path(__file__).resolve().parents[1]
 if str(_repo) not in sys.path:
     sys.path.insert(0, str(_repo))
+
+
+_MOCKED_PREFIXES = ("aqt", "Ankimon")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_sys_modules():
+    """Other test files stub ``aqt`` / ``Ankimon.*`` in sys.modules at import time
+    (MagicMocks, stub packages). That pollution breaks the REAL harness boot when
+    these tests run after them in the full suite. Pop those entries so the harness
+    boots against the genuine aqt-free modules (exactly as it does standalone / in
+    check.py), then restore them so later tests see the state they expect."""
+    def _matches(name):
+        return name in _MOCKED_PREFIXES or any(name.startswith(p + ".") for p in _MOCKED_PREFIXES)
+
+    saved = {k: sys.modules.pop(k) for k in list(sys.modules) if _matches(k)}
+    try:
+        yield
+    finally:
+        for k in [k for k in sys.modules if _matches(k)]:
+            del sys.modules[k]
+        sys.modules.update(saved)
 
 
 def test_play_session_runs_without_errors():

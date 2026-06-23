@@ -124,6 +124,10 @@ _SINGLETONS_STUB = sys.modules["Ankimon.singletons"]
 def _reset_settings():
     """Restore our singletons stub and default settings before every test."""
     sys.modules["Ankimon.singletons"] = _SINGLETONS_STUB
+    # #492 moved the code from singletons.settings_obj to the services registry, so
+    # point services.settings at the same fake (the module reads it lazily per call).
+    from Ankimon.services import services
+    services.settings = settings
     settings.values.update(
         {
             "evolution.day_start_hour": 6,
