@@ -527,21 +527,32 @@ def run_mobile_battles(
         ]
 
         # We will simulate turn-by-turn until enemy or companion faints
-        team_clones = load_active_team_clones(db, settings_obj, main_pokemon)
-
-        main_pokemon_level = 5
-        if team_clones:
-            levels = []
-            for c in team_clones:
-                lvl = getattr(c, "level", None)
+        if not commit:
+            team_clones = load_active_team_clones(None, settings_obj, main_pokemon)
+            main_pokemon_level = 5
+            if team_clones:
+                lvl = getattr(team_clones[0], "level", None)
                 if lvl is not None and isinstance(lvl, (int, float)):
-                    levels.append(int(lvl))
-            if levels:
-                main_pokemon_level = max(levels)
-        elif main_pokemon:
-            lvl = getattr(main_pokemon, "level", 5)
-            if isinstance(lvl, (int, float)):
-                main_pokemon_level = int(lvl)
+                    main_pokemon_level = int(lvl)
+            elif main_pokemon:
+                lvl = getattr(main_pokemon, "level", 5)
+                if isinstance(lvl, (int, float)):
+                    main_pokemon_level = int(lvl)
+        else:
+            team_clones = load_active_team_clones(db, settings_obj, main_pokemon)
+            main_pokemon_level = 5
+            if team_clones:
+                levels = []
+                for c in team_clones:
+                    lvl = getattr(c, "level", None)
+                    if lvl is not None and isinstance(lvl, (int, float)):
+                        levels.append(int(lvl))
+                if levels:
+                    main_pokemon_level = max(levels)
+            elif main_pokemon:
+                lvl = getattr(main_pokemon, "level", 5)
+                if isinstance(lvl, (int, float)):
+                    main_pokemon_level = int(lvl)
 
         from ..pyobj.pokemon_obj import PokemonObject
         from ..business import calc_experience
@@ -893,22 +904,34 @@ def run_mobile_battles(
         day_cutoff
     )
     temp_tracker = TempTracker(initial_reviews)
-    team_clones = load_active_team_clones(db, settings_obj, main_pokemon)
-    main_pokemon_clone = team_clones[0] if team_clones else None
-
-    main_pokemon_level = 5
-    if team_clones:
-        levels = []
-        for c in team_clones:
-            lvl = getattr(c, "level", None)
+    if not commit:
+        team_clones = load_active_team_clones(None, settings_obj, main_pokemon)
+        main_pokemon_clone = team_clones[0] if team_clones else None
+        main_pokemon_level = 5
+        if team_clones:
+            lvl = getattr(team_clones[0], "level", None)
             if lvl is not None and isinstance(lvl, (int, float)):
-                levels.append(int(lvl))
-        if levels:
-            main_pokemon_level = max(levels)
-    elif main_pokemon:
-        lvl = getattr(main_pokemon, "level", 5)
-        if isinstance(lvl, (int, float)):
-            main_pokemon_level = int(lvl)
+                main_pokemon_level = int(lvl)
+        elif main_pokemon:
+            lvl = getattr(main_pokemon, "level", 5)
+            if isinstance(lvl, (int, float)):
+                main_pokemon_level = int(lvl)
+    else:
+        team_clones = load_active_team_clones(db, settings_obj, main_pokemon)
+        main_pokemon_clone = team_clones[0] if team_clones else None
+        main_pokemon_level = 5
+        if team_clones:
+            levels = []
+            for c in team_clones:
+                lvl = getattr(c, "level", None)
+                if lvl is not None and isinstance(lvl, (int, float)):
+                    levels.append(int(lvl))
+            if levels:
+                main_pokemon_level = max(levels)
+        elif main_pokemon:
+            lvl = getattr(main_pokemon, "level", 5)
+            if isinstance(lvl, (int, float)):
+                main_pokemon_level = int(lvl)
 
     total_xp = 0
     total_trainer_xp = 0
