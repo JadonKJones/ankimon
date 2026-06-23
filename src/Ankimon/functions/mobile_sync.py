@@ -1576,8 +1576,8 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
     if not pkmndata:
         return
 
-    from Ankimon.functions.pokemon_functions import find_experience_for_level, get_levelup_move_for_pokemon
-    from Ankimon.functions.drawing_utils import tooltipWithColour
+    from .pokemon_functions import find_experience_for_level, get_levelup_move_for_pokemon
+    from .drawing_utils import tooltipWithColour
     from ..pyobj.pokemon_obj import PokemonObject
     from .. import utils
 
@@ -1639,7 +1639,7 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
                         tooltipWithColour(msg_learn, color)
                 elif new_attack not in attacks:
                     if is_active and not in_bulk:
-                        from Ankimon.pyobj.reviewer_obj import AttackDialog
+                        from ..pyobj.attack_dialog import AttackDialog
                         from PyQt6.QtWidgets import QDialog
                         dialog = AttackDialog(attacks, new_attack)
                         if dialog.exec() == QDialog.DialogCode.Accepted:
