@@ -528,7 +528,9 @@ def run_mobile_battles(
 
         # We will simulate turn-by-turn until enemy or companion faints
         if not commit:
+            # Load only the main companion clone for dry-run simulation
             team_clones = load_active_team_clones(None, settings_obj, main_pokemon)
+            # Align level calculation with mode="all" to ensure full sequence parity
             main_pokemon_level = 5
             if team_clones:
                 lvl = getattr(team_clones[0], "level", None)
@@ -905,8 +907,10 @@ def run_mobile_battles(
     )
     temp_tracker = TempTracker(initial_reviews)
     if not commit:
+        # Load only the main companion clone for dry-run simulation
         team_clones = load_active_team_clones(None, settings_obj, main_pokemon)
         main_pokemon_clone = team_clones[0] if team_clones else None
+        # Align level calculation with mode="next" to ensure full sequence parity
         main_pokemon_level = 5
         if team_clones:
             lvl = getattr(team_clones[0], "level", None)
