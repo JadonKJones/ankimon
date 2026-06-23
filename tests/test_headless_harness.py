@@ -25,13 +25,32 @@ _repo = pathlib.Path(__file__).resolve().parents[1]
 _MARKER = "HARNESS_RESULT:"
 
 
+# Force the Tier-1 contract in the child: NO Qt. This unit suite (integrity_tests)
+# installs aqt+PyQt6 (requirements.txt) and runs under xvfb, so an Ankimon leaf
+# module's "Qt present" path would construct a QWidget at import with no
+# QApplication and SIGABRT the child. The dedicated harness CI (harness.yml) runs
+# Tier-1 with no Qt deps at all; we reproduce that by making aqt/PyQt6 unimportable
+# in the child, so the guarded modules take their headless no-Qt path.
+_BLOCK_QT = (
+    "import sys\n"
+    "class _NoQt:\n"
+    "    _b = ('aqt', 'PyQt6', 'PyQt5')\n"
+    "    def find_spec(self, name, path=None, target=None):\n"
+    "        if name.split('.')[0] in self._b:\n"
+    "            raise ModuleNotFoundError(name + ' blocked: harness Tier-1 is Qt-free')\n"
+    "        return None\n"
+    "sys.meta_path.insert(0, _NoQt())\n"
+)
+
+
 def _subrun(snippet):
-    """Run a harness snippet in a fresh interpreter; return its JSON result.
+    """Run a harness snippet in a fresh, Qt-free interpreter; return its JSON result.
 
     The snippet must print ``HARNESS_RESULT:<json>`` once. We isolate in a child
     process so the in-process sys.modules stubs other test files install can't
-    break the real Ankimon boot (the same reason check.py shells out per probe)."""
-    code = "import sys, json\nsys.path.insert(0, %r)\n%s" % (str(_repo), snippet)
+    break the real Ankimon boot (the same reason check.py shells out per probe),
+    and we block Qt so the child runs the genuine Tier-1 (no-Anki/no-Qt) path."""
+    code = _BLOCK_QT + "import json\nsys.path.insert(0, %r)\n%s" % (str(_repo), snippet)
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, (
         "harness subprocess failed (rc=%d):\n--- stdout ---\n%s\n--- stderr ---\n%s"
