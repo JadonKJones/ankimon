@@ -6,6 +6,19 @@ validate features/PRs without a human clicking through Anki.
 
 This is dev-only tooling. It is **not** shipped with the add-on.
 
+## Quickstart (one command)
+
+```bash
+python3 harness/check.py            # the full Tier-1 gate — no Anki/Qt/pip. Exit 0 = green.
+python3 harness/check.py --doctor   # if something's off (python version / submodule)
+# `make check` and `make doctor` are equivalent sugar if you have make.
+```
+
+`check.py` auto-discovers every Tier-1 check (import probes + a smoke play-through +
+the regression test), runs each isolated, and returns a single PASS/FAIL. It's the
+**exact command CI runs on every PR** (`.github/workflows/harness.yml`), so the loop is:
+**agent writes code → `python3 harness/check.py` → green → review → ship.**
+
 ## Why this exists
 
 Anki add-ons are painful to test: every module historically imported `aqt`, so
