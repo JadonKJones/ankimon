@@ -6,45 +6,48 @@ runs the *real* battle loop / encounter logic against a throwaway profile with n
 Anki and no Qt, and asserts the core loop produces the right observable events
 with zero errors.
 
+Isolation: these tests need the GENUINE ``Ankimon`` package booted fresh. The rest
+of the unit suite (and this repo's conftest.py) stub ``aqt`` / ``Ankimon.*`` in
+sys.modules at import time, which makes an in-process real boot unreliable when
+this file runs after them. So — exactly like ``harness/check.py`` — each test runs
+its scenario in a CLEAN child interpreter and asserts on a JSON result. That makes
+the suite robust (no in-process pollution) without any mocking.
+
 Runs under pytest (CI) or as a plain script:  python3 tests/test_headless_harness.py
 """
 
-import sys
+import json
 import pathlib
-
-import pytest
+import subprocess
+import sys
 
 _repo = pathlib.Path(__file__).resolve().parents[1]
-if str(_repo) not in sys.path:
-    sys.path.insert(0, str(_repo))
+_MARKER = "HARNESS_RESULT:"
 
 
-_MOCKED_PREFIXES = ("aqt", "Ankimon")
+def _subrun(snippet):
+    """Run a harness snippet in a fresh interpreter; return its JSON result.
 
-
-@pytest.fixture(autouse=True)
-def _isolate_sys_modules():
-    """Other test files stub ``aqt`` / ``Ankimon.*`` in sys.modules at import time
-    (MagicMocks, stub packages). That pollution breaks the REAL harness boot when
-    these tests run after them in the full suite. Pop those entries so the harness
-    boots against the genuine aqt-free modules (exactly as it does standalone / in
-    check.py), then restore them so later tests see the state they expect."""
-    def _matches(name):
-        return name in _MOCKED_PREFIXES or any(name.startswith(p + ".") for p in _MOCKED_PREFIXES)
-
-    saved = {k: sys.modules.pop(k) for k in list(sys.modules) if _matches(k)}
-    try:
-        yield
-    finally:
-        for k in [k for k in sys.modules if _matches(k)]:
-            del sys.modules[k]
-        sys.modules.update(saved)
+    The snippet must print ``HARNESS_RESULT:<json>`` once. We isolate in a child
+    process so the in-process sys.modules stubs other test files install can't
+    break the real Ankimon boot (the same reason check.py shells out per probe)."""
+    code = "import sys, json\nsys.path.insert(0, %r)\n%s" % (str(_repo), snippet)
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, (
+        "harness subprocess failed (rc=%d):\n--- stdout ---\n%s\n--- stderr ---\n%s"
+        % (proc.returncode, proc.stdout, proc.stderr)
+    )
+    for line in reversed(proc.stdout.splitlines()):
+        if line.startswith(_MARKER):
+            return json.loads(line[len(_MARKER):])
+    raise AssertionError("no %s in harness output:\n%s\n%s" % (_MARKER, proc.stdout, proc.stderr))
 
 
 def test_play_session_runs_without_errors():
-    from harness.scenarios import smoke_play
-
-    summary = smoke_play.run(verbose=False)
+    summary = _subrun(
+        "from harness.scenarios import smoke_play\n"
+        "print(%r + json.dumps(smoke_play.run(verbose=False)))" % _MARKER
+    )
     assert summary["caught"] >= 1
     assert summary["defeated"] >= 1
     assert summary["event_counts"].get("battle", 0) > 0
@@ -55,26 +58,35 @@ def test_play_session_runs_without_errors():
 
 
 def test_state_snapshot_and_single_answer():
-    from harness.driver import Driver
-
-    d = Driver(settings_overrides={"battle.cards_per_round": 1})
-    st = d.get_state()
+    result = _subrun(
+        "from harness.driver import Driver\n"
+        "d = Driver(settings_overrides={'battle.cards_per_round': 1})\n"
+        "st = d.get_state()\n"
+        "events = d.answer('good')\n"
+        "print(%r + json.dumps({\n"
+        "    'state_keys': list(st.keys()),\n"
+        "    'max_hp': st['main']['max_hp'],\n"
+        "    'enemy_attacks_is_list': isinstance(st['enemy']['attacks'], list),\n"
+        "    'has_battle': any(e['type'] == 'battle' for e in events),\n"
+        "    'has_error': any(e['type'] == 'error' for e in events),\n"
+        "}))" % _MARKER
+    )
     for key in ("main", "enemy", "tracker", "collection", "trainer"):
-        assert key in st, f"missing state key: {key}"
-    assert st["main"]["max_hp"] >= 1
-    assert isinstance(st["enemy"]["attacks"], list)
-
-    events = d.answer("good")
-    assert any(e["type"] == "battle" for e in events), "answering produced no battle"
-    assert not any(e["type"] == "error" for e in events), "answering produced an error"
+        assert key in result["state_keys"], f"missing state key: {key}"
+    assert result["max_hp"] >= 1
+    assert result["enemy_attacks_is_list"]
+    assert result["has_battle"], "answering produced no battle"
+    assert not result["has_error"], "answering produced an error"
 
 
 def test_auto_battle_mode_cycles():
-    from harness.scenarios import auto_battle
-
-    result = auto_battle.run(mode=2, answers=30, verbose=False)
-    assert result["event_counts"].get("encounter", 0) >= 1
-    assert "error" not in result["event_counts"]
+    result = _subrun(
+        "from harness.scenarios import auto_battle\n"
+        "r = auto_battle.run(mode=2, answers=30, verbose=False)\n"
+        "print(%r + json.dumps(r['event_counts']))" % _MARKER
+    )
+    assert result.get("encounter", 0) >= 1
+    assert "error" not in result
 
 
 if __name__ == "__main__":
