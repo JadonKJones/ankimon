@@ -4,9 +4,11 @@ description: >-
   Drive the headless Ankimon harness to test, profile, fuzz, and reproduce bugs in
   the game with no Anki and no clicking. Use whenever the task is to run reviews/
   battles, validate a change or PR, profile CPU/memory/DB-queries, soak/stress test,
-  fuzz a setting with weird input, reproduce a reported bug (specific Pokémon/move/
-  ability), load an existing save, open or screenshot the real windows, or step
-  through the game's code in a debugger.
+  fuzz a setting with weird input, fuzz EVERYTHING a user can do (every window/menu/
+  right-click across realistic or corrupt save states) to hunt crashes/leaks/memory-
+  footprint, validate that a new feature or menu behaves as intended, reproduce a
+  reported bug (specific Pokémon/move/ability), load an existing save, open or
+  screenshot the real windows, or step through the game's code in a debugger.
 argument-hint: "[what to investigate, in plain English]"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 ---
@@ -72,6 +74,42 @@ invariants** from `get_state()` (HP in `[0,max]`, caught-count grows, …).
 `python3 harness/check.py` (the gate CI runs). For deeper logic checks run a
 scenario (`smoke_play.py`, `auto_battle.py`, `economy.py`, `longrun.py N`) and
 confirm: no `error` events, invariants hold, caught-count/levels move.
+
+### Fuzz EVERYTHING — crashes, edge cases, memory (the mega-fuzzer, Tier 2)
+```bash
+source .tier2/env.sh
+python3 harness/scenarios/mega_fuzz.py                                   # sweep random worlds × random actions
+python3 harness/scenarios/mega_fuzz.py --world corrupt,blank --seeds 40 --steps 150 --parallel 3
+python3 harness/scenarios/mega_fuzz.py --replay 7 80 corrupt             # re-run one seed verbatim to watch it
+```
+Boots the real add-on into a random **world** (`first_run`=sprites/empty · `blank`=no
+sprites, i.e. user declined the download · `seeded`=full box · `corrupt`=one save row
+mangled) and loops random **actions** over auto-discovered targets: gameplay
+(answer/catch/defeat/encounter/setting) + GUI (open-menu/click/type/close) +
+**right-click→context-menu** (PC box release/give-item/favorite/…). Each action is
+journaled+fsync'd BEFORE it runs and each seed runs in its own child process, so a C++
+Qt abort becomes a reproducible finding (last journal line = culprit + a `--replay`).
+One ranked report: **hard crashes + soft error-events + footprint** (RSS growth/world).
+**TRIAGE every finding** (the discipline that makes it trustworthy): `--replay` it,
+read the traceback, attribute it — a crash can be a real game bug OR a harness gap (a
+missing fake-mw attr, an un-neutered modal). Don't report a harness artifact as a user
+bug. Smaller siblings: `gui_fuzz.py` (GUI-only monkey), `fuzz.py` (Tier-1 logic fuzz),
+`move_sweep.py` (every move through a real battle).
+
+### Validate a feature works AS INTENDED (not just "no crash")
+The fuzzer proves *no crash*; this proves *correctness*. `harness/scenarios/feature_check.py`
+is the template (3 worked checks, all green) — drive the real feature like a user, then
+assert the intended OUTCOME + no error event:
+```python
+# e.g. the "Rename Pokémon" feature, driven through the real PC-box widgets:
+pc.show_pokemon_details(db.get_pokemon(iid)); app.processEvents()
+edit = _find(app, QLineEdit, placeholderText="Nickname"); edit.clear(); QTest.keyClicks(edit, "Sparky")
+_find(app, QPushButton, text="Rename").click(); app.processEvents()
+assert db.get_pokemon(iid)["nickname"] == "Sparky"      # intended behavior held
+```
+`python3 harness/scenarios/feature_check.py` runs the suite. **When asked to check a new
+menu/feature, add a `check_*` to `CHECKS`** (drive it → assert its intended state change)
+— it joins the suite as a permanent acceptance test.
 
 ### Profile a workload — "do N reviews, watch cProfile + DB + memory"
 ```python

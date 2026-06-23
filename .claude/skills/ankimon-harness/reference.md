@@ -67,11 +67,20 @@ from harness.real_driver import RealDriver           # needs the .tier2 env
 d = RealDriver(settings_overrides={...}, first_encounter=True)
 ```
 Boots the genuine add-on (`start_real_session(user_path=None, settings_overrides=None,
-neuter_network=True)`) with real Qt windows offscreen; actions fire the **real**
-`gui_hooks` / reviewer shortcuts. Action surface (subset of Tier 1):
-`answer / catch / defeat / encounter / set_setting / advance_time / time_of_day /
-get_state / drain_events / act`. (No `set_enemy`/`set_move`/`add_cash`/`buy_item` on
-Tier 2 yet — use Tier 1 for those, or `d.services` / the real window objects directly.)
+neuter_network=True, first_run=False, webengine=False, clock_start=None)`) with real Qt
+windows offscreen; actions fire the **real** `gui_hooks` / reviewer shortcuts.
+- `first_run=True` seeds sprite assets BEFORE the import → `database_complete=True` → the
+  genuine new-user path (full menu + the real "Choose a Starter" window). Needs the sprite
+  cache (`env.sh` exports `ANKIMON_SPRITE_CACHE`; else a null starter pixmap → ZeroDivisionError).
+- `webengine=True` wires the REAL `QWebEngineView` (Pokedex/HUD/help) instead of the stub
+  (needs `bash harness/setup_webengine.sh` once; default False = stub).
+- **Faithful boot:** blocking modals are auto-answered (`QDialog.exec`→0, `QMessageBox.*`→
+  default, `QInputDialog.get*`→a valid default) and the `profileLoaded` hook is fired (sets
+  `mw.catchpokemon`/`defeatpokemon`), so the real windows behave as they do in Anki.
+
+Action surface (subset of Tier 1): `answer / catch / defeat / encounter / set_setting /
+advance_time / time_of_day / get_state / drain_events / act`. (No `set_enemy`/`set_move`/
+`add_cash`/`buy_item` on Tier 2 yet — use Tier 1, or `d.services` / the real window objects.)
 Requires `bash harness/setup_tier2.sh` once (see Tier-2 setup below).
 
 ## Fixtures — construct state (`harness/fixtures.py`)
@@ -164,6 +173,23 @@ and assert invariants from `get_state()`.
 | `profile_battles` | `main(n=2000)` | N battles under the profiler (DB/cProfile/memory) | 1 |
 | `pc_box_moves` | `run(verbose=True, shots_dir=None)` | open the **real** PC box, change a mon's moves (persists) + screenshot | 2 |
 | `screenshots` | `run(shots_dir=None, verbose=True)` | PNGs of the real battle window + PC box | 2 |
+| `mega_fuzz` | `sweep(n_seeds=12, steps=80, world=None, parallel=1)` · CLI `--seeds --steps --parallel --world a,b,c` · `--replay SEED STEPS [WORLD]` | **do-EVERYTHING fuzzer** — random **world** × random **action** over auto-discovered targets; journaled + subprocess-isolated; ranked **crashes + soft-errors + footprint** with replay cmds (see "Fuzzing the whole app" below) | 2 |
+| `feature_check` | `run(verbose=True)` → `[(name, ok, detail)]` | **validate features behave AS INTENDED** — drive the real feature, assert the intended outcome; add a `check_*` to `CHECKS` for a new feature/menu | 2 |
+| `gui_fuzz` | `sweep(n_seeds=12, steps=40)` · `--replay SEED STEPS` | GUI monkey — random click/type/menu/close on real windows; subprocess-isolated, journaled (mega_fuzz superset) | 2 |
+| `fuzz` | `run(...)` · `--seed N` | Tier-1 logic fuzz — random species/level/moves(+bogus)/abilities/IVs-EVs/natures/nicknames + ALL settings + random actions; reproducible by seed | 1 |
+| `move_sweep` | `--main` / `--enemy` | run **every** poke_engine move (885) through a real battle, both sides | 1 |
+| `hud_render` / `pokedex_render` | `run(n=…)` | render the real-WebEngine HUD / Pokedex N times, measure RSS (leak hunting) | 2 |
+
+## Fuzzing the whole app + validating features
+**`mega_fuzz`** — the unified do-everything fuzzer (Tier 2):
+- **Worlds** (random/seed; force with `--world`, comma-list cycles): `first_run` (sprites, empty box, full menu) · `blank` (NO sprites = user declined the download → gated menu) · `seeded` (sprites + full team/box) · `corrupt` (seeded, then one saved Pokémon's JSON mangled to valid-but-broken values; surfaces on load/render). Box-worlds open the PC box at warm-up so the corrupt row is actually loaded + right-click has targets.
+- **Action space = interaction MODES × auto-discovered TARGETS.** Modes: answer/catch/defeat/encounter/set_setting (gameplay) + open-menu/click/type/close + **right-click→context-menu**. Targets discover themselves from live widgets (a window that opens mid-run is fuzzed for free; right-click finds any widget exposing a `rightClicked` signal → PC-box slots: release/give-item/favorite/details). QMenu/QDialog/QMessageBox/QInputDialog are auto-resolved so nothing blocks headless.
+- **Reproducible + isolated:** every action journaled (flush+fsync) BEFORE running; each seed in its own child process. A C++ Qt abort kills the child, not the sweep; the journal's last line = culprit. `--replay SEED STEPS [WORLD]` re-runs one seed verbatim. `parallel=N` (Pi-safe at 3).
+- **Report:** hard crashes (culprit + replay) · distinct soft error-events · **FOOTPRINT** (RSS growth per world — leak signal).
+
+**Attribution discipline (essential):** at scale the fuzzer finds *harness gaps* as readily as game bugs. For EACH crash, `--replay` → read traceback → classify: real game bug vs harness artifact (missing fake-`mw` attr → fix `fake_aqt`/fire the right hook; un-neutered modal → neuter it in `real_env`). Worked example (first scale run): 12 raw crashes → **1 real** (Item Shop `random.sample` in a no-sprites profile) + harness gaps (catch/defeat buttons needed `mw.catchpokemon`, set on the `profileLoaded` hook the harness wasn't firing; give-item hung on an un-neutered `QInputDialog.getItem`). Don't report a harness artifact as a user bug.
+
+**`feature_check`** — the correctness counterpart (fuzzer proves *no crash*; this proves *right behavior*). Each `check_*` boots a seeded Tier-2 session, drives the real feature (open via `pc.show()`, find widgets via `app.allWidgets()`, click/type, or fire the wired callback), and asserts the intended DB/state change + no `error` event. Add a check → joins the suite (also a regression gate). Gotchas: PC box = `Ankimon.singletons.pokemon_pc`, shown via `pc.show()` (NOT `toggle_window`); details render into a panel *inside* it (so `.show()` first or child widgets read `isVisible()==False`); import `Ankimon` AFTER the driver boots.
 
 ## Probes (`harness/checks/`) — import/boot safety
 `probe_foundations`, `probe_leaves` (all core modules import aqt-free), `probe_core`
@@ -202,12 +228,17 @@ Set breakpoints in `src/Ankimon`; inspect variables while a *simulated* review r
 ## Tier-2 setup (offscreen Qt)
 ```bash
 bash harness/setup_tier2.sh        # one-time, sudo-free: venv + locally-extracted Qt libs under .tier2/
-source .tier2/env.sh               # LD_LIBRARY_PATH + QT_QPA_PLATFORM=offscreen + venv
+source .tier2/env.sh               # LD_LIBRARY_PATH + QT_QPA_PLATFORM=offscreen + venv + ANKIMON_SPRITE_CACHE
 python3 harness/fetch_sprites.py   # optional: real ~600MB sprite set (pixel-accurate)
+bash harness/setup_webengine.sh    # optional: real QtWebEngine native deps (sudo-free) -> webengine=True works
 ```
 `harness/screenshot.py:grab(widget, path, size=None)` renders any real widget to PNG.
-Note: the 3 WebEngine windows (pokedex/achievements/help) use lightweight stubs so the
-boot doesn't need Chromium-based `PyQt6-WebEngine`.
+**WebEngine:** the Pokedex/HUD/help web views default to a lightweight stub, but the REAL
+`QWebEngineView` now runs offscreen on this box — `bash harness/setup_webengine.sh` once,
+then `RealDriver(webengine=True)` / `start_real_session(webengine=True)`. Use `hud_render` /
+`pokedex_render` for real-WebEngine memory measurement (the Pokedex leaks ~2.6 MB/open —
+user issue #4). `env.sh` exports `ANKIMON_SPRITE_CACHE` so `first_run`/`seeded` boots render
+with real starter pixmaps (WebEngine `view.grab()` screenshots are unreliable — rely on RSS).
 
 ## Settings keys (for `set_setting` / `settings_overrides` / fuzzing)
 Full set + defaults live in `DEFAULT_CONFIG` (`src/Ankimon/pyobj/settings.py`). Groups:
@@ -226,6 +257,12 @@ Full set + defaults live in `DEFAULT_CONFIG` (`src/Ankimon/pyobj/settings.py`). 
   *cause* of lag (N+1 queries, deepcopy churn), not the milliseconds a user feels.
 - **One session per process.** Sessions reset the DB singleton + registry, but
   `user_path` is fixed at first import; for full isolation run each session in a fresh
-  interpreter (the scenarios/probes/`check.py` do).
+  interpreter (the scenarios/probes/`check.py`/`test_headless_harness` do).
+- **Tier-1 is Qt-free — keep it so under pytest.** A guarded Ankimon module builds a
+  QWidget at import when Qt is importable; if a unit test boots the harness where
+  PyQt6/aqt ARE installed (e.g. the `integrity_tests` CI), it SIGABRTs (no QApplication).
+  Boot in a child interpreter that blocks `aqt`/`PyQt6` via a `sys.meta_path` finder so the
+  no-Qt path is taken — see `tests/test_headless_harness._subrun`. (The dedicated harness
+  CI `harness.yml` sidesteps this by installing no Qt deps at all.)
 - **Errors surface as `error` events**, not raised exceptions (mirrors Anki's error dialog).
 - **Never put any of this in `src/`**; generated saves are throwaway (temp dirs), never committed.
