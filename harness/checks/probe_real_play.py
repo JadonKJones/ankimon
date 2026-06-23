@@ -16,7 +16,14 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 from harness.real_driver import RealDriver
 
 
-def main() -> int:
+def main(seed=7) -> int:
+    # Deterministic by default: real play is otherwise unseeded, so an unlucky
+    # encounter RNG path can hit a real (rare) game bug — e.g. "Cannot choose from
+    # an empty sequence" — and flake this gate. Seed it (mirrors smoke_play / #501);
+    # pass seed=None to fuzz. (Such bugs are hunted deterministically by mega_fuzz.)
+    if seed is not None:
+        import random
+        random.seed(seed)
     d = RealDriver(settings_overrides={
         "battle.cards_per_round": 1,
         "battle.automatic_battle": 0,
