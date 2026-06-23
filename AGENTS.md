@@ -160,6 +160,12 @@ python -m harness.scenarios.screenshots     # PNGs of the real battle window + P
   and confirm: no `error` events, HP stays in `[0, max]`, caught-count/levels move as
   expected. `drain_events()` after each action is how you observe.
 - Editing a real window → run the matching Tier-2 scenario + a screenshot.
+- Reproducing a bug report ("X's move/ability won't work") → construct the exact
+  state and drive it: `Driver(seed={"main": {...}})` for a specific team, `set_enemy(...)`
+  for a specific wild Pokemon, or `Driver(db=<save>)` to boot on an existing save, then
+  watch the `battle` events. See `harness/fixtures.py` + `harness/checks/probe_fixtures.py`.
+  (Dev-only — `fixtures.py` only writes the same plain-JSON DB a user can already edit;
+  it stays in `harness/`, never `src/`, and generated saves are throwaway, never committed.)
 - Hunting bugs/leaks/regressions → fuzz actions, soak for memory, or diff the event
   stream of two branches.
 - Long-horizon: the session is persistent — issue thousands of sequential actions

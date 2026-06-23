@@ -25,8 +25,10 @@ def start_session(
     settings_overrides=None,
     evolution_policy: str = "decline",
     event_sink=None,
-    first_encounter: bool = True,
+    first_encounter=None,
     clock_start=None,
+    db=None,
+    seed=None,
 ) -> SimpleNamespace:
     """Boot a headless session and return a namespace of handles for the Driver.
 
@@ -34,10 +36,27 @@ def start_session(
     settings_overrides: dict of settings keys to set (e.g. {"battle.cards_per_round": 1}).
     evolution_policy: "decline" | "ignore" — how FakeEvoWindow answers evolutions.
     event_sink: optional callable(dict) tee'd every event (e.g. JSONL writer).
-    first_encounter: generate a real wild Pokemon up front (vs the placeholder).
+    first_encounter: generate a real wild Pokemon up front. Default: True for a
+        blank session, False when loading a save (so its state isn't disturbed).
+    db: path to an existing ankimon.db to boot on (loads arbitrary progress). It is
+        COPIED into this session's throwaway profile, so the source is never mutated.
+    seed: a dict describing a starting state to construct — main/team/box/items (see
+        harness/fixtures.py:seed_db). Dev-only; written to the throwaway profile DB.
     """
     if user_path is None:
         user_path = tempfile.mkdtemp(prefix="ankimon_session_")
+
+    # Load an existing save: copy the given ankimon.db into THIS session's throwaway
+    # profile (non-destructive — the source file is never touched).
+    if db is not None:
+        import shutil
+        from pathlib import Path as _P
+        shutil.copy(str(db), str(_P(user_path) / "ankimon.db"))
+
+    # Open on a fresh wild encounter for a blank session, but don't disturb a loaded
+    # save's in-progress state unless the caller explicitly asks for one.
+    if first_encounter is None:
+        first_encounter = db is None
 
     bootstrap(user_path=user_path)
 
@@ -64,6 +83,13 @@ def start_session(
     _dbm.user_path = _Path(user_path)
     _dbm.reset_db()
     services.reset()
+
+    # Construct a starting state (specific main/team/box/items) BEFORE build_core,
+    # so the normal boot path (update_main_pokemon) loads it as the live game state.
+    if seed is not None:
+        from .fixtures import seed_db
+        with quiet():
+            seed_db(seed, _dbm.get_db())
 
     # Build core game state and install GUI fakes with events OFF, so none of the
     # setup noise (config save, etc.) lands in the buffer the agent reads.

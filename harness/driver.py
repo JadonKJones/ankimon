@@ -80,10 +80,25 @@ class Driver:
         return self.drain_events()
 
     def encounter(self):
-        """Force a brand-new wild encounter."""
+        """Force a brand-new (random) wild encounter."""
         s = self.services
         with quiet():
             self.env.new_pokemon(s.enemy_pokemon, s.test_window, s.tracker, s.reviewer)
+        return self.drain_events()
+
+    def set_enemy(self, spec=None, **kw):
+        """Force a SPECIFIC wild encounter — for reproducing a reported bug head-on.
+
+        Accepts a spec dict or keywords (see harness/fixtures.py for all fields):
+            d.set_enemy(species="Golem", level=50, moves=["Earthquake"])
+            d.set_enemy(id=94, ability="Levitate", shiny=True)
+        The Pokemon is built from the game's own pokedex data, so only the fields
+        you pin are overridden. Emits an ``encounter`` event like a real one.
+        """
+        from .fixtures import set_enemy as _set_enemy
+        spec = {**(spec or {}), **kw}
+        with quiet():
+            _set_enemy(self.services, self.events, spec)
         return self.drain_events()
 
     def set_setting(self, key, value):
