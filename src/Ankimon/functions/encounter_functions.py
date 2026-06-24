@@ -337,13 +337,17 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
     if USE_OVERHAUL_ENCOUNTER_SYSTEM:
         return _modify_percentages_overhaul(total_reviews, daily_average, trainer_level)
 
-    # Legacy System
+    active_main = getattr(mw, "main_pokemon", None)
+    if active_main is not None and "Mock" in type(active_main).__name__:
+        active_main = None
+    if not active_main:
+        active_main = main_pokemon
     # Check if cache is valid
     if (
         _percentages_cache["percentages"] is not None
         and _percentages_cache["total_reviews"] == total_reviews
         and _percentages_cache["trainer_level"] == trainer_level
-        and _percentages_cache["main_pokemon_level"] == main_pokemon.level
+        and _percentages_cache["main_pokemon_level"] == active_main.level
     ):
         return _percentages_cache["percentages"]
 
@@ -386,7 +390,7 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
         percentages["Mythical"] += 0.2
         percentages["Normal"] -= 3.7
     # Restrict access to certain tiers based on main Pokémon level
-    if main_pokemon.level:
+    if active_main.level:
         # Define level thresholds for each tier
         level_thresholds = {
             "Ultra": 30,
@@ -421,7 +425,7 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
                 percentages["Normal"] -= added
 
         for tier in ["Starter", "Ultra", "Legendary", "Mythical", "Mega", "Gmax"]:
-            if tier in percentages and main_pokemon.level < level_thresholds.get(tier, float("inf")):
+            if tier in percentages and active_main.level < level_thresholds.get(tier, float("inf")):
                 percentages[tier] = 0
 
     # Force starter probability to 0 and normalize
@@ -446,7 +450,7 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
     _percentages_cache["percentages"] = percentages
     _percentages_cache["total_reviews"] = total_reviews
     _percentages_cache["trainer_level"] = trainer_level
-    _percentages_cache["main_pokemon_level"] = main_pokemon.level
+    _percentages_cache["main_pokemon_level"] = active_main.level
 
     return percentages
 
@@ -800,7 +804,8 @@ def generate_random_pokemon(
     wild_pokemon_lvl = max(
         1, wild_pokemon_lvl
     )  # Ensures that the wild pokemon's level is at least 1
-    if main_pokemon.level == 100:
+    active_main = getattr(mw, "main_pokemon", None) or main_pokemon
+    if active_main and getattr(active_main, "level", 5) == 100:
         wild_pokemon_lvl = 100
 
     from ..utils import load_collected_pokemon_ids

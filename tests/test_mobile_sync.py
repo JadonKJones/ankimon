@@ -354,13 +354,13 @@ def test_update_mobile_badge():
     update_mobile_badge(47)
     mock_menu.setTitle.assert_called_with("&Ankimon")
     mock_game_menu.setTitle.assert_called_with("(47) Game")
-    mock_action.setText.assert_called_with("(47) Mobile & Web Reviews")
+    mock_action.setText.assert_called_with("(47) Mobile and Web Reviews")
 
     # Test count = 0 removes badge
     update_mobile_badge(0)
     mock_menu.setTitle.assert_called_with("&Ankimon")
     mock_game_menu.setTitle.assert_called_with("Game")
-    mock_action.setText.assert_called_with("Mobile & Web Reviews")
+    mock_action.setText.assert_called_with("Mobile and Web Reviews")
 
 def test_mobile_bridge(temp_env):
     db, tmp_path = temp_env
@@ -1674,7 +1674,7 @@ def test_dynamic_total_reviews_calculation(temp_env):
         )
 
     # Initial reviews calculation:
-    # get_total_reviews() (10) - unresolved_today (2) + resolved_today_past (2) = 10.
+    # get_total_reviews() (10) - mobile_reviews_today (2) + resolved_count (2) = 10.
     # First encounter is generated when loop is on review 2, so count incremented to 12.
     # Second encounter is generated on review 4, so count incremented to 14.
     assert len(captured_trackers) == 2
@@ -1702,4 +1702,75 @@ def test_attribute_xp_and_evs_to_companion_legacy_evs():
     _attribute_xp_and_evs_to_companion("mock_id", 10, ev_yield_gained, None, 1, db=FakeDB())
     assert companion["ev"]["spa"] == 252
     assert "special-attack" not in companion["ev"]
+
+
+def test_enemy_level_uses_active_companions_only_when_inactive_high_level(temp_env):
+    db, tmp_path = temp_env
+    from Ankimon.functions.mobile_sync import simulate_pending_mobile_battles
+    from Ankimon.pyobj.pokemon_obj import PokemonObject
+    from unittest.mock import patch, MagicMock
+    from aqt import mw
+
+    mw.ankimon_db = db
+    p_main = PokemonObject(
+        type=["Fire"], name="Main", id=4, shiny=False, level=100, ability="Blaze",
+        gender="M", growth_rate="Medium", captured_date=None, tier="Normal", individual_id="main"
+    )
+    p_team1 = PokemonObject(
+        type=["Fire"], name="Team1", id=4, shiny=False, level=100, ability="Blaze",
+        gender="M", growth_rate="Medium", captured_date=None, tier="Normal", individual_id="1"
+    )
+
+    class MockSettings:
+        def get(self, key, default=None):
+            if key == "mobile.inactive_companions":
+                return ["inactive_high"]
+            return default
+
+    # Mock DB returning an inactive high-level companion
+    original_get_pokemon = db.get_pokemon
+    def mock_get_pokemon(ind_id):
+        if ind_id == "inactive_high":
+            return {
+                "type": ["Normal"], "name": "Watchog", "id": 505, "shiny": False, "level": 600, "ability": "Keen Eye",
+                "gender": "M", "growth_rate": "Medium", "captured_date": None, "tier": "Normal", "individual_id": "inactive_high",
+                "base_stats": {"hp": 60, "atk": 85, "def": 69, "spa": 60, "spd": 69, "spe": 77},
+                "attacks": ["Tackle"], "base_experience": 147, "ev": {}, "iv": {}, "battle_status": "Fighting", "ev_yield": {}, "nature": "serious"
+            }
+        return original_get_pokemon(ind_id)
+
+    db.get_pokemon = mock_get_pokemon
+
+    pending_reviews = [{"id": 1, "ease": 3, "revlog_id": 100}]
+
+    with patch("Ankimon.functions.mobile_sync.load_active_team_clones", return_value=[p_team1]), \
+         patch("Ankimon.functions.encounter_functions.generate_random_pokemon") as mock_gen, \
+         patch("Ankimon.functions.ankimon_hooks_to_poke_engine.simulate_battle_with_poke_engine") as mock_battle:
+        
+        # generate_random_pokemon is called with level 600 (stable_max_level)
+        # and returns an enemy that generates at level 602 (600 + delta)
+        mock_gen.return_value = (
+            "Pikachu", 25, 602, "Run Away", ["Electric"],
+            {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90},
+            ["Thunderbolt"], 112, "Medium",
+            {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+            {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15},
+            "M", "fighting", {}, "Normal", {"speed": 2}, False, "serious"
+        )
+        
+        mock_battle.return_value = (None, None, None, None, None)
+
+        simulate_pending_mobile_battles(
+            pending_reviews, p_main, settings_obj=MockSettings(),
+            trainer_card=None, ankimon_tracker_obj=None, ankimon_db=db
+        )
+
+        # Assert generate_random_pokemon was called with stable max level 600 (from inactive companion)
+        assert mock_gen.call_args[0][0] == 600
+        
+        # Assert the enemy passed into the battle simulation was scaled to the active max level (100) + the +2 delta = 102
+        called_enemy = mock_battle.call_args[0][1]
+        assert called_enemy.level == 102
+
+
 

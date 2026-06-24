@@ -590,42 +590,44 @@ class MobileBridge(QObject):
 
         def bg_resolve():
             try:
-                total_reviews = self._bulk_progress["total"]
-                limit = 15
-                while self._bulk_progress["processed"] < total_reviews:
-                    if getattr(self, "_bulk_stopped", False):
-                        break
-                    if getattr(self, "_bulk_paused", False):
+                def progress_cb(status, total=None):
+                    if isinstance(status, dict):
+                        self._bulk_progress.update(status)
+                    else:
+                        self._bulk_progress["processed"] = status
+                        if total is not None:
+                            self._bulk_progress["total"] = total
+                    
+                    import time
+                    while getattr(self, "_bulk_paused", False) and not getattr(self, "_bulk_stopped", False):
                         time.sleep(0.1)
-                        continue
+                    
+                    if getattr(self, "_bulk_stopped", False):
+                        return False
+                    return True
 
-                    # Run resolve_all for this chunk
-                    res = resolve_all(
-                        db=mw.ankimon_db,
-                        settings_obj=mw.settings_obj,
-                        tracker=getattr(mw, "ankimon_tracker_obj", None),
-                        trainer_card=getattr(mw, "trainer_card", None),
-                        main_pokemon=getattr(mw, "main_pokemon", None),
-                        logger=getattr(mw, "logger", None),
-                        day_cutoff=mw.col.sched.day_cutoff if (mw and mw.col) else 0,
-                        limit=limit
-                    )
-                    if not res or res.get("done") or res.get("reviews_processed", 0) == 0:
-                        break
+                res = resolve_all(
+                    db=mw.ankimon_db,
+                    settings_obj=mw.settings_obj,
+                    tracker=getattr(mw, "ankimon_tracker_obj", None),
+                    trainer_card=getattr(mw, "trainer_card", None),
+                    main_pokemon=getattr(mw, "main_pokemon", None),
+                    logger=getattr(mw, "logger", None),
+                    day_cutoff=mw.col.sched.day_cutoff if (mw and mw.col) else 0,
+                    limit=None,
+                    progress_callback=progress_cb
+                )
+                if res:
                     if not res.get("success", True):
                         raise Exception(res.get("error", "Unknown error in background resolve"))
-
-                    # Accumulate results
-                    self._bulk_progress["processed"] += res.get("reviews_processed", 0)
-                    self._bulk_progress["resolved"] += res.get("resolved", 0)
-                    self._bulk_progress["catches"] += res.get("catches", 0)
-                    self._bulk_progress["cash_gained"] += res.get("cash_gained", 0)
-                    self._bulk_progress["trainer_xp_gained"] += res.get("trainer_xp_gained", 0)
-                    self._bulk_progress["xp_gained"] += res.get("xp_gained", 0)
+                    self._bulk_progress["processed"] = res.get("reviews_processed", 0)
+                    self._bulk_progress["resolved"] = res.get("resolved", 0)
+                    self._bulk_progress["catches"] = res.get("catches", 0)
+                    self._bulk_progress["cash_gained"] = res.get("cash_gained", 0)
+                    self._bulk_progress["trainer_xp_gained"] = res.get("trainer_xp_gained", 0)
+                    self._bulk_progress["xp_gained"] = res.get("xp_gained", 0)
                     if res.get("caught_list"):
-                        self._bulk_progress["caught_list"].extend(res.get("caught_list"))
-                    
-                    time.sleep(0.05)
+                        self._bulk_progress["caught_list"] = res.get("caught_list")
 
             except Exception as e:
                 import traceback

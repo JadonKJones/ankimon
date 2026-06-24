@@ -103,7 +103,16 @@ class AnkimonDB:
     def _get_connection(self) -> ConnectionWrapper:
         """Gets or creates a database connection."""
         if not _is_main_thread():
-            if not hasattr(self._local_conn, "conn") or self._local_conn.conn is None:
+            if (not hasattr(self._local_conn, "conn") or 
+                self._local_conn.conn is None or 
+                getattr(self._local_conn, "db_path", None) != self.db_path):
+                
+                if hasattr(self._local_conn, "conn") and self._local_conn.conn is not None:
+                    try:
+                        self._local_conn.conn.close()
+                    except Exception:
+                        pass
+                
                 conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
                 conn.row_factory = sqlite3.Row  # Access columns by name
                 try:
@@ -113,8 +122,10 @@ class AnkimonDB:
                 except Exception as e:
                     self._log("warning", f"Failed to set background database PRAGMAs: {e}")
                 self._local_conn.conn = ConnectionWrapper(conn)
+                self._local_conn.db_path = self.db_path
             elif not isinstance(self._local_conn.conn, ConnectionWrapper):
                 self._local_conn.conn = ConnectionWrapper(self._local_conn.conn)
+                self._local_conn.db_path = self.db_path
             return self._local_conn.conn
 
         if self._connection is None:

@@ -451,6 +451,120 @@ def test_resolve_next_companion_override_inactive(tmp_path):
         sys.modules.pop("Ankimon.ankimon_items_web.shop_obj", None)
 
 
+def test_multi_turn_encounter_seeding_alignment(tmp_path):
+    """
+    Verify that if Encounter 0 takes multiple turns (e.g. 4 reviews),
+    the next generated encounter's seed matches the second encounter in the preview list
+    and is not skipped or shifted.
+    """
+    from aqt import mw
+    db_path = tmp_path / "ankimon.db"
+    _make_db(db_path)
+    _insert_pending(db_path, n=6)  # cards_per_round = 2, so 6 reviews total
+
+    from src.Ankimon.pyobj.database_manager import AnkimonDB
+    db = AnkimonDB(db_path=db_path)
+
+    orig_db = getattr(mw, "ankimon_db", None)
+    mw.ankimon_db = db
+
+    settings_mock = MagicMock()
+    mock_settings_dict = {
+        "battle.cards_per_round": 2,
+        "battle.automatic_battle": 3,
+        "battle.auto_catch_wishlist": [],
+        "battle.auto_catch_legendary": True,
+        "battle.auto_catch_mythical": True,
+        "battle.auto_catch_ultra": True,
+        "battle.auto_catch_starter": True,
+        "battle.auto_catch_mega": True,
+        "battle.auto_catch_gmax": True,
+        "battle.auto_catch_regional": True,
+        "battle.xp_multiplier": 1.0,
+        "controls.allow_to_choose_moves": False
+    }
+    settings_mock.get.side_effect = lambda key, default=None: mock_settings_dict.get(key, default)
+    orig_settings = getattr(mw, "settings_obj", None)
+    mw.settings_obj = settings_mock
+
+    from src.Ankimon.pyobj.pokemon_obj import PokemonObject
+    orig_main = getattr(mw, "main_pokemon", None)
+    mw.main_pokemon = PokemonObject(
+        type=["Fire"], name="Charizard", id=6, shiny=False, level=50, ability="Blaze",
+        gender="M", growth_rate="Medium", captured_date=None, tier="Normal", individual_id="main"
+    )
+    mw.main_pokemon.attacks = ["Slash"]
+
+    # In the preview simulation, we want Encounter 0 to take 2 turns (4 reviews), and Encounter 1 to take 1 turn (2 reviews).
+    turn_counts = {}
+
+    def mock_simulate(companion, enemy, *args, **kwargs):
+        eid = getattr(enemy, "individual_id", "default")
+        turn_counts[eid] = turn_counts.get(eid, 0) + 1
+        
+        # If it's the first encounter, make it faint on its 2nd turn
+        # Otherwise, make it faint on its 1st turn
+        if len(turn_counts) == 1:
+            if turn_counts[eid] >= 2:
+                enemy.hp = 0
+            else:
+                enemy.hp = 50
+        else:
+            enemy.hp = 0
+            
+        return ([], None, getattr(companion, "hp", 100), 0, 1)
+
+    try:
+        from src.Ankimon.functions.mobile_sync import simulate_pending_mobile_battles, resolve_next, commit_replay_outcome
+        
+        reviews_rows = db.execute(
+            "SELECT id, revlog_id, card_id, ease, review_time, review_type, queued_at FROM pending_mobile_battles WHERE resolved = 0"
+        ).fetchall()
+        reviews_list = [
+            {
+                "id": r[0],
+                "revlog_id": r[1],
+                "card_id": r[2],
+                "ease": r[3],
+                "review_time": r[4],
+                "review_type": r[5],
+                "queued_at": r[6],
+            }
+            for r in reviews_rows
+        ]
+
+        with patch("src.Ankimon.functions.ankimon_hooks_to_poke_engine.simulate_battle_with_poke_engine", side_effect=mock_simulate):
+            sim_res = simulate_pending_mobile_battles(
+                reviews_list, mw.main_pokemon, settings_mock, None, None, ankimon_db=db
+            )
+        
+        all_preview_pokemon = sim_res["caught"] + sim_res["defeated"]
+        assert len(all_preview_pokemon) == 2, f"Should have 2 preview encounters, got {len(all_preview_pokemon)}"
+        preview_enc_0 = all_preview_pokemon[0]
+        preview_enc_1 = all_preview_pokemon[1]
+
+        # Now run manual replay (resolve_next)
+        turn_counts.clear()
+        
+        with patch("src.Ankimon.functions.ankimon_hooks_to_poke_engine.simulate_battle_with_poke_engine", side_effect=mock_simulate):
+            replay_res_0 = resolve_next("main", db, settings_mock, None, None, mw.main_pokemon)
+            assert replay_res_0["result"]["enemy_name"] == preview_enc_0["name"]
+            
+            outcome_0 = replay_res_0["current_pending_outcome"]
+            commit_replay_outcome("defeat", outcome_0, db, settings_mock, None, mw.main_pokemon)
+            
+            resolved_in_db = db.execute("SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved=1").fetchone()[0]
+            assert resolved_in_db == 4
+
+            replay_res_1 = resolve_next("main", db, settings_mock, None, None, mw.main_pokemon)
+            assert replay_res_1["result"]["enemy_name"] == preview_enc_1["name"]
+
+    finally:
+        mw.ankimon_db = orig_db
+        mw.settings_obj = orig_settings
+        mw.main_pokemon = orig_main
+
+
 
 
 

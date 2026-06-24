@@ -505,6 +505,14 @@ def swap_ankimon_account():
         set_collected_ids(new_ids)
         init_battle_state(new_ids)
 
+        # Update mobile reviews badge with the new database's pending count
+        try:
+            from .menu_buttons import update_mobile_badge
+            pending_count = mw.ankimon_db.get_pending_mobile_count()
+            update_mobile_badge(pending_count)
+        except Exception:
+            pass
+
         # Clear encounter percentages cache (uses new trainer level/stats)
         clear_encounter_cache()
 

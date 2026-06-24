@@ -427,7 +427,7 @@ def create_menu_actions(
     game_menu.addAction(pokemon_team_action)
 
     global _mobile_battles_action
-    mobile_battles_action = QAction("Mobile & Web Reviews", mw)
+    mobile_battles_action = QAction("Mobile and Web Reviews", mw)
     mobile_battles_action.setMenuRole(QAction.MenuRole.NoRole)
     mobile_battles_action.triggered.connect(lambda: _open_shell_at("mobile"))
     game_menu.addAction(mobile_battles_action)
@@ -463,7 +463,7 @@ def create_menu_actions(
 def update_mobile_badge(count: int) -> None:
     """Update the Ankimon menu title to show pending mobile battle count.
     
-    Now updates the Game submenu and the Mobile & Web Reviews action directly,
+    Now updates the Game submenu and the Mobile and Web Reviews action directly,
     while leaving the top-level 'Ankimon' menu clean.
     """
     from .utils import is_main_thread
@@ -478,11 +478,11 @@ def update_mobile_badge(count: int) -> None:
         if count > 0:
             game_menu.setTitle(f"({count}) {game_title}")
             if _mobile_battles_action:
-                _mobile_battles_action.setText(f"({count}) Mobile & Web Reviews")
+                _mobile_battles_action.setText(f"({count}) Mobile and Web Reviews")
         else:
             game_menu.setTitle(game_title)
             if _mobile_battles_action:
-                _mobile_battles_action.setText("Mobile & Web Reviews")
+                _mobile_battles_action.setText("Mobile and Web Reviews")
     except Exception:
         pass  # Never let a badge update crash anything
 
