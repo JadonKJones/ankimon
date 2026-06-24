@@ -509,7 +509,7 @@ def select_best_companion(team_clones: list, enemy_pokemon) -> object:
     return best_clone
 
 
-def _compute_encounter_idx(all_reviews: list[dict], db, settings_obj, tracker, trainer_card, main_pokemon) -> int:
+def _compute_encounter_idx(all_reviews: list[dict], db, settings_obj, tracker, trainer_card, main_pokemon, commit: bool = True) -> int:
     if not all_reviews:
         return 0
 
@@ -521,38 +521,19 @@ def _compute_encounter_idx(all_reviews: list[dict], db, settings_obj, tracker, t
             if row is not None:
                 return int(row[0])
             
-            # Fast path: check if resolved count is 0
+            # If missing, calculate starting index using resolved reviews (never use pruned history)
             cursor = db.execute("SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 1")
             resolved_reviews = cursor.fetchone()[0]
-            if resolved_reviews == 0:
-                conn = db._get_connection()
-                with conn:
-                    conn.execute(
-                        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('mobile_resolved_encounters_count', '0')"
-                    )
-                return 0
-
-            # Fast path: use mobile_battle_history count if not pruned (< 500)
-            cursor = db.execute("SELECT COUNT(*) FROM mobile_battle_history")
-            history_count = cursor.fetchone()[0]
-            if 0 < history_count < 500:
+            cards_per_round, _ = _parse_cards_per_round(settings_obj)
+            approx_count = resolved_reviews // cards_per_round
+            
+            if commit:
                 conn = db._get_connection()
                 with conn:
                     conn.execute(
                         "INSERT OR REPLACE INTO metadata (key, value) VALUES ('mobile_resolved_encounters_count', ?)",
-                        (str(history_count),)
+                        (str(approx_count),)
                     )
-                return history_count
-
-            # Fallback: if history is pruned or empty, approximate starting index using resolved reviews
-            cards_per_round, _ = _parse_cards_per_round(settings_obj)
-            approx_count = resolved_reviews // cards_per_round
-            conn = db._get_connection()
-            with conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO metadata (key, value) VALUES ('mobile_resolved_encounters_count', ?)",
-                    (str(approx_count),)
-                )
             return approx_count
         except Exception:
             pass
@@ -702,7 +683,7 @@ def _run_mobile_battles_impl(
         # Initial seed of the encounter using stable index
         first_review = all_unresolved[0]
         resolved_count = sum(1 for r in all_reviews if r.get("resolved") == 1)
-        encounter_idx = _compute_encounter_idx(all_reviews, db, settings_obj, tracker, trainer_card, main_pokemon)
+        encounter_idx = _compute_encounter_idx(all_reviews, db, settings_obj, tracker, trainer_card, main_pokemon, commit=commit)
         if all_reviews:
             seed_idx = min(len(all_reviews) - 1, (encounter_idx + 1) * cards_per_round - 1)
             seed_review = all_reviews[seed_idx]
@@ -918,7 +899,7 @@ def _run_mobile_battles_impl(
         # Re-calculate battle_number properly:
         resolved_count = db.execute("SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved=1").fetchone()[0]
         # Total encounters
-        total_resolved_encounters = _compute_encounter_idx(all_reviews, db, settings_obj, tracker, trainer_card, main_pokemon)
+        total_resolved_encounters = _compute_encounter_idx(all_reviews, db, settings_obj, tracker, trainer_card, main_pokemon, commit=commit)
         last_result_data["battle_number"] = total_resolved_encounters
         # Total encounters overall
         total_all_count = db.execute("SELECT COUNT(*) FROM pending_mobile_battles").fetchone()[0]
@@ -991,7 +972,7 @@ def _run_mobile_battles_impl(
 
     # Unified deterministic seed for the first encounter using the stable index
     resolved_count = sum(1 for r in all_reviews if r.get("resolved") == 1)
-    encounter_idx = _compute_encounter_idx(all_reviews, db, settings_obj, tracker, trainer_card, main_pokemon)
+    encounter_idx = _compute_encounter_idx(all_reviews, db, settings_obj, tracker, trainer_card, main_pokemon, commit=commit)
     if all_reviews:
         seed_idx = min(len(all_reviews) - 1, (encounter_idx + 1) * cards_per_round - 1)
         seed_review = all_reviews[seed_idx]
@@ -1471,11 +1452,18 @@ def _run_mobile_battles_impl(
             try:
                 cursor = db.execute("SELECT value FROM metadata WHERE key = 'mobile_resolved_encounters_count'")
                 row = cursor.fetchone()
-                current_count = int(row[0]) if row else 0
+                if row is not None:
+                    new_count = int(row[0]) + encounters_fought
+                else:
+                    cursor = db.execute("SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 1")
+                    resolved_reviews = cursor.fetchone()[0]
+                    cards_per_round, _ = _parse_cards_per_round(settings_obj)
+                    new_count = resolved_reviews // cards_per_round
+                
                 with db._get_connection():
                     db._get_connection().execute(
                         "INSERT OR REPLACE INTO metadata (key, value) VALUES ('mobile_resolved_encounters_count', ?)",
-                        (str(current_count + encounters_fought),)
+                        (str(new_count),)
                     )
             except Exception:
                 pass
@@ -1653,11 +1641,18 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
             try:
                 cursor = db.execute("SELECT value FROM metadata WHERE key = 'mobile_resolved_encounters_count'")
                 row = cursor.fetchone()
-                current_count = int(row[0]) if row else 0
+                if row is not None:
+                    new_count = int(row[0]) + 1
+                else:
+                    cursor = db.execute("SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 1")
+                    resolved_reviews = cursor.fetchone()[0]
+                    cards_per_round, _ = _parse_cards_per_round(settings_obj)
+                    new_count = resolved_reviews // cards_per_round
+                
                 with db._get_connection():
                     db._get_connection().execute(
                         "INSERT OR REPLACE INTO metadata (key, value) VALUES ('mobile_resolved_encounters_count', ?)",
-                        (str(current_count + 1),)
+                        (str(new_count),)
                     )
             except Exception:
                 pass
