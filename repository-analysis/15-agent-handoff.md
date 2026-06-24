@@ -43,6 +43,24 @@ This document is a concise, operational summary designed to bring the next codin
 - **Status:** Fully Integrated. Items (Mart & Bag), Ankidex, Settings, Profile, and Team screens all run inside `AnkimonItemsWeb` using QWebEngineView pages.
 - **Rule:** Never open separate dialogues for these screens; route them using `_open_shell_at("items" | "ankidex" | "settings" | "profile" | "team")`. Screen data and interactions flow through registered QWebChannel bridges (`bridge`, `nav`, `settings`, `trainer`, `team`). Use `notify_stats_changed()` to broadcast state mutations from background operations to active web views.
 
+### 10. Mobile Reviews Integration (Multi-Companion)
+- **Status:** Fully Integrated (Phases 1-8+).
+- **Core Architecture:**
+  - `functions/mobile_sync.py` handles: watermark-based diff scanning, review queueing (cap: 10 000), team-clone loading, and auto-selection scoring (`select_best_companion` uses `EDO × Speed` scoring with type-effectiveness weighting).
+  - `ankimon_items_web/shop_obj.py` (`MobileBridge`) exposes all QWebChannel slots: `getMobileStatus`, `resolveAll`, `resolveNext`, `commitReplayOutcome`, `startBulkResolve`, `getBulkResolveProgress`, `pauseBulkResolve`, `resumeBulkResolve`, `stopBulkResolve`, `toggleMobileCompanion`, `getTeamStatus`.
+  - `ankimon_mobile_web/` contains: `mobile.html`/`mobile.js` (3-state review UI + auto-resolve progress with Pause/Stop controls) and `history.html`/`history.js` (battle history log panel).
+- **Two Resolution Modes:**
+  1. **Auto-Resolve** (`startBulkResolve`): runs in a daemon background thread (`threading.Thread`). Uses `utils.in_bulk_resolve = True` flag to prevent desktop card reviews from writing to SQLite concurrently. A `_bulk_paused` / `_bulk_stopped` flag pair allows Pause/Resume/Stop from JS polling.
+  2. **Manual Replay** (`resolveNext`/`commitReplayOutcome`): all simulation on the main thread. Uses the full `all_unresolved` list seeded from `all_unresolved[seed_idx].revlog_id` for deterministic encounter generation. The user may override the companion via `companion_id` argument; the fallback is `select_best_companion()`.
+- **Companion Toggles:** `mobile.inactive_companions` setting (list of `individual_id` strings). `toggleMobileCompanion(id)` flips membership. Inactive companions appear darkened in the team grid.
+- **Battle History:** `mobile_battle_history` table in SQLite, capped at **500** most-recent records (trimmed on every insert). Queried at `limit=500` by `getMobileHistory`.
+- **Critical Rules:**
+  - **Do NOT review desktop cards while auto-resolve is running** (race condition on companion stats + SQLite writes). The UI warns users with red text in both the confirmation dialog and progress modal.
+  - `utils.in_bulk_resolve` is checked in `encounter_functions.py` and `pokedex_functions.py` to suppress UI callbacks and evolution logic during batch resolution.
+  - The `_resolve_internal` method uses `use_transaction = (mode == "all")` to batch-commit all resolved rows; `mode == "next"` commits immediately per encounter.
+  - Companion clones are fully healed after each battle (prevents accumulated carry-over damage from causing unexpected early faints).
+  - The seeding strategy differs between modes intentionally: `mode=="next"` seeds from the first encounter's `revlog_id`, while `mode=="all"` seeds from the sum of all batch `revlog_id` values.
+
 ---
 
 ## Verification Commands
@@ -52,8 +70,10 @@ Before submitting pull requests or ending development iterations:
    $env:QT_QPA_PLATFORM="offscreen"
    python -m pytest tests/ -v
    ```
+   Currently: **217 tests** (2 added for companion toggle + encounter seeding alignment).
 2. **Run offline simulation suites:**
    ```powershell
    python scratch/encounter_weighting_simulations/test_encounter_simulation.py
    ```
    Ensures that all 11 encounter pools, region weights, and prerequisite validations function flawlessly.
+

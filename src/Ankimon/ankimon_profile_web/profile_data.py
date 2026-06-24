@@ -57,7 +57,8 @@ def format_pokemon_name(raw):
         m = re.match(r"^(.+?)gmax$", low)
         if m:
             return "Gmax " + _species_name(m.group(1))
-    return _species_name(s)
+    from ..functions.pokedex_functions import format_lore_name
+    return format_lore_name(_species_name(s))
 
 
 def _format_with_level(s):
@@ -599,11 +600,16 @@ class ProfileData:
             self.settings_obj.get("pokedex_v2.spriteMode", "static")
         )
 
+        main_pkmn = mw.ankimon_db.get_main_pokemon()
+        companion_id = main_pkmn.get("individual_id") if main_pkmn else None
+
         return {
             "max_size": MAX_TEAM_SIZE,
             "team": members,
             "xp_share": str(xp_share) if xp_share else None,
             "xp_share_info": self._resolve_stub(xp_share, members) if xp_share else None,
+            "companion": str(companion_id) if companion_id else None,
+            "companion_info": self._resolve_stub(companion_id, members) if companion_id else None,
             "sprite_mode": sprite_mode,
             "team_cycle_count": cycle_count,
         }
@@ -720,8 +726,8 @@ class ProfileData:
             print(f"[Ankimon] profile: CP calc failed for {individual_id}: {e}")
             return 0
 
-    def handle_save_team(self, team_ids, xp_share_id):
-        """Persist the chosen team + XP Share (any owned Pokémon)."""
+    def handle_save_team(self, team_ids, xp_share_id, companion_id):
+        """Persist the chosen team + XP Share + Active Companion (any owned Pokémon)."""
         seen = set()
         clean_ids = []
         for raw in team_ids or []:
@@ -735,11 +741,16 @@ class ProfileData:
 
         team_data = [{"individual_id": ind_id} for ind_id in clean_ids]
         xp_share_id = str(xp_share_id) if xp_share_id else None
+        companion_id = str(companion_id) if companion_id else None
 
         try:
             self.settings_obj.set("trainer.team", team_data)
             self.settings_obj.set("trainer.xp_share", xp_share_id)
             mw.ankimon_db.save_team(team_data)
+            if companion_id:
+                mw.ankimon_db.set_main_pokemon(companion_id)
+                from ..functions.update_main_pokemon import update_main_pokemon
+                update_main_pokemon(mw.main_pokemon)
         except Exception as e:
             return {"ok": False, "message": f"Failed to save team: {e}"}
 

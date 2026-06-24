@@ -30,10 +30,11 @@ Directly evidenced by:
 5. **Battle Engine (`poke_engine/`):** A complex sub-package for simulating Pokémon battles. It calculates damage, determines move effects, and manages battle state. Connected via `poke_engine/ankimon_hooks_to_poke_engine.py`.
 6. **GUI Components (`pyobj/` and `gui_classes/`):** PyQt6 windows and dialogs for the user interface, including the modernized 3:2 PC Box, and a unified web-based shell window (`AnkimonItemsWeb`) hosting HTML5/QtWebEngine screens for Items (Mart & Bag), Settings, Profile, Team, and the Ankidex discovery map.
 7. **Add-on Reloader Module (`reloader.py`):** Instantly hot-reloads all Ankimon code, tearing down hooks and menu controls and purging `sys.modules` to prevent memory leaks during development.
+8. **Mobile Reviews Integration (`functions/mobile_sync.py` & `ankimon_mobile_web/`):** Synchronizes card reviews completed on AnkiMobile/AnkiWeb, queueing them as pending battles. Offers Auto-Resolve (with roster optimization) and turn-based Manual Replay modes.
 
 ## State and persistence at a glance
 - **State Flow:** The flashcard review (`reviewer_did_answer_card`) triggers an attack in the battle. The battle state is updated in the `poke_engine` and synced back to `PokemonObject` instances (`main_pokemon`, `enemy_pokemon`).
-- **Persistence:** All player progression, collection, items, team, badges, and settings state are stored inside a single consolidated SQLite database file (`ankimon.db`) managed by `pyobj/database_manager.py`. Connection hot-swapping is supported for switching to `ankimonDEV.db` at runtime.
+- **Persistence:** All player progression, collection, items, team, badges, settings state, pending mobile battles, and battle history logs are stored inside a single consolidated SQLite database file (`ankimon.db`) managed by `pyobj/database_manager.py`. Connection hot-swapping is supported for switching to `ankimonDEV.db` at runtime.
 - **In-Memory Objects:** `singletons.py` maintains the live instances of the user's main Pokémon, the current enemy Pokémon, settings, and the database manager as reload-safe references anchored to `mw`.
 
 Directly evidenced by:
@@ -54,13 +55,12 @@ Directly evidenced by:
 - **Active Database Hot-Swap Lockout:** Switching database connections while database-locked threads or open UI windows are active can lead to corruption or unhandled sqlite3 state exceptions.
 
 ## What to read first
-1. `__init__.py`: To understand the Anki hooks and the high-level flow of a review card triggering a battle round.
-2. `reloader.py`: To see how the addon handles safe, modular hot-reloads during active development.
-3. `singletons.py`: To see the global objects that drive the add-on.
-4. `functions/encounter_functions.py`: To see the advanced pool weighting and prerequisite checking algorithms.
-5. `pyobj/pokemon_obj.py`: To understand the core data structure representing a Pokémon.
+- **Entrypoint:** `__init__.py` to understand hooks and review-card battle loop.
+- **Hot-Reload:** `reloader.py` for safe development teardown and module purging.
+- **Global Singletons:** `singletons.py` to see live memory structures.
+- **Mobile Engine:** `functions/mobile_sync.py` for mobile review queueing and companion selectors.
 
-## Top 15 Most Important Files (Ranked)
+## Top 16 Most Important Files (Ranked)
 1. `__init__.py` (Entrypoint and orchestration)
 2. `singletons.py` (Global state initialization and hot-swap)
 3. `pyobj/database_manager.py` (Persistence layer, schemas, switch_database)
@@ -74,5 +74,6 @@ Directly evidenced by:
 11. `ankimon_profile_web/profile_data.py` (Profile & Team web view business data provider)
 12. `functions/pokedex_functions.py` (In-memory pokedex cache and lookups)
 13. `functions/learnset_retrieval.py` (In-memory movesets cache and generational fallback)
-14. `pyobj/ankimon_tracker.py` (Session and progress tracking)
-15. `pyobj/ankimon_sync.py` (Data synchronization logic)
+14. `functions/mobile_sync.py` (Mobile review sync, active team loading, and companion selection)
+15. `pyobj/ankimon_tracker.py` (Session and progress tracking)
+16. `pyobj/ankimon_sync.py` (Data synchronization logic)

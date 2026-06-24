@@ -2,6 +2,21 @@ import json
 import importlib
 import sys
 import types
+_orig_modules = {
+    name: sys.modules.get(name)
+    for name in [
+        "Ankimon.resources",
+        "Ankimon.singletons",
+        "Ankimon.utils",
+        "Ankimon.pyobj",
+        "Ankimon.pyobj.error_handler",
+        "Ankimon.pyobj.QProgressIndicator",
+        "aqt",
+        "aqt.utils",
+        "Anki",
+        "aqt.qt"
+    ]
+}
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -50,6 +65,13 @@ sys.modules[_spec.name] = _pf
 _spec.loader.exec_module(_pf)
 
 from Ankimon.functions.pokedex_functions import get_all_pokemon_moves
+
+# Restore original modules to prevent global mock contamination during test collection
+for name, orig in _orig_modules.items():
+    if orig is None:
+        sys.modules.pop(name, None)
+    else:
+        sys.modules[name] = orig
 
 
 def test_all_pokemon_learnsets_are_valid():

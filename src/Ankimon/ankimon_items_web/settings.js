@@ -145,7 +145,7 @@
         if (setting.description) {
             const desc = document.createElement('div');
             desc.className = 'setting-description';
-            desc.textContent = setting.description;
+            desc.innerHTML = setting.description;
             info.appendChild(desc);
         }
         row.appendChild(info);

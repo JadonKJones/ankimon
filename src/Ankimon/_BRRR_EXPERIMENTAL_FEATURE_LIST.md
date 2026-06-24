@@ -12,6 +12,7 @@ Here is a quick look at what's new and improved in this experimental version:
 - **🌎 Region Selection & Regional Forms**: Select an active region (like Kanto, Alola, Galar, etc.) to boost generation spawn odds and catch unique regional forms (e.g. Alolan Geodude, Galarian Darmanitan).
 - **🧬 Deep Evolution Depth**: Level-up evolutions now respect your selected active region and support move-based evolutions. Special forms have been accurately redistributed into their lore-correct Legendary/Mythical tiers.
 - **🔄 Fast Hotkeys**: Swap active team members instantly with the `9` key during card reviews.
+- **📱 Mobile Reviews Integration**: Review your flashcards on the go using AnkiMobile or AnkiWeb and resolve them as battles on your desktop. Support for Auto-Resolve (optimal team matchup selection) or Manual Replay (animated reviews).
 
 ## 1. Performance & Memory Optimization
 
@@ -224,7 +225,22 @@ A modern startup check and installation system designed specifically to keep use
 
 ---
 
-## 8. Comprehensive Encounter Systems Overhaul (Inactive by Default)
+## 8. Mobile Reviews Integration (AnkiMobile / AnkiWeb)
+
+Play Ankimon on the go! You can now review cards on your phone (using AnkiMobile or AnkiWeb) and sync them back to your computer to resolve them as Pokémon battles.
+
+### Core Gameplay Features
+
+- **Sync and Fight**: Reviews done on mobile devices are captured during Anki syncs. When you return to your desktop, a dedicated **Mobile Reviews** tab inside your web shell will show you how many pending battles are waiting for you.
+- **Roster Selection & Companion Toggles**: All your team members can participate as companions on mobile reviews. If you want a specific Pokémon in your team but don't want it to fight mobile battles, simply click its sprite in the Team tab to make it **inactive** (it will appear darkened).
+- **Auto-Resolve (Matchup Optimization)**: Don't want to play through dozens of battles manually? Choose **Auto-Resolve**! The game will simulate the battles in the background and automatically select the best companion from your active mobile roster for each battle based on move types, power, and speed to finish the fight as quickly as possible.
+- **Manual Replay Mode**: Want to see the action? Choose **Manual Replay** to play through your synced mobile battles one by one with full combat animations. You can even manually override the active companion before starting each battle to try different strategies or train specific Pokémon.
+- **Battle History Logs**: A dedicated **Battle History** panel in the Mobile tab lets you review your recently resolved mobile battles (capped at 200 records). It displays the opponent details, your chosen companion, the battle outcome (caught, defeated, fled, etc.), and all the rewards (XP and cash) you earned.
+- **Continuous Payouts**: Cash and experience rewards earned during mobile review resolution are distributed continuously as you resolve them, keeping your progress synced and rewarding.
+
+---
+
+## 9. Comprehensive Encounter Systems Overhaul (Inactive by Default)
 
 A major mathematical and architectural redesign of the wild spawn economy to curb rare spawn inflation and establish a robust, progression-driven economy.
 
@@ -241,10 +257,12 @@ A major mathematical and architectural redesign of the wild spawn economy to cur
 
 ---
 
-## 9. Summary of Key Files Changed
+## 10. Summary of Key Files Changed
 
 | File                                           | Primary Change                                                |
 | ---------------------------------------------- | ------------------------------------------------------------- |
+| `src/Ankimon/ankimon_mobile_web/`              | **New** Mobile Reviews and Battle History web views.          |
+| `src/Ankimon/functions/mobile_sync.py`          | **New** Mobile reviews sync, companion auto-selection, and resolution engine. |
 | `src/Ankimon/ankimon_items_web/`               | **New** Mart, Bag, and Settings web views within the unified shell window. |
 | `src/Ankimon/ankimon_profile_web/`             | **New** Profile (Trainer Card) and Team web views.            |
 | `src/Ankimon/ankimon_items_web/LIVE_UPDATES.md` | **New** architecture documentation detailing the JS/Python live stats updates bridge. |

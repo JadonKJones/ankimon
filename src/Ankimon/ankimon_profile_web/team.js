@@ -15,6 +15,8 @@
         team: [null, null, null, null, null, null],
         xpShare: null,         // individual_id of the XP Share holder (any owned Pokémon)
         xpShareInfo: null,     // display stub for the holder (may be benched)
+        companion: null,
+        companionInfo: null,
         maxSize: 6,
         teamCycleCount: 3,     // limit for hotkey 9 rotation
         roster: null,          // null = not loaded yet
@@ -26,6 +28,7 @@
         spriteMode: 'static',
     };
 
+    const isCompanionPicker = false;
     let teamBridge = null;
 
     function spriteUrl(stub, mode = state.spriteMode) {
@@ -263,6 +266,8 @@
         if (trigger) trigger.addEventListener('click', openXpSharePicker);
     }
 
+
+
     // ---------------- Slot actions ----------------
     function removeSlot(slot) {
         // XP Share is independent of team membership now — removing a Pokémon
@@ -443,11 +448,12 @@
             return;
         }
         const xpMode = state.pickerMode === 'xpshare';
+        const companionMode = state.pickerMode === 'companion';
         const q = (document.getElementById('picker-search').value || '').toLowerCase();
         const typeF = state.rosterType || 'all';
         const sort = state.rosterSort || 'cp';
         // In slot mode, Pokémon already in OTHER slots can't be added twice.
-        const taken = xpMode ? new Set() : new Set(
+        const taken = (xpMode || companionMode) ? new Set() : new Set(
             state.team.map((m, i) => (m && i !== state.pickerSlot ? String(m.id) : null)).filter(Boolean)
         );
         let choices = (state.roster || []).filter((c) => {
@@ -464,7 +470,7 @@
         const countEl = document.getElementById('picker-count');
         if (countEl) countEl.textContent = choices.length + ' Pokémon';
 
-        if (!choices.length && !xpMode) {
+        if (!choices.length && !xpMode && !companionMode) {
             list.classList.add('hidden');
             list.innerHTML = '';
             if (empty) empty.classList.remove('hidden');
@@ -486,8 +492,10 @@
         }
         const CAP = 200;
         choices.slice(0, CAP).forEach((c) => {
-            const inTeam = !xpMode && taken.has(String(c.id));
-            const isCurrent = xpMode && String(state.xpShare) === String(c.id);
+            const inTeam = (!xpMode && !companionMode) && taken.has(String(c.id));
+            const isCurrent = xpMode 
+                ? String(state.xpShare) === String(c.id)
+                : (companionMode ? String(state.companion) === String(c.id) : false);
             const card = document.createElement('div');
             card.className = 'roster-card' + (inTeam ? ' in-team' : '') + (isCurrent ? ' current' : '');
             const types = (c.types || []).map(typeBadge).join('');
@@ -500,8 +508,23 @@
                 ${inTeam ? '<div class="rc-tag">On team</div>' : (isCurrent ? '<div class="rc-tag">Current</div>' : '')}`;
             if (!inTeam) {
                 card.addEventListener('click', () => {
-                    if (xpMode) setXpShare(c); else assignSlot(state.pickerSlot, c);
+                    if (xpMode) {
+                        setXpShare(c);
+                    } else if (companionMode) {
+                        setCompanion(c);
+                    } else {
+                        assignSlot(state.pickerSlot, c);
+                    }
                     showPicker(false);
+                    if (companionMode && isCompanionPicker) {
+                        saveTeam().then((res) => {
+                            if (res && res.ok && window.parent && window.parent.closeCompanionPicker) {
+                                window.parent.closeCompanionPicker();
+                            }
+                        }).catch((err) => {
+                            console.error('Companion auto-save failed:', err);
+                        });
+                    }
                 });
             }
             frag.appendChild(card);
@@ -529,21 +552,23 @@
     }
 
     function saveTeam() {
-        if (!state.dirty) return;
+        if (!state.dirty) return Promise.resolve({ ok: true });
         const ids = state.team.filter(Boolean).map((m) => String(m.id));
         if (!teamBridge || !teamBridge.saveTeam) {
             toast('Saved (preview — no backend).', 'success');
             state.dirty = false;
             updateSaveUI();
-            return;
+            return Promise.resolve({ ok: true });
         }
-        teamBridge.saveTeam(JSON.stringify(ids), state.xpShare || '').then((res) => {
+        return teamBridge.saveTeam(JSON.stringify(ids), state.xpShare || '', '').then((res) => {
             if (res && res.ok) {
                 state.dirty = false;
                 updateSaveUI();
                 toast(res.message || 'Team saved.', 'success');
+                return res;
             } else {
                 toast((res && res.message) || 'Save failed.', 'error');
+                throw new Error((res && res.message) || 'Save failed');
             }
         });
     }
@@ -566,6 +591,8 @@
         for (let i = 0; i < state.maxSize; i++) state.team.push(team[i] || null);
         state.xpShare = data.xp_share ? String(data.xp_share) : null;
         state.xpShareInfo = data.xp_share_info || null;
+        state.companion = null;
+        state.companionInfo = null;
         state.spriteMode = data.sprite_mode || 'static';
         state.teamCycleCount = data.team_cycle_count || 3;
 
@@ -581,6 +608,9 @@
         state.roster = null;
         renderTeam();
         updateSaveUI();
+        if (isCompanionPicker) {
+            openCompanionPicker();
+        }
     }
 
     window.initializeTeam = applyData;
@@ -617,10 +647,20 @@
                 }
             });
         }
-        document.getElementById('picker-close').addEventListener('click', () => showPicker(false));
+        document.getElementById('picker-close').addEventListener('click', () => {
+            showPicker(false);
+            if (isCompanionPicker && window.parent && window.parent.closeCompanionPicker) {
+                window.parent.closeCompanionPicker();
+            }
+        });
         document.getElementById('picker-search').addEventListener('input', () => renderRosterList());
         document.getElementById('picker').addEventListener('click', (e) => {
-            if (e.target.id === 'picker') showPicker(false);
+            if (e.target.id === 'picker') {
+                showPicker(false);
+                if (isCompanionPicker && window.parent && window.parent.closeCompanionPicker) {
+                    window.parent.closeCompanionPicker();
+                }
+            }
         });
         const pickerClear = document.getElementById('picker-clear');
         if (pickerClear) {
@@ -637,6 +677,9 @@
             if (e.key === 'Escape') {
                 if (document.querySelector('#picker-toolbar .filter-select.open')) { closePickerMenus(); return; }
                 showPicker(false);
+                if (isCompanionPicker && window.parent && window.parent.closeCompanionPicker) {
+                    window.parent.closeCompanionPicker();
+                }
                 return;
             }
             // Cmd/Ctrl+S saves the team (matches the Settings screen).
@@ -651,6 +694,19 @@
         wireStaticControls();
 
         if (typeof qt === 'undefined' || !qt.webChannelTransport) {
+            // Standalone preview or iframe picker mode reusing parent channel
+            if (window.self !== window.top && window.parent && window.parent.parentChannel) {
+                teamBridge = window.parent.parentChannel.objects.team;
+                const nav = window.parent.parentChannel.objects.nav;
+                window.team = teamBridge;
+                window.nav = nav;
+                if (window.wireNavSwitcher) window.wireNavSwitcher(nav);
+                if (teamBridge && teamBridge.getTeam) {
+                    teamBridge.getTeam().then(applyData);
+                }
+                return;
+            }
+
             // Standalone preview. applyData() resets state.roster to null
             // (production reloads it from the bridge), so seed the mock roster
             // *after* it for the no-bridge picker to have something to show.

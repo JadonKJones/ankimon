@@ -13,6 +13,21 @@ from ..poke_engine.objects import Pokemon, State, StateMutator, Side
 from ..poke_engine.helpers import normalize_name
 from ..poke_engine.find_state_instructions import get_all_state_instructions
 from ..pyobj.error_handler import show_warning_with_traceback
+from ..poke_engine import instruction_generator
+
+_original_get_instructions_from_damage = instruction_generator.get_instructions_from_damage
+
+def _wrapped_get_instructions_from_damage(mutator, defender, damage, accuracy, attacking_move, instruction):
+    if defender == constants.OPPONENT and hasattr(mutator, "review_based_damage_multiplier") and damage is not None:
+        if damage > 0:
+            damage = max(1, math.floor(damage * mutator.review_based_damage_multiplier))
+        else:
+            damage = math.floor(damage * mutator.review_based_damage_multiplier)
+        mutator.review_based_damage_multiplier_applied = True
+    return _original_get_instructions_from_damage(mutator, defender, damage, accuracy, attacking_move, instruction)
+
+instruction_generator.get_instructions_from_damage = _wrapped_get_instructions_from_damage
+
 
 def reset_stat_boosts(pokemon: Pokemon) -> Pokemon:
     """
@@ -120,7 +135,7 @@ def simulate_battle_with_poke_engine(
         enemy_move = "Splash"
 
 
-    if (state is not None) and (state.user.active.id != main_pokemon.name.lower()):
+    if (state is not None) and (state.user.active.id != normalize_name(main_pokemon.name)):
         mutator_full_reset = 1 # reset AFTER Pokemon is changed !
     if mutator_full_reset not in (0, 1):
         mutator_full_reset = 1
@@ -206,6 +221,13 @@ def simulate_battle_with_poke_engine(
 
         mutator = StateMutator(state)
 
+        from aqt import mw
+        settings = getattr(mw, "settings_obj", None) or settings_obj
+        tracker = getattr(mw, "ankimon_tracker_obj", None) or ankimon_tracker_obj
+
+        if settings and settings.get("battle.review_based_damage"):
+            mutator.review_based_damage_multiplier = tracker.multiplier if (tracker and hasattr(tracker, 'multiplier')) else 1.0
+
         if state.opponent.active.hp == 0:
             main_move = "Splash"
             enemy_move = "Splash"
@@ -220,13 +242,21 @@ def simulate_battle_with_poke_engine(
         weights = [outcome.percentage for outcome in transpose_instructions]
         chosen_outcome = random.choices(transpose_instructions, weights=weights, k=1)[0]
 
-    
-        if settings_obj.get("battle.review_based_damage"):
+        if settings and settings.get("battle.review_based_damage"):
             instrs = []
             for instr in chosen_outcome.instructions:
                 if instr[0] == constants.DAMAGE and instr[1] == constants.OPPONENT:
-                    modified_instr = (instr[0], instr[1], math.floor(instr[2] * ankimon_tracker_obj.multiplier)) + instr[3:]
-                    instrs.append(modified_instr)
+                    if hasattr(mutator, "review_based_damage_multiplier_applied"):
+                        instrs.append(instr)
+                    else:
+                        tracker_mult = tracker.multiplier if tracker else 1.0
+                        raw_dmg = instr[2]
+                        if raw_dmg > 0:
+                            mult_dmg = max(1, math.floor(raw_dmg * tracker_mult))
+                        else:
+                            mult_dmg = math.floor(raw_dmg * tracker_mult)
+                        modified_instr = (instr[0], instr[1], mult_dmg) + instr[3:]
+                        instrs.append(modified_instr)
                 else:
                     instrs.append(instr)
         else:

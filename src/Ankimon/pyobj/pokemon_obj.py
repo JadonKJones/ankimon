@@ -107,13 +107,15 @@ class PokemonObject:
     def display_name(self) -> str:
         """Returns the nickname if present and not redundant, otherwise the official pretty name."""
         try:
-            from ..functions.pokedex_functions import get_pokemon_diff_lang_name
+            from ..functions.pokedex_functions import get_pokemon_diff_lang_name, get_pretty_name_for_name
             # Access language setting via mw if available
             lang = 9
             if mw and hasattr(mw, 'settings_obj'):
                 lang = int(mw.settings_obj.get("misc.language", 9))
             
             pretty_name = get_pokemon_diff_lang_name(self.id, lang)
+            if pretty_name == "No Translation in this language":
+                pretty_name = get_pretty_name_for_name(self.name)
             
             if self.nickname:
                 # Check if the nickname is just a variation of the internal name or pretty name
@@ -126,7 +128,11 @@ class PokemonObject:
                     
             return pretty_name
         except:
-            return self.nickname if self.nickname else self.name.title()
+            try:
+                from ..functions.pokedex_functions import get_pretty_name_for_name
+                return self.nickname if self.nickname else get_pretty_name_for_name(self.name)
+            except:
+                return self.nickname if self.nickname else self.name.title()
 
     @property
     def pokedex_id(self) -> int:

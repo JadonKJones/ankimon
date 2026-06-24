@@ -5,42 +5,34 @@ window close/open flicker; the dropdown switcher in either screen calls back
 through QWebChannel to swap content in place.
 """
 
-print("1", flush=True)
 import json
-print("2", flush=True)
 import random
-print("3", flush=True)
+import math
+import os
+import time
+import traceback
+import threading
+import base64
 from datetime import datetime
-print("4", flush=True)
 from aqt import QDialog, QVBoxLayout, QWebEngineView, mw
-print("5", flush=True)
 from aqt.qt import Qt, QUrl, QFrame
-print("6", flush=True)
-from PyQt6.QtCore import QObject, pyqtSlot, QTimer
-print("7", flush=True)
+from PyQt6.QtCore import QObject, pyqtSlot, QTimer, QByteArray
 from PyQt6.QtGui import QColor
-print("8", flush=True)
 from PyQt6.QtWebChannel import QWebChannel
-print("9", flush=True)
 from PyQt6.QtWidgets import QStackedWidget
-print("10", flush=True)
 import csv
-print("11", flush=True)
 from ..utils import give_item, is_dev_mode
-print("12", flush=True)
 from ..resources import items_path, csv_file_items_cost, csv_file_descriptions
-print("13", flush=True)
 from ..functions.pokedex_functions import (
     find_details_move,
     _load_pokedex_cache,
     check_evolution_by_item,
     return_id_for_item_name,
 )
-print("14", flush=True)
 from ..business import calculate_cp_from_dict
-print("15", flush=True)
 from ..ankimon_profile_web.profile_data import ProfileData
-print("16", flush=True)
+from ..functions import mobile_sync
+from ..functions.mobile_sync import resolve_all, resolve_next, commit_replay_outcome
 
 
 SCREEN_ITEMS = "items"
@@ -48,6 +40,8 @@ SCREEN_ANKIDEX = "ankidex"
 SCREEN_SETTINGS = "settings"
 SCREEN_PROFILE = "profile"
 SCREEN_TEAM = "team"
+SCREEN_MOBILE = "mobile"
+SCREEN_HISTORY = "history"
 
 
 class NavBridge(QObject):
@@ -56,6 +50,15 @@ class NavBridge(QObject):
     def __init__(self, window):
         super().__init__()
         self._w = window
+
+    @pyqtSlot(result=int)
+    def getPendingReviewsCount(self) -> int:
+        try:
+            from aqt import mw
+            db = getattr(mw, "ankimon_db", None)
+            return db.get_pending_mobile_count() if db else 0
+        except Exception:
+            return 0
 
     @pyqtSlot()
     def openItems(self):
@@ -76,6 +79,15 @@ class NavBridge(QObject):
     @pyqtSlot()
     def openTeam(self):
         self._w.load_screen(SCREEN_TEAM)
+
+    @pyqtSlot()
+    def openMobile(self):
+        self._w.load_screen(SCREEN_MOBILE)
+
+    @pyqtSlot()
+    def openHistory(self):
+        self._w.load_screen(SCREEN_HISTORY)
+
 
 
 class TrainerBridge(QObject):
@@ -135,15 +147,15 @@ class TeamBridge(QObject):
         return self._w.profile_data.get_member_stats(individual_id)
 
     # JSON string in (PyQt QVariant-list unwrap is unreliable on first call).
-    @pyqtSlot(str, str, result="QVariant")
-    def saveTeam(self, team_json, xp_share_id):
+    @pyqtSlot(str, str, str, result="QVariant")
+    def saveTeam(self, team_json, xp_share_id, companion_id):
         try:
             team_ids = json.loads(team_json) if team_json else []
             if not isinstance(team_ids, list):
                 raise ValueError("team payload must be a list")
         except (TypeError, ValueError) as e:
             return {"ok": False, "message": f"Invalid team payload: {e}"}
-        return self._w.profile_data.handle_save_team(team_ids, xp_share_id or None)
+        return self._w.profile_data.handle_save_team(team_ids, xp_share_id or None, companion_id or None)
 
 
 class SettingsBridge(QObject):
@@ -236,33 +248,631 @@ class ItemsBridge(QObject):
         self._w.load_screen(SCREEN_ANKIDEX)
 
 
+class MobileBridge(QObject):
+    """Mobile reviews screen — data and actions."""
+
+    def __init__(self, window):
+        super().__init__()
+        self._w = window
+
+    @pyqtSlot(result="QVariant")
+    def getMobileStatus(self) -> dict:
+        """
+        Returns all data needed to render State 1 or State 2.
+        Called by mobile.js on page load and after actions.
+        """
+        try:
+            db = mw.ankimon_db
+            # 1. Count and ease breakdown in one GROUP BY query (lightweight)
+            rows = db.execute(
+                """SELECT ease, COUNT(*) as cnt FROM pending_mobile_battles
+                   WHERE resolved = 0 GROUP BY ease"""
+            ).fetchall()
+            pending_count = sum(r[1] for r in rows)
+
+            # Read settings for cards_per_round
+            from ..functions import mobile_sync
+            settings_obj = mw.settings_obj
+            cards_per_round, _ = mobile_sync._parse_cards_per_round(settings_obj)
+
+            # Read cached resolved count to compute total battle count quickly
+            cursor = db.execute("SELECT value FROM metadata WHERE key = 'mobile_resolved_encounters_count'")
+            row = cursor.fetchone()
+            resolved_battles = int(row[0]) if row else 0
+            battle_count = resolved_battles + math.ceil(pending_count / cards_per_round)
+
+            if pending_count == 0:
+                return {"pending_count": 0, "cap": 10000, "battle_count": 0}
+
+            # Populate ease breakdown from rows count
+            ease_breakdown = {"1": 0, "2": 0, "3": 0, "4": 0}
+            for row in rows:
+                ease_breakdown[str(row[0])] = row[1]
+
+            settings_obj = mw.settings_obj
+            main_pokemon = getattr(mw, "main_pokemon", None)
+            trainer_card = getattr(mw, "trainer_card", None)
+            ankimon_tracker_obj = getattr(mw, "ankimon_tracker_obj", None)
+
+            # Get descriptive name for auto-battle setting
+            auto_battle_mode_names = {
+                0: "Manual (Auto-Resolve)",
+                1: "Auto-Catch",
+                2: "Auto-Defeat",
+                3: "Catch Uncollected"
+            }
+            auto_battle_val = 0
+            try:
+                auto_battle_val = int(settings_obj.get("battle.automatic_battle", 0))
+            except Exception:
+                pass
+            auto_battle_mode = auto_battle_mode_names.get(auto_battle_val, "Manual")
+
+            rare_catch_active = False
+            if settings_obj:
+                rare_catch_active = (
+                    settings_obj.get("battle.auto_catch_legendary", True)
+                    or settings_obj.get("battle.auto_catch_mythical", True)
+                    or settings_obj.get("battle.auto_catch_ultra", True)
+                    or settings_obj.get("battle.auto_catch_starter", True)
+                    or settings_obj.get("battle.auto_catch_mega", True)
+                    or settings_obj.get("battle.auto_catch_gmax", True)
+                    or settings_obj.get("battle.auto_catch_regional", True)
+                    or bool(settings_obj.get("battle.auto_catch_wishlist", []))
+                )
+
+            # Main Pokémon info for preview
+            main_pokemon_name = None
+            main_pokemon_level = None
+            main_pokemon_sprite = None
+            sprite_mode = "static"
+            if main_pokemon:
+                main_pokemon_name = main_pokemon.name
+                main_pokemon_level = main_pokemon.level
+                
+                from ..functions.sprite_functions import get_relative_sprite_path
+                main_pokemon_sprite = get_relative_sprite_path(
+                    main_pokemon.id, bool(main_pokemon.shiny), (main_pokemon.gender or "N"), main_pokemon.name, "gif"
+                )
+
+            if settings_obj:
+                sprite_mode = settings_obj.get(
+                    "ankidex.spriteMode",
+                    settings_obj.get("pokedex_v2.spriteMode", "static")
+                )
+
+            # Trigger async estimates calculation if there are pending reviews
+            estimates_loading = False
+            estimates = {
+                "xp": 0,
+                "encounters": 0,
+                "catches": 0,
+                "caught_list": [],
+                "is_truncated": False,
+                "total_reviews": 0,
+                "simulated_reviews": 0,
+                "cash": 0,
+            }
+            if pending_count > 0:
+                estimates_loading = True
+
+                trainer_card = getattr(mw, "trainer_card", None)
+                ankimon_tracker_obj = getattr(mw, "ankimon_tracker_obj", None)
+
+                def run_sim(col):
+                    reviews_rows_thread = db.execute(
+                        """SELECT id, revlog_id, card_id, ease, review_time, review_type, queued_at
+                           FROM pending_mobile_battles
+                           WHERE resolved = 0
+                           ORDER BY id ASC LIMIT 105"""
+                    ).fetchall()
+                    reviews_list_thread = [
+                        {
+                            "id": r[0],
+                            "revlog_id": r[1],
+                            "card_id": r[2],
+                            "ease": r[3],
+                            "review_time": r[4],
+                            "review_type": r[5],
+                            "queued_at": r[6],
+                        }
+                        for r in reviews_rows_thread
+                    ]
+                    if pending_count > len(reviews_list_thread):
+                        reviews_list_thread.extend([{"ease": 3}] * (pending_count - len(reviews_list_thread)))
+
+                    from ..functions.mobile_sync import simulate_pending_mobile_battles
+                    return simulate_pending_mobile_battles(
+                        reviews_list_thread,
+                        main_pokemon,
+                        settings_obj,
+                        trainer_card,
+                        ankimon_tracker_obj,
+                        ankimon_db=db
+                    )
+
+                def on_sim_success(sim_res):
+                    res_est = {
+                        "xp": sim_res["xp"],
+                        "encounters": sim_res["encounters"],
+                        "catches": sim_res.get("catches_count", len(sim_res["caught"])),
+                        "caught_list": sim_res["caught"],
+                        "is_truncated": sim_res.get("is_truncated", False),
+                        "total_reviews": sim_res.get("total_reviews", 0),
+                        "simulated_reviews": sim_res.get("simulated_reviews", 0),
+                        "cash": sim_res.get("cash", 0),
+                    }
+                    js = f"if (window.updateMobileEstimates) {{ window.updateMobileEstimates({json.dumps(res_est)}); }}"
+                    self._w.webview_mobile.page().runJavaScript(js)
+
+                if "PYTEST_CURRENT_TEST" in os.environ:
+                    sim_res = run_sim(None)
+                    estimates = {
+                        "xp": sim_res["xp"],
+                        "encounters": sim_res["encounters"],
+                        "catches": sim_res.get("catches_count", len(sim_res["caught"])),
+                        "caught_list": sim_res["caught"],
+                        "is_truncated": sim_res.get("is_truncated", False),
+                        "total_reviews": sim_res.get("total_reviews", 0),
+                        "simulated_reviews": sim_res.get("simulated_reviews", 0),
+                        "cash": sim_res.get("cash", 0),
+                    }
+                    estimates_loading = False
+                    battle_count = estimates["encounters"]
+                else:
+                    from aqt.operations import QueryOp
+                    QueryOp(
+                        parent=self._w,
+                        op=run_sim,
+                        success=on_sim_success
+                    ).without_collection().run_in_background()
+
+            return {
+                "pending_count": pending_count,
+                "pending_count_at_start": pending_count,
+                "cards_per_round": cards_per_round,
+                "battle_count": battle_count,
+                "cap": 10000,
+                "ease_breakdown": ease_breakdown,
+                "estimates": estimates,
+                "estimates_loading": estimates_loading,
+                "auto_battle_mode": auto_battle_mode,
+                "rare_catch_active": rare_catch_active,
+                "main_pokemon_name": main_pokemon_name,
+                "main_pokemon_level": main_pokemon_level,
+                "main_pokemon_sprite": main_pokemon_sprite,
+                "sprite_mode": sprite_mode,
+                "team_status": self.getTeamStatus(),
+            }
+        except Exception as e:
+            import traceback
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"getMobileStatus failed: {e}\n{traceback.format_exc()}")
+            return {"error": str(e), "pending_count": 0, "pending_count_at_start": 0, "cap": 10000}
+
+    @pyqtSlot(result="QVariant")
+    def getMobileHistory(self) -> list:
+        """Retrieves mobile battle history."""
+        try:
+            return mw.ankimon_db.get_mobile_history(limit=500)
+        except Exception as e:
+            return []
+
+    @pyqtSlot(result="QVariant")
+    def clearMobileHistory(self) -> bool:
+        """Clears mobile battle history."""
+        try:
+            return mw.ankimon_db.clear_mobile_history()
+        except Exception as e:
+            return False
+
+    @pyqtSlot(result="QVariant")
+    def dismissAll(self) -> dict:
+        """
+        Mark ALL pending battles as resolved without running any battle logic.
+        This is the escape hatch for users who don't want to replay.
+        """
+        try:
+            db = mw.ankimon_db
+            count_before = db.get_pending_mobile_count()
+            with db._get_connection() as conn:
+                conn.execute(
+                    "UPDATE pending_mobile_battles SET resolved=1, resolved_at=? WHERE resolved=0",
+                    (int(time.time() * 1000),)
+                )
+            from ..menu_buttons import update_mobile_badge
+            update_mobile_badge(0)
+            return {"dismissed": count_before, "success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @pyqtSlot(result="QVariant")
+    def resolveAll(self) -> dict:
+        """
+        Runs the deterministic auto-resolve for all pending reviews, applying the exact same
+        encounters and outcomes simulated in the preview.
+        """
+        try:
+            db = mw.ankimon_db
+            settings_obj = mw.settings_obj
+            tracker = getattr(mw, "ankimon_tracker_obj", None)
+            trainer_card = getattr(mw, "trainer_card", None)
+            main_pokemon = getattr(mw, "main_pokemon", None)
+            day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
+
+            return resolve_all(
+                db=db,
+                settings_obj=settings_obj,
+                tracker=tracker,
+                trainer_card=trainer_card,
+                main_pokemon=main_pokemon,
+                logger=getattr(mw, "logger", None),
+                day_cutoff=day_cutoff
+            )
+        except Exception as e:
+            import traceback
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"resolveAll failed: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
+
+    @pyqtSlot(int, result="QVariant")
+    def resolveChunk(self, limit: int) -> dict:
+        """
+        Resolves a chunk of pending battles up to the specified limit.
+        """
+        db = mw.ankimon_db
+        settings_obj = mw.settings_obj
+        tracker = getattr(mw, "ankimon_tracker_obj", None)
+        trainer_card = getattr(mw, "trainer_card", None)
+        main_pokemon = getattr(mw, "main_pokemon", None)
+        day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
+
+        res = resolve_all(
+            db=db,
+            settings_obj=settings_obj,
+            tracker=tracker,
+            trainer_card=trainer_card,
+            main_pokemon=main_pokemon,
+            logger=getattr(mw, "logger", None),
+            day_cutoff=day_cutoff,
+            limit=limit
+        )
+        if isinstance(res, dict) and res.get("success"):
+            res["done"] = (db.get_pending_mobile_count() == 0)
+        return res
+
+    @pyqtSlot()
+    def startBulkResolve(self):
+        """Starts bulk auto-resolve in a background thread."""
+        self._bulk_progress = {
+            "processed": 0,
+            "total": mw.ankimon_db.get_pending_mobile_count(),
+            "resolved": 0,
+            "catches": 0,
+            "cash_gained": 0,
+            "trainer_xp_gained": 0,
+            "xp_gained": 0,
+            "caught_list": [],
+            "done": False,
+            "error": None
+        }
+        self._bulk_paused = False
+        self._bulk_stopped = False
+        self._bulk_refreshed = False
+
+        def bg_resolve():
+            try:
+                def progress_cb(status, total=None):
+                    if isinstance(status, dict):
+                        self._bulk_progress.update(status)
+                    else:
+                        self._bulk_progress["processed"] = status
+                        if total is not None:
+                            self._bulk_progress["total"] = total
+                    
+                    import time
+                    while getattr(self, "_bulk_paused", False) and not getattr(self, "_bulk_stopped", False):
+                        time.sleep(0.1)
+                    
+                    if getattr(self, "_bulk_stopped", False):
+                        return False
+                    return True
+
+                res = resolve_all(
+                    db=mw.ankimon_db,
+                    settings_obj=mw.settings_obj,
+                    tracker=getattr(mw, "ankimon_tracker_obj", None),
+                    trainer_card=getattr(mw, "trainer_card", None),
+                    main_pokemon=getattr(mw, "main_pokemon", None),
+                    logger=getattr(mw, "logger", None),
+                    day_cutoff=mw.col.sched.day_cutoff if (mw and mw.col) else 0,
+                    limit=None,
+                    progress_callback=progress_cb
+                )
+                if res:
+                    if not res.get("success", True):
+                        raise Exception(res.get("error", "Unknown error in background resolve"))
+                    self._bulk_progress["processed"] = res.get("reviews_processed", 0)
+                    self._bulk_progress["resolved"] = res.get("resolved", 0)
+                    self._bulk_progress["catches"] = res.get("catches", 0)
+                    self._bulk_progress["cash_gained"] = res.get("cash_gained", 0)
+                    self._bulk_progress["trainer_xp_gained"] = res.get("trainer_xp_gained", 0)
+                    self._bulk_progress["xp_gained"] = res.get("xp_gained", 0)
+                    if res.get("caught_list"):
+                        self._bulk_progress["caught_list"] = res.get("caught_list")
+
+            except Exception as e:
+                import traceback
+                logger = getattr(mw, "logger", None)
+                if logger:
+                    logger.log("error", f"bg_resolve failed: {e}\n{traceback.format_exc()}")
+                self._bulk_progress["error"] = f"{str(e)}\n{traceback.format_exc()}"
+            finally:
+                self._bulk_progress["done"] = True
+
+        thread = threading.Thread(target=bg_resolve, daemon=True)
+        thread.start()
+
+    @pyqtSlot()
+    def pauseBulkResolve(self):
+        self._bulk_paused = True
+
+    @pyqtSlot()
+    def resumeBulkResolve(self):
+        self._bulk_paused = False
+
+    @pyqtSlot()
+    def stopBulkResolve(self):
+        self._bulk_stopped = True
+
+    @pyqtSlot(result="QVariant")
+    def getBulkResolveProgress(self) -> dict:
+        progress = getattr(self, "_bulk_progress", {"done": True, "processed": 0, "total": 0}).copy()
+        progress["paused"] = getattr(self, "_bulk_paused", False)
+        # If it just finished, perform safe main-thread refreshes!
+        if progress.get("done") and not getattr(self, "_bulk_refreshed", False):
+            self._bulk_refreshed = True
+            try:
+                # Refresh trainer card
+                if hasattr(mw, "trainer_card") and mw.trainer_card:
+                    mw.trainer_card.refresh()
+                # Refresh active companion
+                if hasattr(mw, "main_pokemon") and mw.main_pokemon:
+                    from ..functions.update_main_pokemon import update_main_pokemon
+                    update_main_pokemon(mw.main_pokemon)
+                # Update mobile badge safely on main thread
+                try:
+                    remaining = mw.ankimon_db.get_pending_mobile_count()
+                    from ..menu_buttons import update_mobile_badge
+                    update_mobile_badge(remaining)
+                except Exception: pass
+                # Notify screen stats changes
+                from ..singletons import notify_stats_changed
+                notify_stats_changed()
+            except Exception as e:
+                import traceback
+                logger = getattr(mw, "logger", None)
+                if logger:
+                    logger.log("error", f"Error refreshing singletons after bulk resolve: {e}\n{traceback.format_exc()}")
+        return progress
+    @pyqtSlot(str, result="QVariant")
+    def resolveNext(self, companion_id: str = "") -> dict:
+        try:
+            db = mw.ankimon_db
+            settings_obj = mw.settings_obj
+            tracker = getattr(mw, "ankimon_tracker_obj", None)
+            trainer_card = getattr(mw, "trainer_card", None)
+            main_pokemon = getattr(mw, "main_pokemon", None)
+            day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
+
+            if "PYTEST_CURRENT_TEST" in os.environ:
+                res = resolve_next(
+                    companion_id=companion_id,
+                    db=db,
+                    settings_obj=settings_obj,
+                    tracker=tracker,
+                    trainer_card=trainer_card,
+                    main_pokemon=main_pokemon,
+                    logger=getattr(mw, "logger", None),
+                    day_cutoff=day_cutoff
+                )
+                if isinstance(res, dict) and "current_pending_outcome" in res:
+                    outcome = res["current_pending_outcome"]
+                    if outcome:
+                        outcome.update({
+                            "main_pokemon": main_pokemon,
+                            "trainer_card": trainer_card,
+                            "settings_obj": settings_obj,
+                        })
+                    self._current_pending_outcome = outcome
+                    return res["result"]
+                return res
+            else:
+                from aqt.operations import QueryOp
+
+                def run_sim(col):
+                    return resolve_next(
+                        companion_id=companion_id,
+                        db=db,
+                        settings_obj=settings_obj,
+                        tracker=tracker,
+                        trainer_card=trainer_card,
+                        main_pokemon=main_pokemon,
+                        logger=getattr(mw, "logger", None),
+                        day_cutoff=day_cutoff
+                    )
+
+                def on_sim_success(sim_res):
+                    if isinstance(sim_res, dict) and "current_pending_outcome" in sim_res:
+                        outcome = sim_res["current_pending_outcome"]
+                        if outcome:
+                            outcome.update({
+                                "main_pokemon": main_pokemon,
+                                "trainer_card": trainer_card,
+                                "settings_obj": settings_obj,
+                            })
+                        self._current_pending_outcome = outcome
+                        result_data = sim_res["result"]
+                    else:
+                        result_data = sim_res
+
+                    import json
+                    js = f"if (window.onResolveNextReady) {{ window.onResolveNextReady({json.dumps(result_data)}); }}"
+                    self._w.webview_mobile.page().runJavaScript(js)
+
+                QueryOp(
+                    parent=self._w,
+                    op=run_sim,
+                    success=on_sim_success
+                ).without_collection().run_in_background()
+
+                return {"loading": True}
+        except Exception as e:
+            import traceback
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"resolveNext failed: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
+
+    @pyqtSlot(str, result="QVariant")
+    def commitReplayOutcome(self, choice: str) -> dict:
+        try:
+            db = mw.ankimon_db
+            settings_obj = mw.settings_obj
+            trainer_card = getattr(mw, "trainer_card", None)
+            main_pokemon = getattr(mw, "main_pokemon", None)
+            achievements_dict = getattr(mw, "achievements_dict", None)
+            logger = getattr(mw, "logger", None)
+            outcome_data = getattr(self, "_current_pending_outcome", None)
+
+            res = commit_replay_outcome(
+                choice=choice,
+                outcome_data=outcome_data,
+                db=db,
+                settings_obj=settings_obj,
+                trainer_card=trainer_card,
+                main_pokemon=main_pokemon,
+                achievements_dict=achievements_dict,
+                logger=logger
+            )
+            if res.get("success"):
+                self._current_pending_outcome = None
+            return res
+        except Exception as e:
+            import traceback
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"commitReplayOutcome failed: {e}\n{traceback.format_exc()}")
+            return {"success": False, "error": str(e)}
+
+    @pyqtSlot(str, result="QVariant")
+    def toggleMobileCompanion(self, individual_id: str) -> dict:
+        """Toggle a team member in/out of mobile.inactive_companions. Returns updated inactive list."""
+        try:
+            settings_obj = mw.settings_obj
+            inactive = settings_obj.get("mobile.inactive_companions", [])
+            if not isinstance(inactive, list):
+                inactive = []
+            inactive = [str(x) for x in inactive]
+            if individual_id in inactive:
+                inactive.remove(individual_id)
+            else:
+                inactive.append(individual_id)
+            settings_obj.set("mobile.inactive_companions", inactive)
+            return {"inactive": inactive, "success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @pyqtSlot(result="QVariant")
+    def getTeamStatus(self) -> dict:
+        """Returns the current team with inactive flags for rendering the mobile team grid."""
+        try:
+            db = mw.ankimon_db
+            team_rows = db.get_team()
+            settings_obj = mw.settings_obj
+            inactive = set(settings_obj.get("mobile.inactive_companions", [])) if settings_obj else set()
+            from ..functions.sprite_functions import get_relative_sprite_path
+
+            team_list = []
+            for t in team_rows:
+                ind_id = t.get("individual_id")
+                if ind_id:
+                    if hasattr(db, "get_pokemon_by_individual_id"):
+                        data = db.get_pokemon_by_individual_id(ind_id)
+                    else:
+                        data = db.get_pokemon(ind_id)
+                    if data:
+                        from ..pyobj.pokemon_obj import PokemonObject
+                        pkmn = PokemonObject(**data)
+                        name = pkmn.display_name
+                        level = data.get("level", 5)
+                        shiny = bool(data.get("shiny", False))
+                        gender = data.get("gender") or "N"
+                        pkmn_id = data.get("id")
+                        pkmn_type = data.get("type", ["Normal"])
+                        if isinstance(pkmn_type, str):
+                            pkmn_type = [pkmn_type]
+                        
+                        sprite_path = get_relative_sprite_path(pkmn_id, shiny, gender, pkmn.name, "gif")
+                        is_inactive = ind_id in inactive
+
+                        team_list.append({
+                            "individual_id": ind_id,
+                            "name": name,
+                            "level": level,
+                            "sprite_path": sprite_path,
+                            "type": pkmn_type,
+                            "inactive": is_inactive
+                        })
+
+            return {"team": team_list, "inactive": list(inactive)}
+        except Exception as e:
+            return {"team": [], "inactive": [], "error": str(e)}
+
+    @pyqtSlot(result="QVariant")
+    def triggerAnkiSync(self) -> dict:
+        """
+        Triggers Anki's built-in synchronization on the main window.
+        """
+        try:
+            from aqt import mw
+            if hasattr(mw, "onSync"):
+                from aqt.qt import QTimer
+                QTimer.singleShot(0, mw.onSync)
+                return {"success": True}
+            else:
+                return {"success": False, "error": "mw.onSync not available"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+
 class AnkimonItemsWeb(QDialog):
     def __init__(self, addon_dir, shop_manager, item_window, ankimon_tracker,
                  trainer_card=None, settings_obj=None, logger=None):
-        print("INIT START", flush=True)
         super().__init__()
-        print("INIT SUPER DONE", flush=True)
         self.addon_dir = addon_dir
         self.shop_manager = shop_manager
         self.item_window = item_window
         self.ankimon_tracker = ankimon_tracker
         # Profile + Team are folded into this shell so all five screens share
         # one window and one dropdown. Their data lives in ProfileData.
-        print("INIT BEFORE ProfileData", flush=True)
         self.profile_data = ProfileData(addon_dir, trainer_card, settings_obj, logger)
-        print("INIT AFTER ProfileData", flush=True)
         self._pending_profile_action = None
         # Live updates: map of screen -> bound method that pushes fresh data to
         # that screen. Only screens listed here react to gameplay events. To add
         # a new live screen (e.g. a Stats screen), add an entry here, a matching
         # _push_*_live method, and a window.liveRefreshX receiver in its JS.
         # See ankimon_items_web/LIVE_UPDATES.md.
-        self._live_refreshers = {SCREEN_PROFILE: self._push_profile_live}
+        self._live_refreshers = {
+            SCREEN_PROFILE: self._push_profile_live,
+            SCREEN_MOBILE: self._push_mobile_live,
+            SCREEN_HISTORY: self._push_history_live,
+        }
         self._live_refresh_pending = False
         self.current_screen = None
-        print("INIT BEFORE setWindowTitle", flush=True)
         self.setWindowTitle("Ankimon")
-        print("INIT AFTER setWindowTitle", flush=True)
 
         # Paint the shell dark from the first frame. The web views set their
         # own page background, but the surrounding QDialog/QFrame/QStackedWidget
@@ -275,15 +885,12 @@ class AnkimonItemsWeb(QDialog):
         # Disabled WA_TranslucentBackground to prevent heavy window-level repaint
         # flickering under Windows DWM when QWebEngineView re-composes or updates.
         # self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        print("INIT BEFORE setWindowFlags", flush=True)
         self.setWindowFlags(
             self.windowFlags()
             | Qt.WindowType.WindowMaximizeButtonHint
             | Qt.WindowType.WindowMinimizeButtonHint
         )
-        print("INIT BEFORE resize", flush=True)
         self.resize(1180, 720)
-        print("INIT BEFORE layout", flush=True)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -297,23 +904,24 @@ class AnkimonItemsWeb(QDialog):
         frame.layout().setContentsMargins(0, 0, 0, 0)
         layout.addWidget(frame)
 
-        print("INIT BEFORE stack", flush=True)
         self.stack = QStackedWidget()
         frame.layout().addWidget(self.stack)
 
-        print("INIT BEFORE webviews", flush=True)
         self.webview_items = QWebEngineView()
         self.webview_ankidex = QWebEngineView()
         self.webview_settings = QWebEngineView()
         self.webview_profile = QWebEngineView()
         self.webview_team = QWebEngineView()
-        print("INIT AFTER webviews", flush=True)
+        self.webview_mobile = QWebEngineView()
+        self.webview_history = QWebEngineView()
         self._views = {
             SCREEN_ITEMS: self.webview_items,
             SCREEN_ANKIDEX: self.webview_ankidex,
             SCREEN_SETTINGS: self.webview_settings,
             SCREEN_PROFILE: self.webview_profile,
             SCREEN_TEAM: self.webview_team,
+            SCREEN_MOBILE: self.webview_mobile,
+            SCREEN_HISTORY: self.webview_history,
         }
 
         self.bridge = ItemsBridge(self)
@@ -321,6 +929,7 @@ class AnkimonItemsWeb(QDialog):
         self.settings_bridge = SettingsBridge(self)
         self.trainer_bridge = TrainerBridge(self)
         self.team_bridge = TeamBridge(self)
+        self._mobile_bridge = MobileBridge(self)
 
         # Each screen gets its own channel, but every channel registers the
         # same bridge objects so any page can navigate / call any action.
@@ -335,7 +944,10 @@ class AnkimonItemsWeb(QDialog):
             channel.registerObject("settings", self.settings_bridge)
             channel.registerObject("trainer", self.trainer_bridge)
             channel.registerObject("team", self.team_bridge)
+            if screen in (SCREEN_MOBILE, SCREEN_HISTORY):
+                channel.registerObject("mobile", self._mobile_bridge)
             view.page().setWebChannel(channel)
+
 
             view.loadFinished.connect(
                 lambda ok, s=screen: self._on_screen_load_finished(ok, s)
@@ -384,6 +996,14 @@ class AnkimonItemsWeb(QDialog):
                 title = "Ankimon — Team"
                 target_view = self.webview_team
                 path = self.addon_dir / "ankimon_profile_web" / "team.html"
+            elif screen == SCREEN_MOBILE:
+                title = "Ankimon — Mobile Battles"
+                target_view = self.webview_mobile
+                path = self.addon_dir / "ankimon_mobile_web" / "mobile.html"
+            elif screen == SCREEN_HISTORY:
+                title = "Ankimon — Mobile History"
+                target_view = self.webview_history
+                path = self.addon_dir / "ankimon_mobile_web" / "history.html"
             else:
                 return
 
@@ -442,6 +1062,15 @@ class AnkimonItemsWeb(QDialog):
             data = self.profile_data.get_team_data()
             js = f"if (window.initializeTeam) window.initializeTeam({json.dumps(data)});"
             self.webview_team.page().runJavaScript(js)
+        elif self.current_screen == SCREEN_MOBILE:
+            data = self._mobile_bridge.getMobileStatus()
+            js = f"if (window.initializeMobile) window.initializeMobile({json.dumps(data)});"
+            self.webview_mobile.page().runJavaScript(js)
+        elif self.current_screen == SCREEN_HISTORY:
+            db = mw.ankimon_db
+            data = db.get_mobile_history() if db else []
+            js = f"if (window.initializeHistory) window.initializeHistory({json.dumps(data)});"
+            self.webview_history.page().runJavaScript(js)
 
     def get_profile_payload(self):
         """Profile data + a one-shot UI action ('sprite' opens the picker,
@@ -493,13 +1122,26 @@ class AnkimonItemsWeb(QDialog):
                 return
         except RuntimeError:
             return
+
+        # Update the navigation switcher notification dot in the active web view
+        active_view = self.stack.currentWidget()
+        if active_view:
+            try:
+                db = mw.ankimon_db
+                count = db.get_pending_mobile_count() if db else 0
+                active_view.page().runJavaScript(f"if (window.updateNavSwitcherUnresolvedCount) window.updateNavSwitcherUnresolvedCount({count});")
+            except Exception:
+                pass
+
         refresher = self._live_refreshers.get(self.current_screen)
         if refresher is None:
             return
         try:
             refresher()
         except Exception as e:
-            print(f"[Ankimon] live refresh failed ({self.current_screen}): {e}")
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"[Ankimon] live refresh failed ({self.current_screen}): {e}")
 
     def _push_profile_live(self):
         """Push a full Profile refresh (cash, caught, Pokédex, shinies, highest,
@@ -511,6 +1153,25 @@ class AnkimonItemsWeb(QDialog):
             f"window.liveRefreshProfile({json.dumps(data)});"
         )
         self.webview_profile.page().runJavaScript(js)
+
+    def _push_mobile_live(self):
+        """Push a full Mobile reviews refresh when stats or pending reviews change."""
+        data = self._mobile_bridge.getMobileStatus()
+        js = (
+            "if (window.liveRefreshMobile) "
+            f"window.liveRefreshMobile({json.dumps(data)});"
+        )
+        self.webview_mobile.page().runJavaScript(js)
+
+    def _push_history_live(self):
+        """Push a history refresh when a mobile review outcome is committed."""
+        db = mw.ankimon_db
+        history_data = db.get_mobile_history() if db else []
+        js = (
+            "if (window.liveRefreshHistory) "
+            f"window.liveRefreshHistory({json.dumps(history_data)});"
+        )
+        self.webview_history.page().runJavaScript(js)
 
     def _get_ankidex_data(self):
         # Reuse the existing Ankidex singleton's data getter — keeps the
@@ -542,9 +1203,6 @@ class AnkimonItemsWeb(QDialog):
         self.activateWindow()
 
     def _restore_geometry(self):
-        import base64
-        from PyQt6.QtCore import QByteArray
-
         try:
             geo = mw.pm.profile.get("ankimon.items_web_window.geometry")
             if geo:
@@ -553,8 +1211,6 @@ class AnkimonItemsWeb(QDialog):
             pass
 
     def _save_geometry(self):
-        import base64
-
         try:
             if not self.isMinimized():
                 mw.pm.profile["ankimon.items_web_window.geometry"] = base64.b64encode(
@@ -685,7 +1341,9 @@ class AnkimonItemsWeb(QDialog):
                         "individual_id": pkm.get("individual_id")
                     })
         except Exception as e:
-            print(f"[Ankimon] get_all_pokemon failed in _get_mart_and_bag_data: {e}")
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"[Ankimon] get_all_pokemon failed in _get_mart_and_bag_data: {e}")
 
         owned_index = {}
         for row in owned_rows:
@@ -993,7 +1651,9 @@ class AnkimonItemsWeb(QDialog):
         try:
             pokemons = mw.ankimon_db.get_all_pokemon() or []
         except Exception as e:
-            print(f"[Ankimon] get_pokemon_choices: get_all_pokemon failed: {e}")
+            logger = getattr(mw, "logger", None)
+            if logger:
+                logger.log("error", f"[Ankimon] get_pokemon_choices: get_all_pokemon failed: {e}")
             return {"choices": []}
 
         # Active Pokémon's individual_id (so we can flag it in the UI).
@@ -1129,7 +1789,9 @@ class AnkimonItemsWeb(QDialog):
                 try:
                     pokemon_data = mw.ankimon_db.get_pokemon(individual_id)
                 except Exception as e:
-                    print(f"[Ankimon] get_pokemon({individual_id}) failed: {e}")
+                    logger = getattr(mw, "logger", None)
+                    if logger:
+                        logger.log("error", f"[Ankimon] get_pokemon({individual_id}) failed: {e}")
                 pokedex_id = (pokemon_data or {}).get("id")
                 if not pokedex_id:
                     return {"ok": False, "message": "Could not look up that Pokémon."}
@@ -1265,18 +1927,33 @@ class AnkimonItemsWeb(QDialog):
     ):
         out = []
         for friendly in friendly_names:
-            key = key_by_friendly.get(friendly)
-            if not key or key not in config:
-                continue
-            out.append(
-                self._serialize_setting(
-                    key,
-                    friendly,
-                    name_map,
-                    desc_map,
-                    config.get(key),
+            if isinstance(friendly, dict):
+                key = friendly["key"]
+                if key not in config:
+                    continue
+                entry = {
+                    "key": key,
+                    "label": friendly.get("label", ""),
+                    "description": friendly.get("description", ""),
+                    "value": config.get(key),
+                    "type": friendly.get("type", "text"),
+                }
+                if "options" in friendly:
+                    entry["options"] = friendly["options"]
+                out.append(entry)
+            else:
+                key = key_by_friendly.get(friendly)
+                if not key or key not in config:
+                    continue
+                out.append(
+                    self._serialize_setting(
+                        key,
+                        friendly,
+                        name_map,
+                        desc_map,
+                        config.get(key),
+                    )
                 )
-            )
         return out
 
     @staticmethod
@@ -1431,3 +2108,7 @@ class AnkimonItemsWeb(QDialog):
         except Exception:
             # Best-effort — settings still saved even if the hook fails.
             pass
+
+
+# _attribute_xp_and_evs_to_companion has been moved to functions.mobile_sync
+

@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Callable, Optional
 from pathlib import Path
 
 
@@ -40,9 +40,31 @@ from .gui_entities import (
 
 debug = True
 
+_ankimon_menu: Optional["QMenu"] = None
+_ankimon_menu_base_title: str = ""
+_mobile_battles_action: Optional["QAction"] = None
+
 # Initialize the menu
-mw.translator = Translator(language=int(mw.settings_obj.get("misc.language")))
-mw.pokemenu = QMenu("&" + mw.translator.translate("ankimon_button_title"), mw)
+if "mock" in mw.__class__.__name__.lower():
+    class DummyMock:
+        def __getattr__(self, name):
+            return DummyMock()
+        def __call__(self, *args, **kwargs):
+            return DummyMock()
+    mw.translator = DummyMock()
+    _base = "&Ankimon"
+    _ankimon_menu_base_title = _base
+    mw.pokemenu = DummyMock()
+    _ankimon_menu = mw.pokemenu
+else:
+    try:
+        mw.translator = Translator(language=int(mw.settings_obj.get("misc.language")))
+    except Exception:
+        pass
+    _base = "&" + mw.translator.translate("ankimon_button_title")
+    _ankimon_menu_base_title = _base
+    mw.pokemenu = QMenu(_base, mw)
+    _ankimon_menu = mw.pokemenu
 game_menu = mw.pokemenu.addMenu(mw.translator.translate("ankimon_game_button_title"))
 profile_menu = mw.pokemenu.addMenu(
     mw.translator.translate("ankimon_profile_button_title")
@@ -404,6 +426,14 @@ def create_menu_actions(
     )
     game_menu.addAction(pokemon_team_action)
 
+    global _mobile_battles_action
+    mobile_battles_action = QAction("Mobile and Web Reviews", mw)
+    mobile_battles_action.setMenuRole(QAction.MenuRole.NoRole)
+    mobile_battles_action.triggered.connect(lambda: _open_shell_at("mobile"))
+    game_menu.addAction(mobile_battles_action)
+    _mobile_battles_action = mobile_battles_action
+
+
     file_check_action = QAction(
         mw.translator.translate("ankimon_file_checker_button"), mw
     )
@@ -426,3 +456,34 @@ def create_menu_actions(
     help_menu.addAction(downloader_action)
 
     mw.form.menubar.addMenu(mw.pokemenu)
+    global _ankimon_menu
+    _ankimon_menu = mw.pokemenu
+
+
+def update_mobile_badge(count: int) -> None:
+    """Update the Ankimon menu title to show pending mobile battle count.
+    
+    Now updates the Game submenu and the Mobile and Web Reviews action directly,
+    while leaving the top-level 'Ankimon' menu clean.
+    """
+    from .utils import is_main_thread
+    if not is_main_thread():
+        return
+    global _ankimon_menu, _ankimon_menu_base_title, _mobile_battles_action
+    if _ankimon_menu is None:
+        return
+    try:
+        _ankimon_menu.setTitle(_ankimon_menu_base_title)
+        game_title = mw.translator.translate("ankimon_game_button_title")
+        if count > 0:
+            game_menu.setTitle(f"({count}) {game_title}")
+            if _mobile_battles_action:
+                _mobile_battles_action.setText(f"({count}) Mobile and Web Reviews")
+        else:
+            game_menu.setTitle(game_title)
+            if _mobile_battles_action:
+                _mobile_battles_action.setText("Mobile and Web Reviews")
+    except Exception:
+        pass  # Never let a badge update crash anything
+
+

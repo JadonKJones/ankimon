@@ -52,6 +52,31 @@ erDiagram
         INTEGER badge_id PK
         TEXT data
     }
+    PENDING_MOBILE_BATTLES {
+        INTEGER id PK
+        INTEGER revlog_id UK
+        INTEGER card_id
+        INTEGER ease
+        INTEGER review_time
+        INTEGER review_type
+        INTEGER queued_at
+        INTEGER resolved
+        INTEGER resolved_at
+    }
+    MOBILE_BATTLE_HISTORY {
+        INTEGER id PK
+        INTEGER timestamp
+        INTEGER enemy_id
+        TEXT enemy_name
+        INTEGER enemy_level
+        INTEGER enemy_shiny
+        TEXT companion_name
+        INTEGER companion_level
+        TEXT outcome
+        INTEGER xp_gained
+        INTEGER trainer_xp_gained
+        INTEGER cash_gained
+    }
 ```
 
 ### Table 1: `captured_pokemon`
@@ -121,6 +146,41 @@ Tracks achievement markers and reward completions.
     *   `badge_id` (INTEGER PRIMARY KEY) - System identification code.
     *   `data` (TEXT JSON) - Status, date earned, and associated milestones.
 
+### Table 4: `pending_mobile_battles` (Phase 1)
+Tracks review sessions synced from mobile clients that have pending battles to resolve.
+
+*   **Columns:**
+    *   `id` (INTEGER PRIMARY KEY AUTOINCREMENT) - Unique identifier for the queue.
+    *   `revlog_id` (INTEGER UNIQUE) - Timestamp in milliseconds of the corresponding Anki revlog row. Uniqueness prevents duplicate battle generation.
+    *   `card_id` (INTEGER) - Target card ID.
+    *   `ease` (INTEGER) - Ease rating of review (1=Again, 2=Hard, 3=Good, 4=Easy).
+    *   `review_time` (INTEGER) - Time spent reviewing the card in milliseconds.
+    *   `review_type` (INTEGER) - Type of review (1=review, 2=relearn).
+    *   `queued_at` (INTEGER) - Unix millisecond timestamp when the battle was added to the queue.
+    *   `resolved` (INTEGER) - Resolution status (0=pending, 1=resolved).
+    *   `resolved_at` (INTEGER) - Unix millisecond timestamp when resolved.
+
+### Table 5: `mobile_battle_history` (Phase 2+)
+Logs the outcome of resolved mobile review battles, capped at a maximum of 200 records.
+
+*   **Columns:**
+    *   `id` (INTEGER PRIMARY KEY AUTOINCREMENT) - Unique identifier for the log entry.
+    *   `timestamp` (INTEGER NOT NULL) - Millisecond timestamp when the battle was simulated/resolved.
+    *   `enemy_id` (INTEGER NOT NULL) - Pokédex base species ID of the opponent.
+    *   `enemy_name` (TEXT NOT NULL) - Species name of the opponent.
+    *   `enemy_level` (INTEGER NOT NULL) - Level of the opponent.
+    *   `enemy_shiny` (INTEGER NOT NULL) - Binary indicator (`1` if shiny, `0` otherwise) of the opponent.
+    *   `companion_name` (TEXT) - Name of the active companion that fought the battle.
+    *   `companion_level` (INTEGER) - Level of the active companion.
+    *   `outcome` (TEXT NOT NULL) - Outcome text (e.g., `"caught"`, `"defeated"`, `"lost"`, `"escaped"`).
+    *   `xp_gained` (INTEGER DEFAULT 0) - Experience points awarded to the companion.
+    *   `trainer_xp_gained` (INTEGER DEFAULT 0) - Experience points awarded to the trainer card.
+    *   `cash_gained` (INTEGER DEFAULT 0) - Cash awarded to the trainer.
+
+### Metadata Keys
+
+*   `mobile_revlog_watermark` - Holds the `id` (timestamp in ms) of the most recently processed mobile review in the `revlog` collection to bounds subsequent diff scans.
+
 ---
 
 ## 3. Serialization and Deserialization
@@ -131,3 +191,4 @@ Tracks achievement markers and reward completions.
 
 > [!IMPORTANT]
 > To prevent data corruption, never write direct SQL strings against the virtual fields (`name`, `pokedex_id`, etc.). All data mutations must write directly to the `data` JSON field via python model properties and call `mw.ankimon_db.save_pokemon()`.
+
