@@ -6,21 +6,20 @@ Deck Overview pages via ``gui_hooks``.
 
 Key public components:
 
-* :func:`load_pokemon_team` — reads ``team.json`` / ``mypokemon.json`` and
-  returns an ordered list of Pokémon dictionaries.
+* :func:`load_pokemon_team` — reads from AnkimonDB (SQLite) and falls back to
+  ``team.json`` / ``mypokemon.json``, returning an ordered list of Pokémon dictionaries.
 * :func:`deck_browser_will_render` — hook callback that prepends the grid
   to the Deck Browser stats area.
 * :func:`on_overview_will_render_content` — hook callback that prepends the
   grid to the Deck Overview table area.
 
-Hook registration is performed at **import time** and is gated behind the
-``gui.team_deck_view`` user setting.  Toggling the setting therefore requires
-an Anki restart to take effect.
-
 Note:
+    Hook registration is now handled centrally in ``__init__.py`` rather than
+    at module import time, preventing side-effects and improving error safety.
     Sprites are embedded as base64 data-URIs so the generated HTML is fully
     self-contained — no external image references are needed.
 """
+
 
 from __future__ import annotations
 
@@ -269,58 +268,71 @@ def load_pokemon_team() -> list[dict[str, Any]]:
 
     Resolution order:
 
-    1. If ``team.json`` exists, read the ordered ``individual_id`` values,
-       resolve each against ``mypokemon.json``, and return the matching
+    1. Priority: Query AnkimonDB (SQLite). If active team entries are found,
+       resolves each by ``individual_id``. If the database exists but the team
+       is empty, falls back to the first available Pokémon in the collection.
+    2. Legacy Fallback: If ``team.json`` exists, read the ordered ``individual_id`` 
+       values, resolve each against ``mypokemon.json``, and return the matching
        Pokémon in team order (skipping any unresolved entries).
-    2. If ``team.json`` is absent **or** resolution yields an empty list,
-       fall back to the full contents of ``mypokemon.json``.
-    3. On any I/O or parse error, return an empty list (never raises).
+    3. Final Fallback: Read the full contents of ``mypokemon.json``.
+    4. On any database, I/O, or parse error, return an empty list (never raises).
 
     Returns:
         Ordered list of Pokémon dictionaries (`list[dict[str, Any]]`).
-        May be empty when no data files exist or parsing fails.
+        May be empty when no data exists or parsing fails.
     """
     try:
+        # New DB format
+        if hasattr(mw, 'ankimon_db') and mw.ankimon_db is not None:
+            try:
+                team_stub = mw.ankimon_db.get_team()
+                if team_stub:
+                    team = []
+                    for entry in team_stub:
+                        ind_id = entry.get("individual_id")
+                        if ind_id:
+                            pokemon = mw.ankimon_db.get_pokemon(ind_id)
+                            if pokemon:
+                                team.append(pokemon)
+                    if team:
+                        return team[:_MAX_TEAM_SIZE]
+
+                all_pokemon = mw.ankimon_db.get_all_pokemon()
+                if all_pokemon:
+                    return all_pokemon[:_MAX_TEAM_SIZE]
+            except Exception as e:
+                print(f"Ankimon Team Overview - DB Error: {e}")
+
+        # JSON fallback (legacy)
         if os.path.exists(team_pokemon_path):
             try:
                 with open(team_pokemon_path, "r", encoding="utf-8") as fh:
                     team_entries = json.load(fh)
+                if not isinstance(team_entries, list):
+                    team_entries = []
             except (json.JSONDecodeError, OSError):
                 team_entries = []
-
-            individual_ids = [
-                entry.get("individual_id")
-                for entry in team_entries
-                if entry.get("individual_id") is not None
-            ]
+            individual_ids = [e.get("individual_id") for e in team_entries if isinstance(e, dict) and e.get("individual_id") is not None]
 
             try:
                 with open(mypokemon_path, "r", encoding="utf-8") as fh:
                     all_pokemon = json.load(fh)
+                if not isinstance(all_pokemon, list):
+                    all_pokemon = []
             except (json.JSONDecodeError, OSError):
                 all_pokemon = []
-
-            pokemon_by_id = {
-                p.get("individual_id"): p
-                for p in all_pokemon
-                if p.get("individual_id") is not None
-            }
-            ordered = [
-                pokemon_by_id[ind] for ind in individual_ids if ind in pokemon_by_id
-            ]
+            pokemon_by_id = {p.get("individual_id"): p for p in all_pokemon if isinstance(p, dict) and p.get("individual_id") is not None}
+            ordered = [pokemon_by_id[ind] for ind in individual_ids if ind in pokemon_by_id]
             if ordered:
-                return ordered
+                return ordered[:_MAX_TEAM_SIZE]
 
-        # Fallback: return every Pokémon from mypokemon.json.
+        # Final fallback
         with open(mypokemon_path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        # Fallback for I/O or parse errors during the final fallback attempt.
+            return json.load(fh)[:_MAX_TEAM_SIZE]
+
+    except (OSError, json.JSONDecodeError, TypeError):
         return []
     except Exception as e:
-        # Unexpected errors are logged but not allowed to crash Anki's UI.
-        # mw.progress has no chrome_logger attribute — the previous call
-        # would raise AttributeError and mask the original exception.
         print(f"Ankimon Team Overview Error: {e}")
         return []
 
@@ -383,12 +395,3 @@ def on_overview_will_render_content(overview: Any, content: Any) -> None:
     team = load_pokemon_team()
     grid_html = _build_pokemon_grid(team, id_prefix="pokemon")
     content.table = grid_html + (content.table or "")
-
-
-# ---------------------------------------------------------------------------
-# Hook registration (runs at import time, gated by user setting)
-# ---------------------------------------------------------------------------
-
-if mw.settings_obj.get("gui.team_deck_view") is True:
-    gui_hooks.deck_browser_will_render_content.append(deck_browser_will_render)
-    gui_hooks.overview_will_render_content.append(on_overview_will_render_content)
