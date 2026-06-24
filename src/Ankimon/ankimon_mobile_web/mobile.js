@@ -220,6 +220,22 @@ window.updateMobileEstimates = function(estimates) {
     }
 };
 
+window.onResolveNextReady = function(result) {
+    if (!_replayRunning) return;
+    if (result.done) {
+        _replayRunning = false;
+        loadStatus();
+        return;
+    }
+    if (result.error) {
+        _replayRunning = false;
+        showAlert('Replay error: ' + result.error);
+        loadStatus();
+        return;
+    }
+    renderReplayBattle(result);
+};
+
 
 function render(status) {
     _currentMobileStatus = status;
@@ -626,6 +642,9 @@ function loadNextBattle() {
     _replayCompanionOverride = null;
 
     mobileBridge.resolveNext(companionOverrideId, function(result) {
+        if (result && result.loading) {
+            return;
+        }
         if (result.done) {
             // All done — show summary equivalent
             _replayRunning = false;
@@ -936,12 +955,15 @@ function renderReplayTeamSelector(activeCompanionId) {
                 if (card.classList.contains('active-selected')) return;
 
                 // Re-simulate with new companion
+                _replayCompanionOverride = member.individual_id;
                 mobileBridge.resolveNext(member.individual_id, function(result) {
+                    if (result && result.loading) {
+                        return;
+                    }
                     if (result.error) {
                         showAlert('Replay error: ' + result.error);
                         return;
                     }
-                    _replayCompanionOverride = member.individual_id;
                     renderReplayBattle(result);
                 });
             };

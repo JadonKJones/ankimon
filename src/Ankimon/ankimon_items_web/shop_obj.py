@@ -678,11 +678,19 @@ class MobileBridge(QObject):
                     logger=getattr(mw, "logger", None),
                     day_cutoff=day_cutoff
                 )
+                if isinstance(res, dict) and "current_pending_outcome" in res:
+                    outcome = res["current_pending_outcome"]
+                    if outcome:
+                        outcome.update({
+                            "main_pokemon": main_pokemon,
+                            "trainer_card": trainer_card,
+                            "settings_obj": settings_obj,
+                        })
+                    self._current_pending_outcome = outcome
+                    return res["result"]
+                return res
             else:
-                from PyQt6.QtCore import QEventLoop
                 from aqt.operations import QueryOp
-                loop = QEventLoop()
-                res_container = []
 
                 def run_sim(col):
                     return resolve_next(
@@ -697,8 +705,22 @@ class MobileBridge(QObject):
                     )
 
                 def on_sim_success(sim_res):
-                    res_container.append(sim_res)
-                    loop.quit()
+                    if isinstance(sim_res, dict) and "current_pending_outcome" in sim_res:
+                        outcome = sim_res["current_pending_outcome"]
+                        if outcome:
+                            outcome.update({
+                                "main_pokemon": main_pokemon,
+                                "trainer_card": trainer_card,
+                                "settings_obj": settings_obj,
+                            })
+                        self._current_pending_outcome = outcome
+                        result_data = sim_res["result"]
+                    else:
+                        result_data = sim_res
+
+                    import json
+                    js = f"if (window.onResolveNextReady) {{ window.onResolveNextReady({json.dumps(result_data)}); }}"
+                    self._w.webview_mobile.page().runJavaScript(js)
 
                 QueryOp(
                     parent=self._w,
@@ -706,20 +728,7 @@ class MobileBridge(QObject):
                     success=on_sim_success
                 ).without_collection().run_in_background()
 
-                loop.exec()
-                res = res_container[0] if res_container else {"success": False, "error": "No simulation result"}
-
-            if isinstance(res, dict) and "current_pending_outcome" in res:
-                outcome = res["current_pending_outcome"]
-                if outcome:
-                    outcome.update({
-                        "main_pokemon": main_pokemon,
-                        "trainer_card": trainer_card,
-                        "settings_obj": settings_obj,
-                    })
-                self._current_pending_outcome = outcome
-                return res["result"]
-            return res
+                return {"loading": True}
         except Exception as e:
             import traceback
             logger = getattr(mw, "logger", None)
