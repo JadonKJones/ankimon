@@ -756,7 +756,7 @@ def get_all_pokemon_in_tier(tier: str) -> list[int]:
 
 
 def generate_random_pokemon(
-    main_pokemon_level: int, ankimon_tracker_obj: AnkimonTracker
+    main_pokemon_level: int, ankimon_tracker_obj: AnkimonTracker, *args, **kwargs
 ):
     """
     Generates a random wild Pokémon with attributes scaled to the level of the player's main Pokémon.
@@ -808,9 +808,13 @@ def generate_random_pokemon(
     if active_main and getattr(active_main, "level", 5) == 100:
         wild_pokemon_lvl = 100
 
-    from ..utils import load_collected_pokemon_ids
+    collected_ids = kwargs.get("collected_ids", None)
+    if collected_ids is None and args:
+        collected_ids = args[0]
 
-    collected_ids = load_collected_pokemon_ids()
+    if collected_ids is None:
+        from ..utils import load_collected_pokemon_ids
+        collected_ids = load_collected_pokemon_ids()
 
     # FALLBACK HIERARCHY
     # If a rolled tier fails, try the next one in the list.

@@ -707,6 +707,7 @@ body {
   max-width: 250px;
   transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.15s ease;
   z-index: 2;
+  will-change: transform, opacity;
 }
 
 .replay-card {

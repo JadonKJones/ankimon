@@ -792,22 +792,22 @@ function renderReplayBattle(result) {
                     const tPlayerHurt = setTimeout(() => {
                         playerCard.classList.remove('damaged');
                         animateTurn(idx + 1);
-                    }, 220);
+                    }, 240);
                     _replayTimeouts.push(tPlayerHurt);
 
-                }, 180);
+                }, 240);
                 _replayTimeouts.push(tEnemyAttack);
 
-            }, 220);
+            }, 240);
             _replayTimeouts.push(tEnemyHurt);
 
-        }, 180);
+        }, 240);
         _replayTimeouts.push(tPlayer);
     }
 
     const tStart = setTimeout(() => {
         animateTurn(0);
-    }, 150);
+    }, 100);
     _replayTimeouts.push(tStart);
 
 }
@@ -906,51 +906,63 @@ function updateReplayCounter() {
 function renderReplayTeamSelector(activeCompanionId) {
     const container = document.getElementById('replay-team-selector');
     if (!container) return;
-    container.innerHTML = '';
 
     if (!_currentMobileStatus || !_currentMobileStatus.team_status || !_currentMobileStatus.team_status.team) {
+        container.innerHTML = '';
         return;
     }
 
     const team = _currentMobileStatus.team_status.team;
-    team.forEach(member => {
-        const card = document.createElement('div');
-        card.className = 'replay-member-card';
-        if (member.inactive) {
-            card.classList.add('inactive');
-        }
-        
-        const isSelected = _replayCompanionOverride 
-            ? (_replayCompanionOverride === member.individual_id)
-            : (activeCompanionId === member.individual_id);
-            
+    
+    // Only build team selector DOM cards once
+    if (container.children.length === 0) {
+        team.forEach(member => {
+            const card = document.createElement('div');
+            card.className = 'replay-member-card';
+            card.dataset.individualId = member.individual_id;
+            if (member.inactive) {
+                card.classList.add('inactive');
+            }
+
+            card.innerHTML = `
+                <div class="replay-member-sprite-wrap">
+                    <img class="replay-member-sprite" src="${member.sprite_path}" alt="${member.name}"
+                         onerror="if (this.src.indexOf('_gif') !== -1) { this.src = this.src.replace('_gif', '').replace('.gif', '.png'); } else { this.onerror=null; this.src='../user_files/sprites/front_default/0.png'; }">
+                </div>
+                <div class="replay-member-name">${member.name}</div>
+            `;
+
+            card.onclick = function() {
+                if (card.classList.contains('active-selected')) return;
+
+                // Re-simulate with new companion
+                mobileBridge.resolveNext(member.individual_id, function(result) {
+                    if (result.error) {
+                        showAlert('Replay error: ' + result.error);
+                        return;
+                    }
+                    _replayCompanionOverride = member.individual_id;
+                    renderReplayBattle(result);
+                });
+            };
+
+            container.appendChild(card);
+        });
+    }
+
+    // Update active selections dynamically to avoid complete DOM re-creations
+    const cards = container.querySelectorAll('.replay-member-card');
+    cards.forEach(card => {
+        const indId = card.dataset.individualId;
+        const isSelected = _replayCompanionOverride
+            ? (_replayCompanionOverride === indId)
+            : (activeCompanionId === indId);
+
         if (isSelected) {
             card.classList.add('active-selected');
+        } else {
+            card.classList.remove('active-selected');
         }
-
-        card.innerHTML = `
-            <div class="replay-member-sprite-wrap">
-                <img class="replay-member-sprite" src="${member.sprite_path}" alt="${member.name}"
-                     onerror="if (this.src.indexOf('_gif') !== -1) { this.src = this.src.replace('_gif', '').replace('.gif', '.png'); } else { this.onerror=null; this.src='../user_files/sprites/front_default/0.png'; }">
-            </div>
-            <div class="replay-member-name">${member.name}</div>
-        `;
-
-        card.onclick = function() {
-            if (card.classList.contains('active-selected')) return;
-
-            // Re-simulate with new companion
-            mobileBridge.resolveNext(member.individual_id, function(result) {
-                if (result.error) {
-                    showAlert('Replay error: ' + result.error);
-                    return;
-                }
-                _replayCompanionOverride = member.individual_id;
-                renderReplayBattle(result);
-            });
-        };
-
-        container.appendChild(card);
     });
 }
 
