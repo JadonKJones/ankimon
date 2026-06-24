@@ -748,14 +748,14 @@ body {
   z-index: 10;
 }
 
-.enemy-side.damaged {
-  animation: damaged-wobble 0.25s ease-in-out;
+.enemy-side.damaged, .player-side.damaged {
+  animation: damaged-wobble 0.1s ease-in-out;
 }
 
 @keyframes damaged-wobble {
   0%, 100% { transform: translateX(0); }
-  15%, 45%, 75% { transform: translateX(-6px) rotate(-1deg); filter: brightness(1.3) drop-shadow(0 0 8px var(--accent-red)); }
-  30%, 60%, 90% { transform: translateX(6px) rotate(1deg); filter: brightness(1.3) drop-shadow(0 0 8px var(--accent-red)); }
+  15%, 45%, 75% { transform: translateX(-6px) rotate(-1deg); }
+  30%, 60%, 90% { transform: translateX(6px) rotate(1deg); }
 }
 
 .battle-info-bar {
@@ -807,7 +807,7 @@ body {
   max-height: 90px;
   object-fit: contain;
   image-rendering: pixelated;
-  transition: transform 0.3s ease, filter 0.3s ease;
+  transition: transform 0.3s ease;
 }
 
 .enemy-battle-sprite {
@@ -824,9 +824,9 @@ body {
 }
 
 @keyframes caught-shrink {
-  0% { transform: scale(1); filter: brightness(1); }
-  45% { transform: scale(1.15) translateY(-8px); filter: brightness(2) drop-shadow(0 0 12px var(--accent-gold)); }
-  100% { transform: scale(0) translateY(30px); opacity: 0; filter: brightness(3); }
+  0% { transform: scale(1); }
+  45% { transform: scale(1.15) translateY(-8px); }
+  100% { transform: scale(0) translateY(30px); opacity: 0; }
 }
 
 .fainted-fade {
@@ -835,7 +835,7 @@ body {
 
 @keyframes fainted-sink {
   0% { transform: translateY(0); opacity: 1; }
-  100% { transform: translateY(40px); opacity: 0; filter: grayscale(1) brightness(0.2); }
+  100% { transform: translateY(40px); opacity: 0; }
 }
 
 /* Catch flash overlay */
@@ -854,7 +854,7 @@ body {
 
 @keyframes catch-burst {
   0%   { opacity: 1; transform: scale(0.1); }
-  60%  { opacity: 0.8; transform: scale(1.3); filter: blur(2px); }
+  60%  { opacity: 0.8; transform: scale(1.3); }
   100% { opacity: 0; transform: scale(1.6); }
 }
 

@@ -792,22 +792,22 @@ function renderReplayBattle(result) {
                     const tPlayerHurt = setTimeout(() => {
                         playerCard.classList.remove('damaged');
                         animateTurn(idx + 1);
-                    }, 350);
+                    }, 120);
                     _replayTimeouts.push(tPlayerHurt);
 
-                }, 200);
+                }, 80);
                 _replayTimeouts.push(tEnemyAttack);
 
-            }, 350);
+            }, 120);
             _replayTimeouts.push(tEnemyHurt);
 
-        }, 200);
+        }, 80);
         _replayTimeouts.push(tPlayer);
     }
 
     const tStart = setTimeout(() => {
         animateTurn(0);
-    }, 300);
+    }, 100);
     _replayTimeouts.push(tStart);
 
 }
