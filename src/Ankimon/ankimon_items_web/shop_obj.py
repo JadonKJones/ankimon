@@ -693,16 +693,48 @@ class MobileBridge(QObject):
             main_pokemon = getattr(mw, "main_pokemon", None)
             day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
 
-            res = resolve_next(
-                companion_id=companion_id,
-                db=db,
-                settings_obj=settings_obj,
-                tracker=tracker,
-                trainer_card=trainer_card,
-                main_pokemon=main_pokemon,
-                logger=getattr(mw, "logger", None),
-                day_cutoff=day_cutoff
-            )
+            if "PYTEST_CURRENT_TEST" in os.environ:
+                res = resolve_next(
+                    companion_id=companion_id,
+                    db=db,
+                    settings_obj=settings_obj,
+                    tracker=tracker,
+                    trainer_card=trainer_card,
+                    main_pokemon=main_pokemon,
+                    logger=getattr(mw, "logger", None),
+                    day_cutoff=day_cutoff
+                )
+            else:
+                from PyQt6.QtCore import QEventLoop
+                from aqt.operations import QueryOp
+                loop = QEventLoop()
+                res_container = []
+
+                def run_sim(col):
+                    return resolve_next(
+                        companion_id=companion_id,
+                        db=db,
+                        settings_obj=settings_obj,
+                        tracker=tracker,
+                        trainer_card=trainer_card,
+                        main_pokemon=main_pokemon,
+                        logger=getattr(mw, "logger", None),
+                        day_cutoff=day_cutoff
+                    )
+
+                def on_sim_success(sim_res):
+                    res_container.append(sim_res)
+                    loop.quit()
+
+                QueryOp(
+                    parent=self._w,
+                    op=run_sim,
+                    success=on_sim_success
+                ).without_collection().run_in_background()
+
+                loop.exec()
+                res = res_container[0] if res_container else {"success": False, "error": "No simulation result"}
+
             if isinstance(res, dict) and "current_pending_outcome" in res:
                 outcome = res["current_pending_outcome"]
                 if outcome:
