@@ -275,7 +275,11 @@ class MobileBridge(QObject):
             settings_obj = mw.settings_obj
             cards_per_round, _ = mobile_sync._parse_cards_per_round(settings_obj)
 
-            battle_count = math.ceil(pending_count / cards_per_round)
+            # Read cached resolved count to compute total battle count quickly
+            cursor = db.execute("SELECT value FROM metadata WHERE key = 'mobile_resolved_encounters_count'")
+            row = cursor.fetchone()
+            resolved_battles = int(row[0]) if row else 0
+            battle_count = resolved_battles + math.ceil(pending_count / cards_per_round)
 
             if pending_count == 0:
                 return {"pending_count": 0, "cap": 10000, "battle_count": 0}
@@ -285,37 +289,10 @@ class MobileBridge(QObject):
             for row in rows:
                 ease_breakdown[str(row[0])] = row[1]
 
-            # 2. Fetch only the rows needed for simulation (bounded)
-            reviews_rows = db.execute(
-                """SELECT id, revlog_id, card_id, ease, review_time, review_type, queued_at
-                   FROM pending_mobile_battles
-                   WHERE resolved = 0
-                   ORDER BY id ASC LIMIT 105"""
-            ).fetchall()
-
-            reviews_list = [
-                {
-                    "id": r[0],
-                    "revlog_id": r[1],
-                    "card_id": r[2],
-                    "ease": r[3],
-                    "review_time": r[4],
-                    "review_type": r[5],
-                    "queued_at": r[6],
-                }
-                for r in reviews_rows
-            ]
-            if pending_count > len(reviews_list):
-                reviews_list.extend([{"ease": 3}] * (pending_count - len(reviews_list)))
-
             settings_obj = mw.settings_obj
             main_pokemon = getattr(mw, "main_pokemon", None)
             trainer_card = getattr(mw, "trainer_card", None)
             ankimon_tracker_obj = getattr(mw, "ankimon_tracker_obj", None)
-
-            # Use estimated battle count initially. The precise count will be updated via background QueryOp.
-            # battle_count is already computed on line 289.
-
 
             # Get descriptive name for auto-battle setting
             auto_battle_mode_names = {
@@ -366,8 +343,6 @@ class MobileBridge(QObject):
 
             # Trigger async estimates calculation if there are pending reviews
             estimates_loading = False
-            # Trigger async estimates calculation if there are pending reviews
-            estimates_loading = False
             estimates = {
                 "xp": 0,
                 "encounters": 0,
@@ -380,36 +355,35 @@ class MobileBridge(QObject):
             }
             if pending_count > 0:
                 estimates_loading = True
-                # 2. Fetch only the rows needed for simulation (bounded)
-                reviews_rows = db.execute(
-                    """SELECT id, revlog_id, card_id, ease, review_time, review_type, queued_at
-                       FROM pending_mobile_battles
-                       WHERE resolved = 0
-                       ORDER BY id ASC LIMIT 105"""
-                ).fetchall()
-
-                reviews_list = [
-                    {
-                        "id": r[0],
-                        "revlog_id": r[1],
-                        "card_id": r[2],
-                        "ease": r[3],
-                        "review_time": r[4],
-                        "review_type": r[5],
-                        "queued_at": r[6],
-                    }
-                    for r in reviews_rows
-                ]
-                if pending_count > len(reviews_list):
-                    reviews_list.extend([{"ease": 3}] * (pending_count - len(reviews_list)))
 
                 trainer_card = getattr(mw, "trainer_card", None)
                 ankimon_tracker_obj = getattr(mw, "ankimon_tracker_obj", None)
 
                 def run_sim(col):
+                    reviews_rows_thread = db.execute(
+                        """SELECT id, revlog_id, card_id, ease, review_time, review_type, queued_at
+                           FROM pending_mobile_battles
+                           WHERE resolved = 0
+                           ORDER BY id ASC LIMIT 105"""
+                    ).fetchall()
+                    reviews_list_thread = [
+                        {
+                            "id": r[0],
+                            "revlog_id": r[1],
+                            "card_id": r[2],
+                            "ease": r[3],
+                            "review_time": r[4],
+                            "review_type": r[5],
+                            "queued_at": r[6],
+                        }
+                        for r in reviews_rows_thread
+                    ]
+                    if pending_count > len(reviews_list_thread):
+                        reviews_list_thread.extend([{"ease": 3}] * (pending_count - len(reviews_list_thread)))
+
                     from ..functions.mobile_sync import simulate_pending_mobile_battles
                     return simulate_pending_mobile_battles(
-                        reviews_list,
+                        reviews_list_thread,
                         main_pokemon,
                         settings_obj,
                         trainer_card,
