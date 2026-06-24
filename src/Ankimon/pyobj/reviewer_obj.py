@@ -135,9 +135,9 @@ class Reviewer_Manager:
                     break
 
         if self.enemy_pokemon.hp > 0:
-            hud_html += create_status_html(f"{self.enemy_pokemon.battle_status}", self.settings, is_pokemon_owned, addon_package)
+            hud_html += create_status_html(f"{self.enemy_pokemon.battle_status}", self.settings, is_pokemon_owned, addon_package, pokemon_types=self.enemy_pokemon.type)
         else:
-            hud_html += create_status_html("fainted", self.settings, is_pokemon_owned, addon_package)
+            hud_html += create_status_html("fainted", self.settings, is_pokemon_owned, addon_package, pokemon_types=self.enemy_pokemon.type)
 
         hud_html += f'<div id="hp-display" class="Ankimon">HP: {int(self.enemy_pokemon.hp)}/{int(self.enemy_pokemon.max_hp)}</div>'
 
