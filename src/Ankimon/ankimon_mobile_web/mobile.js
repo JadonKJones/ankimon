@@ -792,22 +792,22 @@ function renderReplayBattle(result) {
                     const tPlayerHurt = setTimeout(() => {
                         playerCard.classList.remove('damaged');
                         animateTurn(idx + 1);
-                    }, 120);
+                    }, 220);
                     _replayTimeouts.push(tPlayerHurt);
 
-                }, 80);
+                }, 180);
                 _replayTimeouts.push(tEnemyAttack);
 
-            }, 120);
+            }, 220);
             _replayTimeouts.push(tEnemyHurt);
 
-        }, 80);
+        }, 180);
         _replayTimeouts.push(tPlayer);
     }
 
     const tStart = setTimeout(() => {
         animateTurn(0);
-    }, 100);
+    }, 150);
     _replayTimeouts.push(tStart);
 
 }
@@ -856,7 +856,7 @@ function animateResolution(outcome, xp_gained, remaining) {
         }
         if (catchFlash) {
             catchFlash.classList.remove('hidden');
-            setTimeout(() => catchFlash.classList.add('hidden'), 700);
+            setTimeout(() => catchFlash.classList.add('hidden'), 300);
         }
         enemySprite.classList.add('caught-fade');
     } else {

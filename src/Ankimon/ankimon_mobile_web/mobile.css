@@ -744,7 +744,11 @@ body {
 
 /* Battle Move Interactions */
 .player-side.attack-dash {
-  transform: translateX(35px) scale(1.05);
+  transform: translateX(10px);
+  z-index: 10;
+}
+.enemy-side.attack-dash {
+  transform: translateX(-10px);
   z-index: 10;
 }
 
@@ -754,8 +758,8 @@ body {
 
 @keyframes damaged-wobble {
   0%, 100% { transform: translateX(0); }
-  15%, 45%, 75% { transform: translateX(-6px) rotate(-1deg); }
-  30%, 60%, 90% { transform: translateX(6px) rotate(1deg); }
+  30%, 70% { transform: translateX(-3px); }
+  50% { transform: translateX(3px); }
 }
 
 .battle-info-bar {
@@ -820,7 +824,7 @@ body {
 
 /* Fading States */
 .caught-fade {
-  animation: caught-shrink 0.6s cubic-bezier(0.6, -0.28, 0.735, 0.045) forwards;
+  animation: caught-shrink 0.25s cubic-bezier(0.6, -0.28, 0.735, 0.045) forwards;
 }
 
 @keyframes caught-shrink {
@@ -830,7 +834,7 @@ body {
 }
 
 .fainted-fade {
-  animation: fainted-sink 0.6s ease-in forwards;
+  animation: fainted-sink 0.25s ease-in forwards;
 }
 
 @keyframes fainted-sink {
@@ -845,7 +849,7 @@ body {
   border-radius: 50%;
   background: radial-gradient(circle, rgba(255,220,50,0.95) 0%, rgba(255,150,0,0.4) 50%, transparent 70%);
   z-index: 5;
-  animation: catch-burst 0.7s ease-out forwards;
+  animation: catch-burst 0.3s ease-out forwards;
 }
 
 .catch-flash.hidden {
@@ -891,6 +895,10 @@ body {
   background: linear-gradient(90deg, #3fb950, #56d364);
   transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
   box-shadow: inset 0 1px 1px rgba(255,255,255,0.2);
+}
+
+.battle-scene .hp-bar-fill {
+  transition: width 0.1s ease-out;
 }
 
 .hp-bar-fill.hp-green {

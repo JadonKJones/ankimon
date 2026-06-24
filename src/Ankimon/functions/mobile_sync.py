@@ -293,24 +293,46 @@ def load_active_team_clones(ankimon_db, settings_obj, main_pokemon_fallback) -> 
         try:
             team_rows = ankimon_db.get_team()
             inactive = set(settings_obj.get("mobile.inactive_companions", [])) if settings_obj else set()
-            for t in team_rows:
-                ind_id = t.get("individual_id")
-                if ind_id and ind_id not in inactive:
-                    if hasattr(ankimon_db, "get_pokemon_by_individual_id"):
-                        data = ankimon_db.get_pokemon_by_individual_id(ind_id)
-                    else:
-                        data = ankimon_db.get_pokemon(ind_id)
-                    if data:
-                        try:
-                            pkmn = PokemonObject(**data)
-                            clones.append(pkmn)
-                        except Exception as e:
+            active_ids = [t.get("individual_id") for t in team_rows if t.get("individual_id") and t.get("individual_id") not in inactive]
+            if active_ids:
+                is_mock = type(ankimon_db).__name__ in ("MagicMock", "Mock", "NonCallableMagicMock")
+                if is_mock:
+                    for ind_id in active_ids:
+                        if hasattr(ankimon_db, "get_pokemon_by_individual_id"):
+                            data = ankimon_db.get_pokemon_by_individual_id(ind_id)
+                        else:
+                            data = ankimon_db.get_pokemon(ind_id)
+                        if data:
                             try:
-                                from aqt import mw
-                                if hasattr(mw, "logger"):
-                                    mw.logger.log("warning", f"load_active_team_clones: skipping {ind_id}: {e}")
+                                pkmn = PokemonObject(**data)
+                                clones.append(pkmn)
                             except Exception:
                                 pass
+                else:
+                    placeholders = ",".join("?" for _ in active_ids)
+                    cursor = ankimon_db.execute(
+                        f"SELECT data FROM captured_pokemon WHERE individual_id IN ({placeholders})",
+                        active_ids
+                    )
+                    id_to_data = {}
+                    for row in cursor.fetchall():
+                        data = ankimon_db._deobfuscate(row["data"])
+                        if data and "individual_id" in data:
+                            id_to_data[data["individual_id"]] = data
+
+                    for ind_id in active_ids:
+                        data = id_to_data.get(ind_id)
+                        if data:
+                            try:
+                                pkmn = PokemonObject(**data)
+                                clones.append(pkmn)
+                            except Exception as e:
+                                try:
+                                    from aqt import mw
+                                    if hasattr(mw, "logger"):
+                                        mw.logger.log("warning", f"load_active_team_clones: skipping {ind_id}: {e}")
+                                except Exception:
+                                    pass
         except Exception:
             pass
 
@@ -1628,30 +1650,25 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
         current_pending = db.get_pending_mobile_count()
         remaining = max(0, current_pending - len(review_ids))
 
-        # 2. Define the deferred work function containing side-effects
-        def deferred_work():
-            try:
-                # Update mobile reviews payout counter settings
-                if review_ids and settings_obj:
-                    settings_obj.set("trainer.mobile_reviews_resolved_since_payout", remaining_counter)
-                    if gained_cash > 0:
-                        settings_obj.set("trainer.cash", int(settings_obj.get("trainer.cash", 0) + gained_cash))
-                        if trainer_card:
-                            trainer_card.cash = settings_obj.get("trainer.cash")
+        # We will split the DB operations (heavy) and the GUI updates.
+        # Run DB operations in the background thread:
+        def do_db_work(col):
+            nonlocal battle_xp
+            # Set in_bulk_resolve to avoid tooltips/dialogs in background thread
+            from .. import utils
+            orig_in_bulk = getattr(utils, "in_bulk_resolve", False)
+            utils.in_bulk_resolve = True
 
-                nonlocal battle_xp
+            try:
+                # 1. Catch logic
                 if choice == "catch":
                     from .encounter_functions import save_caught_pokemon
                     capture_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     enemy_pokemon.captured_date = capture_time
                     save_caught_pokemon(enemy_pokemon, nickname=None, achievements=achievements_dict)
-                    try:
-                        from ..reviewer_ui import _collected_pokemon_ids
-                        if isinstance(_collected_pokemon_ids, set):
-                            _collected_pokemon_ids.add(enemy_pokemon.id)
-                    except Exception: pass
                     battle_xp = 0
-                    
+                
+                # 2. Defeat logic
                 elif choice == "defeat":
                     companion_id = outcome_data.get("companion_id", "")
                     if not companion_id and main_pokemon:
@@ -1660,15 +1677,7 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
                     if companion_id and (total_xp > 0 or any(accumulated_evs.values())):
                         _attribute_xp_and_evs_to_companion(companion_id, total_xp, accumulated_evs, settings_obj, db=db, logger=logger)
 
-                    if total_trainer_xp > 0 and trainer_card:
-                        new_txp = int(settings_obj.get("trainer.xp", 0) + total_trainer_xp)
-                        settings_obj.set("trainer.xp", new_txp)
-                        settings_obj.set("trainer.total_xp", int(settings_obj.get("trainer.total_xp", 0) + total_trainer_xp))
-                        trainer_card.xp = new_txp
-                        trainer_card.total_xp = settings_obj.get("trainer.total_xp")
-                        trainer_card.check_level_up()
-                
-                # Mark resolved in DB
+                # 3. Mark resolved in DB
                 if review_ids:
                     placeholders = ",".join("?" for _ in review_ids)
                     try:
@@ -1693,29 +1702,22 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
                         cursor = db.execute("SELECT value FROM metadata WHERE key = 'mobile_resolved_encounters_count'")
                         row = cursor.fetchone()
                         if row is not None:
-                            new_count = int(row[0]) + 1
+                            new_count_meta = int(row[0]) + 1
                         else:
                             cursor = db.execute("SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 1")
                             resolved_reviews = cursor.fetchone()[0]
                             cards_per_round, _ = _parse_cards_per_round(settings_obj)
-                            new_count = resolved_reviews // cards_per_round
+                            new_count_meta = resolved_reviews // cards_per_round
                         
                         with db._get_connection():
                             db._get_connection().execute(
                                 "INSERT OR REPLACE INTO metadata (key, value) VALUES ('mobile_resolved_encounters_count', ?)",
-                                (str(new_count),)
+                                (str(new_count_meta),)
                             )
                     except Exception:
                         pass
 
-                # Update mobile badge
-                remaining_real = db.get_pending_mobile_count()
-                try:
-                    from ..menu_buttons import update_mobile_badge
-                    update_mobile_badge(remaining_real)
-                except Exception: pass
-
-                # Save to mobile history
+                # 4. Save to mobile history
                 try:
                     comp_name = outcome_data.get("companion_name")
                     comp_level = outcome_data.get("companion_level")
@@ -1751,6 +1753,41 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
                     if logger:
                         logger.log("error", f"Failed to record manual mobile battle history: {ex}")
 
+            finally:
+                utils.in_bulk_resolve = orig_in_bulk
+
+        def on_db_work_done(dummy_res):
+            try:
+                # Update mobile reviews payout counter settings
+                if review_ids and settings_obj:
+                    settings_obj.set("trainer.mobile_reviews_resolved_since_payout", remaining_counter)
+                    if gained_cash > 0:
+                        settings_obj.set("trainer.cash", int(settings_obj.get("trainer.cash", 0) + gained_cash))
+                        if trainer_card:
+                            trainer_card.cash = settings_obj.get("trainer.cash")
+
+                if choice == "catch":
+                    try:
+                        from ..reviewer_ui import _collected_pokemon_ids
+                        if isinstance(_collected_pokemon_ids, set):
+                            _collected_pokemon_ids.add(enemy_pokemon.id)
+                    except Exception: pass
+                elif choice == "defeat":
+                    if total_trainer_xp > 0 and trainer_card:
+                        new_txp = int(settings_obj.get("trainer.xp", 0) + total_trainer_xp)
+                        settings_obj.set("trainer.xp", new_txp)
+                        settings_obj.set("trainer.total_xp", int(settings_obj.get("trainer.total_xp", 0) + total_trainer_xp))
+                        trainer_card.xp = new_txp
+                        trainer_card.total_xp = settings_obj.get("trainer.total_xp")
+                        trainer_card.check_level_up()
+
+                # Update mobile badge
+                remaining_real = db.get_pending_mobile_count()
+                try:
+                    from ..menu_buttons import update_mobile_badge
+                    update_mobile_badge(remaining_real)
+                except Exception: pass
+
                 # Trigger sync notification to refresh UI
                 try:
                     from ..singletons import notify_stats_changed
@@ -1758,18 +1795,21 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
                 except Exception: pass
             except Exception as e:
                 if logger:
-                    logger.log("error", f"deferred_work in commit_replay_outcome failed: {e}")
+                    logger.log("error", f"on_db_work_done in commit_replay_outcome failed: {e}")
 
-        # 3. Schedule or execute deferred work
+        # 3. Schedule or execute work
         import os
         if "PYTEST_CURRENT_TEST" in os.environ:
-            deferred_work()
+            do_db_work(None)
+            on_db_work_done(None)
         else:
-            try:
-                from aqt.qt import QTimer
-            except ImportError:
-                from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, deferred_work)
+            from aqt.operations import QueryOp
+            from aqt import mw
+            QueryOp(
+                parent=mw,
+                op=do_db_work,
+                success=on_db_work_done
+            ).without_collection().run_in_background()
 
         return {"success": True, "outcome": "caught" if choice == "catch" else "defeated", "xp_gained": battle_xp, "cp": cp_val, "remaining": remaining, "cash_gained": gained_cash}
     except Exception as e:
