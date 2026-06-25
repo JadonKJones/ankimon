@@ -30,18 +30,17 @@ spec = importlib.util.spec_from_file_location(
 )
 ef = importlib.util.module_from_spec(spec)
 
-# Pre-patch singletons and dependencies used in the module
+# Execute the module first. It declares its runtime-wired seam globals as
+# `= None` (main_pokemon, ankimon_db, settings_obj, ...), bound at runtime by
+# core.bind_runtime_globals(), so any pre-exec patch would be clobbered. Patch
+# them AFTER exec to drive the functions under test.
+spec.loader.exec_module(ef)
+
 ef.main_pokemon = mock.MagicMock()
 ef.settings_obj = mock.MagicMock()
 ef.ankimon_tracker_obj = mock.MagicMock()
 ef.trainer_card = mock.MagicMock()
-
-# Patch mw in both places
-ef.mw = mock.MagicMock()
-sys.modules["aqt"].mw = ef.mw
-
-# Execute the module
-spec.loader.exec_module(ef)
+ef.ankimon_db = mock.MagicMock()
 
 def test_legacy_mode_works_when_toggle_is_false():
     # Force legacy mode
@@ -51,7 +50,9 @@ def test_legacy_mode_works_when_toggle_is_false():
 
     percentages = ef.modify_percentages(total_reviews=50, daily_average=100, trainer_level=5)
     assert "Normal" in percentages
-    assert percentages["Starter"] == 0.0
+    # Starters are disabled as a wild tier on main's legacy system, so the key
+    # may be absent — either way its encounter rate must be zero.
+    assert percentages.get("Starter", 0.0) == 0.0
     assert abs(sum(percentages.values()) - 100.0) < 0.001
 
 
@@ -61,8 +62,7 @@ def test_ep_mastery_index_bounds_and_components():
     ef.settings_obj.get.return_value = 100  # DailyGoal
 
     # Mock Pokedex Completion D_norm
-    ef.mw.ankimon_db.get_all_pokemon_ids.return_value = {1, 2, 3}
-    sys.modules["aqt"].mw.ankimon_db.get_all_pokemon_ids.return_value = {1, 2, 3}
+    ef.ankimon_db.get_all_pokemon_ids.return_value = {1, 2, 3}
     
     ef.search_pokedex_by_id = lambda pid: "Bulbasaur"
     ef.search_pokedex = lambda name, key: 1 if key == "species_id" else None
@@ -74,8 +74,7 @@ def test_ep_mastery_index_bounds_and_components():
         mock_cache.return_value = {str(i): {"species_id": i} for i in range(1, 11)}
         
         # Mock Core Team Power C_norm
-        ef.mw.ankimon_db.get_all_pokemon.return_value = [{"level": 50, "stats": {}} for _ in range(6)]
-        sys.modules["aqt"].mw.ankimon_db.get_all_pokemon.return_value = [{"level": 50, "stats": {}} for _ in range(6)]
+        ef.ankimon_db.get_all_pokemon.return_value = [{"level": 50, "stats": {}} for _ in range(6)]
         
         # Patch calculate_cp_from_dict directly on ef to return 2000
         ef.calculate_cp_from_dict = mock.MagicMock(return_value=2000)
@@ -98,7 +97,7 @@ def test_overhaul_pity_multipliers_and_level_locks():
     ef.main_pokemon.level = 45  # locks Legendary (50), Mega (60), Gmax (65), Mythical (75)
     
     # Mock pity trackers to trigger custom multipliers
-    ef.mw.ankimon_db.get_user_data.return_value = {
+    ef.ankimon_db.get_user_data.return_value = {
         "Ultra": 150,  # exceeds threshold (150 - 100)/50 = 1 -> multiplier = 1 + 1^2 = 2.0
         "Gmax": 200,   # exceeds threshold but Gmax is locked by level 45, so its weight must remain 0.0
         "Starter": 0,
@@ -141,7 +140,7 @@ def test_pity_trackers_increment_and_reset_in_generation():
         "Legendary": 50,
         "Mythical": 60
     }
-    ef.mw.ankimon_db.get_user_data.return_value = pity_data
+    ef.ankimon_db.get_user_data.return_value = pity_data
     
     pity_trackers = ef.load_pity_trackers()
     selected_tier = "Ultra"

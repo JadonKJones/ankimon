@@ -22,6 +22,7 @@ from ..functions.pokedex_functions import (
     get_effort_values,
     get_growth_rate,
     return_name_for_id,
+    safe_int,
     search_pokedex,
     search_pokedex_by_id,
 )
@@ -35,6 +36,7 @@ from ..functions.drawing_utils import tooltipWithColour
 from ..utils import limit_ev_yield, play_effect_sound, get_ev_spread
 from ..business import calc_experience, calculate_cp_from_dict
 from ..const import gen_ids
+from . import encounter_data
 
 if TYPE_CHECKING:
     # Type-hint-only imports (several pull in Qt). `from __future__ import
@@ -135,8 +137,8 @@ def calculate_mastery_index_ep(total_reviews, daily_average, trainer_level):
     try:
         from ..functions.pokedex_functions import _load_pokedex_cache
         pokedex_data = _load_pokedex_cache()
-        if pokedex_data and hasattr(mw, 'ankimon_db') and mw.ankimon_db:
-            caught_ids = mw.ankimon_db.get_all_pokemon_ids()
+        if pokedex_data and ankimon_db:
+            caught_ids = ankimon_db.get_all_pokemon_ids()
             caught_species = set()
             for pid in caught_ids:
                 if pid >= 10000:
@@ -162,8 +164,8 @@ def calculate_mastery_index_ep(total_reviews, daily_average, trainer_level):
     # 4. C_norm (Core Team Power)
     c_norm = 0.0
     try:
-        if hasattr(mw, 'ankimon_db') and mw.ankimon_db:
-            all_pkmn = mw.ankimon_db.get_all_pokemon()
+        if ankimon_db:
+            all_pkmn = ankimon_db.get_all_pokemon()
             if all_pkmn:
                 cps = []
                 for p in all_pkmn:
@@ -195,8 +197,8 @@ def load_pity_trackers() -> dict:
         "Mythical": 0
     }
     try:
-        if hasattr(mw, 'ankimon_db') and mw.ankimon_db:
-            stored = mw.ankimon_db.get_user_data("ankimon_pity_trackers")
+        if ankimon_db:
+            stored = ankimon_db.get_user_data("ankimon_pity_trackers")
             if isinstance(stored, dict):
                 for k in default_pity:
                     if k in stored:
@@ -207,8 +209,8 @@ def load_pity_trackers() -> dict:
 
 def save_pity_trackers(trackers: dict):
     try:
-        if hasattr(mw, 'ankimon_db') and mw.ankimon_db:
-            mw.ankimon_db.set_user_data("ankimon_pity_trackers", trackers)
+        if ankimon_db:
+            ankimon_db.set_user_data("ankimon_pity_trackers", trackers)
     except Exception as e:
         print(f"[Ankimon] Warning: Error saving pity trackers: {e}")
 

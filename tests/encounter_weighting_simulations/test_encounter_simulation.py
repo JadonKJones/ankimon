@@ -56,7 +56,8 @@ modules_to_mock = [
     "addon.functions.pokemon_functions", "addon.functions.pokedex_functions",
     "addon.functions.trainer_functions", "addon.functions.badges_functions",
     "addon.functions.drawing_utils", "addon.utils", "addon.business", "addon.const",
-    "addon.singletons", "addon.functions.encounter_data", "addon.functions.friendship_evolution"
+    "addon.singletons", "addon.functions.encounter_data", "addon.functions.friendship_evolution",
+    "addon.services", "addon.events"
 ]
 for mod in modules_to_mock:
     sys.modules[mod] = MockModule()

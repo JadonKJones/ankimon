@@ -264,10 +264,16 @@ def create_menu_actions(
 
     # Encounter Rate Simulator (dev tool — ported from BRRRR_Experimental)
     if debug is True:
-        from .pyobj.encounter_simulator_dialog import EncounterSimulatorDialog
         simulator_action = QAction("Encounter Rate Simulator", mw)
         simulator_action.setMenuRole(QAction.MenuRole.NoRole)
-        simulator_action.triggered.connect(lambda: EncounterSimulatorDialog(addon_dir).show())
+
+        def _open_encounter_simulator():
+            # Lazy import: EncounterSimulatorDialog pulls in QtWebEngine, which
+            # must not load at boot (keeps the addon importable without WebEngine).
+            from .pyobj.encounter_simulator_dialog import EncounterSimulatorDialog
+            EncounterSimulatorDialog(addon_dir).show()
+
+        simulator_action.triggered.connect(lambda: _open_encounter_simulator())
         help_menu.addAction(simulator_action)
     if debug is True:
         tracker_window_action = QAction(mw.translator.translate("ankimon_tracker_button"), mw)

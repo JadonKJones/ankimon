@@ -17,3 +17,10 @@ for _pkg in ("Ankimon", "Ankimon.functions"):
         _mod.__path__ = [str(_src / _pkg.replace(".", "/"))]
         _mod.__package__ = _pkg
         sys.modules[_pkg] = _mod
+
+# The encounter-weighting simulations are heavyweight, *unseeded* statistical
+# dev tools (one is a bare script with no test functions). They mutate sys.modules
+# globally at import time, which pollutes the deterministic unit suite, and their
+# random sampling is unsuited to a CI gate. Skip them by default — run manually
+# with `pytest tests/encounter_weighting_simulations/`.
+collect_ignore_glob = ["encounter_weighting_simulations/*"]
