@@ -57,26 +57,90 @@ def _try_back(back: bool, id: int, gif: bool, shiny: bool, female: bool):
             return path
 
 
-def get_sprite_path(side: str, sprite_type: str, id: int, shiny: bool, gender: str):
-    """Return the path to the sprite of the Pokémon with robust fallbacks."""
+def _get_pokemon_id_from_pokedex(pokemon_name):
+    """Get the sprite ID for a Pokémon form from pokedex (handles Mega/Gmax forms)."""
+    from .pokedex_functions import _load_pokedex_cache, safe_int
+    try:
+        pokedex = _load_pokedex_cache()
+        pokemon_key = pokemon_name.lower().replace(" ", "").replace("-", "")
+        if pokemon_key in pokedex:
+            pdata = pokedex[pokemon_key]
+            # Ensure we return an integer ID
+            return safe_int(pdata.get("actual_id")) or safe_int(pdata.get("num"))
+    except Exception as e:
+        services.logger.log("debug", f"Error looking up pokemon ID in pokedex: {e}")
+    return None
+
+
+def get_sprite_path(side: str, sprite_type: str, id: int, shiny: bool, gender: str, pokemon_name: str = None):
+    """Return the path to the sprite of the Pokémon with robust fallbacks.
+
+    Args:
+        side: "front" or "back"
+        sprite_type: "gif" or "png"
+        id: Pokémon ID (base form)
+        shiny: Whether the Pokémon is shiny
+        gender: "M" or "F"
+        pokemon_name: Optional Pokémon name (used for Mega/Gmax forms to lookup correct sprite ID)
+    """
 
     gif = sprite_type == "gif"
     female = gender == "F"
     back = side == "back"
 
-    path = _try_back(back, id, gif, shiny, female)
+    lookup_id = id
+
+    # For Mega/Gmax forms, try to get the form-specific ID from pokedex
+    base_species_id = None
+    if pokemon_name and any(form in pokemon_name.lower() for form in ["mega", "gmax", "gigantamax"]):
+        forme_id = _get_pokemon_id_from_pokedex(pokemon_name)
+        if forme_id:
+            lookup_id = forme_id
+            services.logger.log("debug", f"Using Mega/Gmax form ID {lookup_id} for {pokemon_name}")
+        # Also get the base species_id for fallback
+        try:
+            from .pokedex_functions import _load_pokedex_cache
+            pokedex = _load_pokedex_cache()
+            pokemon_key = pokemon_name.lower().replace(" ", "").replace("-", "")
+            if pokemon_key in pokedex:
+                base_species_id = pokedex[pokemon_key].get("species_id")
+        except Exception:
+            pass
+
+    # Try requested format first
+    path = _try_back(back, lookup_id, gif, shiny, female)
     if path:
         return path
 
+    # If GIF requested but not found, try PNG
     if gif:
-        # requested gif but not found, try png
-        path = _try_back(back, id, False, shiny, female)
+        path = _try_back(back, lookup_id, False, shiny, female)
         if path:
             return path
+
+    # If we used a forme ID and still found nothing, fallback to base form ID
+    if lookup_id != id:
+        path = _try_back(back, id, gif, shiny, female)
+        if path:
+            return path
+        if gif:
+            path = _try_back(back, id, False, shiny, female)
+            if path:
+                return path
+
+    # Final fallback: try species_id (base form) for Mega/Gmax
+    if base_species_id and base_species_id != id and base_species_id != lookup_id:
+        path = _try_back(back, base_species_id, gif, shiny, female)
+        if path:
+            return path
+        if gif:
+            path = _try_back(back, base_species_id, False, shiny, female)
+            if path:
+                return path
 
     # Fallback to the generic substitute image
     services.logger.log(
         "warning",
-        f"Unable to find sprite for ID {id} (Side: {side} Sprite: {sprite_type} Shiny: {shiny}, Gender: {gender}). Returning substitute.",
+        f"Unable to find sprite for {pokemon_name} ID {id} (Side: {side} Sprite: {sprite_type} Shiny: {shiny}, Gender: {gender}). Returning substitute.",
     )
     return SUBSTITUTE_PATH

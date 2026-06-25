@@ -144,6 +144,7 @@ pokemon_pc = PokemonPC(
     test_window=test_window,
     settings=settings_obj,
     main_pokemon=main_pokemon,
+    achievements=achievements,
 )
 
 # --- Register the GUI windows + the Qt UI presenter in the registry, so the
