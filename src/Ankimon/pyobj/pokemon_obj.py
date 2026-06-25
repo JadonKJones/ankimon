@@ -9,7 +9,7 @@ from ..functions.sprite_functions import get_sprite_path
 
 from ..poke_engine.objects import Pokemon
 from ..resources import pkmnimgfolder, mainpokemon_path, mypokemon_path
-from ..utils import give_item
+
 
 class PokemonObject:
     def __init__(
@@ -464,6 +464,8 @@ class PokemonObject:
 
         db = mw.ankimon_db
 
+
+        from ..utils import give_item
         give_item(self.held_item)  # We put the item back in the item bag
         self.held_item = None
 

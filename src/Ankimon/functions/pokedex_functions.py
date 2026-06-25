@@ -17,7 +17,7 @@ import json
 import random
 import csv
 from ..pyobj.error_handler import show_warning_with_traceback
-from ..pyobj.pokemon_obj import PokemonObject
+
 
 GROWTH_RATES = {
     1: "slow",
@@ -756,6 +756,7 @@ def check_evolution_for_pokemon(
                             if evo_defeated > 0:
                                 pokemon_data = mw.ankimon_db.get_pokemon(individual_id)
                                 if pokemon_data:
+                                    from ..pyobj.pokemon_obj import PokemonObject
                                     pokemon_obj = PokemonObject.from_dict(pokemon_data)
                                     if (pokemon_obj.pokemon_defeated or 0) >= evo_defeated:
                                         evo_id = safe_int(target_data.get("actual_id") or target_data.get("species_id"))
