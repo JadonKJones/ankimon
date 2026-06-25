@@ -4,8 +4,7 @@ import random
 import uuid
 from datetime import datetime
 
-from aqt.utils import showWarning
-from aqt import mw
+from ..services import services
 
 from .pokedex_functions import get_base_experience, get_growth_rate, search_pokedex, search_pokedex_by_id, safe_int
 from .battle_functions import calculate_hp
@@ -254,7 +253,7 @@ def save_fossil_pokemon(pokemon_id):
         "is_favorite": False,
     }
     # Save to database
-    db = mw.ankimon_db
+    db = services.db
     db.save_pokemon(caught_pokemon)
 
 from .learnset_retrieval import get_levelup_move_for_pokemon  # noqa: F401,E303 — re-export for backwards compat

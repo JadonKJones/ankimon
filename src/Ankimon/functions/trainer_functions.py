@@ -5,8 +5,7 @@ from .pokedex_functions import extract_ids_from_file
 from .pokemon_functions import find_experience_for_level
 from .pokedex_functions import check_evolution_for_pokemon, return_name_for_id
 from .friendship_evolution import check_friendship_evolution_for_pokemon
-from aqt.utils import showInfo, showWarning
-from aqt import mw
+from ..services import services
 
 def find_trainer_rank(highest_level, trainer_level):
     """
@@ -22,10 +21,10 @@ def find_trainer_rank(highest_level, trainer_level):
     """
     try:
         # Count the amount of Pokémon caught based on the Pokedex
-        caught_pokemon = mw.ankimon_db.execute("SELECT COUNT(DISTINCT pokedex_id) FROM captured_pokemon").fetchone()[0]
+        caught_pokemon = services.db.execute("SELECT COUNT(DISTINCT pokedex_id) FROM captured_pokemon").fetchone()[0]
 
         # Count the number of shiny Pokémon
-        shiny_pokemon_count = mw.ankimon_db.get_shiny_count()
+        shiny_pokemon_count = services.db.get_shiny_count()
 
         # Count badges
         badge_count = len(get_achieved_badges())
@@ -73,7 +72,7 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
     exp = int(exp * 0.5)  # Convert the experience to an integer
 
     # Load pokemon from database
-    db = mw.ankimon_db
+    db = services.db
 
     msg = ""
     evolution_triggered = False

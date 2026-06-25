@@ -3,22 +3,8 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from aqt import mw
-from aqt.qt import QDialog
-
-from .singletons import (
-    main_pokemon,
-    enemy_pokemon,
-    settings_obj,
-    reviewer_obj,
-    ankimon_tracker_obj,
-    test_window,
-    evo_window,
-    logger,
-    achievements,
-    trainer_card,
-    translator,
-)
+from .services import services
+from .events import events
 from .functions.encounter_functions import handle_enemy_faint, handle_main_pokemon_faint
 from .functions.badges_functions import (
     handle_review_count_achievement,
@@ -33,8 +19,24 @@ from .functions.battle_functions import (
 from .functions.drawing_utils import tooltipWithColour
 from .utils import safe_get_random_move, play_effect_sound, play_sound
 from .functions.ankimon_hooks_to_poke_engine import simulate_battle_with_poke_engine
-from .classes.choose_move_dialog import MoveSelectionDialog
 from .pyobj.error_handler import show_warning_with_traceback
+
+# Shared game state used as bare module globals below. core.bind_runtime_globals()
+# points these at the live registry objects after composition (so the module
+# imports without `from .singletons import ...`, and thus without aqt). The
+# move-selection dialog and the reviewer HUD are reached through services.ui /
+# services.reviewer respectively.
+main_pokemon = None
+enemy_pokemon = None
+settings_obj = None
+reviewer_obj = None
+ankimon_tracker_obj = None
+test_window = None
+evo_window = None
+logger = None
+achievements = None
+trainer_card = None
+translator = None
 
 
 @dataclass
@@ -157,10 +159,10 @@ def on_review_card(*args):
                 and enemy_pokemon.hp > 0
             ):
                 if settings_obj.get("controls.allow_to_choose_moves") == True:
-                    dialog = MoveSelectionDialog(main_pokemon.attacks)
-                    if dialog.exec() == QDialog.DialogCode.Accepted:
-                        if dialog.selected_move:
-                            user_attack = dialog.selected_move
+                    # Real dialog under Anki (QtPresenter); scripted/None headless.
+                    chosen = services.ui.choose_move(main_pokemon.attacks)
+                    if chosen:
+                        user_attack = chosen
 
                 if category == "Status":
                     color = "#F7DC6F"
@@ -235,6 +237,20 @@ def on_review_card(*args):
 
             tooltipWithColour(formatted_battle_log, color)
 
+            # Observable turn outcome for the agent harness.
+            events.emit(
+                "battle",
+                user=main_pokemon.name,
+                enemy=enemy_pokemon.name,
+                user_move=user_attack,
+                enemy_move=enemy_attack,
+                dmg_to_enemy=int(true_dmg_from_user_move),
+                dmg_to_user=int(true_dmg_from_enemy_move),
+                user_hp=int(main_pokemon.hp),
+                enemy_hp=int(enemy_pokemon.hp),
+                multiplier=multiplier,
+            )
+
             if true_dmg_from_enemy_move > 0 and multiplier < 1:
                 reviewer_obj.myseconds = settings_obj.compute_special_variable("animate_time")
                 tooltipWithColour(f" -{true_dmg_from_enemy_move} HP ", "#F06060", x=-200)
@@ -286,16 +302,11 @@ def on_review_card(*args):
             )
             s.mutator_full_reset = 1
 
-        class Container:
-            pass
-
-        reviewer = Container()
-        reviewer.web = mw.reviewer.web
-        reviewer_obj.update_life_bar(reviewer, 0, 0)
+        reviewer_obj.refresh_hud()
         if test_window is not None:
             if enemy_pokemon.hp > 0:
                 test_window.display_battle()
     except Exception as e:
         show_warning_with_traceback(
-            parent=mw, exception=e, message="An error occurred in reviewer:"
+            exception=e, message="An error occurred in reviewer:"
         )

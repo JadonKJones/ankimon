@@ -1,23 +1,14 @@
+from __future__ import annotations
+
 import json
 import random
 import math
-from typing import Union
+from typing import TYPE_CHECKING, Union
 from datetime import datetime
 import uuid
 
-from aqt import mw
-from aqt.qt import QDialog
-from aqt.utils import showWarning
-
-from ..pyobj.ankimon_tracker import AnkimonTracker
-from ..pyobj.pokemon_obj import PokemonObject
-from ..pyobj.reviewer_obj import Reviewer_Manager
-from ..pyobj.test_window import TestWindow
-from ..pyobj.trainer_card import TrainerCard
-from ..pyobj.InfoLogger import ShowInfoLogger
-from ..pyobj.evolution_window import EvoWindow
-from ..pyobj.attack_dialog import AttackDialog
-from ..pyobj.translator import Translator
+from ..services import services
+from ..events import events
 from ..functions.pokemon_functions import (
     find_experience_for_level,
     get_levelup_move_for_pokemon,
@@ -44,15 +35,31 @@ from ..functions.drawing_utils import tooltipWithColour
 from ..utils import limit_ev_yield, play_effect_sound, get_ev_spread
 from ..business import calc_experience, calculate_cp_from_dict
 from ..const import gen_ids
-from ..singletons import (
-    main_pokemon,
-    ankimon_tracker_obj,
-    trainer_card,
-    settings_obj,
-    translator,
-    ankimon_db,
-    pokemon_pc,
-)
+
+if TYPE_CHECKING:
+    # Type-hint-only imports (several pull in Qt). `from __future__ import
+    # annotations` keeps the signatures below as strings so these never run.
+    from ..pyobj.ankimon_tracker import AnkimonTracker
+    from ..pyobj.pokemon_obj import PokemonObject
+    from ..pyobj.reviewer_obj import Reviewer_Manager
+    from ..pyobj.test_window import TestWindow
+    from ..pyobj.trainer_card import TrainerCard
+    from ..pyobj.InfoLogger import ShowInfoLogger
+    from ..pyobj.evolution_window import EvoWindow
+    from ..pyobj.translator import Translator
+
+# Shared singletons used as bare module globals below. They are bound to the live
+# registry objects by core.bind_runtime_globals() after composition, exactly as
+# the old `from ..singletons import ...` did (a snapshot of stable objects).
+# Function parameters of the same name shadow these where the faint/defeat
+# helpers operate on the Pokemon passed in.
+main_pokemon = None
+ankimon_tracker_obj = None
+trainer_card = None
+settings_obj = None
+translator = None
+ankimon_db = None
+pokemon_pc = None
 
 
 _percentages_cache = {
@@ -191,11 +198,11 @@ def choose_random_pkmn_from_tier():
     try:
         tier = get_tier(total_reviews, trainer_level)
         id = get_random_pokemon_in_tier(tier)
-        mw.logger.game_log(f"Selected tier: {tier}, Resulting Pokemon ID: {id}")
+        services.logger.game_log(f"Selected tier: {tier}, Resulting Pokemon ID: {id}")
         return id, tier
     except Exception as e:
-        mw.logger.log("error", f"Error in choose_random_pkmn_from_tier: {str(e)}")
-        show_warning_with_traceback(parent=mw, exception=e, message="Error occurred")
+        services.logger.log("error", f"Error in choose_random_pkmn_from_tier: {str(e)}")
+        show_warning_with_traceback(exception=e, message="Error occurred")
 
 
 def check_min_generate_level(name):
@@ -297,7 +304,7 @@ def generate_random_pokemon(
     ):  # We keep drawing a random pokemon until we find a valid one
         attempts += 1
         if attempts >= 500:
-            showWarning("Failed to generate a valid Pokémon after 500 attempts. Please ensure at least one generation is enabled in the settings. Defaulting to Rattata.")
+            services.ui.warn("Failed to generate a valid Pokémon after 500 attempts. Please ensure at least one generation is enabled in the settings. Defaulting to Rattata.")
             pokemon_id = 19
             name = search_pokedex_by_id(19)
             tier = "Normal"
@@ -450,12 +457,22 @@ def new_pokemon(
     if test_window is not None:
         test_window.display_first_encounter()
 
-    class Container(object):
-        pass
+    # Observable: a fresh wild Pokemon appeared.
+    events.emit(
+        "encounter",
+        pokemon=pokemon.name,
+        id=pokemon.id,
+        level=pokemon.level,
+        tier=pokemon.tier,
+        shiny=pokemon.shiny,
+        hp=pokemon.hp,
+        max_hp=pokemon.max_hp,
+    )
 
-    reviewer = Container()
-    reviewer.web = mw.reviewer.web
-    reviewer_obj.update_life_bar(reviewer, 0, 0)
+    # Re-render the reviewer HUD. refresh_hud() grabs the live webview under
+    # Anki and is a recorded no-op headless.
+    if reviewer_obj is not None:
+        reviewer_obj.refresh_hud()
 
     return pokemon
 
@@ -487,14 +504,14 @@ def save_main_pokemon_progress(
         # raises NameError and crashes every post-cap defeat (upstream #402).
         level_cap = 100
     try:
-        db = mw.ankimon_db
+        db = services.db
         main_pokemon_data = db.get_main_pokemon()
         if not main_pokemon_data:
-            showWarning(translator.translate("missing_mainpokemon_data"))
+            services.ui.warn(translator.translate("missing_mainpokemon_data"))
     except Exception as e:
-        mw.logger.log("error", f"Error loading main pokemon data: {str(e)}")
+        services.logger.log("error", f"Error loading main pokemon data: {str(e)}")
         show_warning_with_traceback(
-            parent=mw, exception=e, message="Error loading main pokemon data."
+            exception=e, message="Error loading main pokemon data."
         )
         return
     evolution_prompted = False
@@ -506,6 +523,7 @@ def save_main_pokemon_progress(
         )
     ) < int(main_pokemon.xp) and (level_cap is None or main_pokemon.level < level_cap):
         main_pokemon.level += 1
+        events.emit("levelup", pokemon=main_pokemon.name, level=main_pokemon.level)
         msg = ""
         msg += f"Your {main_pokemon.name} is now level {main_pokemon.level} !"
         color = "#6A4DAC"  # pokemon leveling info color for tooltip
@@ -513,7 +531,7 @@ def save_main_pokemon_progress(
         if check is False:
             achievements = receive_badge(5, achievements)
         try:
-            mw.logger.game_log(f"Level Up: {msg}")
+            services.logger.game_log(f"Level Up: {msg}")
             tooltipWithColour(msg, color)
         except:
             pass
@@ -532,6 +550,7 @@ def save_main_pokemon_progress(
         )
         if evo_id is not None:
             evolution_prompted = True
+            events.emit("evolution_offered", pokemon=main_pokemon.name, trigger="level", evo_id=evo_id)
             # None-safe: return_name_for_id can return None for an unknown id, so
             # fall back to the numeric id instead of crashing on .capitalize()
             # (mirrors the friendship-evolution path below).
@@ -578,9 +597,12 @@ def save_main_pokemon_progress(
                         ):
                             logger.log_and_showinfo("info", f"{msg}")
                     else:
-                        dialog = AttackDialog(attacks, new_attack)
-                        if dialog.exec() == QDialog.DialogCode.Accepted:
-                            selected_attack = dialog.selected_attack
+                        # Ask via the UI port (real dialog under Anki; scripted
+                        # choice headless). None => discard the new move.
+                        selected_attack = services.ui.choose_attack_to_replace(
+                            attacks, new_attack
+                        )
+                        if selected_attack is not None:
                             index_to_replace = None
                             for index, attack in enumerate(attacks):
                                 if attack == selected_attack:
@@ -597,7 +619,7 @@ def save_main_pokemon_progress(
                                     "info", f"'{selected_attack}' not found in the list"
                                 )
                         else:
-                            # Handle the case where the user cancels the dialog
+                            # User declined to replace a move; discard the new one.
                             logger.log_and_showinfo(
                                 "info", f"{new_attack} will be discarded."
                             )
@@ -688,6 +710,7 @@ def save_main_pokemon_progress(
             )
             if friendship_evo_id is not None:
                 evolution_prompted = True
+                events.emit("evolution_offered", pokemon=main_pokemon.name, trigger="friendship", evo_id=friendship_evo_id)
                 # return_name_for_id can return None (and pop a spurious warning)
                 # if the evolved id is missing from the name CSV; guard the
                 # .capitalize() so a data gap can't crash the defeat flow.
@@ -720,8 +743,8 @@ def sync_mainpokemon_to_mypokemon(main_pokemon):
     Update the relevant entry in mypokemon database with the latest values from mainpokemon.
     Uses database instead of JSON files.
     """
-    db = mw.ankimon_db
-    
+    db = services.db
+
     # Get main pokemon from database
     main_entry = db.get_main_pokemon()
     if not main_entry:
@@ -745,6 +768,13 @@ def kill_pokemon(
     achievements: dict,
     trainer_card: Union[TrainerCard, None] = None,
 ):
+    events.emit(
+        "defeat",
+        pokemon=enemy_pokemon.name,
+        id=enemy_pokemon.id,
+        level=enemy_pokemon.level,
+        tier=enemy_pokemon.tier,
+    )
     if trainer_card is not None:
         trainer_card.gain_xp(
             enemy_pokemon.tier, settings_obj.get("controls.allow_to_choose_moves")
@@ -866,6 +896,14 @@ def catch_pokemon(
     if collected_pokemon_ids is not None:
         collected_pokemon_ids.add(enemy_pokemon.id)  # Update cache
     save_caught_pokemon(enemy_pokemon, nickname, achievements)
+    events.emit(
+        "catch",
+        pokemon=enemy_pokemon.name,
+        id=enemy_pokemon.id,
+        shiny=enemy_pokemon.shiny,
+        tier=enemy_pokemon.tier,
+        nickname=nickname,
+    )
 
     ankimon_tracker_obj.general_card_count_for_battle = 0
 
@@ -885,7 +923,7 @@ def catch_pokemon(
     except Exception as e:
         if logger is not None:
             show_warning_with_traceback(
-                parent=mw, exception=e, message="Error while catching Pokemon:"
+                exception=e, message="Error while catching Pokemon:"
             )  # Display a message when the Pokémon is caught
 
     pokemon_pc.refresh_pokemon_grid()
@@ -904,6 +942,7 @@ def handle_enemy_faint(
     """
     Handles what automatically happens when the enemy Pokémon faints, based on auto-battle settings.
     """
+    events.emit("faint", who="enemy", pokemon=enemy_pokemon.name, id=enemy_pokemon.id)
     try:
         auto_battle_setting = int(settings_obj.get("battle.automatic_battle"))
         if not (0 <= auto_battle_setting <= 3):
@@ -975,6 +1014,7 @@ def handle_main_pokemon_faint(
         "pokemon_fainted", enemy_pokemon_name=main_pokemon.name.capitalize()
     )
     tooltipWithColour(msg, "#E12939")
+    events.emit("faint", who="main", pokemon=main_pokemon.name)
     play_effect_sound(settings_obj, "Fainted")
 
     main_pokemon.hp = main_pokemon.max_hp
