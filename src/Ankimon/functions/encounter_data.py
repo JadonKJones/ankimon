@@ -347,3 +347,136 @@ NORMAL = [
     1006, 1011, 1012,   # iron-valiant, dipplin, poltchageist
     1013, 1018, 1019,	# sinistcha, archaludon, hydrapple
 ]
+
+
+REGIONAL_FORMS: dict[str, list[int]] = {
+    "alola": [
+        10091, 10092,  # rattata-alola, raticate-alola
+        10100, 10101, 10102,  # raichu-alola, sandshrew-alola, sandslash-alola
+        10103, 10104, 10105,  # vulpix-alola, ninetales-alola, diglett-alola
+        10106, 10107, 10108,  # dugtrio-alola, meowth-alola, persian-alola
+        10109, 10110, 10111,  # geodude-alola, graveler-alola, golem-alola
+        10112, 10113, 10114,  # grimer-alola, muk-alola, exeggutor-alola
+        10115,                # marowak-alola
+    ],
+    "galar": [
+        10161, 10162, 10163,  # meowth-galar, ponyta-galar, rapidash-galar
+        10164, 10165, 10166,  # slowpoke-galar, slowbro-galar, farfetchd-galar
+        10167, 10168, 10169,  # weezing-galar, mr-mime-galar, articuno-galar
+        10170, 10171, 10172,  # zapdos-galar, moltres-galar, slowking-galar
+        10173, 10174, 10175,  # corsola-galar, zigzagoon-galar, linoone-galar
+        10176, 10177, 10179,  # darumaka-galar, darmanitan-galar-standard, yamask-galar
+        10180,                # stunfisk-galar
+    ],
+    "hisui": [
+        10229, 10230, 10231,  # growlithe-hisui, arcanine-hisui, voltorb-hisui
+        10232, 10233, 10234,  # electrode-hisui, typhlosion-hisui, qwilfish-hisui
+        10235, 10236, 10237,  # sneasel-hisui, samurott-hisui, lilligant-hisui
+        10238, 10239, 10240,  # zorua-hisui, zoroark-hisui, braviary-hisui
+        10241, 10242, 10243,  # sliggoo-hisui, goodra-hisui, avalugg-hisui
+        10244,                # decidueye-hisui
+    ],
+    "paldea": [
+        10250, 10251, 10252,  # tauros-paldea-combat-breed, tauros-paldea-blaze-breed, tauros-paldea-aqua-breed
+        10253,                # wooper-paldea
+    ],
+}
+
+
+PREREQUISITES = {
+    # Generation 1
+    150: {151},            # Mewtwo requires Mew
+    
+    # Generation 2
+    249: {144, 145, 146},  # Lugia requires Articuno + Zapdos + Moltres
+    250: {243, 244, 245},  # Ho-Oh requires Raikou + Entei + Suicune
+    
+    # Generation 3
+    384: {382, 383},       # Rayquaza requires Kyogre + Groudon
+    10001: {386},          # Deoxys Attack requires Deoxys
+    10002: {386},          # Deoxys Defense requires Deoxys
+    10003: {386},          # Deoxys Speed requires Deoxys
+    
+    # Generation 4
+    487: {483, 484},       # Giratina requires Dialga + Palkia
+    483: {480, 481, 482},  # Dialga requires Uxie + Mesprit + Azelf
+    484: {480, 481, 482},  # Palkia requires Uxie + Mesprit + Azelf
+    10245: {483},          # Dialga Origin requires Dialga
+    10246: {484},          # Palkia Origin requires Palkia
+    10007: {487},          # Giratina Origin requires Giratina
+    10006: {492},          # Shaymin Sky requires Shaymin
+    493: {487},            # Arceus requires Lake Trio + Dialga + Palkia + Giratina
+    490: {489},            # Phione requires Manaphy
+    486: {894, 895, 377, 378, 379}, # Regigigas requires Eleki + Drago + Regi Trio
+    
+    # Generation 5
+    647: {638, 639, 640},  # Keldeo requires Swords of Justice
+    10024: {647},          # Keldeo Resolute requires Keldeo
+    645: {641, 642},       # Landorus requires Tornadus + Thundurus
+    646: {643, 644},       # Kyurem requires Reshiram + Zekrom
+    10022: {646, 644},     # Kyurem-Black requires Kyurem + Zekrom
+    10023: {646, 643},     # Kyurem-White requires Kyurem + Reshiram
+    10019: {641},          # Tornadus Therian requires Tornadus
+    10020: {642},          # Thundurus Therian requires Thundurus
+    10021: {645},          # Landorus Therian requires Landorus
+    10018: {648},          # Meloetta Pirouette requires Meloetta
+    
+    # Generation 6
+    718: {716, 717},       # Zygarde requires Xerneas + Yveltal
+    10181: {10119},        # Zygarde 10% requires Zygarde 50%
+    
+    # Generation 7
+    800: {791, 792},       # Necrozma requires Solgaleo + Lunala
+    773: {772},            # Silvally requires Type: Null
+    10155: {800, 791},     # Necrozma-Dusk-Mane requires Necrozma + Solgaleo
+    10156: {800, 792},     # Necrozma-Dawn-Wings requires Necrozma + Lunala
+    10157: {800, 791, 792},# Necrozma-Ultra requires Necrozma + Solgaleo + Lunala
+    
+    # Generation 8
+    890: {888, 889},       # Eternatus requires Zacian + Zamazenta
+    896: {898},            # Glastrier requires Calyrex
+    897: {898},            # Spectrier requires Calyrex
+    905: {645},            # Enamorus requires Tornadus + Thundurus + Landorus
+    10249: {905},          # Enamorus Therian requires Enamorus
+    10193: {898, 896},     # Calyrex-Ice requires Calyrex + Glastrier
+    10194: {898, 897},     # Calyrex-Shadow requires Calyrex + Spectrier
+    10191: {892},          # Urshifu Rapid Strike requires Urshifu Single Strike
+    
+    # Generation 9
+    1025: {1014, 1015, 1016}, # Pecharunt requires Loyal Three
+    1024: {1007, 1008}, # Terapagos requires Koraidon OR Miraidon
+
+    # Starter Evolutions
+    2: {1}, 3: {2},     # Ivysaur requires Bulbasaur, Venusaur requires Ivysaur
+    5: {4}, 6: {5},     # Charmeleon requires Charmander, Charizard requires Charmeleon
+    8: {7}, 9: {8},     # Wartortle requires Squirtle, Blastoise requires Wartortle
+    153: {152}, 154: {153}, # Chikorita family
+    156: {155}, 157: {156}, # Cyndaquil family
+    159: {158}, 160: {159}, # Totodile family
+    253: {252}, 254: {253}, # Treecko family
+    256: {255}, 257: {256}, # Torchic family
+    259: {258}, 260: {259}, # Mudkip family
+    388: {387}, 389: {388}, # Turtwig family
+    391: {390}, 392: {391}, # Chimchar family
+    394: {393}, 395: {394}, # Piplup family
+    496: {495}, 497: {496}, # Snivy family
+    499: {498}, 500: {499}, # Tepig family
+    502: {501}, 503: {502}, # Oshawott family
+    651: {650}, 652: {651}, # Chespin family
+    654: {653}, 655: {654}, # Fennekin family
+    657: {656}, 658: {657}, # Froakie family
+    723: {722}, 724: {723}, # Rowlet family
+    726: {725}, 727: {726}, # Litten family
+    729: {728}, 730: {729}, # Popplio family
+    811: {810}, 812: {811}, # Grookey family
+    814: {813}, 815: {814}, # Scorbunny family
+    817: {816}, 818: {817}, # Sobble family
+    907: {906}, 908: {907}, # Sprigatito family
+    910: {909}, 911: {910}, # Fuecoco family
+    913: {912}, 914: {913}, # Quaxly family
+}
+
+
+REGIONAL_FORM_REGION: dict[int, str] = {
+    aid: region for region, aids in REGIONAL_FORMS.items() for aid in aids
+}

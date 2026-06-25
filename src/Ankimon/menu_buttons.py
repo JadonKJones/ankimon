@@ -27,6 +27,7 @@ from .pyobj.settings_window import SettingsWindow
 from .pyobj.test_window import TestWindow
 from .pyobj.ankimon_shop import PokemonShopManager
 from .pokedex.pokedex_obj import Pokedex
+from .ankidex.ankidex_obj import Ankidex
 from .pyobj.achievement_window import AchievementWindow
 from .pyobj.ankimon_tracker_window import AnkimonTrackerWindow
 from .pyobj.backup_manager import BackupManager
@@ -76,6 +77,7 @@ def create_menu_actions(
     settings_window: SettingsWindow,
     shop_manager: PokemonShopManager,
     pokedex_window: Pokedex,
+    ankidex_window: Ankidex,
     ankimon_key,
     join_discord_url: Callable,
     open_leaderboard_url: Callable,
@@ -148,6 +150,11 @@ def create_menu_actions(
         pokedex_action.setMenuRole(QAction.MenuRole.NoRole)
         qconnect(pokedex_action.triggered, pokedex_window.show)
         collection_menu.addAction(pokedex_action)
+
+        ankidex_action = QAction("Ankidex", mw)
+        ankidex_action.setMenuRole(QAction.MenuRole.NoRole)
+        qconnect(ankidex_action.triggered, ankidex_window.show)
+        collection_menu.addAction(ankidex_action)
 
     # Backup Manager
     backup_manager_action = QAction("Backup Manager", mw)
