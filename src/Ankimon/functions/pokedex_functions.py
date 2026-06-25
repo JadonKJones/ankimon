@@ -386,6 +386,9 @@ def format_lore_name(name: str) -> str:
     if not name or not isinstance(name, str):
         return name
         
+    if name.lower() == "eternatus-eternamax":
+        return "Eternamax"
+
     # Order matters: check more specific ones first
     if "-Mega-X" in name:
         return "Mega " + name.replace("-Mega-X", " X")

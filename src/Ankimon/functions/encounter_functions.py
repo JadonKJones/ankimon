@@ -423,6 +423,169 @@ def check_id_ok(id_num: Union[int, list[int]]):
     return False
 
 
+
+# === Encounter Overhaul helpers (ported from BRRRR_Experimental @hakimh2) ===
+def _build_regional_lookup() -> None:
+    """Populates encounter_data.REGIONAL_FORM_LOOKUP from pokedex.json.
+
+    Maps species_id -> {region -> [actual_id, ...]} for all encounterable
+    regional forms. Called once at module import. Silently no-ops if
+    pokedex.json is unavailable (e.g. first-run before data files exist).
+    """
+    import os
+
+    try:
+        pokedex_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data_files",
+            "pokedex.json",
+        )
+        with open(pokedex_path, "r", encoding="utf-8") as f:
+            pokedex = json.load(f)
+        aid_to_sid: dict[int, int] = {
+            v["actual_id"]: v["species_id"]
+            for v in pokedex.values()
+            if "actual_id" in v and "species_id" in v
+        }
+        for region, aids in encounter_data.REGIONAL_FORMS.items():
+            for aid in aids:
+                sid = aid_to_sid.get(aid)
+                if sid is None:
+                    continue
+                region_map = encounter_data.REGIONAL_FORM_LOOKUP.setdefault(sid, {})
+                region_map.setdefault(region, []).append(aid)
+    except Exception as e:
+        print(f"[Ankimon] Warning: Could not build regional form lookup: {e}")
+
+
+_build_regional_lookup()
+
+def clear_encounter_cache():
+    """Clear cache when needed"""
+    global _percentages_cache
+    _percentages_cache = {
+        "percentages": None,
+        "total_reviews": None,
+        "trainer_level": None,
+        "main_pokemon_level": None,
+    }
+
+def _player_owns_base_form(actual_id: int, collected_ids: set) -> bool:
+    """Return True if the player owns the base species of this Mega/Gmax form."""
+    name = search_pokedex_by_id(actual_id)
+    if not name or name == "Pokémon not found":
+        return True  # can't determine — allow through
+    species_id = safe_int(search_pokedex(name, "species_id"))
+    if not species_id:
+        return True
+    return species_id in collected_ids
+
+
+def _meets_prerequisites(pokemon_id: int, collected_ids: set) -> bool:
+    """Return True if all prerequisite Pokémon for this ID are collected.
+
+    Prerequisite chains are defined in encounter_data.PREREQUISITES.
+    Handles forms by checking the species_id prerequisites.
+    """
+
+    check_id = pokemon_id
+    if pokemon_id not in encounter_data.PREREQUISITES:
+        if pokemon_id >= 10000:
+            name = search_pokedex_by_id(pokemon_id)
+            species_id = safe_int(search_pokedex(name, "species_id"))
+            if species_id:
+                check_id = species_id
+
+    required = encounter_data.PREREQUISITES.get(check_id)
+    if not required:
+        return True
+
+    if isinstance(required, tuple) and len(required) == 2 and required[0] == "OR":
+        # Any of these must be present
+        return any(rid in collected_ids for rid in required[1])
+
+    # All must be present (default behavior for sets)
+    return required.issubset(collected_ids)
+
+def get_regional_substitute(species_id: int, region: str = None) -> "int | None":
+    """
+    Returns a regional form actual_id for the given species and region, or None.
+    If region is None, returns any valid regional variant from any region.
+    """
+
+    eligible = []
+    lookup = encounter_data.REGIONAL_FORM_LOOKUP.get(species_id, {})
+
+    if region:
+        options = lookup.get(region, [])
+        for v in options:
+            if check_id_ok(v):
+                eligible.append(v)
+    else:
+        for reg_variants in lookup.values():
+            for v in reg_variants:
+                if check_id_ok(v):
+                    eligible.append(v)
+
+    if eligible:
+        return random.choice(eligible)
+    return None
+
+
+def get_boosted_gens_for_region(region: str) -> list[int]:
+    mapping = {
+        "kanto": [1],
+        "johto": [2],
+        "hoenn": [3],
+        "sinnoh": [4],
+        "unova": [5],
+        "kalos": [6],
+        "alola": [7],
+        "galar": [8],
+        "paldea": [9],
+        "hisui": [4, 8],
+    }
+    return mapping.get(region, [])
+
+
+def get_boosted_pool_chance(region: str) -> float:
+    return 0.40 if region == "hisui" else 0.30
+
+
+def get_base_species_gen(actual_id: int) -> int:
+    species_id = actual_id
+    if actual_id >= 10000:
+        name = search_pokedex_by_id(actual_id)
+        if name and name != "Pokémon not found":
+            species_id = safe_int(search_pokedex(name, "species_id")) or actual_id
+
+    for gen, max_id in gen_ids.items():
+        if species_id <= max_id:
+            return int(gen.split("_")[1])
+    return 0
+
+
+def get_all_pokemon_in_tier(tier: str) -> list[int]:
+    if tier == "Normal":
+        return encounter_data.NORMAL
+    if tier == "Baby":
+        return encounter_data.BABY
+    if tier == "Ultra":
+        return encounter_data.ULTRA
+    if tier == "Legendary":
+        return encounter_data.LEGENDARY
+    if tier == "Mythical":
+        return encounter_data.MYTHICAL
+    if tier == "Mega":
+        return encounter_data.MEGA
+    if tier == "Gmax":
+        return encounter_data.GMAX
+    # if tier == "Starter": return encounter_data.STARTERS #Uncomment to activate starters
+    if tier == "Starter":
+        return []
+    return []
+
+
 def generate_random_pokemon(
     main_pokemon_level: int, ankimon_tracker_obj: AnkimonTracker
 ):
