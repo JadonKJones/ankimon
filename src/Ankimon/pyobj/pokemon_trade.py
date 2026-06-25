@@ -121,6 +121,8 @@ def check_and_award_monthly_pokemon(logger):
                 if meets_threshold:
                     logger.log("info", f"Shiny criteria met for {challenge_pokemon_data.get('name')}.")
                     make_shiny = True
+            else:
+                logger.log("info", f"Previous challenge Pokemon ({prev_id}) not found in collection. Shiny eligibility skipped.")
         
         new_pokemon = create_monthly_challenge_pokemon(challenge_pokemon_data, make_shiny=make_shiny)
         add_pokemon_to_collection(new_pokemon)

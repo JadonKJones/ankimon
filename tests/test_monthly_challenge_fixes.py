@@ -16,6 +16,7 @@ sys.modules["PyQt6"] = MagicMock()
 sys.modules["PyQt6.QtWidgets"] = MagicMock()
 sys.modules["PyQt6.QtGui"] = MagicMock()
 sys.modules["PyQt6.QtCore"] = MagicMock()
+sys.modules["PyQt6.QtMultimedia"] = MagicMock()
 
 # Instead of direct import, use importlib to avoid breaking conftest's module stubbing
 _src = Path(__file__).parent.parent / "src"
