@@ -104,7 +104,16 @@ shop_manager = PokemonShopManager(
 
 ankimon_tracker_window = AnkimonTrackerWindow(tracker=ankimon_tracker_obj)
 pokedex_window = Pokedex(addon_dir, ankimon_tracker=ankimon_tracker_obj)
-ankidex_window = Ankidex(addon_dir, ankimon_tracker=ankimon_tracker_obj)
+ankidex_window = None
+
+
+def get_ankidex_window():
+    # Lazy: the Ankidex window holds a QWebEngineView, so build it only when first
+    # opened (matches BRRRR's design; keeps boot light and harness-stub-safe).
+    global ankidex_window
+    if ankidex_window is None:
+        ankidex_window = Ankidex(addon_dir, ankimon_tracker=ankimon_tracker_obj)
+    return ankidex_window
 reviewer_obj = Reviewer_Manager(
     settings_obj=settings_obj,
     main_pokemon=main_pokemon,
