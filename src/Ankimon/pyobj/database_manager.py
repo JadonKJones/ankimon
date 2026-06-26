@@ -313,6 +313,15 @@ class AnkimonDB:
                 (individual_id, obfuscated_data)
             )
         conn.commit()
+
+        # Mark as caught in pokedex_caught
+        pokedex_id = pokemon_data.get("id")
+        if pokedex_id:
+            try:
+                self.mark_as_caught(int(pokedex_id))
+            except Exception as e:
+                self._log("warning", f"Failed to mark pokemon as caught: {e}")
+
         return True
 
     def get_pokemon(self, individual_id: str) -> Optional[Dict[str, Any]]:
@@ -442,9 +451,27 @@ class AnkimonDB:
         return results
 
     def get_all_pokemon_ids(self) -> set:
-        """Returns a set of all captured pokemon's pokedex IDs using the virtual index."""
+        """Returns a set of all captured pokemon's pokedex IDs using the virtual index, history, and explicit caught tracking."""
+        # 1. Currently owned
         cursor = self.execute("SELECT pokedex_id FROM captured_pokemon WHERE pokedex_id IS NOT NULL")
-        return {row[0] for row in cursor.fetchall()}
+        caught_ids = {int(row[0]) for row in cursor.fetchall() if row[0] is not None}
+        
+        # 2. Released (history)
+        try:
+            cursor = self.execute("SELECT DISTINCT json_extract(data, '$.id') FROM pokemon_history")
+            for row in cursor.fetchall():
+                if row[0] is not None:
+                    caught_ids.add(int(row[0]))
+        except Exception:
+            pass
+
+        # 3. Explicitly recorded caught IDs (from evolutions, etc.)
+        try:
+            caught_ids.update(self.get_caught_ids())
+        except Exception:
+            pass
+
+        return caught_ids
 
     # --- Main Pokemon Operations ---
 
@@ -468,6 +495,15 @@ class AnkimonDB:
             (individual_id, obfuscated_data)
         )
         conn.commit()
+
+        # Mark as caught in pokedex_caught
+        pokedex_id = pokemon_data.get("id")
+        if pokedex_id:
+            try:
+                self.mark_as_caught(int(pokedex_id))
+            except Exception as e:
+                self._log("warning", f"Failed to mark main pokemon as caught: {e}")
+
         return True
 
     def get_main_pokemon(self) -> Optional[Dict[str, Any]]:
@@ -776,6 +812,37 @@ class AnkimonDB:
             except:
                 result[key] = val
         return result
+
+    # --- Pokedex Seen Tracking ---
+
+    def mark_as_seen(self, pokedex_id: int):
+        """Marks a Pokémon ID as seen in the user_data."""
+        seen_ids = self.get_seen_ids()
+        if pokedex_id not in seen_ids:
+            seen_ids.add(pokedex_id)
+            self.set_user_data("pokedex_seen", list(seen_ids))
+
+    def get_seen_ids(self) -> set:
+        """Retrieves the set of seen Pokémon IDs."""
+        data = self.get_user_data("pokedex_seen", [])
+        if isinstance(data, list):
+            return set(data)
+        return set()
+
+    def mark_as_caught(self, pokedex_id: int):
+        """Marks a Pokémon ID as caught in the user_data."""
+        caught_ids = self.get_caught_ids()
+        if pokedex_id not in caught_ids:
+            caught_ids.add(pokedex_id)
+            self.set_user_data("pokedex_caught", list(caught_ids))
+        self.mark_as_seen(pokedex_id)
+
+    def get_caught_ids(self) -> set:
+        """Retrieves the set of caught Pokémon IDs."""
+        data = self.get_user_data("pokedex_caught", [])
+        if isinstance(data, list):
+            return set(data)
+        return set()
 
     # --- Config Operations (replaces config.obf) ---
 

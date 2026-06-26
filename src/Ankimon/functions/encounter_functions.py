@@ -869,6 +869,19 @@ def new_pokemon(
     Returns:
         PokemonObject: The updated `pokemon` object representing the newly generated wild Pokémon ready for battle.
     """
+    ankimon_tracker.caught = 0
+
+    # Reset the battle simulation state in the battle loop
+    try:
+        from ..battle_loop import _state
+        _state.new_state = None
+        _state.mutator_full_reset = 1
+    except Exception as e:
+        print(f"[Ankimon] Error resetting battle state in new_pokemon: {e}")
+
+    # Force HUD update on next card/refresh
+    if reviewer_obj is not None:
+        reviewer_obj._last_state = None
     (
         name,
         pkmn_id,
@@ -1357,7 +1370,7 @@ def catch_pokemon(
             logger.log_and_showinfo(
                 "info", translator.translate("already_caught_pokemon")
             )  # Display a message when the Pokémon is caught
-            return
+        return
 
     # If we arrive here, this means that ankimon_tracker_obj.caught == 1
     if not nickname:

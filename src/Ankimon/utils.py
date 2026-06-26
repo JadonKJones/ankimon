@@ -984,3 +984,14 @@ def close_anki():
         mw.close()
     except Exception:
         pass
+
+
+def is_alive(obj):
+    """Check if a QObject/QWidget's C++ part is still alive."""
+    if obj is None:
+        return False
+    try:
+        obj.objectName()
+        return True
+    except (RuntimeError, AttributeError):
+        return False

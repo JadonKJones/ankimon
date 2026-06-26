@@ -126,6 +126,8 @@ def PokemonCollectionDetails(
                 "everstone": everstone,
                 "evolution_rejected": evolution_rejected,
                 "level": level,
+                "individual_id": individual_id,
+                "attacks": attacks,
             }
         )
         # For Mega/Gmax and Regional forms, the species CSV often has no entry or is hyphenated — use pretty name instead

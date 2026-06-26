@@ -137,6 +137,30 @@ evo_window = EvoWindow(
     test_window,
     achievements,
 )
+
+
+def get_evo_window():
+    """Return the live EvoWindow, recreating it if its C++ part was destroyed.
+
+    The EvoWindow can be closed/garbage-collected (especially from the PC box /
+    item flows); calling into a dead Qt widget raises ``RuntimeError``. This
+    getter rebuilds it transparently so callers always get a usable window.
+    """
+    global evo_window
+    from .utils import is_alive
+    if not is_alive(evo_window):
+        evo_window = EvoWindow(
+            logger,
+            settings_obj,
+            main_pokemon,
+            translator,
+            reviewer_obj,
+            test_window,
+            achievements,
+        )
+    return evo_window
+
+
 starter_window = StarterWindow(logger, settings_obj)
 item_window = ItemWindow(  # Create an instance of the MainWindow
     logger=logger,
@@ -147,6 +171,38 @@ item_window = ItemWindow(  # Create an instance of the MainWindow
     starter_window=starter_window,
     evo_window=evo_window,
 )
+
+
+def get_item_window():
+    """Return the live ItemWindow, recreating it if its C++ part was destroyed.
+
+    Used by the evolution flow to refresh item quantities after an evolution
+    stone is consumed.
+    """
+    global item_window
+    from .utils import is_alive
+    if not is_alive(item_window):
+        item_window = ItemWindow(
+            logger=logger,
+            settings_obj=settings_obj,
+            main_pokemon=main_pokemon,
+            enemy_pokemon=enemy_pokemon,
+            achievements=achievements,
+            starter_window=starter_window,
+            evo_window=evo_window,
+        )
+    return item_window
+
+
+def get_items_window():
+    """Return the web-based items window if present.
+
+    The QtWebEngine items window (``ankimon_items_web``) is not part of this
+    build, so there is nothing to refresh; return ``None`` so callers treat the
+    web-items refresh as a safe no-op.
+    """
+    return None
+
 
 pokemon_pc = PokemonPC(
     logger=logger,
