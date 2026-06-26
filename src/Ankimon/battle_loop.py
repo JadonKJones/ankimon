@@ -98,7 +98,11 @@ def on_review_card(*args):
         s.item_receive_value -= 1
         if s.item_receive_value <= 0:
             s.item_receive_value = random.randint(3, 385)
-            test_window.display_item()
+            if settings_obj.get("gui.pop_up_dialog_message_on_item"):
+                test_window.display_item()
+            else:
+                from .utils import random_item
+                random_item()
             if not check_for_badge(achievements, 6):
                 receive_badge(6, achievements)
 

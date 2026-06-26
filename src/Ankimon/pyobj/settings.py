@@ -26,6 +26,7 @@ DEFAULT_CONFIG = {
     "gui.styling_in_reviewer": True,
     "gui.hp_bar_config": True,
     "gui.pop_up_dialog_message_on_defeat": False,
+    "gui.pop_up_dialog_message_on_item": True,
     "gui.review_hp_bar_thickness": 2,
     "gui.reviewer_image_gif": False,
     "gui.reviewer_text_message_box": True,

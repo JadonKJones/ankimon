@@ -321,6 +321,7 @@ class SettingsWindow(QMainWindow):
                     "Hide HUD on Reviewer Startup", 
                     "Show Pokémon Buttons",
                     "Pop-Up on Defeat",
+                    "Pop-Up on Item Receive",
                     "Show Text Message Box in Reviewer",
                     "Message Box Display Time",
                     "Review Based Damage",
