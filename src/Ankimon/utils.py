@@ -71,6 +71,17 @@ with open(pokedex_path, "r", encoding="utf-8") as f:
     POKEMON_NAME_LOOKUP = {x: data[x]["name"] for x in data}
 
 
+def is_alive(obj):
+    """Check if a QObject/QWidget's C++ part is still alive."""
+    if obj is None:
+        return False
+    try:
+        obj.objectName()
+        return True
+    except (RuntimeError, AttributeError):
+        return False
+
+
 def format_pokemon_name(name: str) -> str:
     """
     Look up the official Pokémon name using the normalized key.
