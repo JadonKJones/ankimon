@@ -144,3 +144,20 @@ def get_sprite_path(side: str, sprite_type: str, id: int, shiny: bool, gender: s
         f"Unable to find sprite for {pokemon_name} ID {id} (Side: {side} Sprite: {sprite_type} Shiny: {shiny}, Gender: {gender}). Returning substitute.",
     )
     return SUBSTITUTE_PATH
+
+
+def get_relative_sprite_path(pokemon_id: int, shiny: bool, gender: str = "N", pokemon_name: str = None, sprite_type: str = "png") -> str:
+    """Return a sprite path relative to the web root (../user_files/sprites/...)."""
+    try:
+        abs_path = str(get_sprite_path(
+            "front", sprite_type, pokemon_id,
+            bool(shiny), gender, pokemon_name,
+        ))
+        norm = abs_path.replace("\\", "/")
+        marker = "user_files/sprites/"
+        idx = norm.find(marker)
+        if idx != -1:
+            return "../" + norm[idx:]
+    except Exception:
+        pass
+    return "../user_files/sprites/front_default/0.png"

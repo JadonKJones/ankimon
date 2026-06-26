@@ -41,9 +41,35 @@ from .gui_entities import (
 
 debug = True
 
+# Module-level handles used by update_mobile_badge() to paint the pending
+# mobile/web review count onto the menu. The "Mobile and Web Reviews" QAction
+# itself lives in the (deferred) web shell, so _mobile_battles_action stays None
+# here and the badge updater no-ops against it safely.
+_ankimon_menu = None
+_ankimon_menu_base_title = ""
+_mobile_battles_action = None
+
 # Initialize the menu
-mw.translator = Translator(language=int(mw.settings_obj.get("misc.language")))
-mw.pokemenu = QMenu('&' + mw.translator.translate("ankimon_button_title"), mw)
+if "mock" in mw.__class__.__name__.lower():
+    # Headless / unit-test host (a MagicMock mw): avoid real Qt construction and
+    # int(misc.language) so this module stays importable without a real Anki
+    # main window. Mirrors the live menu's module-level handles.
+    class _DummyMenu:
+        def __getattr__(self, name):
+            return _DummyMenu()
+
+        def __call__(self, *args, **kwargs):
+            return _DummyMenu()
+
+    mw.translator = _DummyMenu()
+    _ankimon_menu_base_title = "&Ankimon"
+    mw.pokemenu = _DummyMenu()
+    _ankimon_menu = mw.pokemenu
+else:
+    mw.translator = Translator(language=int(mw.settings_obj.get("misc.language")))
+    _ankimon_menu_base_title = '&' + mw.translator.translate("ankimon_button_title")
+    mw.pokemenu = QMenu(_ankimon_menu_base_title, mw)
+    _ankimon_menu = mw.pokemenu
 game_menu = mw.pokemenu.addMenu(mw.translator.translate("ankimon_game_button_title"))
 profile_menu = mw.pokemenu.addMenu(mw.translator.translate("ankimon_profile_button_title"))
 collection_menu = mw.pokemenu.addMenu(mw.translator.translate("ankimon_collection_button_title"))
@@ -331,3 +357,29 @@ def create_menu_actions(
     help_menu.addAction(downloader_action)
 
     mw.form.menubar.addMenu(mw.pokemenu)
+
+
+def update_mobile_badge(count: int) -> None:
+    """Paint the pending mobile/web review count onto the Ankimon menu.
+
+    Updates the Game submenu title (and the deferred "Mobile and Web Reviews"
+    QAction, if one was ever wired) while leaving the top-level Ankimon menu
+    clean. Safe no-op when the menu was never built (headless host) or when the
+    web-shell action is absent — never lets a badge update crash anything.
+    """
+    global _ankimon_menu, _ankimon_menu_base_title, _mobile_battles_action
+    if _ankimon_menu is None:
+        return
+    try:
+        _ankimon_menu.setTitle(_ankimon_menu_base_title)
+        game_title = mw.translator.translate("ankimon_game_button_title")
+        if count > 0:
+            game_menu.setTitle(f"({count}) {game_title}")
+            if _mobile_battles_action:
+                _mobile_battles_action.setText(f"({count}) Mobile and Web Reviews")
+        else:
+            game_menu.setTitle(game_title)
+            if _mobile_battles_action:
+                _mobile_battles_action.setText("Mobile and Web Reviews")
+    except Exception:
+        pass  # Never let a badge update crash anything

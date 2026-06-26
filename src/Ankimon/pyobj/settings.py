@@ -69,6 +69,12 @@ DEFAULT_CONFIG = {
     "trainer.last_cash_reward_date": "",
     "trainer.level": 0,
     "trainer.xp": 0,
+    "trainer.mobile_reviews_resolved_since_payout": 0,
+    # Mobile/web reviews: when Anki syncs reviews done on AnkiMobile, detect them
+    # by watermark and simulate battles for them locally.
+    "mobile.enabled": True,
+    "mobile.resolution_mode": "manual",
+    "mobile.inactive_companions": [],
 }
 
 

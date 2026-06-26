@@ -13,6 +13,41 @@ sync_dialog = None
 
 def _on_profile_did_open(online_connectivity):
     def handler():
+        # Mobile/web review detection: on profile open, set the first-run
+        # watermark, start a fresh inter-sync interval, and queue+badge any
+        # reviews pulled in by startup sync. No-ops cleanly when mobile.enabled
+        # is off or there is nothing pending (and never blocks boot — fully
+        # wrapped in try/except).
+        try:
+            from .functions.mobile_sync import clear_desktop_session
+            from .menu_buttons import update_mobile_badge
+            watermark = mw.ankimon_db.get_mobile_watermark()
+            if watermark == 0:
+                # First-ever run — set watermark to NOW so no retroactive battles
+                initial_watermark = mw.col.db.scalar("SELECT MAX(id) FROM revlog") or 0
+                mw.ankimon_db.set_mobile_watermark(initial_watermark or 0)
+            # Always clear session set on profile open (fresh inter-sync interval)
+            clear_desktop_session()
+
+            # Run detection immediately on startup/profile open to catch any reviews pulled in by startup sync
+            if settings_obj.get("mobile.enabled", True):
+                try:
+                    from .functions.mobile_sync import process_mobile_reviews_after_sync
+                    process_mobile_reviews_after_sync(
+                        col=mw.col,
+                        ankimon_db=mw.ankimon_db,
+                        settings_obj=settings_obj,
+                        logger=logger
+                    )
+                except Exception as sync_err:
+                    logger.log("error", f"Failed to run startup mobile reviews sync: {sync_err}")
+
+            # Restore badge — show pending count from previous session
+            pending = mw.ankimon_db.get_pending_mobile_count()
+            update_mobile_badge(pending)
+        except Exception as e:
+            logger.log("error", f"Failed to initialize mobile watermark: {e}")
+
         try:
             show_tip_of_the_day()
         except Exception as e:

@@ -15,15 +15,73 @@ import csv
 from ..resources import user_path, csv_file_items_cost, mypokemon_path, mainpokemon_path, items_path, badges_path, team_pokemon_path as team_path
 
 
+class ConnectionWrapper:
+    """Thin wrapper around a sqlite3.Connection.
+
+    Adds a ``_disable_commit`` flag the mobile-review batch resolver toggles so
+    the many per-write ``commit()`` calls inside one ``resolve_all`` run collapse
+    into a single outer transaction (raw ``sqlite3.Connection`` objects reject
+    arbitrary attributes, so the engine cannot set the flag on them directly).
+    All other attribute access is delegated to the underlying connection.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._disable_commit = False
+
+    def commit(self):
+        if not self._disable_commit:
+            self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    def execute(self, *args, **kwargs):
+        return self._conn.execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        return self._conn.executemany(*args, **kwargs)
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __enter__(self):
+        if getattr(self, "_txn_depth", 0) == 0:
+            self._conn.execute("BEGIN")
+        self._txn_depth = getattr(self, "_txn_depth", 0) + 1
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._txn_depth = getattr(self, "_txn_depth", 1) - 1
+        if self._txn_depth == 0:
+            if exc_type is not None:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+            else:
+                try:
+                    self._conn.commit()
+                except Exception:
+                    pass
+        return False
+
+
 class AnkimonDB:
     """Handles all database operations for Ankimon. Stores data in SQLite."""
-    
+
     DB_FILENAME = "ankimon.db"
 
     def __init__(self, logger=None):
         self.logger = logger
         self.db_path = user_path / self.DB_FILENAME
-        self._connection: Optional[sqlite3.Connection] = None
+        self._connection: Optional[ConnectionWrapper] = None
         self._setup_database()
 
     def _log(self, level: str, message: str):
@@ -35,11 +93,17 @@ class AnkimonDB:
 
     # --- Connection Management ---
 
-    def _get_connection(self) -> sqlite3.Connection:
-        """Gets or creates a database connection."""
+    def _get_connection(self) -> ConnectionWrapper:
+        """Gets or creates a database connection.
+
+        Returns a :class:`ConnectionWrapper` so the mobile-review batch resolver
+        can suppress per-write commits via ``conn._disable_commit``. The wrapper
+        is transparent for every existing caller (cursor/execute/commit/``with``).
+        """
         if self._connection is None:
-            self._connection = sqlite3.connect(str(self.db_path))
-            self._connection.row_factory = sqlite3.Row  # Access columns by name
+            conn = sqlite3.connect(str(self.db_path))
+            conn.row_factory = sqlite3.Row  # Access columns by name
+            self._connection = ConnectionWrapper(conn)
         return self._connection
 
     def close(self):
@@ -47,6 +111,14 @@ class AnkimonDB:
         if self._connection:
             self._connection.close()
             self._connection = None
+
+    def switch_database(self, db_filename: str):
+        """Closes the current connection and opens a new database file."""
+        self.close()
+        self.db_path = user_path / db_filename
+        self._connection = None
+        self._setup_database()
+        self._log("info", f"Switched database to {db_filename}")
 
     # --- Obfuscation / De-obfuscation ---
 
@@ -174,6 +246,40 @@ class AnkimonDB:
             )
         """)
 
+        # Table for pending mobile reviews/battles (Phase 1)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pending_mobile_battles (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                revlog_id     INTEGER UNIQUE NOT NULL,
+                card_id       INTEGER NOT NULL,
+                ease          INTEGER NOT NULL,
+                review_time   INTEGER NOT NULL,
+                review_type   INTEGER NOT NULL,
+                queued_at     INTEGER NOT NULL,
+                resolved      INTEGER NOT NULL DEFAULT 0,
+                resolved_at   INTEGER
+            )
+        """)
+
+        # Table for mobile battle history (Phase 2)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mobile_battle_history (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp         INTEGER NOT NULL,
+                enemy_id          INTEGER NOT NULL,
+                enemy_name        TEXT NOT NULL,
+                enemy_level       INTEGER NOT NULL,
+                enemy_shiny       INTEGER NOT NULL,
+                companion_name    TEXT,
+                companion_level   INTEGER,
+                outcome           TEXT NOT NULL,
+                xp_gained         INTEGER DEFAULT 0,
+                trainer_xp_gained INTEGER DEFAULT 0,
+                cash_gained       INTEGER DEFAULT 0
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_timestamp ON mobile_battle_history(timestamp)")
+
         conn.commit()
         self._log("info", "AnkimonDB: Database schema initialized.")
 
@@ -219,6 +325,10 @@ class AnkimonDB:
         if row:
             return self._deobfuscate(row["data"])
         return None
+
+    def get_pokemon_by_individual_id(self, individual_id: str) -> Optional[Dict[str, Any]]:
+        """Query captured_pokemon by individual_id, deobfuscate, and return the data dict or None."""
+        return self.get_pokemon(individual_id)
 
     def get_all_pokemon(self) -> List[Dict[str, Any]]:
         """Retrieves all captured pokemon."""
@@ -980,6 +1090,212 @@ class AnkimonDB:
         cursor.execute("SELECT value FROM metadata WHERE key = 'migrated'")
         row = cursor.fetchone()
         return row is not None and row["value"] == "true"
+
+    # --- Mobile Sync Operations ---
+
+    def get_mobile_watermark(self) -> int:
+        """Return stored watermark (ms). Returns 0 if not set (first-ever run)."""
+        row = self.execute(
+            "SELECT value FROM metadata WHERE key = 'mobile_revlog_watermark'"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def set_mobile_watermark(self, watermark_ms: int) -> None:
+        with self._get_connection():
+            self._get_connection().execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('mobile_revlog_watermark', ?)",
+                (str(watermark_ms),)
+            )
+
+    def queue_mobile_battles(self, reviews: list[dict]) -> int:
+        """Insert mobile reviews into pending queue. Returns count inserted (skips duplicates)."""
+        import time
+        now = int(time.time() * 1000)
+        inserted = 0
+        conn = self._get_connection()
+        with conn:
+            for r in reviews:
+                cursor = conn.execute(
+                    """INSERT OR IGNORE INTO pending_mobile_battles
+                       (revlog_id, card_id, ease, review_time, review_type, queued_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (r["id"], r["cid"], r["ease"], r["time"], r["type"], now)
+                )
+                inserted += cursor.rowcount
+        return inserted
+
+    def get_pending_mobile_count(self) -> int:
+        return self.execute(
+            "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 0"
+        ).fetchone()[0]
+
+    def get_next_pending_mobile_batch(self, limit: int = 1) -> list[dict]:
+        """Return next N unresolved battles, oldest-first (lowest revlog_id first)."""
+        rows = self.execute(
+            """SELECT id, revlog_id, card_id, ease, review_time, review_type
+               FROM pending_mobile_battles
+               WHERE resolved = 0
+               ORDER BY revlog_id ASC
+               LIMIT ?""",
+            (limit,)
+        ).fetchall()
+        keys = ["queue_id", "revlog_id", "card_id", "ease", "review_time", "review_type"]
+        return [dict(zip(keys, r)) for r in rows]
+
+    def mark_mobile_battle_resolved(self, queue_id: int) -> None:
+        import time
+        now = int(time.time() * 1000)
+        cursor = self.execute("SELECT revlog_id FROM pending_mobile_battles WHERE id = ?", (queue_id,))
+        row = cursor.fetchone()
+        revlog_id = row[0] if row else None
+
+        with self._get_connection():
+            self._get_connection().execute(
+                "UPDATE pending_mobile_battles SET resolved=1, resolved_at=? WHERE id=?",
+                (now, queue_id)
+            )
+
+        if revlog_id:
+            self.sync_resolutions_to_other_db([revlog_id], now)
+
+    def add_mobile_history_entry(self, entry: Dict[str, Any]) -> bool:
+        """Saves a single mobile battle outcome to history."""
+        return self.add_mobile_history_entries_batch([entry])
+
+    def add_mobile_history_entries_batch(self, entries: List[Dict[str, Any]]) -> bool:
+        """Saves a batch of mobile battle outcomes to history in a single transaction."""
+        if not entries:
+            return True
+
+        def _clean_val(v, default):
+            if v is None:
+                return default
+            return v
+
+        try:
+            conn = self._get_connection()
+            with conn:
+                conn.executemany(
+                    """INSERT INTO mobile_battle_history (
+                        timestamp, enemy_id, enemy_name, enemy_level, enemy_shiny,
+                        companion_name, companion_level, outcome, xp_gained,
+                        trainer_xp_gained, cash_gained
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [
+                        (
+                            _clean_val(entry.get("timestamp"), 0),
+                            _clean_val(entry.get("enemy_id"), 0),
+                            str(_clean_val(entry.get("enemy_name"), "")),
+                            _clean_val(entry.get("enemy_level"), 0),
+                            1 if entry.get("enemy_shiny") else 0,
+                            str(_clean_val(entry.get("companion_name"), "")),
+                            _clean_val(entry.get("companion_level"), 0),
+                            str(_clean_val(entry.get("outcome"), "")),
+                            _clean_val(entry.get("xp_gained"), 0),
+                            _clean_val(entry.get("trainer_xp_gained"), 0),
+                            _clean_val(entry.get("cash_gained"), 0),
+                        )
+                        for entry in entries
+                    ]
+                )
+                conn.execute(
+                    """DELETE FROM mobile_battle_history
+                       WHERE id NOT IN (
+                           SELECT id FROM mobile_battle_history
+                           ORDER BY timestamp DESC, id DESC
+                           LIMIT 500
+                       )"""
+                )
+            return True
+        except Exception as e:
+            self._log("error", f"Failed to batch add mobile history entries: {e}")
+            return False
+
+    def get_mobile_history(self, limit: int = 500) -> List[Dict[str, Any]]:
+        """Retrieves recent mobile battle history entries, newest first."""
+        try:
+            rows = self.execute(
+                """SELECT id, timestamp, enemy_id, enemy_name, enemy_level, enemy_shiny,
+                          companion_name, companion_level, outcome, xp_gained,
+                          trainer_xp_gained, cash_gained
+                   FROM mobile_battle_history
+                   ORDER BY timestamp DESC, id DESC
+                   LIMIT ?""",
+                (limit,)
+            ).fetchall()
+            keys = [
+                "id", "timestamp", "enemy_id", "enemy_name", "enemy_level", "enemy_shiny",
+                "companion_name", "companion_level", "outcome", "xp_gained",
+                "trainer_xp_gained", "cash_gained"
+            ]
+            result = []
+            for r in rows:
+                item = dict(zip(keys, r))
+                item["enemy_shiny"] = bool(item["enemy_shiny"])
+                result.append(item)
+            return result
+        except Exception as e:
+            self._log("error", f"Failed to get mobile history: {e}")
+            return []
+
+    def clear_mobile_history(self) -> bool:
+        """Clears all entries from the mobile battle history."""
+        try:
+            conn = self._get_connection()
+            with conn:
+                conn.execute("DELETE FROM mobile_battle_history")
+            return True
+        except Exception as e:
+            self._log("error", f"Failed to clear mobile history: {e}")
+            return False
+
+    def sync_resolutions_to_other_db(self, revlog_ids: list[int], resolved_at: int) -> None:
+        """
+        If the other database exists (normal vs dev), sync the resolved status of the given
+        revlog_ids to it directly.
+        """
+        if not revlog_ids:
+            return
+
+        current_name = self.db_path.name
+        if current_name == "ankimon.db":
+            other_name = "ankimonDEV.db"
+        elif current_name == "ankimonDEV.db":
+            other_name = "ankimon.db"
+        else:
+            return
+
+        other_path = user_path / other_name
+        if not other_path.is_file():
+            return
+
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(other_path), timeout=5.0)
+            try:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS pending_mobile_battles (
+                        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                        revlog_id     INTEGER UNIQUE NOT NULL,
+                        card_id       INTEGER NOT NULL,
+                        ease          INTEGER NOT NULL,
+                        review_time   INTEGER NOT NULL,
+                        review_type   INTEGER NOT NULL,
+                        queued_at     INTEGER NOT NULL,
+                        resolved      INTEGER NOT NULL DEFAULT 0,
+                        resolved_at   INTEGER
+                    )
+                """)
+                placeholders = ",".join("?" for _ in revlog_ids)
+                conn.execute(
+                    f"UPDATE pending_mobile_battles SET resolved=1, resolved_at=? WHERE revlog_id IN ({placeholders})",
+                    [resolved_at] + list(revlog_ids)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            self._log("error", f"Failed to sync resolutions to {other_name}: {e}")
 
 
 # Singleton instance for use throughout the addon

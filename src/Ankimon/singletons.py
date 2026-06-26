@@ -161,3 +161,14 @@ services.populate(
 # test_window, …) to the now-fully-populated registry. Must run after the
 # services.populate above so the GUI window bindings are non-None.
 bind_runtime_globals()
+
+
+def get_evo_window():
+    """Lazy accessor for the shared evolution window.
+
+    The mobile-review engine (functions/mobile_sync.py) awards XP through
+    ``save_main_pokemon_progress(..., get_evo_window())``; this getter keeps the
+    call site decoupled from this module's import order. Returns the singleton
+    built above.
+    """
+    return evo_window
