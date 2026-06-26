@@ -1,39 +1,105 @@
 import pytest
 import os
 import sys
-import json
+import importlib.util
 from unittest.mock import MagicMock
 from datetime import datetime
+from pathlib import Path
 
-# Restore correct resources to prevent test pollution
-import aqt
-import Ankimon.resources as resources
-import Ankimon.functions.pokedex_functions as pf
-import Ankimon.functions.friendship_evolution as fe
+# These tests exercise the *real* region/time/move-aware evolution engine against
+# the bundled data files. The rest of the suite is hostile to that: several test
+# modules replace ``Ankimon.resources`` / ``Ankimon.functions.pokedex_functions``
+# / ``Ankimon.functions.friendship_evolution`` in ``sys.modules`` with mocks or
+# with copies loaded against dummy data paths, and don't restore them. Because the
+# engine resolves ``pokedex_functions`` through ``sys.modules`` at *call* time
+# (e.g. ``from .pokedex_functions import _load_pokedex_cache`` inside
+# ``get_level_evolutions_for_species``), that pollution made these tests read an
+# empty pokedex and fall back to the form-blind legacy CSV — wrongly evolving
+# Kantonian Mr. Mime, Mime Jr. and Alolan Cubone. A plain ``import`` here also bound
+# whichever (mock-deps) module happened to be in ``sys.modules`` at collection time.
+#
+# To be order-independent we instead load our OWN real resources + pokedex_functions
+# + friendship_evolution (isolated, restoring ``sys.modules`` afterwards so we don't
+# pollute anyone else), and the autouse fixture force-points ``sys.modules`` at
+# exactly those objects for the duration of each test (via ``monkeypatch.setitem``,
+# auto-restored) so the engine's lazy imports always resolve to them.
 
+_src = Path(__file__).parent.parent / "src"
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 actual_pokedex_path = os.path.join(base_dir, "src", "Ankimon", "data_files", "pokedex.json")
 actual_items_path = os.path.join(base_dir, "src", "Ankimon", "data_files", "items.csv")
 
+import aqt  # real aqt from the tier-2 env; the fixture sets aqt.mw to a mock
+
+
+def _load_real_evolution_modules():
+    """Load resources + pokedex_functions + friendship_evolution for real.
+
+    Done inside a ``sys.modules`` snapshot/restore so loading our private copies
+    never clobbers the shared module table other test modules rely on. Returns the
+    three module objects; the fixture re-inserts them into ``sys.modules`` per-test.
+    """
+    orig = dict(sys.modules)
+    try:
+        # External / transitive deps the real modules import at module top.
+        sys.modules["aqt"] = MagicMock()
+        sys.modules["aqt.qt"] = MagicMock()
+        sys.modules["aqt.utils"] = MagicMock()
+        sys.modules["Ankimon.pyobj"] = MagicMock()
+        sys.modules["Ankimon.pyobj.error_handler"] = MagicMock()
+        sys.modules["Ankimon.pyobj.pokemon_obj"] = MagicMock()
+        sys.modules["Ankimon.singletons"] = MagicMock()
+
+        def _load(name, rel):
+            spec = importlib.util.spec_from_file_location(name, _src / rel)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+            return module
+
+        resources = _load("Ankimon.resources", "Ankimon/resources.py")
+        pf = _load(
+            "Ankimon.functions.pokedex_functions",
+            "Ankimon/functions/pokedex_functions.py",
+        )
+        fe = _load(
+            "Ankimon.functions.friendship_evolution",
+            "Ankimon/functions/friendship_evolution.py",
+        )
+        return resources, pf, fe
+    finally:
+        sys.modules.clear()
+        sys.modules.update(orig)
+
+
+resources, pf, fe = _load_real_evolution_modules()
+
+
 # Setup dynamic mock environment
 @pytest.fixture(autouse=True)
 def setup_mock_environment(monkeypatch):
+    # Force the engine's lazy sys.modules lookups to resolve to OUR real modules
+    # for the duration of this test (monkeypatch.setitem auto-restores after).
+    monkeypatch.setitem(sys.modules, "Ankimon.resources", resources)
+    monkeypatch.setitem(sys.modules, "Ankimon.functions.pokedex_functions", pf)
+    monkeypatch.setitem(sys.modules, "Ankimon.functions.friendship_evolution", fe)
+
     # Restore actual resource paths to prevent test pollution
     monkeypatch.setattr(resources, "pokedex_path", actual_pokedex_path)
     monkeypatch.setattr(pf, "pokedex_path", actual_pokedex_path)
     monkeypatch.setattr(resources, "csv_file_items_cost", actual_items_path)
     monkeypatch.setattr(pf, "csv_file_items_cost", actual_items_path)
-    
+
     # Reset pokedex cache and lru_caches
     pf._pokedex_cache = None
     pf._pokedex_id_index = None
     fe.get_level_evolutions_for_species.cache_clear()
     fe.get_friendship_evolutions_for_species.cache_clear()
-    
+
     # Mock settings cleanly without breaking other settings
     mock_settings = MagicMock()
     mock_settings.active_region_val = "No Region"
-    
+
     def get_setting(key, default=None):
         if key == "misc.active_region":
             return mock_settings.active_region_val
@@ -42,33 +108,34 @@ def setup_mock_environment(monkeypatch):
         if key == "evolution.night_start_hour":
             return 18
         return default
-        
+
     mock_settings.get.side_effect = get_setting
-    
+
     # Mock database
     mock_db = MagicMock()
     mock_db.get_pokemon.return_value = {
         "id": 234, # Stantler
         "attacks": ["Psyshield Bash", "Tackle"]
     }
-    
+
     # Mock main window (mw)
     mock_mw = MagicMock()
     mock_mw.settings_obj = mock_settings
     mock_mw.ankimon_db = mock_db
-    
-    # Set sys.modules["aqt"].mw directly to bypass mock overrides
-    if "aqt" in sys.modules:
-        monkeypatch.setattr(sys.modules["aqt"], "mw", mock_mw)
-    monkeypatch.setattr(aqt, "mw", mock_mw)
-    monkeypatch.setattr(pf, "mw", mock_mw)
+
+    # The engine reads mw via a fresh `from aqt import mw` at call time (in
+    # _level_readiness), which resolves sys.modules["aqt"] — and other suite
+    # modules may have swapped that for a different mock. Force it to our aqt and
+    # set mw on it, plus pf.mw (pf functions use the module-level binding).
+    monkeypatch.setitem(sys.modules, "aqt", aqt)
+    monkeypatch.setattr(aqt, "mw", mock_mw, raising=False)
+    monkeypatch.setattr(pf, "mw", mock_mw, raising=False)
 
     # #492 moved settings/db access from mw.* / singletons to the services registry,
     # which the friendship/pokedex engine reads (services.settings / services.db).
-    # Point those at the same mocks so the engine sees this test's configuration.
-    from Ankimon.services import services
-    monkeypatch.setattr(services, "settings", mock_settings, raising=False)
-    monkeypatch.setattr(services, "db", mock_db, raising=False)
+    # pf and fe share the same registry object; point it at this test's mocks.
+    monkeypatch.setattr(pf.services, "settings", mock_settings, raising=False)
+    monkeypatch.setattr(pf.services, "db", mock_db, raising=False)
 
     return mock_mw
 

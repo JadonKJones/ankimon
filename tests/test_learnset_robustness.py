@@ -15,19 +15,20 @@ actual_learnset_path = _src / "Ankimon" / "data_files" / "learnsets.json"
 with open(actual_learnset_path, "r", encoding="utf-8") as file:
     LEARNSETS_DATA = json.load(file)
 
-# Mock modules
-mock_aqt = MagicMock()
-sys.modules["aqt"] = mock_aqt
-sys.modules["aqt.utils"] = mock_aqt.utils
-sys.modules["Anki"] = MagicMock()
-sys.modules["aqt.qt"] = MagicMock()
-
 
 class MockResources:
     learnset_path = str(actual_learnset_path)
 
     def __getattr__(self, name):
         return "dummy"
+
+
+# Mock modules
+mock_aqt = MagicMock()
+sys.modules["aqt"] = mock_aqt
+sys.modules["aqt.utils"] = mock_aqt.utils
+sys.modules["Anki"] = MagicMock()
+sys.modules["aqt.qt"] = MagicMock()
 
 
 sys.modules["Ankimon.resources"] = MockResources()
@@ -39,6 +40,13 @@ mock_pyobj = MagicMock()
 sys.modules["Ankimon.pyobj"] = mock_pyobj
 sys.modules["Ankimon.pyobj.error_handler"] = mock_pyobj.error_handler
 sys.modules["Ankimon.pyobj.QProgressIndicator"] = MagicMock()
+# pokedex_functions imports PokemonObject from here at module top. The full suite
+# happens to leave a real pokemon_obj in sys.modules by the time this module is
+# collected, but when this file runs in its OWN process nothing has loaded it, so
+# `from ..pyobj.pokemon_obj import PokemonObject` used to fail with "Ankimon.pyobj
+# is not a package". Pre-cache a stub submodule so the import resolves either way
+# and this module is self-contained (passes alone).
+sys.modules["Ankimon.pyobj.pokemon_obj"] = MagicMock()
 
 # Now load pokedex_functions from its file
 _spec = importlib.util.spec_from_file_location(
