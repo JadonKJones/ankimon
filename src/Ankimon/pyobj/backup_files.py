@@ -38,11 +38,20 @@ def is_backup_needed():
     if not os.path.exists(backup_folders[0]):
         return True  # No backups exist, so we need one
 
-    with open(os.path.join(backup_folders[0], "backup_info.txt"), "r") as f:
-        date_str = f.readline().replace("Backup created on: ", "").strip()
-        last_backup_date = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+    backup_info_path = os.path.join(backup_folders[0], "backup_info.txt")
+    if not os.path.exists(backup_info_path):
+        return True  # The text file is missing, do a backup to be safe and restore state
 
-    return (datetime.now() - last_backup_date).days >= 14  # Check if 2 weeks have passed
+    try:
+        with open(backup_info_path, "r") as f:
+            date_str = f.readline().replace("Backup created on: ", "").strip()
+            last_backup_date = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+
+        return (datetime.now() - last_backup_date).days >= 14  # Check if 2 weeks have passed
+    except Exception as e:
+        # If there's an issue reading or parsing the date, just take a backup
+        mw.logger.log("error", f"Could not read backup_info.txt: {e}")
+        return True
 
 def run_backup():
     """Main function to run the backup process."""
