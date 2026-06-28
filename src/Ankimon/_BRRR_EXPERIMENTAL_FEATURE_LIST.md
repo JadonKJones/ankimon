@@ -235,8 +235,10 @@ Play Ankimon on the go! You can now review cards on your phone (using AnkiMobile
 - **Roster Selection & Companion Toggles**: All your team members can participate as companions on mobile reviews. If you want a specific Pokémon in your team but don't want it to fight mobile battles, simply click its sprite in the Team tab to make it **inactive** (it will appear darkened).
 - **Auto-Resolve (Matchup Optimization)**: Don't want to play through dozens of battles manually? Choose **Auto-Resolve**! The game will simulate the battles in the background and automatically select the best companion from your active mobile roster for each battle based on move types, power, and speed to finish the fight as quickly as possible.
 - **Manual Replay Mode**: Want to see the action? Choose **Manual Replay** to play through your synced mobile battles one by one with full combat animations. You can even manually override the active companion before starting each battle to try different strategies or train specific Pokémon.
-- **Battle History Logs**: A dedicated **Battle History** panel in the Mobile tab lets you review your recently resolved mobile battles (capped at 200 records). It displays the opponent details, your chosen companion, the battle outcome (caught, defeated, fled, etc.), and all the rewards (XP and cash) you earned.
+- **Battle History Logs**: A dedicated **Battle History** panel in the Mobile tab lets you review your recently resolved mobile battles (capped at 500 records). It displays the opponent details, your chosen companion, the battle outcome (caught, defeated, fled, etc.), and all the rewards (XP and cash) you earned.
 - **Continuous Payouts**: Cash and experience rewards earned during mobile review resolution are distributed continuously as you resolve them, keeping your progress synced and rewarding.
+- **Deterministic Encounter Sequence**: The sequence of wild Pokémon you fight is determined solely by your review queue and is fully consistent — the same enemies appear in the same order whether you auto-resolve or manually replay, and regardless of which team members are active.
+- **Non-Blocking UI**: All heavy work (battle simulation, database writes, XP attribution) runs off the main thread. The UI stays fully responsive during estimate calculation, manual replay loading, and catch/defeat commits.
 
 ---
 
@@ -290,4 +292,4 @@ A major mathematical and architectural redesign of the wild spawn economy to cur
 
 ---
 
-_Analysis completed based on repository state as of June 10, 2026, incorporating the unified web shell features, special forms redistribution, and learnset logic._
+_Analysis completed based on repository state as of June 28, 2026, incorporating the unified web shell features, special forms redistribution, learnset logic, and the completed Mobile & Web Reviews integration (PR #507)._

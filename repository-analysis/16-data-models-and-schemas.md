@@ -161,7 +161,7 @@ Tracks review sessions synced from mobile clients that have pending battles to r
     *   `resolved_at` (INTEGER) - Unix millisecond timestamp when resolved.
 
 ### Table 5: `mobile_battle_history` (Phase 2+)
-Logs the outcome of resolved mobile review battles, capped at a maximum of 200 records.
+Logs the outcome of resolved mobile review battles, capped at a maximum of **500** records.
 
 *   **Columns:**
     *   `id` (INTEGER PRIMARY KEY AUTOINCREMENT) - Unique identifier for the log entry.
@@ -179,7 +179,8 @@ Logs the outcome of resolved mobile review battles, capped at a maximum of 200 r
 
 ### Metadata Keys
 
-*   `mobile_revlog_watermark` - Holds the `id` (timestamp in ms) of the most recently processed mobile review in the `revlog` collection to bounds subsequent diff scans.
+*   `mobile_revlog_watermark` - Holds the `id` (timestamp in ms) of the most recently processed mobile review in the `revlog` collection **per DB connection**. Each `AnkimonDB` instance maintains its own watermark to prevent duplicate sync when multiple connection objects are active during hot-swap.
+*   `mobile_resolved_encounters_count` - Running count of encounters that have been fully resolved (auto or manual). Written after every real resolve. Used exclusively by `_compute_encounter_idx()` as the seed offset for encounter generation — grows unboundedly and is never capped.
 
 ---
 
