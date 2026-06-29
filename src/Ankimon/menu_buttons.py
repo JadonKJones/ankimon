@@ -182,6 +182,17 @@ def create_menu_actions(
     backup_manager_action.triggered.connect(lambda: BackupManagerDialog(backup_manager, mw).exec())
     game_menu.addAction(backup_manager_action)
 
+    # Mobile & Web Reviews
+    global _mobile_battles_action
+    _mobile_battles_action = QAction("Mobile & Web Reviews", mw)
+    _mobile_battles_action.setMenuRole(QAction.MenuRole.NoRole)
+    def show_mobile_reviews():
+        from .pyobj.mobile_reviews_dialog import MobileReviewsDialog
+        dialog = MobileReviewsDialog(parent=mw)
+        dialog.exec()
+    _mobile_battles_action.triggered.connect(show_mobile_reviews)
+    game_menu.addAction(_mobile_battles_action)
+
     # Effectiveness chart
     eff_chart_action = QAction(mw.translator.translate("eff_chart_button"), mw)
     eff_chart_action.setMenuRole(QAction.MenuRole.NoRole)
