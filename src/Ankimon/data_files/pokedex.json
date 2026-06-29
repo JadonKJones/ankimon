@@ -4782,7 +4782,7 @@
   "farfetchd": {
     "species_id": 83,
     "actual_id": 83,
-    "name": "Farfetch\u2019d",
+    "name": "Farfetch’d",
     "types": [
       "Normal",
       "Flying"
@@ -4808,11 +4808,11 @@
       "Field"
     ],
     "otherFormes": [
-      "Farfetch\u2019d-Galar"
+      "Farfetch’d-Galar"
     ],
     "formeOrder": [
-      "Farfetch\u2019d",
-      "Farfetch\u2019d-Galar"
+      "Farfetch’d",
+      "Farfetch’d-Galar"
     ],
     "tier": "Illegal",
     "isNonstandard": "Past"
@@ -4820,8 +4820,8 @@
   "farfetchdgalar": {
     "species_id": 83,
     "actual_id": 10166,
-    "name": "Farfetch\u2019d-Galar",
-    "baseSpecies": "Farfetch\u2019d",
+    "name": "Farfetch’d-Galar",
+    "baseSpecies": "Farfetch’d",
     "forme": "Galar",
     "types": [
       "Fighting"
@@ -4842,7 +4842,7 @@
     "weightkg": 42,
     "color": "Brown",
     "evos": [
-      "Sirfetch\u2019d"
+      "Sirfetch’d"
     ],
     "eggGroups": [
       "Flying",
@@ -29675,7 +29675,7 @@
   "flabebe": {
     "species_id": 669,
     "actual_id": 669,
-    "name": "Flab\u00e9b\u00e9",
+    "name": "Flabébé",
     "baseForme": "Red",
     "types": [
       "Fairy"
@@ -29703,17 +29703,17 @@
       "Fairy"
     ],
     "cosmeticFormes": [
-      "Flab\u00e9b\u00e9-Blue",
-      "Flab\u00e9b\u00e9-Orange",
-      "Flab\u00e9b\u00e9-White",
-      "Flab\u00e9b\u00e9-Yellow"
+      "Flabébé-Blue",
+      "Flabébé-Orange",
+      "Flabébé-White",
+      "Flabébé-Yellow"
     ],
     "formeOrder": [
-      "Flab\u00e9b\u00e9",
-      "Flab\u00e9b\u00e9-Yellow",
-      "Flab\u00e9b\u00e9-Orange",
-      "Flab\u00e9b\u00e9-Blue",
-      "Flab\u00e9b\u00e9-White"
+      "Flabébé",
+      "Flabébé-Yellow",
+      "Flabébé-Orange",
+      "Flabébé-Blue",
+      "Flabébé-White"
     ],
     "tier": "LC"
   },
@@ -29741,7 +29741,7 @@
     "heightm": 0.2,
     "weightkg": 0.9,
     "color": "White",
-    "prevo": "Flab\u00e9b\u00e9",
+    "prevo": "Flabébé",
     "evoLevel": 19,
     "evos": [
       "Florges"
@@ -39225,7 +39225,7 @@
   "sirfetchd": {
     "species_id": 865,
     "actual_id": 865,
-    "name": "Sirfetch\u2019d",
+    "name": "Sirfetch’d",
     "types": [
       "Fighting"
     ],
@@ -39244,7 +39244,7 @@
     "heightm": 0.8,
     "weightkg": 117,
     "color": "White",
-    "prevo": "Farfetch\u2019d-Galar",
+    "prevo": "Farfetch’d-Galar",
     "evoType": "other",
     "evoCondition": "Land 3 critical hits in 1 battle",
     "eggGroups": [
@@ -45709,5 +45709,820 @@
       "Undiscovered"
     ],
     "tier": "OU"
+  },
+  "raichumegax": {
+    "species_id": 26,
+    "actual_id": 10304,
+    "name": "Raichu-Mega-X",
+    "baseSpecies": "Raichu",
+    "forme": "Mega-X",
+    "types": [
+      "Electric"
+    ],
+    "baseStats": {
+      "hp": 60,
+      "atk": 135,
+      "def": 95,
+      "spa": 90,
+      "spd": 95,
+      "spe": 110
+    },
+    "abilities": {
+      "0": "Surge Surfer"
+    },
+    "heightm": 1.2,
+    "weightkg": 38,
+    "color": "Yellow",
+    "eggGroups": [
+      "Field",
+      "Fairy"
+    ],
+    "requiredItem": "Raichunite X",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "raichumegay": {
+    "species_id": 26,
+    "actual_id": 10305,
+    "name": "Raichu-Mega-Y",
+    "baseSpecies": "Raichu",
+    "forme": "Mega-Y",
+    "types": [
+      "Electric"
+    ],
+    "baseStats": {
+      "hp": 60,
+      "atk": 100,
+      "def": 55,
+      "spa": 160,
+      "spd": 80,
+      "spe": 130
+    },
+    "abilities": {
+      "0": "Surge Surfer"
+    },
+    "heightm": 1,
+    "weightkg": 26,
+    "color": "Yellow",
+    "eggGroups": [
+      "Field",
+      "Fairy"
+    ],
+    "requiredItem": "Raichunite Y",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "chimechomega": {
+    "species_id": 358,
+    "actual_id": 10306,
+    "name": "Chimecho-Mega",
+    "baseSpecies": "Chimecho",
+    "forme": "Mega",
+    "types": [
+      "Psychic",
+      "Steel"
+    ],
+    "baseStats": {
+      "hp": 75,
+      "atk": 50,
+      "def": 110,
+      "spa": 135,
+      "spd": 120,
+      "spe": 65
+    },
+    "abilities": {
+      "0": "Levitate"
+    },
+    "heightm": 1.2,
+    "weightkg": 8,
+    "color": "Blue",
+    "eggGroups": [
+      "Amorphous"
+    ],
+    "requiredItem": "Chimechite",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "absolmegaz": {
+    "species_id": 359,
+    "actual_id": 10307,
+    "name": "Absol-Mega-Z",
+    "baseSpecies": "Absol",
+    "forme": "Mega-Z",
+    "types": [
+      "Dark",
+      "Ghost"
+    ],
+    "baseStats": {
+      "hp": 65,
+      "atk": 154,
+      "def": 60,
+      "spa": 75,
+      "spd": 60,
+      "spe": 151
+    },
+    "abilities": {
+      "0": "Magic Bounce"
+    },
+    "heightm": 1.2,
+    "weightkg": 49,
+    "color": "Black",
+    "eggGroups": [
+      "Field"
+    ],
+    "requiredItem": "Absolite Z",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "staraptormega": {
+    "species_id": 398,
+    "actual_id": 10308,
+    "name": "Staraptor-Mega",
+    "baseSpecies": "Staraptor",
+    "forme": "Mega",
+    "types": [
+      "Fighting",
+      "Flying"
+    ],
+    "baseStats": {
+      "hp": 85,
+      "atk": 140,
+      "def": 100,
+      "spa": 60,
+      "spd": 90,
+      "spe": 110
+    },
+    "abilities": {
+      "0": "Intimidate",
+      "H": "Reckless"
+    },
+    "heightm": 1.9,
+    "weightkg": 50,
+    "color": "Gray",
+    "eggGroups": [
+      "Flying"
+    ],
+    "requiredItem": "Staraptite",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "garchompmegaz": {
+    "species_id": 445,
+    "actual_id": 10309,
+    "name": "Garchomp-Mega-Z",
+    "baseSpecies": "Garchomp",
+    "forme": "Mega-Z",
+    "types": [
+      "Dragon"
+    ],
+    "baseStats": {
+      "hp": 108,
+      "atk": 130,
+      "def": 85,
+      "spa": 141,
+      "spd": 85,
+      "spe": 151
+    },
+    "abilities": {
+      "0": "Sand Force"
+    },
+    "heightm": 1.9,
+    "weightkg": 99,
+    "color": "Blue",
+    "eggGroups": [
+      "Monster",
+      "Dragon"
+    ],
+    "requiredItem": "Garchompite Z",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "lucariomegaz": {
+    "species_id": 448,
+    "actual_id": 10310,
+    "name": "Lucario-Mega-Z",
+    "baseSpecies": "Lucario",
+    "forme": "Mega-Z",
+    "types": [
+      "Fighting",
+      "Steel"
+    ],
+    "genderRatio": {
+      "M": 0.875,
+      "F": 0.125
+    },
+    "baseStats": {
+      "hp": 70,
+      "atk": 100,
+      "def": 70,
+      "spa": 164,
+      "spd": 70,
+      "spe": 151
+    },
+    "abilities": {
+      "0": "Adaptability"
+    },
+    "heightm": 1.3,
+    "weightkg": 49.4,
+    "color": "Gray",
+    "eggGroups": [
+      "Field",
+      "Human-Like"
+    ],
+    "requiredItem": "Lucarionite Z",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "heatranmega": {
+    "species_id": 485,
+    "actual_id": 10311,
+    "name": "Heatran-Mega",
+    "baseSpecies": "Heatran",
+    "forme": "Mega",
+    "types": [
+      "Fire",
+      "Steel"
+    ],
+    "baseStats": {
+      "hp": 91,
+      "atk": 120,
+      "def": 106,
+      "spa": 175,
+      "spd": 141,
+      "spe": 67
+    },
+    "abilities": {
+      "0": "Flash Fire",
+      "H": "Flame Body"
+    },
+    "heightm": 2.8,
+    "weightkg": 570,
+    "color": "Brown",
+    "tags": [
+      "Sub-Legendary"
+    ],
+    "eggGroups": [
+      "Undiscovered"
+    ],
+    "requiredItem": "Heatranite",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "darkraimega": {
+    "species_id": 491,
+    "actual_id": 10312,
+    "name": "Darkrai-Mega",
+    "baseSpecies": "Darkrai",
+    "forme": "Mega",
+    "types": [
+      "Dark"
+    ],
+    "gender": "N",
+    "baseStats": {
+      "hp": 70,
+      "atk": 120,
+      "def": 130,
+      "spa": 165,
+      "spd": 130,
+      "spe": 85
+    },
+    "abilities": {
+      "0": "Bad Dreams"
+    },
+    "heightm": 3,
+    "weightkg": 240,
+    "color": "Black",
+    "tags": [
+      "Mythical"
+    ],
+    "eggGroups": [
+      "Undiscovered"
+    ],
+    "requiredItem": "Darkranite",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "golurkmega": {
+    "species_id": 623,
+    "actual_id": 10313,
+    "name": "Golurk-Mega",
+    "baseSpecies": "Golurk",
+    "forme": "Mega",
+    "types": [
+      "Ground",
+      "Ghost"
+    ],
+    "gender": "N",
+    "baseStats": {
+      "hp": 89,
+      "atk": 159,
+      "def": 105,
+      "spa": 70,
+      "spd": 105,
+      "spe": 55
+    },
+    "abilities": {
+      "0": "Unseen Fist"
+    },
+    "heightm": 4,
+    "weightkg": 330,
+    "color": "Green",
+    "eggGroups": [
+      "Mineral"
+    ],
+    "requiredItem": "Golurkite",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "crabominablemega": {
+    "species_id": 740,
+    "actual_id": 10315,
+    "name": "Crabominable-Mega",
+    "baseSpecies": "Crabominable",
+    "forme": "Mega",
+    "types": [
+      "Fighting",
+      "Ice"
+    ],
+    "baseStats": {
+      "hp": 97,
+      "atk": 157,
+      "def": 122,
+      "spa": 62,
+      "spd": 107,
+      "spe": 33
+    },
+    "abilities": {
+      "0": "Iron Fist"
+    },
+    "heightm": 2.6,
+    "weightkg": 252.8,
+    "color": "White",
+    "eggGroups": [
+      "Water 3"
+    ],
+    "requiredItem": "Crabominite",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "golisopodmega": {
+    "species_id": 768,
+    "actual_id": 10316,
+    "name": "Golisopod-Mega",
+    "baseSpecies": "Golisopod",
+    "forme": "Mega",
+    "types": [
+      "Bug",
+      "Steel"
+    ],
+    "baseStats": {
+      "hp": 75,
+      "atk": 150,
+      "def": 175,
+      "spa": 70,
+      "spd": 120,
+      "spe": 40
+    },
+    "abilities": {
+      "0": "Emergency Exit"
+    },
+    "heightm": 2.3,
+    "weightkg": 148,
+    "color": "Gray",
+    "eggGroups": [
+      "Bug",
+      "Water 3"
+    ],
+    "requiredItem": "Golisopite",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "miniororange": {
+    "species_id": 774,
+    "actual_id": 10137,
+    "isCosmeticForme": true,
+    "name": "Minior-Orange",
+    "baseSpecies": "Minior",
+    "forme": "Orange",
+    "color": "Red",
+    "tier": "ZU"
+  },
+  "minioryellow": {
+    "species_id": 774,
+    "actual_id": 10138,
+    "isCosmeticForme": true,
+    "name": "Minior-Yellow",
+    "baseSpecies": "Minior",
+    "forme": "Yellow",
+    "color": "Yellow",
+    "tier": "ZU"
+  },
+  "miniorgreen": {
+    "species_id": 774,
+    "actual_id": 10139,
+    "isCosmeticForme": true,
+    "name": "Minior-Green",
+    "baseSpecies": "Minior",
+    "forme": "Green",
+    "color": "Green",
+    "tier": "ZU"
+  },
+  "miniorblue": {
+    "species_id": 774,
+    "actual_id": 10140,
+    "isCosmeticForme": true,
+    "name": "Minior-Blue",
+    "baseSpecies": "Minior",
+    "forme": "Blue",
+    "color": "Blue",
+    "tier": "ZU"
+  },
+  "miniorindigo": {
+    "species_id": 774,
+    "actual_id": 10141,
+    "isCosmeticForme": true,
+    "name": "Minior-Indigo",
+    "baseSpecies": "Minior",
+    "forme": "Indigo",
+    "color": "Blue",
+    "tier": "ZU"
+  },
+  "miniorviolet": {
+    "species_id": 774,
+    "actual_id": 10142,
+    "isCosmeticForme": true,
+    "name": "Minior-Violet",
+    "baseSpecies": "Minior",
+    "forme": "Violet",
+    "color": "Purple",
+    "tier": "ZU"
+  },
+  "magearnamega": {
+    "species_id": 801,
+    "actual_id": 10317,
+    "name": "Magearna-Mega",
+    "baseSpecies": "Magearna",
+    "forme": "Mega",
+    "types": [
+      "Steel",
+      "Fairy"
+    ],
+    "gender": "N",
+    "baseStats": {
+      "hp": 80,
+      "atk": 125,
+      "def": 115,
+      "spa": 170,
+      "spd": 115,
+      "spe": 95
+    },
+    "abilities": {
+      "0": "Soul-Heart"
+    },
+    "heightm": 1.3,
+    "weightkg": 248.1,
+    "color": "Gray",
+    "eggGroups": [
+      "Undiscovered"
+    ],
+    "requiredItem": "Magearnite",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "magearnaoriginalmega": {
+    "species_id": 801,
+    "actual_id": 10318,
+    "name": "Magearna-Original-Mega",
+    "baseSpecies": "Magearna",
+    "forme": "Original-Mega",
+    "types": [
+      "Steel",
+      "Fairy"
+    ],
+    "gender": "N",
+    "baseStats": {
+      "hp": 80,
+      "atk": 125,
+      "def": 115,
+      "spa": 170,
+      "spd": 115,
+      "spe": 95
+    },
+    "abilities": {
+      "0": "Soul-Heart"
+    },
+    "heightm": 1.3,
+    "weightkg": 248.1,
+    "color": "Red",
+    "eggGroups": [
+      "Undiscovered"
+    ],
+    "requiredItem": "Magearnite",
+    "battleOnly": "Magearna-Original",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "zeraoramega": {
+    "species_id": 807,
+    "actual_id": 10319,
+    "name": "Zeraora-Mega",
+    "baseSpecies": "Zeraora",
+    "forme": "Mega",
+    "types": [
+      "Electric"
+    ],
+    "gender": "N",
+    "baseStats": {
+      "hp": 88,
+      "atk": 157,
+      "def": 75,
+      "spa": 147,
+      "spd": 80,
+      "spe": 153
+    },
+    "abilities": {
+      "0": "Volt Absorb"
+    },
+    "heightm": 1.5,
+    "weightkg": 44.5,
+    "color": "Yellow",
+    "tags": [
+      "Mythical"
+    ],
+    "eggGroups": [
+      "Undiscovered"
+    ],
+    "requiredItem": "Zeraorite",
+    "gen": 9,
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "scovillainmega": {
+    "species_id": 952,
+    "actual_id": 10320,
+    "name": "Scovillain-Mega",
+    "baseSpecies": "Scovillain",
+    "forme": "Mega",
+    "types": [
+      "Grass",
+      "Fire"
+    ],
+    "baseStats": {
+      "hp": 65,
+      "atk": 138,
+      "def": 85,
+      "spa": 138,
+      "spd": 85,
+      "spe": 75
+    },
+    "abilities": {
+      "0": "Spicy Spray"
+    },
+    "heightm": 1.2,
+    "weightkg": 22,
+    "color": "Green",
+    "eggGroups": [
+      "Grass"
+    ],
+    "requiredItem": "Scovillainite",
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "glimmoramega": {
+    "species_id": 970,
+    "actual_id": 10321,
+    "name": "Glimmora-Mega",
+    "baseSpecies": "Glimmora",
+    "forme": "Mega",
+    "types": [
+      "Rock",
+      "Poison"
+    ],
+    "baseStats": {
+      "hp": 83,
+      "atk": 90,
+      "def": 105,
+      "spa": 150,
+      "spd": 96,
+      "spe": 101
+    },
+    "abilities": {
+      "0": "Adaptability"
+    },
+    "heightm": 2.8,
+    "weightkg": 77,
+    "color": "Blue",
+    "eggGroups": [
+      "Mineral"
+    ],
+    "requiredItem": "Glimmoranite",
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "tatsugiridroopy": {
+    "species_id": 978,
+    "actual_id": 10258,
+    "name": "Tatsugiri-Droopy",
+    "baseSpecies": "Tatsugiri",
+    "forme": "Droopy",
+    "types": [
+      "Dragon",
+      "Water"
+    ],
+    "baseStats": {
+      "hp": 68,
+      "atk": 50,
+      "def": 60,
+      "spa": 120,
+      "spd": 95,
+      "spe": 82
+    },
+    "abilities": {
+      "0": "Commander",
+      "H": "Storm Drain"
+    },
+    "heightm": 0.3,
+    "weightkg": 8,
+    "color": "Pink",
+    "eggGroups": [
+      "Water 2"
+    ],
+    "tier": "PU"
+  },
+  "tatsugiristretchy": {
+    "species_id": 978,
+    "actual_id": 10259,
+    "name": "Tatsugiri-Stretchy",
+    "baseSpecies": "Tatsugiri",
+    "forme": "Stretchy",
+    "types": [
+      "Dragon",
+      "Water"
+    ],
+    "baseStats": {
+      "hp": 68,
+      "atk": 50,
+      "def": 60,
+      "spa": 120,
+      "spd": 95,
+      "spe": 82
+    },
+    "abilities": {
+      "0": "Commander",
+      "H": "Storm Drain"
+    },
+    "heightm": 0.3,
+    "weightkg": 8,
+    "color": "Yellow",
+    "eggGroups": [
+      "Water 2"
+    ],
+    "tier": "PU"
+  },
+  "tatsugiricurlymega": {
+    "species_id": 978,
+    "actual_id": 10322,
+    "name": "Tatsugiri-Curly-Mega",
+    "baseSpecies": "Tatsugiri",
+    "forme": "Curly-Mega",
+    "types": [
+      "Dragon",
+      "Water"
+    ],
+    "baseStats": {
+      "hp": 68,
+      "atk": 65,
+      "def": 90,
+      "spa": 135,
+      "spd": 125,
+      "spe": 92
+    },
+    "abilities": {
+      "0": "Commander",
+      "H": "Storm Drain"
+    },
+    "heightm": 0.3,
+    "weightkg": 24,
+    "color": "Red",
+    "eggGroups": [
+      "Water 2"
+    ],
+    "requiredItem": "Tatsugirinite",
+    "battleOnly": "Tatsugiri",
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "tatsugiridroopymega": {
+    "species_id": 978,
+    "actual_id": 10323,
+    "name": "Tatsugiri-Droopy-Mega",
+    "baseSpecies": "Tatsugiri",
+    "forme": "Droopy-Mega",
+    "types": [
+      "Dragon",
+      "Water"
+    ],
+    "baseStats": {
+      "hp": 68,
+      "atk": 65,
+      "def": 90,
+      "spa": 135,
+      "spd": 125,
+      "spe": 92
+    },
+    "abilities": {
+      "0": "Commander",
+      "H": "Storm Drain"
+    },
+    "heightm": 0.3,
+    "weightkg": 24,
+    "color": "Pink",
+    "eggGroups": [
+      "Water 2"
+    ],
+    "requiredItem": "Tatsugirinite",
+    "battleOnly": "Tatsugiri-Droopy",
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "tatsugiristretchymega": {
+    "species_id": 978,
+    "actual_id": 10324,
+    "name": "Tatsugiri-Stretchy-Mega",
+    "baseSpecies": "Tatsugiri",
+    "forme": "Stretchy-Mega",
+    "types": [
+      "Dragon",
+      "Water"
+    ],
+    "baseStats": {
+      "hp": 68,
+      "atk": 65,
+      "def": 90,
+      "spa": 135,
+      "spd": 125,
+      "spe": 92
+    },
+    "abilities": {
+      "0": "Commander",
+      "H": "Storm Drain"
+    },
+    "heightm": 0.3,
+    "weightkg": 24,
+    "color": "Yellow",
+    "eggGroups": [
+      "Water 2"
+    ],
+    "requiredItem": "Tatsugirinite",
+    "battleOnly": "Tatsugiri-Stretchy",
+    "tier": "Illegal",
+    "isNonstandard": "Past"
+  },
+  "baxcaliburmega": {
+    "species_id": 998,
+    "actual_id": 10325,
+    "name": "Baxcalibur-Mega",
+    "baseSpecies": "Baxcalibur",
+    "forme": "Mega",
+    "types": [
+      "Dragon",
+      "Ice"
+    ],
+    "baseStats": {
+      "hp": 115,
+      "atk": 175,
+      "def": 117,
+      "spa": 105,
+      "spd": 101,
+      "spe": 87
+    },
+    "abilities": {
+      "0": "Thermal Exchange",
+      "H": "Ice Body"
+    },
+    "heightm": 2.1,
+    "weightkg": 315,
+    "color": "Blue",
+    "eggGroups": [
+      "Dragon",
+      "Mineral"
+    ],
+    "requiredItem": "Baxcalibrite",
+    "tier": "Illegal",
+    "isNonstandard": "Past"
   }
 }
