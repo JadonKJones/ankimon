@@ -66,6 +66,10 @@ def open_help_window(online_connectivity):
 def check_branch_update(online_connectivity: bool, ssh: bool):
     from .singletons import logger
     logger.log("info", f"check_branch_update triggered: online_connectivity={online_connectivity}, ssh={ssh}")
+    from .pyobj.update_manager import is_git_clone
+    if is_git_clone():
+        logger.log("info", "check_branch_update exited early: running from a git clone")
+        return
     if not ssh:
         logger.log("info", "check_branch_update exited early: ssh is False")
         return

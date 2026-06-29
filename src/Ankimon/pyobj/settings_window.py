@@ -260,13 +260,8 @@ class SettingsWindow(QMainWindow):
         self._apply_stylesheet()
 
         layout = QVBoxLayout(central_widget)
-        image_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            "user_files",
-            "web",
-            "images",
-            "ankimon_logo.png",
-        )
+        from ..resources import addon_dir
+        image_path = str(addon_dir / "web" / "images" / "ankimon_logo.png")
         image_label = QLabel()
         if os.path.exists(image_path):
             pixmap = QPixmap(image_path)
