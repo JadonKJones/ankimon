@@ -537,7 +537,7 @@ body {
     align-items: center;
     position: relative;
     cursor: pointer;
-    transition: var(--transition-mid);
+    transition: transform var(--transition-mid), background var(--transition-mid), border-color var(--transition-mid), box-shadow var(--transition-mid);
     overflow: hidden;
 }
 
@@ -564,7 +564,12 @@ body {
 }
 
 .pokemon-card.state-unseen .card-sprite img {
-    filter: brightness(0) invert(1) brightness(0.15); /* Solid dark grey silhouette */
+    filter: brightness(0) invert(1) brightness(0.22); /* Solid grey silhouette */
+    transition: filter var(--transition-fast);
+}
+
+.pokemon-card.state-unseen:hover .card-sprite img {
+    filter: brightness(0) invert(1) brightness(0.5); /* Brighter silhouette on hover */
 }
 
 .pokemon-card.state-seen {

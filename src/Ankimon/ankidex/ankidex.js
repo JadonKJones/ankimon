@@ -304,11 +304,15 @@ function setupEventListeners() {
   const searchInput = document.getElementById("pokemon-search");
   const clearBtn = document.getElementById("clear-search");
 
+  let searchTimeout = null;
   searchInput.addEventListener("input", (e) => {
     state.ui.searchQuery = e.target.value.toLowerCase().trim();
     if (state.ui.searchQuery) clearBtn.classList.remove("hidden");
     else clearBtn.classList.add("hidden");
-    applyFiltersAndRender();
+    if (searchTimeout) clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => {
+      applyFiltersAndRender();
+    }, 150);
   });
 
   clearBtn.addEventListener("click", () => {
@@ -1775,7 +1779,12 @@ function buildMapNodes() {
   };
 
   allIds.forEach((id) => {
-    nodes[id] = { tier: getDepth(id), x: 0, y: null };
+    nodes[id] = { tier: 3, x: 0, y: null };
+  });
+
+  allIds.forEach((id) => {
+    if (APEX_IDS.has(id)) nodes[id].tier = 3;
+    else if (TARGET_IDS.has(id)) nodes[id].tier = 2;
   });
 
   let changed = true;
@@ -1791,18 +1800,16 @@ function buildMapNodes() {
             ? reqs
             : [reqs];
       ids.forEach((rid) => {
-        if (nodes[rid] && nodes[rid].tier >= nodes[targetId].tier) {
-          nodes[rid].tier = nodes[targetId].tier - 1;
-          changed = true;
+        if (nodes[rid]) {
+          const maxAllowed = nodes[targetId].tier - 1;
+          if (nodes[rid].tier > maxAllowed) {
+            nodes[rid].tier = maxAllowed;
+            changed = true;
+          }
         }
       });
     });
   }
-
-  allIds.forEach((id) => {
-    if (APEX_IDS.has(id)) nodes[id].tier = 3;
-    else if (TARGET_IDS.has(id)) nodes[id].tier = 2;
-  });
 
   const nodeTargets = {};
   allIds.forEach((id) => (nodeTargets[id] = new Set()));

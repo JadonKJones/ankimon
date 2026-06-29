@@ -173,13 +173,8 @@ def create_menu_actions(
 
         pokedex_action = QAction(mw.translator.translate("open_pokedex_button"), mw)
         pokedex_action.setMenuRole(QAction.MenuRole.NoRole)
-        qconnect(pokedex_action.triggered, pokedex_window.show)
+        qconnect(pokedex_action.triggered, lambda: get_ankidex_window().show())
         collection_menu.addAction(pokedex_action)
-
-        ankidex_action = QAction("Ankidex", mw)
-        ankidex_action.setMenuRole(QAction.MenuRole.NoRole)
-        qconnect(ankidex_action.triggered, lambda: get_ankidex_window().show())
-        collection_menu.addAction(ankidex_action)
 
     # Backup Manager
     backup_manager_action = QAction("Backup Manager", mw)
