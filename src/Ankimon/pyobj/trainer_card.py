@@ -85,7 +85,7 @@ class TrainerCard:
         except ImportError:
             pass
         except Exception as e:
-            self.logger.log_and_showinfo(
+            self.logger.log(
                 "error", f"Error in syncing data to leaderboard {e}"
             )
 
