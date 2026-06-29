@@ -5,7 +5,7 @@ from aqt.utils import showInfo
 from ..resources import user_path_credentials, mypokemon_path
 import json
 import requests
-from aqt import mw # import setting values direct from init file
+from ..services import services
 
 #ANKIMON_LEADERBOARD_API_URL = "https://ankimon.com/api/leaderboard"  # Replace with the actual API URL
 ANKIMON_LEADERBOARD_API_URL = "https://leaderboard-api.ankimon.com/update_stats"  # Replace with the actual API URL
@@ -60,7 +60,7 @@ class ApiKeyDialog(QDialog):
         try:
             # Save the new credentials to the database
             for key, value in credentials.items():
-                mw.ankimon_db.set_user_data(key, value)
+                services.db.set_user_data(key, value)
             showInfo("Credentials saved successfully!")
         except Exception as e:
             showInfo(f"Error saving credentials: {e}")
@@ -68,16 +68,16 @@ class ApiKeyDialog(QDialog):
 def sync_data_to_leaderboard(data):
 
         # First check if leaderboard is enabled in config
-        if not mw.settings_obj.get("misc.leaderboard"):
+        if not services.settings.get("misc.leaderboard"):
             return
 
         try:
             # Load credentials from the database
-            username = mw.ankimon_db.get_user_data("username")
-            api_key = mw.ankimon_db.get_user_data("api_key")
+            username = services.db.get_user_data("username")
+            api_key = services.db.get_user_data("api_key")
 
             # Validate credentials
-            if (not username or not api_key) and mw.ankimon_db.is_migrated():
+            if (not username or not api_key) and services.db.is_migrated():
                 showInfo("Error: Missing credentials for Ankimon leaderboard. Please set up leaderboard from Ankimon menu or turn off in Settings.")
                 return
 
