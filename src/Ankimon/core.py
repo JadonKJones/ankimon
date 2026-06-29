@@ -149,7 +149,7 @@ def build_core() -> SimpleNamespace:
 #
 # Each entry: module path -> {bare global name: services attribute name}.
 _RUNTIME_GLOBALS = {
-    "Ankimon.functions.encounter_functions": {
+    ".functions.encounter_functions": {
         "main_pokemon": "main_pokemon",
         "ankimon_tracker_obj": "tracker",
         "trainer_card": "trainer_card",
@@ -158,7 +158,7 @@ _RUNTIME_GLOBALS = {
         "ankimon_db": "db",
         "pokemon_pc": "pokemon_pc",
     },
-    "Ankimon.battle_loop": {
+    ".battle_loop": {
         "main_pokemon": "main_pokemon",
         "enemy_pokemon": "enemy_pokemon",
         "settings_obj": "settings",
@@ -171,7 +171,7 @@ _RUNTIME_GLOBALS = {
         "trainer_card": "trainer_card",
         "translator": "translator",
     },
-    "Ankimon.functions.ankimon_hooks_to_poke_engine": {
+    ".functions.ankimon_hooks_to_poke_engine": {
         "ankimon_tracker_obj": "tracker",
         "settings_obj": "settings",
     },
@@ -188,6 +188,6 @@ def bind_runtime_globals() -> None:
     import importlib
 
     for module_path, mapping in _RUNTIME_GLOBALS.items():
-        module = importlib.import_module(module_path)
+        module = importlib.import_module(module_path, package=__package__)
         for global_name, attr in mapping.items():
             setattr(module, global_name, getattr(services, attr))
