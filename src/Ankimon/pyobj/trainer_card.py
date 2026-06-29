@@ -214,6 +214,7 @@ class TrainerCard:
         print(f"Gained {xp_gained} XP from defeating a {tier} Pokémon!")
         self.check_level_up()
 
+
     def check_level_up(self):
         """Update level based on XP."""
         xp_needed = self.xp_for_next_level()
