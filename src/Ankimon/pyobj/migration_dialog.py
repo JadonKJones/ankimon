@@ -21,6 +21,7 @@ from typing import Dict, Any
 import csv
 from ..utils import show_warning_with_traceback
 from ..resources import csv_file_items_cost, user_path
+from ..functions.pokedex_functions import search_pokedex_by_id
 
 
 class MigrationDialog(QDialog):
@@ -154,6 +155,21 @@ class MigrationDialog(QDialog):
                     total = len(pokemon_list)
                     for i, pokemon in enumerate(pokemon_list):
                         if self.cancelled: break
+                        if isinstance(pokemon, (int, str)):
+                            # Convert string/int to dict
+                            if isinstance(pokemon, int) or (isinstance(pokemon, str) and pokemon.isdigit()):
+                                poke_name = search_pokedex_by_id(int(pokemon))
+                                if poke_name == "Pokémon not found":
+                                    continue
+                            else:
+                                poke_name = str(pokemon)
+
+                            pokemon = {
+                                "name": poke_name.capitalize(),
+                                "individual_id": str(uuid.uuid4()),
+                                "level": 1,
+                                "xp": 0
+                            }
                         if not isinstance(pokemon, dict):
                             continue
                         if not pokemon.get("individual_id"):
