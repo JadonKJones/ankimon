@@ -598,5 +598,65 @@
             "special-form": null,
             "evos": []
         }
+    },
+    {
+        "code": "MONTHLY-2026-07-MAGBY",
+        "month": "July 2026",
+        "description": "A fiery challenge for July 2026, featuring Magby!",
+        "previous_challenge_individual_id": "1f8abeaf-3962-4f35-a404-bd0d22c3fc8c",
+        "defeat_threshold": 250,
+        "pokemon": {
+            "name": "Magby",
+            "nickname": "",
+            "level": 5,
+            "gender": "M",
+            "id": 240,
+            "ability": "Flame Body",
+            "type": [
+                "Fire"
+            ],
+            "stats": {
+                "hp": 45,
+                "atk": 75,
+                "def": 37,
+                "spa": 70,
+                "spd": 55,
+                "spe": 83,
+                "xp": 0
+            },
+            "ev": {
+                "hp": 0,
+                "atk": 0,
+                "def": 0,
+                "spa": 0,
+                "spd": 0,
+                "spe": 0
+            },
+            "iv": {
+                "hp": 27,
+                "atk": 9,
+                "def": 31,
+                "spa": 19,
+                "spd": 14,
+                "spe": 28
+            },
+            "attacks": [
+                "Ember",
+                "Leer",
+                "Smog"
+            ],
+            "base_experience": 73,
+            "current_hp": 45,
+            "growth_rate": "medium",
+            "friendship": 70,
+            "pokemon_defeated": 0,
+            "everstone": false,
+            "shiny": false,
+            "captured_date": "2026-06-30 17:10:02",
+            "individual_id": "bd6cf5fb-a70b-4c65-9595-c8d2cab47ee1",
+            "mega": false,
+            "special-form": null,
+            "evos": []
+        }
     }
 ]
