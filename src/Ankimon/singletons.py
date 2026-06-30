@@ -80,33 +80,45 @@ settings_window = SettingsWindow(
 )
 mw.settings_ankimon = settings_window
 
-item_window = getattr(mw, "item_window", None) or ItemWindow(
-    logger=logger, settings_obj=settings_obj, main_pokemon=main_pokemon,
-    enemy_pokemon=enemy_pokemon, achievements=achievements,
-    starter_window=starter_window,
-    evo_window=evo_window,
+# Create an instance of the MainWindow
+test_window = TestWindow(
+    main_pokemon=main_pokemon,
+    enemy_pokemon=enemy_pokemon,
+    settings_obj=settings_obj,
+    ankimon_tracker_obj=ankimon_tracker_obj,
+    translator=translator,
+    parent=mw,
+    logger=logger,
 )
-mw.item_window = item_window
 
-# Pokemon PC
-pokemon_pc = getattr(mw, "pokemon_pc", None)
-def get_pokemon_pc():
-    global pokemon_pc
-    if not is_alive(pokemon_pc):
-        pokemon_pc = PokemonPC(
-            logger=logger, translator=translator, reviewer_obj=reviewer_obj,
-            test_window=test_window, settings=settings_obj, main_pokemon=main_pokemon,
-        )
-        mw.pokemon_pc = pokemon_pc
-    return pokemon_pc
+achievement_bag = AchievementWindow()
 
-# Initialize initially
-get_pokemon_pc()
+# Initialize the Pokémon Shop Manager
+shop_manager = PokemonShopManager(
+    logger=logger,
+    settings_obj=settings_obj,
+    set_callback=settings_obj.set,
+    get_callback=settings_obj.get,
+)
 
-# UI Utilities
+ankimon_tracker_window = AnkimonTrackerWindow(tracker=ankimon_tracker_obj)
+ankidex_window = getattr(mw, "ankidex_window", None)
+def get_ankidex_window():
+    global ankidex_window
+    if not is_alive(ankidex_window):
+        ankidex_window = Ankidex(addon_dir, ankimon_tracker=ankimon_tracker_obj)
+        mw.ankidex_window = ankidex_window
+    return ankidex_window
+reviewer_obj = Reviewer_Manager(
+    settings_obj=settings_obj,
+    main_pokemon=main_pokemon,
+    enemy_pokemon=enemy_pokemon,
+    ankimon_tracker=ankimon_tracker_obj,
+)
+
 eff_chart = TableWidget()
-gen_id_chart = IDTableWidget()
 nature_chart = NatureTableWidget()
+gen_id_chart = IDTableWidget()
 license = License()
 credits = Credits()
 version_dialog = Version_Dialog()
@@ -154,3 +166,47 @@ services.populate(
 # test_window, …) to the now-fully-populated registry. Must run after the
 # services.populate above so the GUI window bindings are non-None.
 bind_runtime_globals()
+
+
+def swap_ankimon_account():
+    """Toggles between ankimon.db and ankimonDEV.db and refreshes the game state."""
+    from aqt.utils import tooltip
+    from .functions.update_main_pokemon import update_main_pokemon
+    from .functions.encounter_functions import new_pokemon, clear_encounter_cache
+
+    current_name = services.db.db_path.name
+    new_name = "ankimonDEV.db" if current_name == "ankimon.db" else "ankimon.db"
+
+    try:
+        # Switch DB connection
+        services.db.switch_database(new_name)
+
+        # Reload configuration (in-place)
+        services.settings.load_config()
+
+        # Update main pokemon in-place
+        update_main_pokemon(services.main_pokemon)
+
+        # Refresh trainer card data
+        services.trainer_card.refresh()
+
+        # Reset battle and capture state so no stale data can bleed through
+        services.tracker.caught = 0
+        services.tracker.general_card_count_for_battle = 0
+
+        # Sync collected IDs to current account
+        from .pyobj.reviewer_ui import set_collected_ids
+        new_ids = services.db.get_all_pokemon_ids()
+        set_collected_ids(new_ids)
+
+        # Clear encounter percentages cache (uses new trainer level/stats)
+        clear_encounter_cache()
+
+        # Generate a fresh encounter for the new account
+        new_pokemon(services.enemy_pokemon, services.test_window, services.tracker, services.reviewer)
+
+        tooltip(f"Switched to {new_name}")
+    except Exception as e:
+        tooltip(f"Failed to switch account: {e}")
+        import traceback
+        traceback.print_exc()

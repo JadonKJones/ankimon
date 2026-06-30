@@ -389,6 +389,6 @@ def on_overview_will_render_content(overview: Any, content: Any) -> None:
 # Hook registration (runs at import time, gated by user setting)
 # ---------------------------------------------------------------------------
 
-if getattr(mw, "settings_obj", None) and services.settings.get("gui.team_deck_view") is True:
+if getattr(mw, "settings_obj", None) and mw.settings_obj.get("gui.team_deck_view") is True:
     gui_hooks.deck_browser_will_render_content.append(deck_browser_will_render)
     gui_hooks.overview_will_render_content.append(on_overview_will_render_content)

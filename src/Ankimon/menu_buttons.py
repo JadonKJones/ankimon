@@ -86,7 +86,7 @@ def create_menu_actions(
     pokemon_pc: PokemonPC,
     backup_manager: BackupManager,
 ):
-    from .singletons import get_ankidex_window, get_pokemon_pc
+    from .singletons import get_ankidex_window
     actions = []
 
     if database_complete:
@@ -94,7 +94,7 @@ def create_menu_actions(
         pokemon_pc_action = QAction("Pokémon PC", mw)
         pokemon_pc_action.setMenuRole(QAction.MenuRole.NoRole)
         collection_menu.addAction(pokemon_pc_action)
-        qconnect(pokemon_pc_action.triggered, lambda: get_pokemon_pc().show())
+        qconnect(pokemon_pc_action.triggered, lambda: ().show())
 
         # Ankimon Window
         ankimon_window_action = QAction(mw.translator.translate("open_ankimon_window_button"), mw)
