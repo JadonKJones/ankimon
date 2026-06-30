@@ -187,7 +187,11 @@ def bind_runtime_globals() -> None:
     """
     import importlib
 
+    root_pkg = __package__ or "Ankimon"
     for module_path, mapping in _RUNTIME_GLOBALS.items():
-        module = importlib.import_module(module_path)
+        real_module_path = module_path
+        if module_path.startswith("Ankimon."):
+            real_module_path = root_pkg + module_path[len("Ankimon"):]
+        module = importlib.import_module(real_module_path)
         for global_name, attr in mapping.items():
             setattr(module, global_name, getattr(services, attr))
