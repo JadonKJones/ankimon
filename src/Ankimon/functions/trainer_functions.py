@@ -5,7 +5,8 @@ from .pokedex_functions import extract_ids_from_file
 from .pokemon_functions import find_experience_for_level
 from .pokedex_functions import check_evolution_for_pokemon, return_name_for_id
 from .friendship_evolution import check_friendship_evolution_for_pokemon
-from ..services import services
+from aqt.utils import showInfo, showWarning
+from aqt import mw
 
 def find_trainer_rank(highest_level, trainer_level):
     """
@@ -21,10 +22,10 @@ def find_trainer_rank(highest_level, trainer_level):
     """
     try:
         # Count the amount of Pokémon caught based on the Pokedex
-        caught_pokemon = services.db.execute("SELECT COUNT(DISTINCT pokedex_id) FROM captured_pokemon").fetchone()[0]
+        caught_pokemon = mw.ankimon_db.execute("SELECT COUNT(DISTINCT pokedex_id) FROM captured_pokemon").fetchone()[0]
 
         # Count the number of shiny Pokémon
-        shiny_pokemon_count = services.db.get_shiny_count()
+        shiny_pokemon_count = mw.ankimon_db.get_shiny_count()
 
         # Count badges
         badge_count = len(get_achieved_badges())
@@ -72,22 +73,16 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
     exp = int(exp * 0.5)  # Convert the experience to an integer
 
     # Load pokemon from database
-    db = services.db
+    db = mw.ankimon_db
 
     msg = ""
     evolution_triggered = False
 
     pokemon = db.get_pokemon(xp_share_individual_id)
-    # The XP-Share target may have been released or traded away since it was
-    # selected, leaving a dangling individual_id in settings. get_pokemon then
-    # returns None and any pokemon[...] access below would raise
-    # "'NoneType' object is not subscriptable" on the next review/defeat.
-    # Clear the stale setting and return the already-computed half-exp so the
-    # main Pokémon still gets its share and the review continues normally.
-    if pokemon is None:
-        settings_obj.set("trainer.xp_share", None)
-        logger.log("info", "XP Share target no longer exists; cleared the setting.")
-        return original_exp
+    if not pokemon:
+        # Fixed: if pokemon not found in current DB (e.g. after account swap), skip sharing
+        mw.logger.log("warning", f"XP Share target {xp_share_individual_id} not found in current database.")
+        return exp
 
     current_level = int(pokemon['level'])  # MODIFIED: Use local variable for level
     if pokemon.get('held_item') == "lucky-egg":
@@ -117,56 +112,32 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
 
     # Check for evolution
     evo_id = check_evolution_for_pokemon(
-        pokemon['individual_id'],
-        pokemon['id'],
-        pokemon['level'],
+        pokemon["individual_id"],
+        pokemon["id"],
+        pokemon["level"],
         evo_window,
-        pokemon.get('everstone', False),
-        pokemon.get('evolution_rejected', False)
+        pokemon["everstone"],
+        pokemon.get("evolution_rejected", False),
     )
 
     if evo_id is not None:
-        # return_name_for_id can return None if the evolved id is missing from
-        # the name CSV; guard the .capitalize() so a data gap can't crash the
-        # XP-share flow (mirrors the friendship path below).
-        evo_disp_name = return_name_for_id(evo_id)
-        evo_disp_name = evo_disp_name.capitalize() if evo_disp_name else str(evo_id)
-        msg += f"{pokemon['name']} is about to evolve to {evo_disp_name} at level {pokemon['level']}"
+        msg += f"{pokemon['name']} is about to evolve to {return_name_for_id(evo_id).capitalize()} at level {pokemon['level']}"
         evolution_triggered = True
 
         # Write the XP/level changes to database BEFORE calling evolution
         db.save_pokemon(pokemon)
 
         # Now call evolution (which will read the updated file and handle the evolution)
-
-    # Secondary friendship/time-of-day evolution check. Only fires if the level
-    # check above did not already prompt an evolution (avoids double-prompting).
-    # No friendship is granted here; it only triggers if stored friendship
-    # already meets the species threshold.
-    if not evolution_triggered:
-        friendship_evo_id = check_friendship_evolution_for_pokemon(
+    else:
+        # Trigger friendship evolution check if level-up evolution didn't happen
+        check_friendship_evolution_for_pokemon(
             pokemon["individual_id"],
             pokemon["id"],
             evo_window,
-            pokemon.get("everstone", False),
+            pokemon["everstone"],
             pokemon.get("friendship", 0),
             pokemon.get("evolution_rejected", False),
         )
-        if friendship_evo_id is not None:
-            # return_name_for_id can return None if the evolved id is missing
-            # from the name CSV; guard the .capitalize() so a data gap can't
-            # crash the XP-share flow.
-            friendship_evo_name = return_name_for_id(friendship_evo_id)
-            friendship_evo_name = friendship_evo_name.capitalize() if friendship_evo_name else str(friendship_evo_id)
-            msg += evo_window.translator.translate(
-                "pokemon_about_to_evolve_friendship",
-                main_pokemon_name=pokemon["name"],
-                evo_pokemon_name=friendship_evo_name,
-            )
-            evolution_triggered = True
-
-            # Write the XP/level changes to database BEFORE calling evolution
-            db.save_pokemon(pokemon)
 
     # Only save to database if no evolution was triggered (since evolution already saved)
     if not evolution_triggered:

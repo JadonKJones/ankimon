@@ -1,29 +1,11 @@
+from PyQt6.QtCore import QTimer
 from .pokemon_obj import PokemonObject
 from datetime import datetime
+from .error_handler import show_warning_with_traceback
 from ..functions.pokedex_functions import extract_ids_from_file
 from ..utils import random_battle_scene
-from ..services import services
+from aqt import mw
 import re
-
-try:
-    from PyQt6.QtCore import QTimer
-except Exception:
-    # Headless (agent harness / tests): no Qt event loop. The session/card
-    # timers are purely cosmetic, so stub them out so the tracker still
-    # constructs and runs. start()/stop()/timeout.connect() become no-ops.
-    class _NoOpSignal:
-        def connect(self, *args, **kwargs):
-            pass
-
-    class QTimer:  # type: ignore[no-redef]
-        def __init__(self, *args, **kwargs):
-            self.timeout = _NoOpSignal()
-
-        def start(self, *args, **kwargs):
-            pass
-
-        def stop(self, *args, **kwargs):
-            pass
 
 
 class AnkimonTracker:
@@ -86,33 +68,31 @@ class AnkimonTracker:
             0  # count for general card count for battle
         )
         self.caught = 0  # check if pokemon is caught
+        self.faint_processed = False # guard against duplicate faint processing
 
         # Start the session timer when the object is initialized
         self.start_session_timer()
 
     def get_total_reviews(self):
-        col = services.col
-        if col is None:
-            # Inside Anki the collection is live on mw; fall back to it so the
-            # count is always current (services.col may be unset at addon load).
-            try:
-                from aqt import mw
-                col = mw.col
-            except Exception:
-                col = None
-        if col is None:
+        if mw.col is None:
             return 0
         try:
-            studied = col.studied_today()
-            match = re.search(r'Studied\s+[^\d]*(\d+)(?=[^\n]*card)', studied)
+            # Query Anki's database directly for review logs since today's scheduler cutoff.
+            # This is language-agnostic, robust, and handles custom day boundaries.
+            cutoff = mw.col.sched.day_cutoff
+            return mw.col.db.scalar(
+                "SELECT count() FROM revlog WHERE id > ?", (cutoff - 86400) * 1000
+            )
         except Exception:
-            # e.g. a stub/mock collection whose studied_today() isn't a string.
-            return 0
-        if match is None:
-            # Empty-study session or localized Anki whose "Studied N cards"
-            # text doesn't match the English regex.
-            return 0
-        return int(match.group(1))
+            # Fallback to parsing localized string if the database query fails.
+            try:
+                text = mw.col.studied_today()
+                nums = re.findall(r'\d+', text)
+                if nums:
+                    return int(nums[0])
+            except Exception:
+                pass
+        return 0
 
     def set_main_pokemon(self, pokemon):
         """Set the main Pokémon being used."""
@@ -286,9 +266,10 @@ class AnkimonTracker:
             owned_pokemon_ids = extract_ids_from_file()
             self.owned_pokemon_ids = owned_pokemon_ids
         except Exception as e:
-            services.ui.report_error(
-                e,
-                "Error: from AnkimonTracker with function extract_ids_from_file",
+            show_warning_with_traceback(
+                parent=mw,
+                exception=e,
+                message="Error: from AnkimonTracker with function extract_ids_from_file",
             )
 
     # def get_badges(self):

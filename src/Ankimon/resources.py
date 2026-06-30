@@ -4,37 +4,30 @@ import json
 
 addon_dir = Path(__file__).parents[0]
 
-# The writable user-data tree (DB, sprites, JSON saves, backups) lives under
-# ``user_path`` — normally ``<addon>/user_files``, but redirectable with the
-# ANKIMON_USER_PATH environment variable. That redirect is what lets the headless
-# agent harness (and tests) point Ankimon at a throwaway temp directory without
-# touching the real profile; when the var is unset, every path below is identical
-# to before. Read-only shipped data (data_files/addon_files/addon_sprites/lang)
-# always stays under ``addon_dir``.
-_env_user_path = os.environ.get("ANKIMON_USER_PATH")
-user_path = Path(_env_user_path) if _env_user_path else addon_dir.joinpath("user_files")
+#safe route for updates
+user_path = addon_dir / "user_files"
 data_files_path = addon_dir / "data_files"
-user_path_sprites = user_path / "sprites"
-user_path_credentials = user_path / "data.json"
+user_path_sprites = addon_dir / "user_files" / "sprites"
+user_path_credentials = addon_dir / "user_files" / "data.json"
 manifest_path = addon_dir / "manifest.json"
 
 font_path = addon_dir / "addon_files"
 
 # Assign Pokemon Image folder directory name
-pkmnimgfolder = user_path / "sprites"
-backdefault = user_path / "sprites" / "back_default"
-frontdefault = user_path / "sprites" / "front_default"
+pkmnimgfolder = addon_dir / "user_files" / "sprites"
+backdefault = addon_dir / "user_files" / "sprites" / "back_default"
+frontdefault = addon_dir / "user_files" / "sprites" / "front_default"
 #Assign saved Pokemon Directory
-mypokemon_path = user_path / "mypokemon.json"
-mainpokemon_path = user_path / "mainpokemon.json"
-pokemon_history_path = user_path / "pokemon_history.json"
+mypokemon_path = addon_dir / "user_files" / "mypokemon.json"
+mainpokemon_path = addon_dir / "user_files" / "mainpokemon.json"
+pokemon_history_path = addon_dir / "user_files" / "pokemon_history.json"
 battlescene_path = addon_dir / "addon_sprites" / "battle_scenes"
 trainer_sprites_path = addon_dir / "addon_sprites" / "trainers"
 battlescene_path_without_dialog = addon_dir / "addon_sprites" / "battle_scenes_without_dialog"
 battle_ui_path = addon_dir / "pkmnbattlescene - UI_transp"
 type_style_file = addon_dir / "addon_files" / "types.json"
 next_lvl_file_path = addon_dir / "addon_files" / "ExpPokemonAddon.csv"
-berries_path = user_path / "sprites" / "berries"
+berries_path = addon_dir / "user_files" / "sprites" / "berries"
 background_dialog_image_path  = addon_dir / "background_dialog_image.png"
 pokeball_path = addon_dir / "addon_files" / "pokeball.png"
 pokedex_image_path = addon_dir / "addon_sprites" / "pokedex_template.jpg"
@@ -44,10 +37,10 @@ pokedex_path = data_files_path / "pokedex.json"
 stats_csv = data_files_path / "pokemon_stats.csv"
 moves_file_path = data_files_path / "moves.json"
 move_names_file_path = data_files_path / "move_names.json"
-items_path = user_path / "sprites" / "items"
-badges_path = user_path / "sprites" / "badges"
-itembag_path = user_path / "items.json"
-badgebag_path = user_path / "badges.json"
+items_path = addon_dir / "user_files" / "sprites" / "items"
+badges_path = addon_dir / "user_files" / "sprites" / "badges"
+itembag_path = addon_dir / "user_files" / "items.json"
+badgebag_path = addon_dir / "user_files" / "badges.json"
 pokenames_lang_path = data_files_path / "pokemon_species_names.csv"
 pokedesc_lang_path = data_files_path / "pokemon_species_flavor_text.csv"
 poke_evo_path = data_files_path / "pokemon_evolution.csv"
@@ -55,17 +48,18 @@ poke_species_path = data_files_path / "pokemon_species.csv"
 eff_chart_html_path = addon_dir / "addon_files" / "eff_chart_html.html"
 effectiveness_chart_file_path = addon_dir / "addon_files" / "eff_chart.json"
 table_gen_id_html_path = addon_dir / "addon_files" / "table_gen_id.html"
+nature_chart_html_path = addon_dir / "addon_files" / "nature_chart.html"
 icon_path = addon_dir / "addon_files" / "pokeball.png"
 sound_list_path = addon_dir / "addon_files" / "sound_list.json"
 badges_list_path = addon_dir / "addon_files" / "badges.json"
 items_list_path = addon_dir / "addon_files" / "items.json"
-rate_path = user_path / "rate_this.json"
+rate_path = addon_dir / "user_files" / "rate_this.json"
 csv_file_items = data_files_path / "item_names.csv"
 csv_file_descriptions = data_files_path / "item_flavor_text.csv"
 csv_file_items_cost = data_files_path / "items.csv"
 pokemon_csv = data_files_path / "pokemon.csv"
 pokemon_tm_learnset_path = data_files_path / "pokemon_tm_learnset.json"
-pokeapi_db_path = user_path / "ankimon.db"
+pokeapi_db_path = addon_dir / "user_files" / "ankimon.db"
 
 #effect sounds paths
 hurt_normal_sound_path = addon_dir / "addon_sprites" / "sounds" / "HurtNormal.mp3"
@@ -81,7 +75,7 @@ json_file_structure = addon_dir / "addon_files" / "folder_structure.json"
 #move ui paths
 type_icon_path_resources = addon_dir / "addon_sprites" / "Types"
 
-team_pokemon_path = user_path / "team.json"
+team_pokemon_path = addon_dir / "user_files" / "team.json"
 
 #lang routes
 lang_path = addon_dir / "lang"
@@ -98,7 +92,7 @@ lang_path_kr = addon_dir / "lang" / "kr_text.json"
 lang_path_es_latam = addon_dir / "lang" / "es_latam_text.json"
 
 #backup_routes
-backup_root = user_path / "backups"
+backup_root = addon_dir / "user_files" / "backups"
 backup_folder_1 = backup_root / "backup_1"
 backup_folder_2 = backup_root / "backup_2"
 backup_folders = [os.path.join(backup_root, f"backup_{i}") for i in range(1, 4)]
@@ -427,27 +421,35 @@ POKEMON_TIERS = {
   1022,  # iron-boulder
   1023,  # iron-crown
   1024,  # terapagos
+  10245, 10246,  # dialgaorigin, palkiaorigin
+  10007,         # giratinaorigin
+  10019, 10020, 10021, 10249, # tornadustherian, thundurustherian, landorustherian, enamorustherian
+  10181,         # zygarde10
+  10191,         # urshifurapidstrike
 ]
 ,
   "Mythical": [
   # Gen 1
-  151,        # Mew
+  151,                       # Mew
   # Gen 2
-  251,        # Celebi
+  251,                       # Celebi
   # Gen 3
-  385, 386,   # Jirachi, Deoxys
+  385, 386,                  # Jirachi, Deoxys
+  10001, 10002, 10003,       # deoxysattack, deoxysdefense, deoxysspeed
   # Gen 4
   489, 490, 491, 492, 493,   # Phione, Manaphy, Darkrai, Shaymin, Arceus
+  10006,                     # shayminsky
   # Gen 5
   494, 647, 648, 649,        # Victini, Keldeo, Meloetta, Genesect
+  10024, 10018,              # keldeoresolute, meloettapirouette
   # Gen 6
-  719, 720, 721,             # Diancie, Hoopa, Volcanion
+  719, 720, 721,              # Diancie, Hoopa, Volcanion
   # Gen 7
   801, 802, 807, 808, 809,   # Magearna, Marshadow, Zeraora, Meltan, Melmetal
   # Gen 8
-  893,                       # Zarude
+  893,                        # Zarude
   # Gen 9
-  1025                       # Pecharunt
+  1025,                       # Pecharunt
 ]
 ,
   "Ultra": [

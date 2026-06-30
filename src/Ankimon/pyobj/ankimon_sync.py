@@ -158,94 +158,19 @@ class ImprovedPokemonDataSync(QDialog):
             local_lines = []
             remote_lines = []
             
-            def get_db_stats(db_path: Path) -> Dict[str, Any]:
-                stats = {
-                    "pokemon": 0,
-                    "items": 0,
-                    "history": 0,
-                    "badges": 0,
-                    "trainer_name": "N/A",
-                    "trainer_level": 1,
-                    "trainer_cash": 0
-                }
-                if not db_path.is_file():
-                    return stats
-                conn = None
-                try:
-                    import sqlite3
-                    conn = sqlite3.connect(str(db_path))
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
-                    
-                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                    tables = {row["name"] for row in cursor.fetchall()}
-                    
-                    if "captured_pokemon" in tables:
-                        cursor.execute("SELECT COUNT(*) as count FROM captured_pokemon")
-                        stats["pokemon"] = cursor.fetchone()["count"]
-                    
-                    if "items" in tables:
-                        cursor.execute("SELECT SUM(quantity) as count FROM items")
-                        res = cursor.fetchone()
-                        stats["items"] = res["count"] if res and res["count"] is not None else 0
-                    
-                    if "pokemon_history" in tables:
-                        cursor.execute("SELECT COUNT(*) as count FROM pokemon_history")
-                        stats["history"] = cursor.fetchone()["count"]
-                        
-                    if "badges" in tables:
-                        cursor.execute("SELECT COUNT(*) as count FROM badges WHERE achieved = 1")
-                        stats["badges"] = cursor.fetchone()["count"]
-                        
-                    if "config" in tables:
-                        cursor.execute("SELECT value FROM config WHERE key = 'trainer.name'")
-                        row = cursor.fetchone()
-                        if row:
-                            stats["trainer_name"] = row["value"]
-                            
-                        cursor.execute("SELECT value FROM config WHERE key = 'trainer.level'")
-                        row = cursor.fetchone()
-                        if row:
-                            stats["trainer_level"] = int(row["value"])
-                            
-                        cursor.execute("SELECT value FROM config WHERE key = 'trainer.cash'")
-                        row = cursor.fetchone()
-                        if row:
-                            stats["trainer_cash"] = int(row["value"])
-                    
-                except Exception as e:
-                    self.logger.log("error", f"Failed to get stats for {db_path.name}: {e}")
-                finally:
-                    if conn is not None:
-                        conn.close()
-                return stats
-
-            source_file = self.sync_handler._get_source_path(filename)
-            media_file = self.sync_handler._get_media_path(filename)
+            # Since it's a binary DB, we show stats
+            db = mw.ankimon_db
+            local_stats = db.get_stats()
             
-            local_stats = get_db_stats(source_file)
+            # We don't have an easy way to 'query' the remote DB without loading it
+            # For now, we show local stats and acknowledge the file difference
+            local_lines.append(f"Pokemon: {local_stats.get('pokemon', 0)}")
+            local_lines.append(f"Items: {local_stats.get('items', 0)}")
+            local_lines.append(f"History: {local_stats.get('history', 0)}")
             
-            local_lines.append(f"Trainer: {local_stats['trainer_name']}")
-            local_lines.append(f"Level: {local_stats['trainer_level']}")
-            local_lines.append(f"Cash: {local_stats['trainer_cash']}")
-            local_lines.append(f"Captured Pokemon: {local_stats['pokemon']}")
-            local_lines.append(f"Total Items: {local_stats['items']}")
-            local_lines.append(f"Badges: {local_stats['badges']}")
-            local_lines.append(f"History: {local_stats['history']}")
+            remote_lines.append("(Database stats comparisons require sync)")
+            remote_lines.append("(File size or hash difference detected)")
             
-            if media_file.is_file():
-                remote_stats = get_db_stats(media_file)
-                remote_lines.append(f"Trainer: {remote_stats['trainer_name']}")
-                remote_lines.append(f"Level: {remote_stats['trainer_level']}")
-                remote_lines.append(f"Cash: {remote_stats['trainer_cash']}")
-                remote_lines.append(f"Captured Pokemon: {remote_stats['pokemon']}")
-                remote_lines.append(f"Total Items: {remote_stats['items']}")
-                remote_lines.append(f"Badges: {remote_stats['badges']}")
-                remote_lines.append(f"History: {remote_stats['history']}")
-            else:
-                remote_lines.append("(No database file exists on AnkiWeb)")
-                remote_lines.extend([""] * 6)
-                
             return local_lines, remote_lines
 
         def detect_structure_and_compare(local_data: Any, remote_data: Any, filename: str) -> Tuple[List[str], List[str]]:
@@ -278,7 +203,7 @@ class ImprovedPokemonDataSync(QDialog):
             local_content.append(f"Local file exists: {local_exists}")
             web_content.append(f"AnkiWeb file exists: {media_exists}")
 
-            if filename.endswith(('.json', '.obf')) or filename == 'ankimon.db':
+            if filename.endswith(('.json', '.obf')):
                 local_data = diff_info.get('local_data')
                 media_data = diff_info.get('media_data')
 
@@ -868,7 +793,105 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
             logger.log("error", f"Failed to prepare files for sync: {str(e)}")
 
     def on_sync_did_finish():
-        """Called after sync finishes - only auto-read if enabled."""
+        """Called after sync finishes."""
+        # === NEW (Phase 1, extended in Phase 2 & Parallel Routing): Mobile review detection ===
+        try:
+            if settings_obj.get("mobile.enabled", True):
+                from ..functions.mobile_sync import (
+                    process_mobile_reviews_after_sync,
+                    detect_mobile_reviews,
+                    get_desktop_session_revlog_ids,
+                    clear_desktop_session
+                )
+                from ..menu_buttons import update_mobile_badge
+                from PyQt6.QtWidgets import QDialog
+                import sqlite3
+
+                dev_db_path = user_path / "ankimonDEV.db"
+                original_db_name = mw.ankimon_db.db_path.name
+                desktop_ids = get_desktop_session_revlog_ids()
+
+                newly_queued_normal = 0
+                newly_queued_dev = 0
+
+                try:
+                    # 1. Queue to ankimon.db
+                    if mw.ankimon_db.db_path.name != "ankimon.db":
+                        mw.ankimon_db.switch_database("ankimon.db")
+                    watermark_normal = mw.ankimon_db.get_mobile_watermark()
+                    all_mobile_normal = detect_mobile_reviews(mw.col, watermark_normal, desktop_ids)
+                    if all_mobile_normal:
+                        newly_queued_normal = mw.ankimon_db.queue_mobile_battles(all_mobile_normal)
+                        mw.ankimon_db.set_mobile_watermark(max(r["id"] for r in all_mobile_normal))
+
+                    # 2. Queue to ankimonDEV.db if present
+                    if dev_db_path.is_file():
+                        if mw.ankimon_db.db_path.name != "ankimonDEV.db":
+                            mw.ankimon_db.switch_database("ankimonDEV.db")
+                        watermark_dev = mw.ankimon_db.get_mobile_watermark()
+                        all_mobile_dev = detect_mobile_reviews(mw.col, watermark_dev, desktop_ids)
+                        if all_mobile_dev:
+                            newly_queued_dev = mw.ankimon_db.queue_mobile_battles(all_mobile_dev)
+                            mw.ankimon_db.set_mobile_watermark(max(r["id"] for r in all_mobile_dev))
+                finally:
+                    if mw.ankimon_db.db_path.name != original_db_name:
+                        mw.ankimon_db.switch_database(original_db_name)
+
+                # Clear desktop session to prevent indefinite memory/exclusion set accumulation
+                clear_desktop_session()
+
+                # Always update the badge with the TOTAL pending count of the active database
+                total_pending = mw.ankimon_db.get_pending_mobile_count()
+                update_mobile_badge(total_pending)
+
+                msg_parts = []
+                if newly_queued_normal > 0:
+                    msg_parts.append(f"{newly_queued_normal} in Normal")
+                if newly_queued_dev > 0:
+                    msg_parts.append(f"{newly_queued_dev} in Dev")
+
+                if msg_parts:
+                    newly_queued = newly_queued_dev if original_db_name == "ankimonDEV.db" else newly_queued_normal
+                    resolution_mode = settings_obj.get("mobile.resolution_mode", "manual")
+
+                    if resolution_mode == "auto":
+                        try:
+                            from ..ankimon_items_web.shop_obj import MobileBridge
+                            bridge = MobileBridge(mw)
+                            result = bridge.resolveAll()
+                            if result.get("success"):
+                                xp_gained = result.get("xp_gained", 0)
+                                cash_gained = result.get("cash_gained", 0)
+                                caught_list = result.get("caught_list", [])
+                                resolved = result.get("resolved", 0)
+                                caught_names = [p["name"] for p in caught_list]
+                                caught_str = f" Caught: {', '.join(caught_names)}." if caught_names else ""
+                                tooltip(f"⚔ Auto-resolved {resolved} mobile/web reviews! +{xp_gained} XP, +{cash_gained}¥.{caught_str}")
+                                logger.log("info", f"Auto-resolved {resolved} mobile/web reviews on active DB. +{xp_gained} XP, +{cash_gained}¥.{caught_str}")
+                            else:
+                                error_msg = result.get("error", "Unknown error")
+                                tooltip(f"⚠ Auto-resolve failed: {error_msg}. Please resolve manually.")
+                                logger.log("error", f"Auto-resolve failed: {error_msg}")
+                        except Exception as ex:
+                            tooltip(f"⚠ Auto-resolve error: {ex}. Please resolve manually.")
+                            logger.log("error", f"Auto-resolve error: {ex}")
+                    else:
+                        tooltip(f"⚔ Mobile/web reviews synced: {', '.join(msg_parts)}! Open Ankimon → Mobile & Web Reviews to resolve.")
+                        logger.log("info", f"Mobile/web reviews synced: {', '.join(msg_parts)}. Total active pending: {total_pending}.")
+                logger.log("info", f"Mobile dual-queue complete. Active DB restored to: {mw.ankimon_db.db_path.name}")
+                try:
+                    from ..singletons import notify_stats_changed
+                    notify_stats_changed()
+                except Exception:
+                    pass
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            logger.log("error", f"Mobile review detection failed: {e}")
+        # === END NEW ===
+
+        # Only auto-read Ankimon configs if automatic sync is enabled
         if not _automatic_sync_enabled:
             logger.log("info", "Anki sync finished - automatic Ankimon sync disabled (awaiting manual sync)")
             return
@@ -880,6 +903,7 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
                 tooltip(f"Updated {len(updated_files)} Ankimon files from AnkiWeb")
         except Exception as e:
             logger.log("error", f"Failed to read files after sync: {str(e)}")
+
 
     # Register hooks (but they won't auto-sync until enabled)
     gui_hooks.sync_will_start.append(on_sync_will_start)

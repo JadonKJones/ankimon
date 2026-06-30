@@ -1,17 +1,22 @@
 {
     "battle.automatic_battle": "Set automatic battle mode for wild Pokémon interactions when enemy HP is 0. \n[0: Disabled, 1: Auto-catch, 2: Auto-defeat (to gain XP), 3: Catch if NEW Pokémon (not in collection), otherwise defeat].",
+    "battle.auto_catch_legendary": "If enabled, Legendary Pokémon are always auto-caught in automatic battle mode, regardless of collection status.",
+    "battle.auto_catch_mythical":  "If enabled, Mythical Pokémon are always auto-caught in automatic battle mode, regardless of collection status.",
+    "battle.auto_catch_ultra":     "If enabled, Ultra Beasts are always auto-caught in automatic battle mode, regardless of collection status.",
+    "battle.auto_catch_starter":   "If enabled, Starter Pokémon and their evolutions are always auto-caught in automatic battle mode, regardless of collection status.",
+    "battle.auto_catch_mega":      "If enabled, Mega-Evolved Pokémon are always auto-caught in automatic battle mode, regardless of collection status.",
+    "battle.auto_catch_gmax": "If enabled, Gigantamax Pokémon are always auto-caught in automatic battle mode, regardless of collection status.",
+    "battle.auto_catch_regional": "If enabled, Regional Form Pokémon (e.g. Alolan, Galarian, Hisuian, Paldean) are always auto-caught in automatic battle mode, regardless of collection status.",
+    "battle.auto_catch_wishlist": "Pokémon on this list are always auto-caught regardless of mode, collection status, or tier. Search by name and click Add.",
     "battle.cards_per_round": "Number of cards to review per round until the next battle action. (For dynamic values use a-b [e.g. 1-3])",
     "battle.daily_average": "Set the amount of Cards you want to review per day.",
     "battle.card_max_time": "Goal of maximum amount of time needed to answer a card in seconds",
     "battle.review_based_damage": "If enabled, your Pokémon's damage will be modified depending on how you graded your last few cards.",
 
-    "evolution.friendship_time_enabled": "Let Pokémon evolve when they reach their friendship requirement at the right time of day (day/night).",
-    "evolution.timezone_auto": "Use this device's local time zone to decide day vs night for evolutions. Turn off to set a fixed UTC offset below.",
-    "evolution.timezone_offset": "UTC offset in hours used for the day/night cycle when Auto-detect Time Zone is off (e.g. -5 = New York, 1 = Berlin, 5.5 = India, 0 = UTC). Ignored while auto-detect is on.",
-
     "controls.pokemon_buttons": "Enable action buttons for Pokémon commands during reviews.",
     "controls.defeat_key": "Key for defeating Pokémon when its HP is 0. [A-Z]",
     "controls.catch_key": "Key for catching Pokémon when its HP is 0. [A-Z]",
+    "controls.team_cycle_key": "Key for Cycling between the first 3 Pokémon in team. [A-Z]",
     "controls.key_for_opening_closing_ankimon": "Key to open/close Ankimon interface with control/command key. Write the keys like 'Shift+N' you can also add things like Ctrl, Shift, and multiple button combinations",
     "controls.allow_to_choose_moves": "Allows player to manually pick attack moves in battles with Keys 1-4 or fast click.",
     "gui.animate_time": "Enable a small animation for Pokémon interactions. This animation is displayed when you or the wild Pokémon is taking damage.",
@@ -44,6 +49,7 @@
     "misc.gen7": "Include Pokémon from Generation 7.",
     "misc.gen8": "Include Pokémon from Generation 8.",
     "misc.gen9": "Include Pokémon from Generation 9.",
+    "misc.active_region": "Controls regional encounter behavior. When set to 'No Region', all regional variants have a 7% chance to appear. Selecting a specific region provides a 30% encounter boost (40% for Hisui) for that region's Pokémon and ensures their regional forms appear in the boosted pool. Note: Both the base species' and the form's introduction generations must be enabled for a variant to appear.",
     "misc.remove_level_cap": "Allow leveling beyond set level cap.",
   "misc.language": "Select language ID for Pokémon names and descriptions. [1: Japanese (Hir & Kata), 2: Japanese (Roomaji), 3: Korean, 4: Chinese (Traditional), 5: French, 6: German, 7: Spanish, 8: Italian, 9: English, 10: Czech, 11: Japanese, 12: Chinese (Simplified), 13: Portuguese (Brazil), 14: Spanish (Latin America)]",
     "misc.ssh": "Enable SSH if encountering connectivity issues (like Eduroam restrictions).",
@@ -55,6 +61,8 @@
     "misc.show_tip_on_startup": "If enabled, a window with a helpful tip about Ankimon will be shown when you start Anki!",
     "misc.developer_mode": "Enable developer mode. This will create a backup every time Anki is opened.",
     "trainer.name": "Set the name of your trainer.",
-    "trainer.cash_reward_amount": "How much cash you earn for each interval of cards reviewed. [Min: 10, Max: 400]. NOTE: To prevent exploits, the payout is capped based on your daily economy limit and subject to a hard daily cap of 400¥.",
-    "trainer.cash_reward_interval": "Number of cards to review before earning cash. [Min: 5, Max: 100]. Earnings are subject to a maximum daily cap of 400¥."
+    "trainer.cash_reward_amount": "How much cash you earn for each interval of cards reviewed. [Min: 10, Max: 2,000]. NOTE: To prevent exploits, the payout is capped at 100¥ per card (e.g., to earn 1,000¥, you must set the interval to at least 10 cards).",
+    "trainer.cash_reward_interval": "Number of cards to review before earning cash. [Min: 5, Max: 250].",
+    "evolution.timezone_auto": "Automatically detect your local time zone for time-based features.",
+    "evolution.timezone_offset": "Manually set the UTC offset (in hours) for your time zone if auto-detection is disabled."
 }

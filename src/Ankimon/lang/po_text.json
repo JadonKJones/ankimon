@@ -10,7 +10,6 @@
   "error_occured": "Ocorreu um erro com {function}. Por favor, poste esta mensagem de erro na seção de Reportar Bug.",
   "missing_mainpokemon_data": "Dados do Pokémon principal ausentes",
   "pokemon_about_to_evolve": "{main_pokemon_name} está prestes a evoluir para {evo_pokemon_name} no nível {main_pokemon_level}",
-  "pokemon_about_to_evolve_friendship": "{main_pokemon_name} está pronto para evoluir para {evo_pokemon_name}!",
   "mainpokemon_can_learn_new_attack": "Seu {main_pokemon_name} pode aprender um novo ataque!",
   "mainpokemon_learned_new_attack": "Seu {main_pokemon_name} aprendeu {new_attack_name}!",
   "mainpokemon_gained_xp": "Seu {main_pokemon_name} ganhou {exp} XP.\n {experience_till_next_level} de exp são necessários para o próximo nível.\n Seu Pokémon atualmente tem {main_pokemon_xp}",
@@ -459,5 +458,13 @@
   "cp_label": "PC",
   "bp_label": "PB",
   "combat_power": "Poder de combate",
-  "battle_power": "Poder de batalha"
+  "battle_power": "Poder de batalha",
+  "pokemon_about_to_evolve_friendship": "{main_pokemon_name} está pronto para evoluir para {evo_pokemon_name}!",
+  "friendship_label": "Amizade",
+  "friendship_tooltip": "Mede o vínculo entre você e seu Pokémon.",
+  "bff_tooltip": "💖 Melhor Amigo (Amizade Máxima)",
+  "evolve_now_button": "⇈ Evoluir para {evo_name} agora! ⇈",
+  "badge_ready": "⇈ Pronto para evoluir!",
+  "badge_wait_day": "☀️ Pronto para evoluir durante o dia",
+  "badge_wait_night": "🌙 Pronto para evoluir à noite"
 }

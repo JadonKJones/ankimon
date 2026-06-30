@@ -7,7 +7,7 @@ from aqt.qt import QDialog, qconnect
 from aqt.utils import showWarning, showInfo, tooltip
 from PyQt6.QtCore import Qt
 
-from .resources import icon_path, addon_dir, eff_chart_html_path, table_gen_id_html_path, mypokemon_path
+from .resources import icon_path, addon_dir, eff_chart_html_path, table_gen_id_html_path, nature_chart_html_path, mypokemon_path
 from .texts import terms_text, pokedex_html_template
 from .utils import read_local_file, read_github_file, compare_files, write_local_file, read_html_file
 from .pyobj.error_handler import show_warning_with_traceback
@@ -101,21 +101,24 @@ class Version_Dialog(QDialog):
         self.text_browser.setOpenExternalLinks(True)  # Enable clickable links
         self.text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.text_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.local_file_path = addon_dir / "updateinfos.md"
-        self.local_content = read_local_file(self.local_file_path)
-        self.html_content = markdown.markdown(self.local_content)
-        self.text_browser.setHtml(self.html_content)
         layout.addWidget(self.text_browser)
         self.setWindowIcon(QIcon(str(icon_path)))
         self.setLayout(layout)
+        self.loaded = False
 
     def open(self):
+        if not self.loaded:
+            self.local_file_path = addon_dir / "updateinfos.md"
+            self.local_content = read_local_file(self.local_file_path) or ""
+            self.html_content = markdown.markdown(self.local_content)
+            self.text_browser.setHtml(self.html_content)
+            self.loaded = True
         self.exec()
 
 class License(QWidget):
     def __init__(self):
         super().__init__()
-        self.initUI()
+        self.initialized = False
 
     def initUI(self):
         self.setWindowTitle("AnkiMon License")
@@ -151,17 +154,22 @@ class License(QWidget):
         window_layout = QVBoxLayout()
         window_layout.addWidget(scroll_area)
         self.setLayout(window_layout)
+        self.initialized = True
+
     def read_html_file(self, file_path):
         """Reads an HTML file and returns its content as a string."""
         with open(file_path, 'r', encoding='utf-8') as file:
             return file.read()
+
     def show_window(self):
+        if not self.initialized:
+            self.initUI()
         self.show()
 
 class Credits(QWidget):
     def __init__(self):
         super().__init__()
-        self.initUI()
+        self.initialized = False
 
     def initUI(self):
         self.setWindowTitle("AnkiMon License")
@@ -197,11 +205,16 @@ class Credits(QWidget):
         window_layout = QVBoxLayout()
         window_layout.addWidget(scroll_area)
         self.setLayout(window_layout)
+        self.initialized = True
+
     def read_html_file(self, file_path):
         """Reads an HTML file and returns its content as a string."""
         with open(file_path, 'r', encoding='utf-8') as file:
             return file.read()
+
     def show_window(self):
+        if not self.initialized:
+            self.initUI()
         self.show()
 
 class HelpWindow(QDialog):
@@ -217,18 +230,15 @@ class HelpWindow(QDialog):
                 # Path to the local file
                 local_content = read_local_file(help_local_file_path)
                 # Read content from GitHub
-                github_content = read_github_file(help_github_url)
+                github_content, github_html_content = read_github_file(help_github_url)
                 if local_content is not None and compare_files(local_content, github_content):
-                    html_content = github_content
+                    html_content = github_html_content
                 else:
                     # Download new content from GitHub
                     if github_content is not None:
                         # Write new content to the local file
                         write_local_file(help_local_file_path, github_content)
-                        html_content = github_content
-                    elif local_content is not None:
-                        # GitHub unreachable — fall back to the cached local copy
-                        html_content = local_content
+                        html_content = github_html_content
             else:
                 help_local_file_path = addon_dir / "HelpInfos.html"
                 local_content = read_local_file(help_local_file_path)
@@ -253,94 +263,130 @@ class HelpWindow(QDialog):
 class TableWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.initUI()
+        self.initialized = False
 
     def initUI(self):
         self.setWindowTitle("Pokémon Type Effectiveness Table")
+        self.setGeometry(100, 100, 800, 600)
 
         # Create a label and set HTML content
         label = QLabel()
-        html_content = read_html_file(f"{eff_chart_html_path}")  # Replace with the path to your HTML file
-        label.setText(html_content)  # 'html_table' contains the HTML table string
+        html_content = read_html_file(f"{eff_chart_html_path}")
+        label.setText(html_content)
         label.setWordWrap(True)
+        label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        label.setStyleSheet("background-color: rgb(44,44,44); padding: 10px;")
 
-        # Layout
+        # Create a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("background-color: rgb(44,44,44); border: none;")
+
+        # Container widget for the label
+        container = QWidget()
+        container_layout = QVBoxLayout()
+        container_layout.addWidget(label)
+        container.setLayout(container_layout)
+
+        scroll_area.setWidget(container)
+
+        # Main layout
         layout = QVBoxLayout()
-        layout.addWidget(label)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(scroll_area)
         self.setLayout(layout)
+        self.initialized = True
 
     def show_eff_chart(self):
+        if not self.initialized:
+            self.initUI()
         self.show()
 
 class IDTableWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.initUI()
+        self.initialized = False
 
     def initUI(self):
         self.setWindowTitle("Pokémon - Generations and ID")
+        self.setGeometry(100, 100, 800, 600)
+
         # Create a label and set HTML content
         label = QLabel()
-        html_content = read_html_file(f"{table_gen_id_html_path}")  # Replace with the path to your HTML file
-        label.setText(html_content)  # 'html_table' contains the HTML table string
+        html_content = read_html_file(f"{table_gen_id_html_path}")
+        label.setText(html_content)
         label.setWordWrap(True)
-        label.setStyleSheet("background-color: rgb(44,44,44);")
-        # Layout
+        label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        label.setStyleSheet("background-color: rgb(44,44,44); padding: 10px;")
+
+        # Create a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("background-color: rgb(44,44,44); border: none;")
+
+        # Container widget for the label
+        container = QWidget()
+        container_layout = QVBoxLayout()
+        container_layout.addWidget(label)
+        container.setLayout(container_layout)
+
+        scroll_area.setWidget(container)
+
+        # Main layout
         layout = QVBoxLayout()
-        layout.addWidget(label)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(scroll_area)
         self.setLayout(layout)
+        self.initialized = True
 
     def show_gen_chart(self):
+        if not self.initialized:
+            self.initUI()
         self.show()
 
-class Pokedex_Widget(QWidget):
+class NatureTableWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.read_poke_coll()
-        self.initUI()
-
-    def read_poke_coll(self):
-        db = mw.ankimon_db
-        self.available_pokedex_ids = db.get_all_pokemon_ids()
+        self.initialized = False
 
     def initUI(self):
-        self.setWindowTitle("Pokédex")
+        self.setWindowTitle("Pokémon Nature Chart")
+        self.setGeometry(100, 100, 650, 500)
 
         # Create a label and set HTML content
         label = QLabel()
-        # Use the already fetched set of existing ids
-        # (self.available_pokedex_ids is fetched in read_poke_coll)
-
-        # Now we generate the HTML rows for each Pokémon in the range 1-898, graying out those not in the JSON file
-        table_rows = [self.generate_table_row(i, i not in self.available_pokedex_ids) for i in range(1, 899)]
-
-        # Combine the HTML template with the generated rows
-        html_content = pokedex_html_template.replace('<!-- Table Rows Will Go Here -->', ''.join(table_rows))
-
-        #html_content = self.read_html_file(f"{pokedex_html_path}")  # Replace with the path to your HTML file
-        label.setText(html_content)  # 'html_table' contains the HTML table string
+        html_content = read_html_file(f"{nature_chart_html_path}")
+        label.setText(html_content)
         label.setWordWrap(True)
+        label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        label.setStyleSheet("background-color: rgb(44,44,44); padding: 10px;")
 
-        # Layout
+        # Create a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("background-color: rgb(44,44,44); border: none;")
+
+        # Container widget for the label
+        container = QWidget()
+        container_layout = QVBoxLayout()
+        container_layout.addWidget(label)
+        container.setLayout(container_layout)
+
+        scroll_area.setWidget(container)
+
+        # Main layout
         layout = QVBoxLayout()
-        layout.addWidget(label)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(scroll_area)
         self.setLayout(layout)
+        self.initialized = True
 
-    # Helper function to generate table rows
-    def generate_table_row(self, pokedex_number, is_gray):
-        name = f"Pokemon #{pokedex_number}" # Placeholder, actual name should be fetched from a database or API
-        image_class = "pokemon-gray" if is_gray else ""
-        return f'''
-        <tr>
-            <td>{pokedex_number}</td>
-            <td>{name}</td>
-            <td><img src="{pokedex_number}.png" alt="{name}" class="pokemon-image {image_class}" /></td>
-        </tr>
-        '''
-
-    def show_pokedex(self):
-        self.read_poke_coll()
+    def show_nature_chart(self):
+        if not self.initialized:
+            self.initUI()
         self.show()
+
+# Pokedex_Widget removed
 
 class CheckFiles(QDialog):
     def __init__(self):

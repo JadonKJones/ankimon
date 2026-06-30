@@ -3,8 +3,22 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from .services import services
-from .events import events
+from aqt import mw
+from aqt.qt import QDialog
+
+from .singletons import (
+    main_pokemon,
+    enemy_pokemon,
+    settings_obj,
+    reviewer_obj,
+    ankimon_tracker_obj,
+    test_window,
+    evo_window,
+    logger,
+    achievements,
+    trainer_card,
+    translator,
+)
 from .functions.encounter_functions import handle_enemy_faint, handle_main_pokemon_faint
 from .functions.badges_functions import (
     handle_review_count_achievement,
@@ -17,26 +31,10 @@ from .functions.battle_functions import (
     process_battle_data,
 )
 from .functions.drawing_utils import tooltipWithColour
-from .utils import safe_get_random_move, play_effect_sound, play_sound
+from .utils import safe_get_random_move, play_effect_sound, play_sound, is_alive
 from .functions.ankimon_hooks_to_poke_engine import simulate_battle_with_poke_engine
+from .classes.choose_move_dialog import MoveSelectionDialog
 from .pyobj.error_handler import show_warning_with_traceback
-
-# Shared game state used as bare module globals below. core.bind_runtime_globals()
-# points these at the live registry objects after composition (so the module
-# imports without `from .singletons import ...`, and thus without aqt). The
-# move-selection dialog and the reviewer HUD are reached through services.ui /
-# services.reviewer respectively.
-main_pokemon = None
-enemy_pokemon = None
-settings_obj = None
-reviewer_obj = None
-ankimon_tracker_obj = None
-test_window = None
-evo_window = None
-logger = None
-achievements = None
-trainer_card = None
-translator = None
 
 
 @dataclass
@@ -73,6 +71,9 @@ def _get_cards_per_round() -> int:
 
 
 def on_review_card(*args):
+    if not getattr(mw, "ankimon_startup_finished", False):
+        return
+
     global _state
     s = _state
 
@@ -98,32 +99,28 @@ def on_review_card(*args):
         s.item_receive_value -= 1
         if s.item_receive_value <= 0:
             s.item_receive_value = random.randint(3, 385)
-            test_window.display_item()
+            win = getattr(mw, "test_window", None)
+            if is_alive(win):
+                try:
+                    win.display_item()
+                except RuntimeError:
+                    pass
             if not check_for_badge(achievements, 6):
                 receive_badge(6, achievements)
 
-        try:
-            cash_interval = int(settings_obj.get("trainer.cash_reward_interval", 10))
-            cash_amount = int(settings_obj.get("trainer.cash_reward_amount", 100))
-        except (ValueError, TypeError):
-            cash_interval = 10
-            cash_amount = 100
-        if cash_interval > 0 and total_reviews % cash_interval == 0:
-            from datetime import date
-            today_str = str(date.today())
-            last_reward_date = settings_obj.get("trainer.last_cash_reward_date", "")
-            cash_earned_today = settings_obj.get("trainer.cash_earned_today", 0)
-            
-            if last_reward_date != today_str:
-                cash_earned_today = 0
-                settings_obj.set("trainer.last_cash_reward_date", today_str)
-            
-            if cash_earned_today < 400:
-                allowed_amount = min(cash_amount, 400 - cash_earned_today)
-                if allowed_amount > 0:
-                    settings_obj.set("trainer.cash_earned_today", cash_earned_today + allowed_amount)
-                    settings_obj.set("trainer.cash", settings_obj.get("trainer.cash") + allowed_amount)
-                    trainer_card.cash = settings_obj.get("trainer.cash")
+        cash_interval = int(settings_obj.get("trainer.cash_reward_interval"))
+        cash_amount = int(settings_obj.get("trainer.cash_reward_amount"))
+        if total_reviews % cash_interval == 0:
+            settings_obj.set("trainer.cash", settings_obj.get("trainer.cash") + cash_amount)
+            trainer_card.cash = settings_obj.get("trainer.cash")
+            # Live-refresh the open shell screen's cash (best-effort; no-op
+            # unless a live screen is visible).
+            try:
+                from .singletons import notify_stats_changed
+
+                notify_stats_changed()
+            except Exception:
+                pass
 
         if battle_sounds == True and ankimon_tracker_obj.general_card_count_for_battle == 1:
             play_sound(enemy_pokemon.id, settings_obj)
@@ -159,10 +156,10 @@ def on_review_card(*args):
                 and enemy_pokemon.hp > 0
             ):
                 if settings_obj.get("controls.allow_to_choose_moves") == True:
-                    # Real dialog under Anki (QtPresenter); scripted/None headless.
-                    chosen = services.ui.choose_move(main_pokemon.attacks)
-                    if chosen:
-                        user_attack = chosen
+                    dialog = MoveSelectionDialog(main_pokemon.attacks)
+                    if dialog.exec() == QDialog.DialogCode.Accepted:
+                        if dialog.selected_move:
+                            user_attack = dialog.selected_move
 
                 if category == "Status":
                     color = "#F7DC6F"
@@ -237,20 +234,6 @@ def on_review_card(*args):
 
             tooltipWithColour(formatted_battle_log, color)
 
-            # Observable turn outcome for the agent harness.
-            events.emit(
-                "battle",
-                user=main_pokemon.name,
-                enemy=enemy_pokemon.name,
-                user_move=user_attack,
-                enemy_move=enemy_attack,
-                dmg_to_enemy=int(true_dmg_from_user_move),
-                dmg_to_user=int(true_dmg_from_enemy_move),
-                user_hp=int(main_pokemon.hp),
-                enemy_hp=int(enemy_pokemon.hp),
-                multiplier=multiplier,
-            )
-
             if true_dmg_from_enemy_move > 0 and multiplier < 1:
                 reviewer_obj.myseconds = settings_obj.compute_special_variable("animate_time")
                 tooltipWithColour(f" -{true_dmg_from_enemy_move} HP ", "#F06060", x=-200)
@@ -280,13 +263,13 @@ def on_review_card(*args):
 
             if enemy_pokemon.hp < 1:
                 enemy_pokemon.hp = 0
-                test_window.display_battle()
+                win = getattr(mw, "test_window", None)
                 handle_enemy_faint(
                     main_pokemon,
                     enemy_pokemon,
                     s.collected_pokemon_ids,
-                    test_window,
-                    evo_window,
+                    win if is_alive(win) else None,
+                    getattr(mw, "evo_window", None),
                     reviewer_obj,
                     logger,
                     achievements,
@@ -297,16 +280,44 @@ def on_review_card(*args):
             play_sound(enemy_pokemon.id, settings_obj)
 
         if main_pokemon.hp < 1:
+            win = getattr(mw, "test_window", None)
             handle_main_pokemon_faint(
-                main_pokemon, enemy_pokemon, test_window, reviewer_obj, translator
+                main_pokemon,
+                enemy_pokemon,
+                win if is_alive(win) else None,
+                reviewer_obj,
+                translator
             )
             s.mutator_full_reset = 1
 
-        reviewer_obj.refresh_hud()
-        if test_window is not None:
+        class Container:
+            pass
+
+        reviewer = Container()
+        reviewer.web = mw.reviewer.web
+        reviewer_obj.update_life_bar(reviewer, 0, 0)
+        win = getattr(mw, "test_window", None)
+        if is_alive(win):
             if enemy_pokemon.hp > 0:
-                test_window.display_battle()
+                try:
+                    win.display_battle()
+                except RuntimeError:
+                    pass
+
+        try:
+            if len(args) >= 2:
+                card = args[1]
+                revlog_id = mw.col.db.scalar(
+                    "SELECT id FROM revlog WHERE cid=? ORDER BY id DESC LIMIT 1",
+                    card.id
+                )
+                if revlog_id:
+                    from .functions.mobile_sync import record_desktop_review
+                    record_desktop_review(revlog_id)
+        except Exception:
+            pass
+
     except Exception as e:
         show_warning_with_traceback(
-            exception=e, message="An error occurred in reviewer:"
+            parent=mw, exception=e, message="An error occurred in reviewer:"
         )

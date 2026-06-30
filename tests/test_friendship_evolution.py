@@ -53,6 +53,8 @@ class _FakeSettings:
         }
 
     def get(self, key, default=None):
+        if key == "evolution.friendship_time_enabled":
+            return True
         return self.values.get(key, default)
 
 
@@ -75,6 +77,7 @@ def _load_friendship_evolution():
         importlib.util.spec_from_loader("Ankimon.singletons", loader=None)
     )
     singletons_stub.settings_obj = fake_settings
+    singletons_stub.get_evo_window = mock.MagicMock
     sys.modules["Ankimon.singletons"] = singletons_stub
 
     # Load resources + pokedex_functions FOR REAL so the bundled CSV lookups work.
@@ -97,6 +100,17 @@ def _load_friendship_evolution():
     sys.modules["Ankimon.functions.pokedex_functions"] = pokedex_functions
     pf_spec.loader.exec_module(pokedex_functions)
 
+    # Mock search_pokedex_by_id to force Eevee (133) to fallback to legacy CSV lookup
+    original_search_by_id = pokedex_functions.search_pokedex_by_id
+    def mock_search_pokedex_by_id(species_id):
+        try:
+            if int(species_id) == 133:
+                return "Pokémon not found"
+        except (ValueError, TypeError):
+            pass
+        return original_search_by_id(species_id)
+    pokedex_functions.search_pokedex_by_id = mock_search_pokedex_by_id
+
     # Load the module under test; its relative imports resolve via conftest's
     # Ankimon / Ankimon.functions stub packages and the real pokedex_functions.
     fe_spec = importlib.util.spec_from_file_location(
@@ -118,16 +132,14 @@ fe, settings = _load_friendship_evolution()
 # ``Ankimon.singletons`` with a ``MagicMock`` at import time. Without restoring
 # our stub, those lazy imports would resolve to the mock and break the clock.
 _SINGLETONS_STUB = sys.modules["Ankimon.singletons"]
+_POKEDEX_FUNCTIONS_STUB = sys.modules["Ankimon.functions.pokedex_functions"]
 
 
 @pytest.fixture(autouse=True)
 def _reset_settings():
     """Restore our singletons stub and default settings before every test."""
     sys.modules["Ankimon.singletons"] = _SINGLETONS_STUB
-    # #492 moved the code from singletons.settings_obj to the services registry, so
-    # point services.settings at the same fake (the module reads it lazily per call).
-    from Ankimon.services import services
-    services.settings = settings
+    sys.modules["Ankimon.functions.pokedex_functions"] = _POKEDEX_FUNCTIONS_STUB
     settings.values.update(
         {
             "evolution.day_start_hour": 6,
@@ -340,6 +352,9 @@ class _FakeEvoWindow:
     def __init__(self):
         self.calls = []
 
+    def objectName(self):
+        return "Fake"
+
     def ask_pokemon_evo(self, individual_id, pokemon_id, evo_id):
         self.calls.append((individual_id, pokemon_id, evo_id))
 
@@ -358,7 +373,7 @@ def test_check_triggers_evolution_when_ready():
     assert evo_window.calls == [(7, 133, 196)]
 
 
-def test_check_returns_none_when_disabled():
+def test_check_ignores_disabled_and_evolves_anyway():
     settings.values["evolution.friendship_time_enabled"] = False
     evo_window = _FakeEvoWindow()
     result = fe.check_friendship_evolution_for_pokemon(
@@ -369,8 +384,8 @@ def test_check_returns_none_when_disabled():
         friendship=160,
         now=datetime(2024, 1, 1, 9, 0),
     )
-    assert result is None
-    assert evo_window.calls == []
+    assert result == 196
+    assert evo_window.calls == [(7, 133, 196)]
 
 
 def test_check_returns_none_with_everstone():
@@ -656,3 +671,11 @@ def test_current_time_label_bad_offset_does_not_crash():
     label = fe.current_time_label(datetime(2024, 1, 1, 9, 0))
     assert "Day" in label
     assert "UTC" not in label
+
+
+def test_pichu_evolution_readiness():
+    pokemon = {"id": 172, "friendship": 400, "everstone": False, "level": 5}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evolvable"] is True
+    assert result["ready"] is True
+    assert result["evo_name"] == "Pikachu"

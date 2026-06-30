@@ -1,9 +1,14 @@
 from ..resources import trainer_sprites_path, mypokemon_path, team_pokemon_path
 from ..functions.trainer_functions import find_trainer_rank
 from ..functions.badges_functions import get_achieved_badges
-from ..services import services
+from aqt import mw
+from aqt.utils import showWarning, showInfo
 import math
 import json
+from .ankimon_leaderboard import (
+    sync_data_to_leaderboard,
+    show_api_key_dialog
+)
 
 
 # Constants for leveling
@@ -68,22 +73,16 @@ class TrainerCard:
             "trainerRank": f"{league}",  # Example rank
             "trainerName": trainer_name,  # Example trainer name
             "level": max(1, int(settings_obj.get("trainer.level"))),
-            "pokedex": services.db.execute("SELECT COUNT(DISTINCT pokedex_id) FROM captured_pokemon WHERE pokedex_id IS NOT NULL").fetchone()[0],
-            "caughtPokemon": services.db.get_pokemon_count(),
+            "pokedex": mw.ankimon_db.execute("SELECT COUNT(DISTINCT pokedex_id) FROM captured_pokemon WHERE pokedex_id IS NOT NULL").fetchone()[0],
+            "caughtPokemon": mw.ankimon_db.get_pokemon_count(),
             "trainerLevel": self.level,  # Add a logic for trainer's level if applicable
             "highestLevel": highest_pokemon_level,  # Example highest level
-            "shinies": f"{services.db.get_shiny_count()}",  # Example shinies
+            "shinies": f"{mw.ankimon_db.get_shiny_count()}",  # Example shinies
             "cash": cash,  # Example cash,
             "trainerSprite": f"{settings_obj.get('trainer.sprite') + '.png'}",
         }
         try:
-            # Lazy import: ankimon_leaderboard pulls in Qt/Anki, so importing it
-            # at module top would break the headless core. Imported here instead,
-            # and an ImportError simply means "no leaderboard available" (harness).
-            from .ankimon_leaderboard import sync_data_to_leaderboard
             sync_data_to_leaderboard(data)
-        except ImportError:
-            pass
         except Exception as e:
             self.logger.log_and_showinfo(
                 "error", f"Error in syncing data to leaderboard {e}"
@@ -100,7 +99,7 @@ class TrainerCard:
     def get_highest_level_pokemon(self):
         """Method to find the name of the highest-level Pokémon from the database."""
         try:
-            db = services.db
+            db = mw.ankimon_db
             cursor = db.execute("SELECT name, level FROM captured_pokemon WHERE level IS NOT NULL ORDER BY level DESC LIMIT 1")
             row = cursor.fetchone()
 
@@ -109,13 +108,13 @@ class TrainerCard:
 
             return f"{row['name']} (Level {row['level']})"
         except Exception as e:
-            services.ui.notify("info", f"Error getting highest level pokemon: {e}")
+            showInfo(f"Error getting highest level pokemon: {e}")
             return "None"
 
     def highest_pokemon_level(self):
         """Method to find the highest level from all Pokémon in the database."""
         try:
-            db = services.db
+            db = mw.ankimon_db
             cursor = db.execute("SELECT level FROM captured_pokemon WHERE level IS NOT NULL ORDER BY level DESC LIMIT 1")
             row = cursor.fetchone()
 
@@ -124,7 +123,7 @@ class TrainerCard:
 
             return int(row["level"])
         except Exception as e:
-            services.ui.notify("info", f"Error getting highest level: {e}")
+            showInfo(f"Error getting highest level: {e}")
             return 0
 
     def add_achievement(self, achievement):
@@ -134,14 +133,14 @@ class TrainerCard:
     def get_team(self):
         """Method to get the trainer's active team (team as a string)"""
         try:
-            team_data = services.db.get_team()
+            team_data = mw.ankimon_db.get_team()
             
             if not team_data:
                 return "No Team Set"
 
             # Use new DB method for targeted fetch
             ids_to_fetch = [str(t.get("individual_id")) for t in team_data if t.get("individual_id")]
-            my_pokemon_data = services.db.get_pokemons_by_individual_ids(ids_to_fetch)
+            my_pokemon_data = mw.ankimon_db.get_pokemons_by_individual_ids(ids_to_fetch)
 
             # Create lookup dict
             pokemon_map = {str(p.get("individual_id")): p for p in my_pokemon_data}
@@ -214,6 +213,15 @@ class TrainerCard:
         print(f"Gained {xp_gained} XP from defeating a {tier} Pokémon!")
         self.check_level_up()
 
+        # Live-refresh the open shell screen's XP/level/Total XP (best-effort;
+        # no-op unless a live screen is visible).
+        try:
+            from ..singletons import notify_stats_changed
+
+            notify_stats_changed()
+        except Exception:
+            pass
+
     def check_level_up(self):
         """Update level based on XP."""
         xp_needed = self.xp_for_next_level()
@@ -225,3 +233,25 @@ class TrainerCard:
             self.on_level_up()
             # Recalculate for next iteration (in case multiple levels gained)
             xp_needed = self.xp_for_next_level()
+
+    def refresh(self):
+        """Reloads trainer data from current settings and database."""
+        self.trainer_name = self.settings_obj.get("trainer.name")
+        self.level = int(self.settings_obj.get("trainer.level"))
+        self.xp = int(self.settings_obj.get("trainer.xp"))
+        self.total_xp = int(self.settings_obj.get("trainer.total_xp", 0))
+        self.cash = int(self.settings_obj.get("trainer.cash"))
+        self.image_path = (
+            f"{trainer_sprites_path}"
+            + "/"
+            + self.settings_obj.get("trainer.sprite")
+            + ".png"
+        )
+        self.league = find_trainer_rank(
+            int(self.highest_pokemon_level()), int(self.level)
+        )
+        self.reload_team()
+        if hasattr(self, "main_pokemon") and self.main_pokemon:
+            self.favorite_pokemon = self.main_pokemon.name
+        else:
+            self.favorite_pokemon = "None"

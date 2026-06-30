@@ -1,6 +1,13 @@
-aqt
 pytest
+
 pytest-qt
-requests
+
+anki
+
+aqt
+
 PyQt6
-markdown
+
+orjson
+
+requests

@@ -18,7 +18,6 @@ jobs:
           ref: main
           fetch-depth: 0
           fetch-tags: true
-          token: ${{ secrets.GH_PAT }}
 
       - name: Read version from manifest.json
         id: version

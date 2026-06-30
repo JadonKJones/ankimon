@@ -1,8 +1,6 @@
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QScrollArea
 from PyQt6.QtCore import Qt
 
-from ..utils import format_move_name
-
 class AttackDialog(QDialog):
     def __init__(self, attacks, new_attack):
         super().__init__()
@@ -12,21 +10,11 @@ class AttackDialog(QDialog):
         self.initUI()
 
     def initUI(self):
-        # Display human-readable move names (e.g. "Thunderbolt") while the
-        # dialog still returns the RAW move id in ``self.selected_attack`` so
-        # callers can index the real ``attacks`` list. The raw move is stashed
-        # on each button via a dynamic property and read back in attackSelected.
-        new_attack_display = format_move_name(self.new_attack)
-        self.setWindowTitle(
-            f"Select which Attack to Replace with {new_attack_display}"
-        )
+        self.setWindowTitle(f"Select which Attack to Replace with {self.new_attack}")
         layout = QVBoxLayout()
-        layout.addWidget(
-            QLabel(f"Select which Attack to Replace with {new_attack_display}")
-        )
+        layout.addWidget(QLabel(f"Select which Attack to Replace with {self.new_attack}"))
         for attack in self.attacks:
-            button = QPushButton(format_move_name(attack))
-            button.setProperty("raw_move", attack)
+            button = QPushButton(attack)
             button.clicked.connect(self.attackSelected)
             layout.addWidget(button)
         reject_button = QPushButton("Reject Attack")
@@ -36,9 +24,7 @@ class AttackDialog(QDialog):
 
     def attackSelected(self):
         sender = self.sender()
-        # Return the RAW move id (not the formatted label) so callers can index
-        # the underlying ``attacks`` list correctly.
-        self.selected_attack = sender.property("raw_move")
+        self.selected_attack = sender.text()
         self.accept()
 
     def attackNoneSelected(self):

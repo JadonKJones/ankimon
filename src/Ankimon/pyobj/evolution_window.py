@@ -1,5 +1,6 @@
 import json
 import random
+from typing import Optional
 
 from aqt import mw
 from aqt.qt import (
@@ -17,7 +18,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
 )
 
-from ..utils import load_custom_font
+from ..utils import load_custom_font, is_alive
 from ..functions.pokedex_functions import (
     get_base_experience,
     get_growth_rate,
@@ -38,7 +39,7 @@ from ..pyobj.translator import Translator
 from ..pyobj.test_window import TestWindow
 from ..pyobj.reviewer_obj import Reviewer_Manager
 from ..pyobj.error_handler import show_warning_with_traceback
-from ..business import calculate_cp_from_dict, resize_pixmap_img
+from ..business import resize_pixmap_img, calculate_cp_from_dict
 from ..resources import (
     addon_dir,
     frontdefault,
@@ -93,16 +94,15 @@ class EvoWindow(QWidget):
         layout = self.layout()
         pkmn_label = self._display_evo_complete_layout(prevo_id, evo_id)
         layout.addWidget(pkmn_label)
-        # Give the celebration screen an explicit way to dismiss itself instead
-        # of leaving the user to find the OS window-close button (the only exit
-        # this screen used to offer).
+
         close_button = QPushButton("Close")
-        qconnect(close_button.clicked, self.close)
+        close_button.clicked.connect(self.close)
         layout.addWidget(close_button)
+
         self.setStyleSheet("background-color: rgb(14,14,14);")
         self.setLayout(layout)
         self.setMaximumWidth(500)
-        self.setMaximumHeight(300)
+        self.setMaximumHeight(350)
         self.show()
 
     def _display_evo_complete_layout(self, prevo_id: int, evo_id: int):
@@ -162,7 +162,7 @@ class EvoWindow(QWidget):
         pkmn_label.setPixmap(merged_pixmap)
         return pkmn_label
 
-    def ask_pokemon_evo(self, individual_id: int, prevo_id: int, evo_id: int):
+    def ask_pokemon_evo(self, individual_id: int, prevo_id: int, evo_id: int, item_name: Optional[str] = None):
         """
         Displays the GUI notification that the given Pokemon is about to evolve.
 
@@ -173,6 +173,7 @@ class EvoWindow(QWidget):
             individual_id (int): The UUID of the Pokemon to evolve.
             prevo_id (int): The identifier (National Pokedex Number) of the Pokémon to evolve.
             evo_id (int): The identifier (National Pokedex Number) of the evolved Pokémon.
+            item_name (str, optional): The name of the evolution item used, if any.
         """
 
         self.setMaximumWidth(600)
@@ -180,7 +181,7 @@ class EvoWindow(QWidget):
         self.clear_layout(self.layout())
         layout = self.layout()
         pokemon_images, evolve_button, dont_evolve_button = (
-            self._ask_pokemon_evo_layout(individual_id, prevo_id, evo_id)
+            self._ask_pokemon_evo_layout(individual_id, prevo_id, evo_id, item_name)
         )
         layout.addWidget(pokemon_images)
         layout.addWidget(evolve_button)
@@ -189,7 +190,7 @@ class EvoWindow(QWidget):
         self.setLayout(layout)
         self.show()
 
-    def _ask_pokemon_evo_layout(self, individual_id: int, prevo_id: int, evo_id: int):
+    def _ask_pokemon_evo_layout(self, individual_id: int, prevo_id: int, evo_id: int, item_name: Optional[str] = None):
         """
         Creates the GUI layout for the upcoming evolution.
 
@@ -200,6 +201,7 @@ class EvoWindow(QWidget):
             individual_id (int): The UUID of the Pokemon to evolve.
             prevo_id (int): The identifier (National Pokedex Number) of the Pokémon to evolve.
             evo_id (int): The identifier (National Pokedex Number) of the evolved Pokémon.
+            item_name (str, optional): The name of the evolution item used, if any.
         """
 
         # Update mainpokemon_evolution and handle evolution logic
@@ -260,7 +262,7 @@ class EvoWindow(QWidget):
             150, 35, f"{prevo_name.capitalize()} is evolving to {evo_name.capitalize()}"
         )
         painter.drawText(
-            95, 430, "Choose to evolve your Pokémon, or cancel to keep it as is"
+            95, 430, "Please Choose to Evolve Your Pokemon or Cancel Evolution"
         )
         # Capitalize the first letter of the Pokémon's name
         # name_label = QLabel(capitalized_name)
@@ -273,7 +275,7 @@ class EvoWindow(QWidget):
         qconnect(
             evolve_button.clicked,
             lambda: self.evolve_pokemon(
-                individual_id, prevo_id, prevo_name, evo_id, evo_name, self.main_pokemon
+                individual_id, prevo_id, prevo_name, evo_id, evo_name, self.main_pokemon, item_name
             ),
         )
         qconnect(
@@ -294,37 +296,29 @@ class EvoWindow(QWidget):
             if widget:
                 widget.deleteLater()
 
-    def evolve_pokemon(self, individual_id, prevo_id, prevo_name, evo_id, evo_name, main_pokemon):
+    def evolve_pokemon(self, individual_id, prevo_id, prevo_name, evo_id, evo_name, main_pokemon, item_name=None):
         """Evolve a pokemon and save to database."""
         db = mw.ankimon_db
-        
+
         try:
             pokemon = db.get_pokemon(individual_id)
             if not pokemon:
                 self.logger.log("error", f"Could not find pokemon with id {individual_id}")
                 return
 
-            # Guard against double-evolution: only proceed if this Pokémon is
-            # still the expected pre-evolution species. A stale "Evolve now"
-            # button or a re-shown evolution window could otherwise re-trigger
-            # this on an already-evolved Pokémon (re-rolling its moves/ability).
-            if str(pokemon.get("id")) != str(prevo_id):
-                self.logger.log(
-                    "info",
-                    f"Skipping evolution for {individual_id}: already evolved "
-                    f"(current id {pokemon.get('id')}, expected pre-evo {prevo_id}).",
-                )
+            # Guard against double-evolution
+            if int(pokemon.get("id", 0)) != int(prevo_id):
+                self.logger.log("info", f"Evolution already completed for {pokemon.get('name')}.")
                 return
 
+            # Explicitly mark the pre-evolved state as caught before changing the ID
+            if hasattr(db, 'mark_as_caught'):
+                try:
+                    db.mark_as_caught(int(prevo_id))
+                except Exception as e:
+                    self.logger.log("warning", f"Failed to mark prevo as caught: {e}")
+
             pokemon["name"] = evo_name.capitalize()
-            # Carry the nickname across evolution: only rewrite it when the user
-            # never set a custom one (it still matched the pre-evolution species
-            # name). An empty nickname is left empty — every display path already
-            # falls back to pokemon["name"], which we just updated to the evolved
-            # species, so writing it here would dupe to "Umbreon (Umbreon)".
-            old_nickname = pokemon.get("nickname", "")
-            if old_nickname and old_nickname.strip().lower() == prevo_name.lower():
-                pokemon["nickname"] = evo_name.capitalize()
             pokemon["id"] = evo_id
             pokemon["type"] = search_pokedex(evo_name.lower(), "types")
             attacks = pokemon["attacks"]
@@ -340,7 +334,7 @@ class EvoWindow(QWidget):
                             try:
                                 index_to_replace = attacks.index(selected_attack)
                                 attacks[index_to_replace] = new_attack
-                                self.logger.log_and_showinfo("info", self.translator.translate("replaced_attack", selected_attack=selected_attack, new_attack=new_attack))
+                                self.logger.log_and_showinfo("info", self.translator.translate("replaced_selected_attack", selected_attack=selected_attack, new_attack=new_attack))
                             except ValueError:
                                 self.logger.log_and_showinfo("info", self.translator.translate("selected_attack_not_found", selected_attack=selected_attack))
                         else:
@@ -356,10 +350,8 @@ class EvoWindow(QWidget):
             level = pokemon["level"]
             hp = calculate_hp(hp_stat, level, ev, iv)
             pokemon["current_hp"] = int(hp)
-            pokemon["growth_rate"] = get_growth_rate(evo_id)
-            pokemon["base_experience"] = get_base_experience(
-                search_pokedex(evo_name.lower(), "actual_id")
-            )
+            pokemon["growth_rate"] = get_growth_rate(int(evo_id))
+            pokemon["base_experience"] = get_base_experience(int(evo_id))
             abilities = search_pokedex(evo_name.lower(), "abilities")
             numeric_abilities = None
             try:
@@ -371,23 +363,55 @@ class EvoWindow(QWidget):
                 pokemon["ability"] = random.choice(abilities_list)
             else:
                 pokemon["ability"] = self.translator.translate("no_ability")
-            
-            # Recompute Combat Power from the evolved base stats so the stored
-            # CP isn't left stale after evolution.
-            pokemon["cp"] = calculate_cp_from_dict(pokemon)
 
-            # Evolving from a previously-rejected state clears the soft flag so
-            # the auto prompt resumes for the new form's future evolutions.
+            # Update nickname only if it was never customized (matched pre-evo name)
+            old_nickname = pokemon.get("nickname", "")
+            
+            def normalize_nick(s):
+                return str(s).lower().replace(" ", "").replace("-", "").replace("'", "").replace(".", "").replace(":", "")
+
+            from ..functions.pokedex_functions import get_pretty_name_for_id
+            prevo_pretty = get_pretty_name_for_id(prevo_id)
+
+            norm_old = normalize_nick(old_nickname)
+            is_default = (
+                not old_nickname
+                or norm_old == normalize_nick(prevo_name)
+                or norm_old == normalize_nick(prevo_pretty)
+            )
+
+            if is_default:
+                pretty_evo = get_pretty_name_for_id(evo_id)
+                if pretty_evo == "Pokémon not found":
+                    pretty_evo = evo_name.replace("-", " ").title()
+                pokemon["nickname"] = pretty_evo
+
+            # Recompute CP and clear rejection flag
+            pokemon["cp"] = calculate_cp_from_dict(pokemon)
             pokemon["evolution_rejected"] = False
 
             # Save to database
             db.save_pokemon(pokemon)
             self.logger.log_and_showinfo("info", self.translator.translate("mainpokemon_has_evolved", prevo_name=prevo_name, evo_name=evo_name))
+
+            # Consume the item (stone) if it was used for the evolution
+            if item_name:
+                db.update_item_quantity(item_name, -1)
+                # Refresh items window if it is open
+                from ..singletons import get_item_window, get_items_window
+                item_w = get_item_window()
+                if item_w and is_alive(item_w):
+                    item_w.renewWidgets()
+
+                # Also refresh items web window if it's open
+                items_web_w = get_items_window()
+                if items_web_w and is_alive(items_web_w):
+                    items_web_w.update_ui_data()
         except Exception as e:
             show_warning_with_traceback(
                 parent=mw, exception=e, message=f"Error occured in evolving pokemon"
             )
-            self.logger.log("error", f"{e}")
+            self.logger.log(f"{e}")
 
         try:  # Update Main Pokemon Object and sync with file
             if main_pokemon is not None and main_pokemon.individual_id == individual_id:
@@ -414,17 +438,13 @@ class EvoWindow(QWidget):
         if check is False:
             receive_badge(16, self.achievements)
 
-        from ..singletons import pokemon_pc
-
-        pokemon_pc.refresh_pokemon_grid()
-        # Refresh the open details panel so the just-evolved Pokémon no longer
-        # shows stale pre-evolution info / an "Evolve now" button that would
-        # otherwise let it be evolved a second time.
-        try:
-            if pokemon_pc.isVisible():
-                pokemon_pc.show_pokemon_details({"individual_id": individual_id})
-        except Exception:
-            pass
+        from ..singletons import get_pokemon_pc
+        pc = get_pokemon_pc()
+        if pc and is_alive(pc):
+            pc.refresh_gui()
+            # If the evolved pokemon is the one currently selected in PC, refresh its details
+            if pc._selected_individual_id == individual_id:
+                pc.show_pokemon_details({"individual_id": individual_id})
 
     def cancel_evolution(self, individual_id, prevo_name):
         """Cancel evolution and save changes to database."""
@@ -433,7 +453,7 @@ class EvoWindow(QWidget):
         try:
             pokemon_to_update = db.get_pokemon(individual_id)
             if not pokemon_to_update:
-                self.logger.log("error", f"Could not find pokemon with individual_id {individual_id} to cancel evolution.")
+                self.logger.log(f"Could not find pokemon with individual_id {individual_id} to cancel evolution.")
                 return
 
             # Add logic to learn new moves
@@ -460,7 +480,7 @@ class EvoWindow(QWidget):
             
             pokemon_to_update["attacks"] = attacks
             pokemon_to_update["evolution_rejected"] = True
-            
+
             # Save to database
             db.save_pokemon(pokemon_to_update)
 
@@ -468,7 +488,7 @@ class EvoWindow(QWidget):
             if self.main_pokemon and self.main_pokemon.individual_id == individual_id:
                 self.main_pokemon, _ = update_main_pokemon(self.main_pokemon)
 
-            self.logger.log_and_showinfo("info", f"Evolution rejected for {prevo_name}. You can still evolve it anytime from the Pokémon PC.")
+            self.logger.log_and_showinfo("info", f"Evolution rejected for {prevo_name}. You can still evolve it from the PC later.")
             self.close()
 
         except Exception as e:
@@ -477,4 +497,4 @@ class EvoWindow(QWidget):
                 exception=e,
                 message="Error occurred while canceling evolution",
             )
-            self.logger.log("error", f"Error in cancel_evolution: {e}")
+            self.logger.log(f"Error in cancel_evolution: {e}")

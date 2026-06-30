@@ -141,7 +141,7 @@ class StarterWindow(QWidget):
             current_hp=calculate_hp(int(base_stats["hp"]), level, ev, iv),
             growth_rate=growth_rate,
             individual_id=str(uuid.uuid4()),
-            captured_date=None,
+            captured_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             shiny=False,
             tier="Starter",
         )
@@ -159,7 +159,9 @@ class StarterWindow(QWidget):
         self.display_chosen_starter_pokemon(starter_name)
 
         from ..singletons import pokemon_pc
-        pokemon_pc.refresh_pokemon_grid()
+        from ..utils import is_alive
+        if is_alive(pokemon_pc):
+            pokemon_pc.refresh_pokemon_grid()
 
         close_anki()
 

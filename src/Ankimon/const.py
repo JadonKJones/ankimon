@@ -39,13 +39,9 @@ status_colors_html = {
     "fighting": {"background": "#C03028", "outline": "#7D1F1A", "name": "Fighting"},  # Example colors for Fighting
 }
 
-# Get the profile folder. Guarded so const imports headless (no Anki): the
-# profile name is only meaningful inside Anki, and is None in the agent harness.
+# Get the profile folder
+from aqt import mw
 from pathlib import Path
-try:
-    from aqt import mw
-    profilename = mw.pm.name
-except Exception:
-    profilename = None
+profilename = mw.pm.name
 #profilefolder = Path(mw.pm.profileFolder())
 #mediafolder = Path(mw.col.media.dir())

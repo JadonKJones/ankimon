@@ -3,16 +3,13 @@ import uuid
 import json
 import os
 from typing import Optional
+from aqt import mw
 
-from ..services import services
-# NOTE: give_item is imported lazily inside give_back_held_item() (below) rather
-# than here. utils imports pokedex_functions which imports this module, so a
-# top-level `from ..utils import give_item` forms an import cycle that breaks
-# whichever module in it loads first. The lazy import sidesteps that entirely.
 from ..functions.sprite_functions import get_sprite_path
 
 from ..poke_engine.objects import Pokemon
 from ..resources import pkmnimgfolder, mainpokemon_path, mypokemon_path
+from ..utils import give_item
 
 class PokemonObject:
     def __init__(
@@ -103,7 +100,105 @@ class PokemonObject:
         self.current_hp = current_hp or 15
 
         self.is_favorite = is_favorite
+
         self.captured_date = captured_date
+
+    @property
+    def display_name(self) -> str:
+        """Returns the nickname if present and not redundant, otherwise the official pretty name."""
+        try:
+            from ..functions.pokedex_functions import get_pokemon_diff_lang_name, get_pretty_name_for_name
+            # Access language setting via mw if available
+            lang = 9
+            if mw and hasattr(mw, 'settings_obj'):
+                lang = int(mw.settings_obj.get("misc.language", 9))
+
+            pretty_name = get_pokemon_diff_lang_name(self.id, lang)
+            if pretty_name == "No Translation in this language":
+                pretty_name = get_pretty_name_for_name(self.name)
+
+            if self.nickname:
+                # Check if the nickname is just a variation of the internal name or pretty name
+                def normalize(s):
+                    return str(s).lower().replace(" ", "").replace("-", "").replace("'", "").replace(".", "").replace(":", "")
+
+                norm_nick = normalize(self.nickname)
+                if norm_nick != normalize(self.name) and norm_nick != normalize(pretty_name):
+                    return self.nickname
+
+            return pretty_name
+        except:
+            try:
+                from ..functions.pokedex_functions import get_pretty_name_for_name
+                return self.nickname if self.nickname else get_pretty_name_for_name(self.name)
+            except:
+                return self.nickname if self.nickname else self.name.title()
+
+    @property
+    def pokedex_id(self) -> int:
+        """Returns the base species Pokédex ID."""
+        try:
+            from ..functions.pokedex_functions import search_pokedex_by_id, search_pokedex, safe_int
+            actual_id = int(self.id)
+            if actual_id >= 10000:
+                internal_name = search_pokedex_by_id(actual_id)
+                if internal_name and internal_name != "Pokémon not found":
+                    sid = safe_int(search_pokedex(internal_name, "species_id"))
+                    if sid:
+                        return sid
+            return actual_id
+        except:
+            return getattr(self, 'id', 1)
+
+    @property
+    def generation(self) -> int:
+        """Returns the generation in which this Pokémon (or form) was introduced."""
+        try:
+            from ..functions.pokedex_functions import search_pokedex_by_id, search_pokedex
+            from ..const import gen_ids
+            from ..functions import encounter_data
+
+            actual_id = int(self.id)
+
+            # 1. Check for regional form intro gen first
+            if actual_id >= 10000:
+                internal_name = search_pokedex_by_id(actual_id)
+                if internal_name and internal_name != "Pokémon not found":
+                    forme = search_pokedex(internal_name, "forme") or ""
+                    # Check if the forme string is in our regional gen map
+                    intro_gen = encounter_data.REGIONAL_FORME_GEN.get(forme)
+                    if intro_gen:
+                        return intro_gen
+
+            # 2. Fallback to base species generation
+            species_id = self.pokedex_id
+
+            # Sort by max_id to ensure we match the lowest possible gen
+            sorted_gens = sorted(gen_ids.items(), key=lambda x: x[1])
+            for gen_key, max_val in sorted_gens:
+                if species_id <= max_val:
+                    # Parse "gen_1" -> 1
+                    try:
+                        return int(gen_key.split("_")[1])
+                    except:
+                        continue
+
+            # If ID is beyond known gens, return the last gen
+            if sorted_gens:
+                return int(sorted_gens[-1][0].split("_")[1])
+            return 1
+        except:
+            # Emergency fallback based on common ID ranges if imports fail
+            sid = getattr(self, 'id', 1)
+            if sid <= 151: return 1
+            if sid <= 251: return 2
+            if sid <= 386: return 3
+            if sid <= 493: return 4
+            if sid <= 649: return 5
+            if sid <= 721: return 6
+            if sid <= 809: return 7
+            if sid <= 905: return 8
+            return 9
 
     @classmethod
     def calc_stat(
@@ -228,7 +323,7 @@ class PokemonObject:
             "base_experience": self.base_experience,
             "growth_rate": self.growth_rate,
             "everstone": self.everstone,
-            "evolution_rejected": self.evolution_rejected,
+            "evolution_rejected": getattr(self, "evolution_rejected", False),
             "shiny": self.shiny,
             "captured_date": getattr(self, "captured_date", None),
             "individual_id": self.individual_id,
@@ -295,7 +390,7 @@ class PokemonObject:
         return hp
 
     def get_sprite_path(self, side, sprite_type):
-        return get_sprite_path(side, sprite_type, self.id, self.shiny, self.gender)
+        return get_sprite_path(side, sprite_type, self.id, self.shiny, self.gender, self.name)
 
     def to_engine_format(self):
         from ..poke_engine.helpers import normalize_name
@@ -430,6 +525,7 @@ class PokemonObject:
             'accuracy': 0,
             'evasion': 0
             }
+        self.volatile_status = set()
 
     def give_held_item(self, held_item: str) -> None:
         """
@@ -437,7 +533,7 @@ class PokemonObject:
 
         If the Pokémon is already holding an item, it is removed first.
         """
-        db = services.db
+        db = mw.ankimon_db
         
         # If the pokemon already holds an object, we remove it to make room for the new one.
         if self.held_item:
@@ -458,6 +554,10 @@ class PokemonObject:
             main_pokemon["held_item"] = held_item
             db.save_main_pokemon(main_pokemon)
 
+        # Sync in-memory main_pokemon singleton if it's the target
+        if mw and getattr(mw, "main_pokemon", None) and mw.main_pokemon.individual_id == self.individual_id:
+            mw.main_pokemon.held_item = held_item
+
     def remove_held_item(self) -> None:
         """
         Removes the held item from the Pokémon and updates the database.
@@ -465,9 +565,8 @@ class PokemonObject:
         if self.held_item is None:
             return
 
-        db = services.db
+        db = mw.ankimon_db
 
-        from ..utils import give_item  # lazy: avoids the utils<->pokedex<->pokemon_obj cycle
         give_item(self.held_item)  # We put the item back in the item bag
         self.held_item = None
 
@@ -482,6 +581,10 @@ class PokemonObject:
         if main_pokemon and main_pokemon.get("individual_id") == self.individual_id:
             main_pokemon["held_item"] = None
             db.save_main_pokemon(main_pokemon)
+
+        # Sync in-memory main_pokemon singleton if it's the target
+        if mw and getattr(mw, "main_pokemon", None) and mw.main_pokemon.individual_id == self.individual_id:
+            mw.main_pokemon.held_item = None
 
 
 class PokemonEncoder(json.JSONEncoder):

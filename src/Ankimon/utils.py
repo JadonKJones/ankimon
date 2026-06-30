@@ -7,8 +7,11 @@ import csv
 import base64
 from typing import Any, Optional
 
-from .services import services
-from .events import events
+from aqt import mw
+from aqt.utils import showWarning, showInfo
+
+from aqt.qt import QFontDatabase, QFont, QUrl
+from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 
 from .pyobj.settings import Settings
 from .pyobj.InfoLogger import ShowInfoLogger
@@ -37,38 +40,33 @@ from .resources import (
 from .move_names import format_move_name
 
 
-# Audio is optional. Under Anki these construct real Qt players; headless (the
-# agent harness / tests) there is no QtMultimedia, so we degrade to "no audio"
-# and play_sound/play_effect_sound become event-only.
-try:
-    from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
-
-    audio_output = QAudioOutput()
-    media_player = QMediaPlayer()
-    media_player.setAudioOutput(audio_output)
-    _HAVE_AUDIO = True
-except Exception:
-    audio_output = None
-    media_player = None
-    _HAVE_AUDIO = False
-
-
-def showInfo(message, *args, **kwargs):
-    """Headless-safe stand-in for ``aqt.utils.showInfo``.
-
-    Routed through the UI presenter: a real popup under Anki (the QtPresenter),
-    a recorded ``notify`` event headless. Keeps utils free of an aqt import.
-    """
-    services.ui.notify("info", str(message))
-
-
-def showWarning(message, *args, **kwargs):
-    """Headless-safe stand-in for ``aqt.utils.showWarning``."""
-    services.ui.notify("warning", str(message))
+audio_output = QAudioOutput()
+media_player = QMediaPlayer()
+media_player.setAudioOutput(audio_output)
 
 with open(pokedex_path, "r", encoding="utf-8") as f:
     data = json.load(f)
     POKEMON_NAME_LOOKUP = {x: data[x]["name"] for x in data}
+
+
+def is_main_thread() -> bool:
+    from PyQt6.QtCore import QThread
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if not app:
+        return True
+    return QThread.currentThread() == app.thread()
+
+
+def is_alive(obj):
+    """Check if a QObject/QWidget's C++ part is still alive."""
+    if obj is None:
+        return False
+    try:
+        obj.objectName()
+        return True
+    except (RuntimeError, AttributeError):
+        return False
 
 
 def format_pokemon_name(name: str) -> str:
@@ -416,7 +414,7 @@ def daily_item_list():
 # Function to give an item to the player
 def give_item(item_name: str, item_type: Optional[str] = None):
     """Gives an item to the user."""
-    db = services.db
+    db = mw.ankimon_db
     
     # Get current item or create new
     existing = db.get_item(item_name)
@@ -481,12 +479,12 @@ def get_item_id(item_name, file_path=csv_file_items_cost):
                     return int(id)
     except (OSError, KeyError) as e:
         show_warning_with_traceback(
-            exception=e, message="Error reading item data:"
+            parent=mw, exception=e, message="Error reading item data:"
         )
         return 4
     except Exception as e:
         show_warning_with_traceback(
-            exception=e, message=f"Unexpected error: {e}"
+            parent=mw, exception=e, message=f"Unexpected error: {e}"
         )
         return 4
 
@@ -511,7 +509,7 @@ def count_items_and_rewrite():
     Legacy: Previously read from items.json, now uses database.
     """
     try:
-        db = services.db
+        db = mw.ankimon_db
         
         # Get all items from database - they're already unique by item_name
         # so no need to aggregate, the database handles this automatically
@@ -570,7 +568,13 @@ def get_item_description(item_name, language_id):
         return None
 
 
+_FONT_CACHE = {}
+
 def load_custom_font(font_size, language):
+    cache_key = (font_size, language)
+    if cache_key in _FONT_CACHE:
+        return _FONT_CACHE[cache_key]
+
     if language == 1:
         font_file = "pkmn_w.ttf"
         font_file_path = font_path / font_file
@@ -586,15 +590,15 @@ def load_custom_font(font_size, language):
         font_file = "Early GameBoy.ttf"
         font_size = int((font_size * 2) / 5)
 
-    # Register the custom font with its file path. Qt imported lazily so utils
-    # stays importable headless (custom fonts are a GUI-only concern).
-    from PyQt6.QtGui import QFontDatabase, QFont
-    QFontDatabase.addApplicationFont(str(font_path / font_file))
+    # Register the custom font with its file path if not already added
+    font_id = QFontDatabase.addApplicationFont(str(font_path / font_file))
+
     custom_font = QFont(
         font_name
     )  # Use the font family name you specified in the font file
     custom_font.setPointSize(int(font_size))  # Adjust the font size as needed
 
+    _FONT_CACHE[cache_key] = custom_font
     return custom_font
 
 
@@ -635,16 +639,12 @@ def play_effect_sound(settings_obj, sound_type):
         elif sound_type == "Fainted":
             audio_path = fainted_sound_path
 
-        if audio_path is None or not audio_path.is_file():
+        if not audio_path.is_file():
             return
-        # Structured event so an agent "hears" the effect even with no audio device.
-        events.emit("sound", kind="effect", sound=sound_type)
-        if not _HAVE_AUDIO:
-            return
-        from PyQt6.QtCore import QUrl
-        audio_output.setVolume(settings_obj.get("audio.volume"))
-        media_player.setSource(QUrl.fromLocalFile(str(audio_path)))
-        media_player.play()
+        else:
+            audio_output.setVolume(settings_obj.get("audio.volume"))
+            media_player.setSource(QUrl.fromLocalFile(str(audio_path)))
+            media_player.play()
     else:
         pass
 
@@ -683,7 +683,7 @@ def save_error_code(error_code, logger=None):
 
 
 def get_main_pokemon_data():
-    main_pokemon_data = services.db.get_main_pokemon()
+    main_pokemon_data = mw.ankimon_db.get_main_pokemon()
     
     if not main_pokemon_data:
         return None
@@ -734,10 +734,6 @@ def play_sound(enemy_pokemon_id: int, settings_obj: Settings):
         file_name = f"{enemy_pokemon_id}.ogg"
         audio_path = addon_dir / "user_files" / "sprites" / "sounds" / file_name
         if audio_path.is_file():
-            events.emit("sound", kind="cry", pokemon_id=enemy_pokemon_id)
-            if not _HAVE_AUDIO:
-                return
-            from PyQt6.QtCore import QUrl
             audio_output.setVolume(settings_obj.get("audio.volume"))
             media_player.setSource(QUrl.fromLocalFile(str(audio_path)))
             media_player.play()
@@ -745,7 +741,7 @@ def play_sound(enemy_pokemon_id: int, settings_obj: Settings):
 
 def load_collected_pokemon_ids() -> set:
     """Loads all captured pokemon IDs from the database."""
-    return services.db.get_all_pokemon_ids()
+    return mw.ankimon_db.get_all_pokemon_ids()
 
 
 def limit_ev_yield(
@@ -771,21 +767,9 @@ def limit_ev_yield(
         dict[str, int]: Adjusted EV yields that do not cause the Pokémon's total EVs to exceed 510 or any
         single stat to exceed 252. The keys correspond to full stat names.
     """
-    # The sum of EVs of a Pokemon can only add up to 510. With a limit of 252 EVs in a single stat.
-    for stat in current_pokemon_ev.keys():
-        if stat not in ("hp", "atk", "def", "spa", "spd", "spe"):
-            raise ValueError(f"Unknown EV : {stat}")
-
-    for stat in ev_yield.keys():
-        if stat not in (
-            "hp",
-            "attack",
-            "defense",
-            "special-attack",
-            "special-defense",
-            "speed",
-        ):
-            raise ValueError(f"Unknown EV : {stat}")
+    # Normalize and clean inputs: unknown keys dropped, missing default to 0
+    clean_current = {stat: int(current_pokemon_ev.get(stat, 0)) for stat in ("hp", "atk", "def", "spa", "spd", "spe")}
+    clean_yield = {stat: int(ev_yield.get(stat, 0)) for stat in ("hp", "attack", "defense", "special-attack", "special-defense", "speed")}
 
     zipped_keys = zip(
         ["hp", "atk", "def", "spa", "spd", "spe"],
@@ -803,10 +787,10 @@ def limit_ev_yield(
 
     for key_1, key_2 in zipped_keys:
         # For each stat, we yield an amount of EVs that will not exceed the value of 252
-        new_ev_yield[key_2] = min(ev_yield[key_2], 252 - current_pokemon_ev[key_1])
+        new_ev_yield[key_2] = min(clean_yield[key_2], 252 - clean_current[key_1])
 
     # To ensure that we won't go above 510 EVs after yielding the EVs, we randomly reduce the EV yield until we drop below the 510 limit
-    while (sum(current_pokemon_ev.values()) + sum(new_ev_yield.values())) > 510:
+    while (sum(clean_current.values()) + sum(new_ev_yield.values())) > 510:
         rand_key = [
             key for key, val in new_ev_yield.items() if val > 0
         ]  # We only reduce the positive EV yield values. In other words : We don't give out negative EV yields
@@ -818,7 +802,7 @@ def limit_ev_yield(
     # This final block here is specifically made to give out negative EV yields
     # This might be necessary if, for any reason, the user's pokemon has a total EV sum already above 510
     # In that case, we randomly give out negative EV yields to bring down the EVs of the user's pokemon below 510
-    while (sum(current_pokemon_ev.values()) + sum(new_ev_yield.values())) > 510:
+    while (sum(clean_current.values()) + sum(new_ev_yield.values())) > 510:
         rand_key = random.choice(
             list(new_ev_yield.keys())
         )  # This time, we choose any EV yields, including those that could already have a negative EV yield
@@ -967,9 +951,23 @@ def png_to_base64(path: str) -> str:
 
 
 def close_anki():
-    # Guarded: only meaningful inside Anki. No-op headless.
+    mw.close()
+
+
+def is_dev_mode() -> bool:
+    """Check if the user is a developer based on profile name or trainer name."""
     try:
-        from aqt import mw
-        mw.close()
+        # Check Anki profile name (case-insensitive check for 'dev' triggers)
+        if mw and mw.pm and mw.pm.name:
+            profile_name = mw.pm.name.lower()
+            if "dev_" in profile_name or "_dev" in profile_name:
+                return True
+
+        # Check Trainer name in config
+        if mw and hasattr(mw, "settings_obj") and mw.settings_obj:
+            trainer_name = mw.settings_obj.get("trainer.name", "").lower()
+            if "dev_" in trainer_name or "_dev" in trainer_name:
+                return True
     except Exception:
         pass
+    return False

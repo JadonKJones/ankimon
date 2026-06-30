@@ -4,7 +4,8 @@ import random
 import uuid
 from datetime import datetime
 
-from ..services import services
+from aqt.utils import showWarning
+from aqt import mw
 
 from .pokedex_functions import get_base_experience, get_growth_rate, search_pokedex, search_pokedex_by_id, safe_int
 from .battle_functions import calculate_hp
@@ -88,8 +89,6 @@ def find_experience_for_level(group_growth_rate, level, remove_levelcap=True):
     # Specify the growth rate and level you're interested in
     growth_rate = f'{group_growth_rate}'
     if level < 100:
-        # Default if no row matches or the growth_rate column is unknown —
-        # prevents UnboundLocalError from breaking the level-up path.
         experience = 0
         cache = _load_next_lvl_cache()
         row = cache.get(str(level))
@@ -237,7 +236,7 @@ def save_fossil_pokemon(pokemon_id):
         "iv": iv,
         "attacks": attacks,
         "base_experience": base_experience,
-        "current_hp": calculate_hp(int(stats["hp"]), level, ev, iv),
+        "current_hp": calculate_hp(safe_int(stats.get("hp", 0)), level, ev, iv),
         "growth_rate": growth_rate,
         "friendship": 0,
         "pokemon_defeated": 0,
@@ -248,12 +247,13 @@ def save_fossil_pokemon(pokemon_id):
         "individual_id": str(uuid.uuid4()),
         "mega": False,
         "special_form": None,
+        "tier": "Fossil",
         "nature": "serious",
         "held_item": None,
         "is_favorite": False,
     }
     # Save to database
-    db = services.db
+    db = mw.ankimon_db
     db.save_pokemon(caught_pokemon)
 
 from .learnset_retrieval import get_levelup_move_for_pokemon  # noqa: F401,E303 — re-export for backwards compat

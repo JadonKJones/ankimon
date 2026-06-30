@@ -16,11 +16,18 @@ def setup_mocks():
     # Mock aqt/anki namespaces
     for name in [
         "aqt", "aqt.qt", "aqt.utils", "aqt.gui_hooks", "aqt.operations", 
-        "aqt.reviewer", "aqt.webview", "aqt.main", "aqt.operations.QueryOp",
+        "aqt.reviewer", "aqt.webview", "aqt.main", "aqt.operations.QueryOp", "aqt.theme",
         "anki", "anki.hooks", "anki.collection", "anki.models", "anki.notes", "anki.template", "anki.buildinfo"
     ]:
         sys.modules[name] = MagicMock()
     
+    # Configure default settings_obj on mw mock so singletons.py doesn't crash on import
+    aqt_mock = sys.modules["aqt"]
+    mw_mock = aqt_mock.mw
+    settings_mock = MagicMock()
+    settings_mock.get.side_effect = lambda key, default=None: "0" if key == "misc.language" else (default if default is not None else MagicMock())
+    mw_mock.settings_obj = settings_mock
+
     # Define a robust mock for resources
     class MockResources:
         # These are used by database_manager

@@ -1,9 +1,7 @@
 import io
 import json
 import os
-import re
 import shutil
-import subprocess
 import tempfile
 import urllib.request
 import urllib.error
@@ -22,126 +20,6 @@ GITHUB_API = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}"
 DOWNLOAD_TIMEOUT = 30
 USER_AGENT = "Ankimon-Updater (https://github.com/h0tp-ftw/ankimon)"
 DEFAULT_SUBMODULE_SHA = "f3092b03fbe1e37d1788ef802dee98906d621e36"
-# The in-app updater shipped in v2.0. Installing an older release would strip the
-# updater out (older versions predate it), so pre-2.0 versions are filtered from
-# the release/tag pickers — going back would break the update feature itself.
-MIN_UPDATER_VERSION = (2, 0)
-
-
-def _git_repo_root() -> Optional[Path]:
-    """Return the git repo root that contains the addon, else None.
-
-    For a GitHub clone the addon is ``src/Ankimon`` nested in the repo, so the
-    ``.git`` directory sits two levels *above* ``addon_dir`` at the repo root —
-    hence the upward parent walk. ``resolve()`` first follows the dev symlink
-    from ``addons21/`` into the repo so those parents land on the real repo root;
-    the walk is kept shallow to avoid false positives from an unrelated repo
-    higher up.
-    """
-    try:
-        base = Path(addon_dir).resolve()
-    except Exception:
-        base = Path(addon_dir)
-    for d in [base, *list(base.parents)[:3]]:
-        # .exists() rather than .is_dir(): in git worktrees and some submodule
-        # layouts ".git" is a *file* (containing "gitdir: ..."), not a directory.
-        if (d / ".git").exists():
-            return d
-    return None
-
-
-def is_git_clone() -> bool:
-    """True if Ankimon runs from a git working tree (a dev clone).
-
-    The in-place updater would overwrite every file under ``addon_dir`` with the
-    downloaded copy, trashing the working tree and any uncommitted/untracked
-    changes (``.git`` is above ``addon_dir`` so it survives, but the checkout is
-    clobbered). So the destructive updater is hidden for clones; a safe
-    ``git pull --ff-only`` is offered instead (see ``git_pull_ff_only``).
-    """
-    return _git_repo_root() is not None
-
-
-def git_pull_ff_only(status_cb=None) -> tuple[bool, str]:
-    """Update a dev clone via ``git pull --ff-only`` (+ submodule update).
-
-    Safe by construction: ``--ff-only`` refuses, without changing anything, when
-    the tree is dirty or the branch has diverged — so it never creates merge
-    conflicts. Returns ``(success, message)``.
-    """
-    def log(msg):
-        if status_cb:
-            status_cb(msg)
-
-    root = _git_repo_root()
-    if root is None:
-        return False, "Ankimon is not running from a git checkout."
-
-    if shutil.which("git") is None:
-        return False, (
-            "git wasn't found on Anki's PATH. This is common when Anki is "
-            "launched from the dock/Finder, which doesn't inherit your shell "
-            "PATH. Restart Anki from a terminal, or run 'git pull' in your "
-            "clone yourself."
-        )
-
-    def _git(*args, timeout=180):
-        return subprocess.run(
-            ["git", "-C", str(root), *args],
-            capture_output=True, text=True, timeout=timeout,
-        )
-
-    try:
-        branch = (_git("rev-parse", "--abbrev-ref", "HEAD", timeout=30).stdout or "").strip() or "HEAD"
-        log(f"Fast-forwarding '{branch}' (git pull --ff-only)...")
-        pull = _git("pull", "--ff-only")
-        if pull.returncode != 0:
-            err = (pull.stderr or pull.stdout or "").strip()
-            return False, (
-                f"Could not fast-forward '{branch}'. This is expected if you "
-                "have local changes/commits or no upstream — resolve it manually "
-                "with git.\n\n" + err
-            )
-        log("Updating submodules...")
-        sub = _git("submodule", "update", "--init", "--recursive")
-        out = (pull.stdout or "").strip()
-        if sub.returncode != 0:
-            return True, (
-                f"Updated '{branch}', but the submodule update failed — run "
-                "'git submodule update --init --recursive' manually.\n\n"
-                + (sub.stderr or "").strip()
-            )
-        return True, f"Updated '{branch}' via git pull --ff-only.\n\n{out}"
-    except subprocess.TimeoutExpired:
-        return False, "git timed out. Update manually with 'git pull'."
-    except Exception as e:
-        return False, f"git update failed: {e}. Update manually with 'git pull'."
-
-
-def _parse_version(name: str) -> Optional[tuple]:
-    """Coarse (major, minor) parse for the MIN_UPDATER_VERSION threshold gate ONLY.
-
-    Returns None for non-version names ('sprites', 'nightly-release', 'archive/*').
-
-    This is deliberately NOT a total ordering. It stops at minor and reads each
-    component as an int, so '2.01' and '2.1' both parse to (2, 1) and a '2.0.1'
-    patch is dropped. That is harmless for the `>= (2, 0)` threshold but WRONG for
-    sorting or equality: do not pass it to sorted()/max() or use it to compare two
-    releases. "Latest" is resolved by GitHub API order (newest first, see
-    fetch_releases / update_dialog), never by this function.
-    """
-    m = re.match(r"v?(\d+)(?:\.(\d+))?", name.strip())
-    if not m:
-        return None
-    return (int(m.group(1)), int(m.group(2) or 0))
-
-
-def _is_supported_version(name: str) -> bool:
-    """True for parseable version names >= MIN_UPDATER_VERSION. Non-version names
-    (the 'sprites' asset release, 'nightly-release', 'archive/*', …) return False
-    and are excluded from the pickers."""
-    v = _parse_version(name)
-    return v is not None and v >= MIN_UPDATER_VERSION
 
 
 def _make_request(url: str, accept: str = "application/vnd.github.v3+json") -> urllib.request.Request:
@@ -180,9 +58,15 @@ def _fetch_gitignore_patterns() -> list[str]:
 
 
 def _should_preserve(rel_path: str, gitignore_patterns: list[str]) -> bool:
-    # Holy Ground: NEVER touch anything in user_files/ during an update,
-    # regardless of gitignore patterns.
+    # Unconditionally preserve any user data inside the user_files/ directory
+    # (This covers ankimon.db, ankimonDEV.db, as well as .db-shm and .db-wal files, custom sprites, and backups)
+    # THIS IS A TEMPORARY FIX UNTIL BRRRR_EXPERIMENTAL IS MERGED INTO MAIN, THEN GITIGNORE WILL CONTAIN ALL IMPORTATNT FILES
     if rel_path == "user_files" or rel_path.startswith("user_files/"):
+        return True
+
+    # Unconditionally preserve local metadata, guides and changelogs
+    always_preserve_roots = ["HelpInfos.html", "updateinfos.md", "meta.json"]
+    if rel_path in always_preserve_roots:
         return True
 
     for pattern in gitignore_patterns:
@@ -194,7 +78,7 @@ def _should_preserve(rel_path: str, gitignore_patterns: list[str]) -> bool:
             if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(os.path.basename(rel_path), pattern):
                 return True
 
-    always_preserve = ["user_files/sprites/", "user_files/ankimon.db"]
+    always_preserve = ["user_files/sprites/", "user_files/ankimon.db", "user_files/ankimonDEV.db", "user_files/update_state.json"]
     for p in always_preserve:
         p = p.rstrip("/")
         if rel_path == p or rel_path.startswith(p + "/"):
@@ -206,22 +90,14 @@ def fetch_tags() -> list[dict]:
     data = _api_get("tags")
     if not data:
         return []
-    return [
-        {"name": t["name"], "zipball_url": t["zipball_url"]}
-        for t in data
-        if _is_supported_version(t["name"])
-    ]
+    return [{"name": t["name"], "zipball_url": t["zipball_url"]} for t in data]
 
 
 def fetch_releases() -> list[dict]:
     data = _api_get("releases")
     if not data:
         return []
-    return [
-        {"name": r["tag_name"], "body": r.get("body", ""), "zipball_url": r["zipball_url"]}
-        for r in data
-        if _is_supported_version(r["tag_name"])
-    ]
+    return [{"name": r["tag_name"], "body": r.get("body", ""), "zipball_url": r["zipball_url"]} for r in data]
 
 
 def fetch_branches() -> list[dict]:
@@ -236,6 +112,93 @@ def fetch_open_prs() -> list[dict]:
     if not data:
         return []
     return [{"number": pr["number"], "title": pr["title"], "head_ref": pr["head"]["ref"], "head_sha": pr["head"]["sha"]} for pr in data]
+
+
+def fetch_branch_sha(branch: str) -> Optional[str]:
+    data = _api_get(f"branches/{branch}")
+    if data and "commit" in data:
+        return data["commit"].get("sha")
+    return None
+
+
+def fetch_commit_date(sha: str) -> Optional[str]:
+    if not sha or len(sha) < 7 or not all(c in "0123456789abcdefABCDEF" for c in sha):
+        return None
+    data = _api_get(f"commits/{sha}")
+    if data and isinstance(data, dict) and "commit" in data:
+        committer = data["commit"].get("committer") or {}
+        author = data["commit"].get("author") or {}
+        return committer.get("date") or author.get("date")
+    return None
+
+
+def fetch_branch_commits(branch: str, local_sha: Optional[str] = None) -> list[dict]:
+    try:
+        if local_sha and not local_sha.startswith("old_mocked") and len(local_sha) >= 7 and all(c in "0123456789abcdefABCDEF" for c in local_sha):
+            # Try to use the compare API
+            url = f"compare/{local_sha}...{branch}"
+            data = _api_get(url)
+            if data and "commits" in data:
+                commits = data["commits"]
+                return [{"sha": c["sha"][:7], "message": c["commit"]["message"].splitlines()[0]} for c in reversed(commits)]
+
+        # Fallback: get the last 5 commits of the branch
+        data = _api_get(f"commits?sha={branch}&per_page=5")
+        if data and isinstance(data, list):
+            return [{"sha": c["sha"][:7], "message": c["commit"]["message"].splitlines()[0]} for c in data]
+    except Exception:
+        pass
+    return []
+
+
+def get_update_state_path() -> Path:
+    return addon_dir / "user_files" / "update_state.json"
+
+
+def save_update_state(source_type: str, source_name: str, commit_sha: str, skip_until: Optional[float] = None):
+    try:
+        import time
+        path = get_update_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        state = {
+            "source_type": source_type,
+            "source_name": source_name,
+            "commit_sha": commit_sha,
+            "installed_at": time.time()
+        }
+        if skip_until is not None:
+            state["skip_until"] = skip_until
+        elif path.exists():
+            try:
+                old_state = json.loads(path.read_text(encoding="utf-8"))
+                if "skip_until" in old_state:
+                    state["skip_until"] = old_state["skip_until"]
+            except Exception:
+                pass
+        path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"Ankimon Updater: Failed to save update state: {e}")
+
+
+def set_update_skip_until(skip_until: float):
+    try:
+        state = read_update_state() or {}
+        state["skip_until"] = skip_until
+        path = get_update_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"Ankimon Updater: Failed to set skip_until: {e}")
+
+
+def read_update_state() -> Optional[dict]:
+    try:
+        path = get_update_state_path()
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return None
 
 
 def _download_zip_to_temp(url: str, progress_cb=None) -> Optional[str]:
@@ -402,7 +365,7 @@ def _download_and_extract_submodule(sha: str, dest_dir: Path, status_cb=None):
                 pass
 
 
-def apply_update(zip_path: str, status_cb=None) -> tuple[bool, str]:
+def apply_update(zip_path: str, source_type: str = None, source_name: str = None, commit_sha: str = None, status_cb=None) -> tuple[bool, str]:
     def log(msg):
         if status_cb:
             status_cb(msg)
@@ -413,19 +376,6 @@ def apply_update(zip_path: str, status_cb=None) -> tuple[bool, str]:
                 os.unlink(zip_path)
             except Exception:
                 pass
-
-    # Safety guard: this overwrites every file under addon_dir (the addon =
-    # src/Ankimon) with the downloaded copy. On a git clone that trashes the
-    # working tree and any uncommitted/untracked changes, so refuse. (.git lives
-    # above addon_dir and is untouched, but the checkout is still clobbered.)
-    if is_git_clone():
-        cleanup()
-        return False, (
-            "Detected a git checkout of Ankimon. The in-app updater overwrites "
-            "the addon's files in place and would clobber your working tree "
-            "(you'd lose uncommitted changes). Update your clone with 'git pull' "
-            "instead."
-        )
 
     log("Fetching latest .gitignore from main...")
     gitignore_patterns = _get_gitignore_patterns()
@@ -496,9 +446,15 @@ def apply_update(zip_path: str, status_cb=None) -> tuple[bool, str]:
                     continue
                 dest = addon_dir / rel_path
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(zip_name) as source, dest.open("wb") as target:
-                    shutil.copyfileobj(source, target)
-                installed += 1
+                try:
+                    with zf.open(zip_name) as source, dest.open("wb") as target:
+                        shutil.copyfileobj(source, target)
+                    installed += 1
+                except PermissionError as pe:
+                    if dest.exists():
+                        log(f"Warning: Skipping locked file {rel_path} (already exists)")
+                    else:
+                        raise pe
 
             # --- Download and install matching poke_engine submodule version ---
             ref = _extract_ref_from_prefix(src_prefix)
@@ -506,6 +462,10 @@ def apply_update(zip_path: str, status_cb=None) -> tuple[bool, str]:
             sub_sha = _fetch_submodule_sha(ref) or DEFAULT_SUBMODULE_SHA
             
             _download_and_extract_submodule(sub_sha, addon_dir / "poke_engine", status_cb)
+
+            # --- Save update state if provided ---
+            if source_type and source_name:
+                save_update_state(source_type, source_name, commit_sha or "")
 
             cleanup()
             log(f"Update complete. Installed {installed} files.")

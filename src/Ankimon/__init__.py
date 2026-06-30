@@ -26,25 +26,11 @@ ensure_ankimon_infrastructure(addon_dir, user_path)
 
 from .singletons import (
     settings_obj,
-    settings_window,
     logger,
     translator,
     reviewer_obj,
     ankimon_tracker_obj,
-    test_window,
-    achievement_bag,
     shop_manager,
-    ankimon_tracker_window,
-    pokedex_window,
-    eff_chart,
-    gen_id_chart,
-    license,
-    credits,
-    evo_window,
-    starter_window,
-    item_window,
-    version_dialog,
-    pokemon_pc,
     trainer_card,
 )
 from .functions.url_functions import (
@@ -64,20 +50,132 @@ from .menu_buttons import create_menu_actions
 from .hooks import setupHooks
 from .pyobj.error_handler import show_warning_with_traceback
 
-# singletons.py already populated the service registry and mirrored these onto
-# mw (see services.py), so the previous mw.settings_ankimon/logger/settings_obj
-# writes here were pure duplication and are gone. The translator write stays:
-# importing menu_buttons (above) re-creates mw.translator at its module top
-# (menu_buttons.py:45), so we re-point mw.translator back to the registry's
-# instance to keep mw.translator identical to services.translator. Remove this
-# once menu_buttons stops building its own translator.
+# --- Register singletons on mw for global access ---
+mw.settings_ankimon = None
+mw.logger = logger
 mw.translator = translator
+mw.settings_obj = settings_obj
 
-from .gui_classes import overview_team
+# --- Register Team Overview Hooks  ---
+try:
+    from .gui_classes.overview_team import (
+        deck_browser_will_render,
+        on_overview_will_render_content,
+    )
 
-# --- Startup: backup, migration, assets, first enemy ---
-from .startup import run_startup_sequence
-database_complete, collected_pokemon_ids, backup_manager = run_startup_sequence()
+    # Register hooks if the setting is enabled (requires Anki restart to toggle)
+    if settings_obj.get("gui.team_deck_view") is True:
+        gui_hooks.deck_browser_will_render_content.append(deck_browser_will_render)
+        gui_hooks.overview_will_render_content.append(on_overview_will_render_content)
+
+except Exception as e:
+    # Don't break addon startup if team overview fails
+    print(f"Ankimon: Failed to register team overview hooks: {e}")
+    if logger:
+        logger.log("error", f"Team overview hook registration failed: {e}")
+
+# --- Startup: asynchronous & thread-safe ---
+mw.ankimon_startup_finished = False
+
+# Import hooks early at module level
+from .hook_registry import (
+    CatchPokemonHook,
+    DefeatPokemonHook,
+    add_catch_pokemon_hook,
+    add_defeat_pokemon_hook,
+)
+
+def start_asynchronous_startup():
+    from aqt.operations import QueryOp
+    from .startup import run_startup_background_checks, run_startup_ui_callbacks
+
+    def on_startup_complete(results):
+        # 1. Run UI callbacks (migration dialog, sprite downloader, first enemy update, starter window, rate prompt)
+        database_complete = run_startup_ui_callbacks(results)
+        collected_pokemon_ids = results["collected_pokemon_ids"]
+
+        # 2. Update battle loop state
+        from .battle_loop import init_battle_state
+        init_battle_state(collected_pokemon_ids)
+
+        # 3. Update reviewer ids
+        from .reviewer_ui import set_collected_ids
+        set_collected_ids(collected_pokemon_ids)
+
+        # 4. Create BackupManager
+        from .pyobj.backup_manager import BackupManager
+        backup_manager = BackupManager(logger, settings_obj)
+
+        # 5. Create Menu Actions
+        create_menu_actions(
+            database_complete,
+            online_connectivity,
+            None, # item_window
+            None, # test_window
+            None, # achievement_bag
+            open_team_builder,
+            export_to_pkmn_showdown,
+            export_all_pkmn_showdown,
+            flex_pokemon_collection,
+            None, # eff_chart
+            None, # gen_id_chart
+            None, # nature_chart
+            None, # credits
+            None, # license
+            open_help_window,
+            report_bug,
+            rate_addon_url,
+            None, # version_dialog
+            trainer_card,
+            None, # ankimon_tracker_window
+            logger,
+            None, # settings_window
+            shop_manager,
+            settings_obj.get("controls.key_for_opening_closing_ankimon"),
+            join_discord_url,
+            open_leaderboard_url,
+            settings_obj,
+            addon_dir,
+            None, # pokemon_pc
+            backup_manager,
+        )
+
+        # 6. Register Profile Hooks
+        from .profile_hooks import register_profile_hooks
+        register_profile_hooks(
+            online_connectivity,
+            backup_manager,
+            CatchPokemonHook,
+            DefeatPokemonHook,
+            add_catch_pokemon_hook,
+            add_defeat_pokemon_hook,
+            collected_pokemon_ids,
+        )
+
+        # 7. Update collected IDs in HUD and register reviewer ui shortcuts
+        from .reviewer_ui import setup_reviewer_ui
+        setup_reviewer_ui(
+            settings_obj.get("controls.catch_key"),
+            settings_obj.get("controls.defeat_key"),
+            settings_obj.get("controls.pokemon_buttons"),
+            settings_obj.get("controls.team_cycle_key", "9"),
+        )
+
+        # 8. Set startup finished flag
+        mw.ankimon_startup_finished = True
+
+        # 9. Force redraw of the reviewer bottom bar if active
+        if getattr(mw, "state", None) == "review" and getattr(mw, "reviewer", None):
+            try:
+                mw.reviewer.bottom.draw()
+            except Exception:
+                pass
+
+    QueryOp(
+        parent=mw,
+        op=lambda _col: run_startup_background_checks(),
+        success=on_startup_complete,
+    ).without_collection().run_in_background()
 
 # --- Web exports for reviewer UI ---
 mw.addonManager.setWebExports(
@@ -100,79 +198,25 @@ register_card_hooks()
 
 setupHooks(None, ankimon_tracker_obj)
 
-# --- Changelog check ---
-online_connectivity = test_online_connectivity()
-no_more_news = settings_obj.get("misc.YouShallNotPass_Ankimon_News")
-ssh = settings_obj.get("misc.ssh")
+# --- Changelog & Update checks (Asynchronous) ---
+online_connectivity = False
+mw.online_connectivity = False
+from .changelog import open_help_window
 
-from .changelog import check_and_show_changelog, open_help_window
-check_and_show_changelog(online_connectivity, ssh, no_more_news)
+# --- Battle loop proxy ---
+def _ankimon_review_proxy(*args, **kwargs):
+    """Persistent proxy that always calls the current battle loop."""
+    from .battle_loop import on_review_card
+    return on_review_card(*args, **kwargs)
 
-# --- Battle loop ---
-from .battle_loop import on_review_card, init_battle_state
-init_battle_state(collected_pokemon_ids)
-gui_hooks.reviewer_did_answer_card.append(on_review_card)
+# Register the proxy only once on mw to prevent duplicates across reloads
+if not hasattr(mw, "_ankimon_review_proxy"):
+    mw._ankimon_review_proxy = _ankimon_review_proxy
+    gui_hooks.reviewer_did_answer_card.append(mw._ankimon_review_proxy)
 
-# --- Menu ---
-create_menu_actions(
-    database_complete,
-    online_connectivity,
-    item_window,
-    test_window,
-    achievement_bag,
-    open_team_builder,
-    export_to_pkmn_showdown,
-    export_all_pkmn_showdown,
-    flex_pokemon_collection,
-    eff_chart,
-    gen_id_chart,
-    credits,
-    license,
-    open_help_window,
-    report_bug,
-    rate_addon_url,
-    version_dialog,
-    trainer_card,
-    ankimon_tracker_window,
-    logger,
-    settings_window,
-    shop_manager,
-    pokedex_window,
-    settings_obj.get("controls.key_for_opening_closing_ankimon"),
-    join_discord_url,
-    open_leaderboard_url,
-    settings_obj,
-    addon_dir,
-    pokemon_pc,
-    backup_manager,
-)
-
-# --- Hook registry, profile hooks, reviewer UI, discord ---
-from .hook_registry import (
-    CatchPokemonHook,
-    DefeatPokemonHook,
-    add_catch_pokemon_hook,
-    add_defeat_pokemon_hook,
-)
-
-from .profile_hooks import register_profile_hooks
-register_profile_hooks(
-    online_connectivity,
-    backup_manager,
-    CatchPokemonHook,
-    DefeatPokemonHook,
-    add_catch_pokemon_hook,
-    add_defeat_pokemon_hook,
-    collected_pokemon_ids,
-)
-
-from .reviewer_ui import setup_reviewer_ui, set_collected_ids
-set_collected_ids(collected_pokemon_ids)
-setup_reviewer_ui(
-    settings_obj.get("controls.catch_key"),
-    settings_obj.get("controls.defeat_key"),
-    settings_obj.get("controls.pokemon_buttons"),
-)
-
+# --- Discord Integration ---
 from .discord_integration import setup_discord_hooks
 setup_discord_hooks()
+
+# Start background loading process
+start_asynchronous_startup()
