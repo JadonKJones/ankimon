@@ -9,6 +9,7 @@ from aqt.utils import showWarning
 from PyQt6.QtGui import QPixmap, QPainter, QIcon, QColor, QPolygonF, QPen, QBrush
 from PyQt6.QtCore import Qt, QPointF, QRectF
 from PyQt6.QtWidgets import QScrollArea
+from ..services import services
 from PyQt6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -105,20 +106,16 @@ def PokemonCollectionDetails(
     tab_changed_callback=None,
     nature: str = "serious",
     base_stats: dict = None,
-<<<<<<< HEAD
     old_stats: dict = None,
-=======
     friendship: int = 0,
     evolution_rejected: bool = False,
     friendship_time_enabled: bool = True,
->>>>>>> main
 ):
     # Create the layouts
     header_layout = QVBoxLayout()
     footer_layout = QVBoxLayout()
     
     try:
-<<<<<<< HEAD
         # For Mega/Gmax and Regional forms, the species CSV often has no entry or is hyphenated — use pretty name instead
         if any(f in name.lower() for f in ['mega', 'gmax', 'alola', 'galar', 'hisui', 'paldea']):
             from ..functions.pokedex_functions import get_pretty_name_for_name, search_pokedex
@@ -129,7 +126,7 @@ def PokemonCollectionDetails(
         else:
             lang_name = get_pokemon_diff_lang_name(int(id), language)
             lang_desc = get_pokemon_descriptions(int(id), language)
-=======
+
         readiness = evolution_readiness(
             {
                 "id": id,
@@ -141,7 +138,6 @@ def PokemonCollectionDetails(
         )
         lang_name = get_pokemon_diff_lang_name(int(id), language).capitalize()
         lang_desc = get_pokemon_descriptions(int(id), language)
->>>>>>> main
         description = lang_desc
         typelayout = QHBoxLayout()
         attackslayout = QVBoxLayout()
@@ -277,28 +273,8 @@ def PokemonCollectionDetails(
         for attack in attacks:
             attacks_txt += f"\n{attack.capitalize()}"
 
-<<<<<<< HEAD
         CompleteTable_layout = PokemonDetailsStats(
             _stats_dict, growth_rate, level, remove_levelcap, language, old_stats
-=======
-        _stats_dict = {
-            "hp": stats_list[0],
-            "atk": stats_list[1],
-            "def": stats_list[2],
-            "spa": stats_list[3],
-            "spd": stats_list[4],
-            "spe": stats_list[5],
-            "xp": stats_list[6],
-            "friendship": friendship,
-        }
-        CompleteTable_layout = PokemonDetailsStats(
-            _stats_dict,
-            growth_rate,
-            level,
-            remove_levelcap,
-            language,
-            friendship_bar_max=readiness["bar_max"],
->>>>>>> main
         )
 
         if gender == "M":
@@ -623,13 +599,9 @@ def PokemonCollectionDetails(
         return QWidget(), QWidget(), QWidget(), {}
 
 
-<<<<<<< HEAD
-def PokemonDetailsStats(detail_stats, growth_rate, level, remove_levelcap, language, old_stats=None):
-=======
 def PokemonDetailsStats(
-    detail_stats, growth_rate, level, remove_levelcap, language, friendship_bar_max=400
+    detail_stats, growth_rate, level, remove_levelcap, language, old_stats=None, friendship_bar_max=400
 ):
->>>>>>> main
     CompleteTable_layout = QVBoxLayout()
     CompleteTable_layout.addSpacing(15)
     # Stat colors
@@ -714,17 +686,7 @@ def PokemonDetailsStats(
 
         if stat == "xp":
             experience = int(find_experience_for_level(growth_rate, level, True))
-<<<<<<< HEAD
             new_val_mapped = int((int(value) / int(experience)) * max_width_stat_item)
-=======
-            value = int((int(value) / int(experience)) * max_width_stat_item)
-        elif stat == "friendship":
-            # Bar reads 100% exactly at the evolution threshold (bar_max).
-            value = min(
-                max_width_stat_item,
-                int((friendship_value / max(1, friendship_bar_max)) * max_width_stat_item),
-            )
->>>>>>> main
         else:
             new_val_mapped = int(max_width_stat_item * (1 - exp(-value / max_width_stat_item)))
             
@@ -1167,7 +1129,7 @@ def remember_attack(
     individual_id: str, attacks: list[str], new_attack: str, logger: ShowInfoLogger, refresh_callback=None
 ):
     """Learn a new attack using database."""
-    db = mw.ankimon_db
+    db = services.db
     
     if new_attack in attacks:
         logger.log_and_showinfo("warning", "Your pokemon already knows this move!")
@@ -1219,7 +1181,7 @@ def forget_attack(
     refresh_callback=None,
 ) -> None:
     """Forget a move using database."""
-    db = mw.ankimon_db
+    db = services.db
 
     pokemon_data = db.get_pokemon(individual_id)
     if not pokemon_data:
@@ -1288,7 +1250,7 @@ def tm_attack_details_window(
         return
         
     # 4. Get owned TMs from DB
-    db = mw.ankimon_db
+    db = services.db
     all_items = db.get_all_items()
     owned_tm_moves = [
         item["item_name"] 
@@ -1327,7 +1289,7 @@ def rename_pkmn(
     refresh_callback,
 ):
     """Rename a pokemon using database."""
-    db = mw.ankimon_db
+    db = services.db
     
     try:
         pokemon = db.get_pokemon(individual_id)
@@ -1366,13 +1328,13 @@ def PokemonFree(
         return
 
     # Check if the Pokémon is the main pokemon
-    main_pokemon = mw.ankimon_db.get_main_pokemon()
+    main_pokemon = services.db.get_main_pokemon()
     if main_pokemon and main_pokemon.get("individual_id") == individual_id:
         logger.log_and_showinfo("info", "You can't free your Main Pokémon!")
         return
 
     # Get the pokemon from database
-    pokemon_to_release = mw.ankimon_db.get_pokemon(individual_id)
+    pokemon_to_release = services.db.get_pokemon(individual_id)
     if not pokemon_to_release:
         logger.log_and_showinfo("info", "No Pokémon found with the specified ID.")
         refresh_callback()
@@ -1390,7 +1352,7 @@ def PokemonFree(
     }
     
     # Add to history via database
-    if mw.ankimon_db.add_to_history(history_data):
+    if services.db.add_to_history(history_data):
         pass  # Success
     else:
         logger.log_and_showinfo("error", f"Failed to add {name} to history.")
@@ -1404,7 +1366,7 @@ def PokemonFree(
         settings_obj.set("trainer.xp_share", None)
 
     # Delete from database
-    mw.ankimon_db.delete_pokemon(individual_id)
+    services.db.delete_pokemon(individual_id)
     logger.log_and_showinfo("info", f"{name.capitalize()} has been let free.")
 
     refresh_callback()

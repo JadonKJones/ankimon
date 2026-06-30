@@ -603,16 +603,10 @@ def load_custom_font(font_size, language):
         font_file = "Early GameBoy.ttf"
         font_size = int((font_size * 2) / 5)
 
-<<<<<<< HEAD
-    # Register the custom font with its file path if not already added
-    font_id = QFontDatabase.addApplicationFont(str(font_path / font_file))
-    
-=======
     # Register the custom font with its file path. Qt imported lazily so utils
     # stays importable headless (custom fonts are a GUI-only concern).
     from PyQt6.QtGui import QFontDatabase, QFont
     QFontDatabase.addApplicationFont(str(font_path / font_file))
->>>>>>> main
     custom_font = QFont(
         font_name
     )  # Use the font family name you specified in the font file

@@ -88,11 +88,8 @@ def find_experience_for_level(group_growth_rate, level, remove_levelcap=True):
     # Specify the growth rate and level you're interested in
     growth_rate = f'{group_growth_rate}'
     if level < 100:
-<<<<<<< HEAD
-=======
         # Default if no row matches or the growth_rate column is unknown —
         # prevents UnboundLocalError from breaking the level-up path.
->>>>>>> main
         experience = 0
         cache = _load_next_lvl_cache()
         row = cache.get(str(level))

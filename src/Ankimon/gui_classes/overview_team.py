@@ -9,6 +9,7 @@ Key public components:
 * :func:`load_pokemon_team` — reads ``team.json`` / ``mypokemon.json`` and
   returns an ordered list of Pokémon dictionaries.
 * :func:`deck_browser_will_render` — hook callback that prepends the grid
+from ..services import services
   to the Deck Browser stats area.
 * :func:`on_overview_will_render_content` — hook callback that prepends the
   grid to the Deck Overview table area.
@@ -388,6 +389,6 @@ def on_overview_will_render_content(overview: Any, content: Any) -> None:
 # Hook registration (runs at import time, gated by user setting)
 # ---------------------------------------------------------------------------
 
-if mw.settings_obj.get("gui.team_deck_view") is True:
+if getattr(mw, "settings_obj", None) and services.settings.get("gui.team_deck_view") is True:
     gui_hooks.deck_browser_will_render_content.append(deck_browser_will_render)
     gui_hooks.overview_will_render_content.append(on_overview_will_render_content)

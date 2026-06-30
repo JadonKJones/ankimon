@@ -446,15 +446,9 @@ POKEMON_TIERS = {
   # Gen 7
   801, 802, 807, 808, 809,   # Magearna, Marshadow, Zeraora, Meltan, Melmetal
   # Gen 8
-<<<<<<< HEAD
   893,                        # Zarude
   # Gen 9
   1025,                       # Pecharunt
-=======
-  893,                       # Zarude
-  # Gen 9
-  1025                       # Pecharunt
->>>>>>> main
 ]
 ,
   "Ultra": [

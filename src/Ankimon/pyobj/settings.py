@@ -1,20 +1,6 @@
 import json
 import os
-<<<<<<< HEAD
-from aqt import mw
-from aqt.utils import showInfo
-from PyQt6.QtWidgets import (
-    QApplication,
-    QWidget,
-    QVBoxLayout,
-    QLabel,
-    QLineEdit,
-    QPushButton,
-)
-from PyQt6.QtWidgets import QRadioButton, QHBoxLayout, QMainWindow, QScrollArea
-=======
 import shutil
->>>>>>> main
 from pathlib import Path
 from ..resources import user_path
 from ..services import services
@@ -79,15 +65,8 @@ DEFAULT_CONFIG = {
     "trainer.sprite": "ash",
     "trainer.id": 0,
     "trainer.cash": 0,
-<<<<<<< HEAD
     "trainer.cash_reward_amount": 100,
     "trainer.cash_reward_interval": 10,
-=======
-    "trainer.cash_reward_amount": 40,
-    "trainer.cash_reward_interval": 10,
-    "trainer.cash_earned_today": 0,
-    "trainer.last_cash_reward_date": "",
->>>>>>> main
     "trainer.level": 0,
     "trainer.xp": 0,
 }
@@ -152,13 +131,15 @@ class Settings:
                 modified = True
                 config[key] = DEFAULT_CONFIG[key]
 
-        if modified:
-            self.save_config(config)
-
         if not hasattr(self, 'config'):
             self.config = {}
+
         self.config.clear()
         self.config.update(config)
+
+        if modified:
+            self.save_config(self.config)
+
         self.compute_gui_config()
         return self.config
     
@@ -182,16 +163,15 @@ class Settings:
                     print(f"Ankimon: Warning: Could not convert '{config[key]}' for key '{key}' to int.")
 
     def save_config(self, config):
-<<<<<<< HEAD
         from ..pyobj.ankimon_sync import AnkimonDataSync  # To reuse obfuscation logic
 
         obfuscated_config_path = user_path / "config.obf"
         sync_handler = AnkimonDataSync()  # Re-use the obfuscation logic
 
         # Always save to the database if available
-        if hasattr(mw, 'ankimon_db') and mw.ankimon_db is not None:
+        if services.db is not None:
             try:
-                mw.ankimon_db.save_all_config(config)
+                services.db.save_all_config(config)
             except Exception as e:
                 print(f"Ankimon: Failed to save config to database: {e}")
 
@@ -206,17 +186,6 @@ class Settings:
         #     except Exception as e:
         #         print(f"Ankimon: Could not save obfuscated config: {e}")
 
-=======
-        # 1. Always save to database if available
-        if services.db is not None:
-            try:
-                services.db.save_all_config(config)
-                print("Ankimon: Saved config to database")
-            except Exception as e:
-                print(f"Ankimon: Failed to save config to database: {e}")
-
-        # 2. Also save to obfuscated file if it exists (legacy support)
->>>>>>> main
         self.config = config
         self._save_legacy_obf_if_present()
         self.compute_gui_config()

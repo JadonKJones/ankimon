@@ -454,13 +454,6 @@ def get_mainpokemon_evo(pokemon_name):
     pokemon_info = pokedex_data[pokemon_name]
     evolutions = pokemon_info.get("evos", [])
     return evolutions
-<<<<<<< HEAD
-
-def get_base_experience(actual_id: int) -> int:
-    pokemon_data = _load_pokemon_csv_cache()  # Use cache instead of file I/O
-    if actual_id in pokemon_data:
-        return safe_int(pokemon_data[actual_id].get("base_experience"))
-=======
 
 def get_growth_rate(species_id: int) -> str:
     # Coerce string callers to int so they match the integer CSV ids; a
@@ -486,7 +479,6 @@ def get_base_experience(actual_id: int) -> int:
     row = cache.get(actual_id)
     if row:
         return int(row["base_experience"])
->>>>>>> main
     raise ValueError(actual_id)
 
 def get_effort_values(actual_id: int) -> dict[str, int]:
@@ -600,11 +592,7 @@ def find_details_move(move_name: str) -> dict:
             return move
         else:
             move = moves_data.get("tackle")
-<<<<<<< HEAD
-            showWarning(f"Move '{move_name}' not found. Returning default move 'tackle'.")
-=======
             services.ui.warn(f"Move '{move_name}' not found. Returning default move 'tackle'.")
->>>>>>> main
             return move
                 
     except Exception as e:
@@ -654,23 +642,12 @@ def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
 
     # Iterate through the possible evolutions
     for evos in possible_evos:
-<<<<<<< HEAD
-        evo_data = get_pokemon_evolution_data(safe_int(evos))
-        if evo_data:
-            if safe_int(evo_data.get("evolution_trigger_id")) == 3 and safe_int(
-                evo_data.get("trigger_item_id")
-            ) == safe_int(item_id):
-                return safe_int(
-                    evo_data.get("evolved_species_id")
-                )  # Return True as soon as a matching evolution is found
-=======
         try:
             evo_data = get_pokemon_evolution_data(int(evos))
         except (TypeError, ValueError):
             continue
         if not evo_data:
             continue
->>>>>>> main
 
         try:
             trigger_id = int(evo_data.get("evolution_trigger_id", 0) or 0)
@@ -821,26 +798,11 @@ def check_evolution_for_pokemon(
         if possible_evos:
             for evos in possible_evos:
                 evo_data = get_pokemon_evolution_data(safe_int(evos))
-<<<<<<< HEAD
-                # Only handle level-up evolutions (trigger_id == 1)
-                if evo_data and safe_int(evo_data.get("evolution_trigger_id", 0)) == 1:
-                    min_level_str = evo_data.get("minimum_level", "")
-                    # Only proceed if min_level_str represents a valid integer
-                    if not min_level_str or not str(min_level_str).isdigit():
-                        continue  # Skip this evolution if minimum_level is missing or not a number
-                    min_level = safe_int(min_level_str)
-                    if min_level <= level:
-                        evo_window.ask_pokemon_evo(
-                            individual_id, pokemon_id, safe_int(evos)
-                        )
-                        return safe_int(evos)  # Return the evolution ID
-=======
                 if evo_data and safe_int(evo_data.get("evolution_trigger_id", 0)) == 1:
                     min_level = safe_int(evo_data.get("minimum_level"))
                     if min_level > 0 and level >= min_level:
                         time_raw = (evo_data.get("time_of_day") or "").strip().lower()
                         time_of_day = time_raw if time_raw in ("day", "night") else None
->>>>>>> main
 
                         if time_of_day is None or time_of_day == current_time:
                             evo_window.ask_pokemon_evo(individual_id, pokemon_id, safe_int(evos))
@@ -877,15 +839,6 @@ def pokemon_evolves_from_id(pokemon_id):
     try:
         poke_species_data = _load_poke_species_cache()  # Use cache instead of file I/O
         for row in poke_species_data.values():
-<<<<<<< HEAD
-            evolves_from_species_id = row.get("evolves_from_species_id", None)
-            if evolves_from_species_id:
-                try:
-                    if safe_int(evolves_from_species_id) == safe_int(pokemon_id):
-                        evolves_from_ids.append(row["id"])
-                except ValueError:
-                    continue
-=======
             # Safely check if 'evolves_from_species_id' exists and is a valid number
             evolves_from_species_id = row.get("evolves_from_species_id", None)
             if evolves_from_species_id:
@@ -903,7 +856,6 @@ def pokemon_evolves_from_id(pokemon_id):
         # else:
         #    services.ui.warn(f"No evolutions found for Pokémon ID '{pokemon_id}'")
 
->>>>>>> main
         return evolves_from_ids
     except Exception as e:
         show_warning_with_traceback(
@@ -917,15 +869,6 @@ def get_pokemon_evolution_data(pokemon_id):
     """Returns the evolution data for a given Pokémon ID by matching evolved_species_id."""
     try:
         poke_evo_data = _load_poke_evo_cache()  # Use cache instead of file I/O
-<<<<<<< HEAD
-        for row in poke_evo_data:
-            try:
-                if safe_int(row.get("evolved_species_id")) == safe_int(pokemon_id):
-                    return row
-            except ValueError:
-                continue
-        return None
-=======
         # Search for the given Pokémon ID in the evolved_species_id column
         for row in poke_evo_data:
             try:
@@ -942,7 +885,6 @@ def get_pokemon_evolution_data(pokemon_id):
         if not evolution_data:
             # services.ui.warn(f"No evolution data found for Pokémon ID '{pokemon_id}'")
             pass
->>>>>>> main
     except Exception as e:
         show_warning_with_traceback(
             parent=mw,
@@ -1063,23 +1005,10 @@ def return_name_for_id(pokemon_id):
         None: If no matching Pokémon is found or an error occurs.
     """
     try:
-<<<<<<< HEAD
-        # Open the CSV file
-        with open(pokemon_csv, mode="r", encoding="utf-8") as file:
-            reader = csv.DictReader(file)  # Read the file as a dictionary
-
-            # Search for the value in the "id" column
-            for row in reader:
-                if safe_int(row.get("id")) == safe_int(
-                    pokemon_id
-                ):  # Convert CSV id to integer for comparison
-                    return row.get("identifier")  # Return the identifier from the CSV row
-=======
         cache = _load_pokemon_csv_cache()
         row = cache.get(int(pokemon_id))
         if row:
             return row["identifier"]
->>>>>>> main
 
         # Log a message if the item is not found
         services.ui.warn(f"Name for Pokemon with ID '{pokemon_id}' not found in the CSV.")

@@ -17,14 +17,8 @@ from .functions.battle_functions import (
     process_battle_data,
 )
 from .functions.drawing_utils import tooltipWithColour
-<<<<<<< HEAD
-from .utils import safe_get_random_move, play_effect_sound, play_sound, is_alive
-from .poke_engine.ankimon_hooks_to_poke_engine import simulate_battle_with_poke_engine
-from .classes.choose_move_dialog import MoveSelectionDialog
-=======
 from .utils import safe_get_random_move, play_effect_sound, play_sound
 from .functions.ankimon_hooks_to_poke_engine import simulate_battle_with_poke_engine
->>>>>>> main
 from .pyobj.error_handler import show_warning_with_traceback
 
 # Shared game state used as bare module globals below. core.bind_runtime_globals()
@@ -104,22 +98,15 @@ def on_review_card(*args):
         s.item_receive_value -= 1
         if s.item_receive_value <= 0:
             s.item_receive_value = random.randint(3, 385)
-            win = getattr(mw, "test_window", None)
-            if is_alive(win):
+            win = test_window
+            if test_window is not None:
                 try:
-                    win.display_item()
+                    test_window.display_item()
                 except RuntimeError:
                     pass
             if not check_for_badge(achievements, 6):
                 receive_badge(6, achievements)
 
-<<<<<<< HEAD
-        cash_interval = int(settings_obj.get("trainer.cash_reward_interval"))
-        cash_amount = int(settings_obj.get("trainer.cash_reward_amount"))
-        if total_reviews % cash_interval == 0:
-            settings_obj.set("trainer.cash", settings_obj.get("trainer.cash") + cash_amount)
-            trainer_card.cash = settings_obj.get("trainer.cash")
-=======
         try:
             cash_interval = int(settings_obj.get("trainer.cash_reward_interval", 10))
             cash_amount = int(settings_obj.get("trainer.cash_reward_amount", 100))
@@ -142,7 +129,6 @@ def on_review_card(*args):
                     settings_obj.set("trainer.cash_earned_today", cash_earned_today + allowed_amount)
                     settings_obj.set("trainer.cash", settings_obj.get("trainer.cash") + allowed_amount)
                     trainer_card.cash = settings_obj.get("trainer.cash")
->>>>>>> main
 
         if battle_sounds == True and ankimon_tracker_obj.general_card_count_for_battle == 1:
             play_sound(enemy_pokemon.id, settings_obj)
@@ -299,13 +285,13 @@ def on_review_card(*args):
 
             if enemy_pokemon.hp < 1:
                 enemy_pokemon.hp = 0
-                win = getattr(mw, "test_window", None)
+                win = test_window
                 handle_enemy_faint(
                     main_pokemon,
                     enemy_pokemon,
                     s.collected_pokemon_ids,
-                    win if is_alive(win) else None,
-                    getattr(mw, "evo_window", None),
+                    test_window,
+                    evo_window,
                     reviewer_obj,
                     logger,
                     achievements,
@@ -316,32 +302,21 @@ def on_review_card(*args):
             play_sound(enemy_pokemon.id, settings_obj)
 
         if main_pokemon.hp < 1:
-            win = getattr(mw, "test_window", None)
+            win = test_window
             handle_main_pokemon_faint(
                 main_pokemon, 
                 enemy_pokemon, 
-                win if is_alive(win) else None, 
+                test_window,
                 reviewer_obj, 
                 translator
             )
             s.mutator_full_reset = 1
 
-<<<<<<< HEAD
-        class Container:
-            pass
-
-        reviewer = Container()
-        reviewer.web = mw.reviewer.web
-        reviewer_obj.update_life_bar(reviewer, 0, 0)
-        win = getattr(mw, "test_window", None)
-        if is_alive(win):
-=======
         reviewer_obj.refresh_hud()
         if test_window is not None:
->>>>>>> main
             if enemy_pokemon.hp > 0:
                 try:
-                    win.display_battle()
+                    test_window.display_battle()
                 except RuntimeError:
                     pass
     except Exception as e:

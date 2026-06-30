@@ -7,17 +7,36 @@ import shutil
 from pathlib import Path
 from typing import Dict, List, Any
 
-from aqt import mw, gui_hooks
-from aqt.utils import showInfo, tooltip
+try:
+    from aqt import mw, gui_hooks
+except ImportError:
+    pass
+try:
+    from aqt.utils import showInfo, tooltip
+except ImportError:
+    pass
 from ..pyobj.error_handler import show_warning_with_traceback
 
 from ..resources import user_path, addon_dir
 from ..utils import close_anki
 
-from PyQt6.QtGui import QTextOption
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QTextEdit, QPushButton, QDialog, QHBoxLayout, QScrollArea, QWidget
+try:
+    from PyQt6.QtGui import QTextOption
+except ImportError:
+    pass
+try:
+    from PyQt6.QtWidgets import QLabel, QVBoxLayout, QTextEdit, QPushButton, QDialog, QHBoxLayout, QScrollArea, QWidget
+except ImportError:
+    pass
 
-class ImprovedPokemonDataSync(QDialog):
+try:
+    class _BaseDialog(QDialog):
+        pass
+except NameError:
+    class _BaseDialog:
+        pass
+
+class ImprovedPokemonDataSync(_BaseDialog):
     """
     Improved Pokemon data sync dialog using the new AnkimonDataSync system.
     Provides better file comparison and uses Anki's media sync for reliable syncing.

@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QMenu
 from PyQt6.QtGui import QAction, QKeySequence
 from aqt import mw  # The main window object
 from aqt.utils import qconnect
+from .services import services
 
 
 from .gui_classes.choose_trainer_sprite_graphical import TrainerSpriteGraphicalDialog
@@ -43,7 +44,7 @@ from .gui_entities import (
 debug = True
 
 # Initialize the menu
-mw.translator = Translator(language=int(mw.settings_obj.get("misc.language")))
+mw.translator = Translator(language=int(services.settings.get("misc.language")) if getattr(services, "settings", None) else 0)
 mw.pokemenu = QMenu('&' + mw.translator.translate("ankimon_button_title"), mw)
 game_menu = mw.pokemenu.addMenu(mw.translator.translate("ankimon_game_button_title"))
 profile_menu = mw.pokemenu.addMenu(mw.translator.translate("ankimon_profile_button_title"))

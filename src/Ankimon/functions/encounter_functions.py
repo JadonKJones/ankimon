@@ -35,66 +35,9 @@ from ..functions.trainer_functions import xp_share_gain_exp
 from ..functions.badges_functions import check_for_badge, receive_badge
 from ..functions.drawing_utils import tooltipWithColour
 from ..utils import limit_ev_yield, play_effect_sound, get_ev_spread, is_alive
+from . import encounter_data as tier_data
 from ..business import calc_experience, calculate_cp_from_dict
 from ..const import gen_ids
-<<<<<<< HEAD
-from ..singletons import (
-    main_pokemon,
-    ankimon_tracker_obj,
-    trainer_card,
-    settings_obj,
-    translator,
-    ankimon_db,
-    pokemon_pc,
-)
-from . import encounter_data
-
-ALL_NATURES = [
-    "Hardy", "Lonely", "Brave", "Adamant", "Naughty",
-    "Bold", "Docile", "Relaxed", "Impish", "Lax",
-    "Timid", "Hasty", "Serious", "Jolly", "Naive",
-    "Modest", "Mild", "Quiet", "Bashful", "Rash",
-    "Calm", "Gentle", "Sassy", "Careful", "Quirky"
-]
-
-
-def _build_regional_lookup() -> None:
-    """Populates encounter_data.REGIONAL_FORM_LOOKUP from pokedex.json.
-
-    Maps species_id -> {region -> [actual_id, ...]} for all encounterable
-    regional forms. Called once at module import. Silently no-ops if
-    pokedex.json is unavailable (e.g. first-run before data files exist).
-    """
-    import os
-    
-    try:
-        pokedex_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "user_files", "data_files", "pokedex.json"
-        )
-        with open(pokedex_path, "r", encoding="utf-8") as f:
-            pokedex = json.load(f)
-        aid_to_sid: dict[int, int] = {
-            v["actual_id"]: v["species_id"]
-            for v in pokedex.values()
-            if "actual_id" in v and "species_id" in v
-        }
-        for region, aids in encounter_data.REGIONAL_FORMS.items():
-            for aid in aids:
-                sid = aid_to_sid.get(aid)
-                if sid is None:
-                    continue
-                region_map = encounter_data.REGIONAL_FORM_LOOKUP.setdefault(sid, {})
-                region_map.setdefault(region, []).append(aid)
-    except Exception as e:
-        print(f"[Ankimon] Warning: Could not build regional form lookup: {e}")
-
-
-_build_regional_lookup()
-
-
-# === PERFORMANCE FIX: Cache percentage calculations ===
-=======
 
 if TYPE_CHECKING:
     # Type-hint-only imports (several pull in Qt). `from __future__ import
@@ -122,7 +65,6 @@ ankimon_db = None
 pokemon_pc = None
 
 
->>>>>>> main
 _percentages_cache = {
     'percentages': None,
     'total_reviews': None,
@@ -135,23 +77,15 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
     Modify Pokémon encounter percentages based on total reviews, trainer level, and main Pokémon level.
     CACHED: Only recalculates when inputs change.
     """
-<<<<<<< HEAD
-    # Check if cache is valid
-=======
     # Performance Guard: Skip recalculation if inputs haven't changed
->>>>>>> main
     if (_percentages_cache['percentages'] is not None and
         _percentages_cache['total_reviews'] == total_reviews and
         _percentages_cache['trainer_level'] == trainer_level and
         _percentages_cache['main_pokemon_level'] == main_pokemon.level):
         return _percentages_cache['percentages']
-<<<<<<< HEAD
-        
-=======
 
     # Start with the base percentages
     percentages = {"Baby": 2, "Legendary": 0.5, "Mythical": 0.2, "Normal": 92.3, "Ultra": 5}
->>>>>>> main
 
     # Start with the base percentages
     percentages = {
@@ -219,38 +153,19 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
         for tier in percentages:
             percentages[tier] = (percentages[tier] / total) * 100 if total > 0 else 0 
 
-<<<<<<< HEAD
-    #MODIFIED FOR TESTING: Fixed percentages, review restrictions.
-    """percentages = {
-                "Baby": 0,
-                "Normal": 10,
-                "Starter": 0,
-                "Legendary": 0,
-                "Mythical": 0,
-                "Ultra": 0,
-                "Mega": 90,
-                "Gmax": 0,
-            }"""
-
-    # Cache the result
-=======
     # Normalize percentages to ensure they sum to 100
     total = sum(percentages.values())
     for tier in percentages:
         percentages[tier] = (percentages[tier] / total) * 100 if total > 0 else 0
 
     # Cache and return
->>>>>>> main
     _percentages_cache['percentages'] = percentages
     _percentages_cache['total_reviews'] = total_reviews
     _percentages_cache['trainer_level'] = trainer_level
     _percentages_cache['main_pokemon_level'] = main_pokemon.level
     
-<<<<<<< HEAD
-=======
     # this function gets called maybe 10 times per battle round, which is concerning.
     # it could be rewritten to run ONLY when the change in review ratio is detected.
->>>>>>> main
     return percentages
 
 def clear_encounter_cache():
@@ -267,21 +182,21 @@ def get_random_pokemon_in_tier(tier):
     
 
     if tier == "Normal":
-        id_data = encounter_data.NORMAL
+        id_data = tier_data.NORMAL
     elif tier == "Baby":
-        id_data = encounter_data.BABY
+        id_data = tier_data.BABY
     elif tier == "Ultra":
-        id_data = encounter_data.ULTRA
+        id_data = tier_data.ULTRA
     elif tier == "Legendary":
-        id_data = encounter_data.LEGENDARY
+        id_data = tier_data.LEGENDARY
     elif tier == "Mythical":
-        id_data = encounter_data.MYTHICAL
+        id_data = tier_data.MYTHICAL
     elif tier == "Mega":
-        id_data = encounter_data.MEGA
+        id_data = tier_data.MEGA
     elif tier == "Gmax":
-        id_data = encounter_data.GMAX
+        id_data = tier_data.GMAX
     elif tier == "Starter":
-        id_data = encounter_data.STARTERS
+        id_data = tier_data.STARTERS
     else:
         return 1
 
@@ -301,7 +216,7 @@ def _player_owns_base_form(actual_id: int, collected_ids: set) -> bool:
 def _meets_prerequisites(pokemon_id: int, collected_ids: set) -> bool:
     """Return True if all prerequisite Pokémon for this ID are collected.
 
-    Prerequisite chains are defined in encounter_data.PREREQUISITES.
+    Prerequisite chains are defined in tier_data.PREREQUISITES.
     Handles forms by checking the species_id prerequisites.
     """
     
@@ -312,7 +227,7 @@ def _meets_prerequisites(pokemon_id: int, collected_ids: set) -> bool:
         if species_id:
             check_id = species_id
 
-    required = encounter_data.PREREQUISITES.get(check_id)
+    required = tier_data.PREREQUISITES.get(check_id)
     if not required:
         return True
 
@@ -361,10 +276,7 @@ def choose_random_pkmn_from_tier():
     try:
         tier = get_tier(total_reviews, trainer_level)
         id = get_random_pokemon_in_tier(tier)
-<<<<<<< HEAD
-=======
         services.logger.game_log(f"Selected tier: {tier}, Resulting Pokemon ID: {id}")
->>>>>>> main
         return id, tier
     except Exception as e:
         services.logger.log("error", f"Error in choose_random_pkmn_from_tier: {str(e)}")
@@ -388,12 +300,12 @@ def check_min_generate_level(name):
     species_id = safe_int(search_pokedex(name.lower(), "species_id"))
     actual_id = safe_int(search_pokedex(name.lower(), "actual_id"))
     
-    is_mythical = (species_id in encounter_data.MYTHICAL) or (actual_id in encounter_data.MYTHICAL)
-    is_legendary = (species_id in encounter_data.LEGENDARY) or (actual_id in encounter_data.LEGENDARY)
-    is_ultra = (species_id in encounter_data.ULTRA) or (actual_id in encounter_data.ULTRA)
-    is_starter = (species_id in encounter_data.STARTERS) or (actual_id in encounter_data.STARTERS)
-    is_mega = (species_id in encounter_data.MEGA) or (actual_id in encounter_data.MEGA)
-    is_gmax = (species_id in encounter_data.GMAX) or (actual_id in encounter_data.GMAX)
+    is_mythical = (species_id in tier_data.MYTHICAL) or (actual_id in tier_data.MYTHICAL)
+    is_legendary = (species_id in tier_data.LEGENDARY) or (actual_id in tier_data.LEGENDARY)
+    is_ultra = (species_id in tier_data.ULTRA) or (actual_id in tier_data.ULTRA)
+    is_starter = (species_id in tier_data.STARTERS) or (actual_id in tier_data.STARTERS)
+    is_mega = (species_id in tier_data.MEGA) or (actual_id in tier_data.MEGA)
+    is_gmax = (species_id in tier_data.GMAX) or (actual_id in tier_data.GMAX)
 
     if is_mythical:
         min_level = max(min_level, 75)
@@ -444,10 +356,10 @@ def check_id_ok(id_num: Union[int, list[int]]):
 
         # For regional forms, also require the form's intro gen to be enabled
         
-        if id_num in encounter_data.REGIONAL_FORM_REGION:
+        if id_num in tier_data.REGIONAL_FORM_REGION:
             forme = search_pokedex(name, "forme") or ""
             intro_gen = None
-            for f_name, g in encounter_data.REGIONAL_FORME_GEN.items():
+            for f_name, g in tier_data.REGIONAL_FORME_GEN.items():
                 if f_name in forme:
                     intro_gen = g
                     break
@@ -476,7 +388,7 @@ def get_regional_substitute(species_id: int, region: str = None) -> "int | None"
     
     
     eligible = []
-    lookup = encounter_data.REGIONAL_FORM_LOOKUP.get(species_id, {})
+    lookup = tier_data.REGIONAL_FORM_LOOKUP.get(species_id, {})
     
     if region:
         options = lookup.get(region, [])
@@ -517,14 +429,14 @@ def get_base_species_gen(actual_id: int) -> int:
     return 0
 
 def get_all_pokemon_in_tier(tier: str) -> list[int]:
-    if tier == "Normal": return encounter_data.NORMAL
-    if tier == "Baby": return encounter_data.BABY
-    if tier == "Ultra": return encounter_data.ULTRA
-    if tier == "Legendary": return encounter_data.LEGENDARY
-    if tier == "Mythical": return encounter_data.MYTHICAL
-    if tier == "Mega": return encounter_data.MEGA
-    if tier == "Gmax": return encounter_data.GMAX
-    if tier == "Starter": return encounter_data.STARTERS
+    if tier == "Normal": return tier_data.NORMAL
+    if tier == "Baby": return tier_data.BABY
+    if tier == "Ultra": return tier_data.ULTRA
+    if tier == "Legendary": return tier_data.LEGENDARY
+    if tier == "Mythical": return tier_data.MYTHICAL
+    if tier == "Mega": return tier_data.MEGA
+    if tier == "Gmax": return tier_data.GMAX
+    if tier == "Starter": return tier_data.STARTERS
     return []
 
 
@@ -644,7 +556,7 @@ def generate_random_pokemon(
                         boosted_pool.append(pid)
                 
                 # Add eligible regional variants for the active region
-                options = encounter_data.REGIONAL_FORM_LOOKUP.get(pid, {}).get(active_region, [])
+                options = tier_data.REGIONAL_FORM_LOOKUP.get(pid, {}).get(active_region, [])
                 for opt in options:
                     if check_id_ok(opt) and opt not in boosted_pool:
                         boosted_pool.append(opt)
@@ -669,7 +581,7 @@ def generate_random_pokemon(
     # --- Regional form resolution ---
     # Apply 7%-per-variant resolution for base species.
     if selected_pokemon_id < 10000:
-        region_forms = encounter_data.REGIONAL_FORM_LOOKUP.get(selected_pokemon_id, {})
+        region_forms = tier_data.REGIONAL_FORM_LOOKUP.get(selected_pokemon_id, {})
         num_eligible = 0
         for variants in region_forms.values():
             for v in variants:
@@ -686,8 +598,6 @@ def generate_random_pokemon(
     pokemon_id = selected_pokemon_id
     tier = selected_tier
     name = search_pokedex_by_id(pokemon_id)
-<<<<<<< HEAD
-=======
     min_allowed_pokemon_lvl = check_min_generate_level(
         str(name.lower())
     )  # Gets the minimum allowed level for that pokemon given its stage of evolution
@@ -711,7 +621,6 @@ def generate_random_pokemon(
         min_allowed_pokemon_lvl = check_min_generate_level(
             str(name.lower())
         )  # Gets the minimum allowed level for that pokemon given its stage of evolution
->>>>>>> main
 
     # Now we get all necessary information about the chosen pokemon.
     pokemon_type = search_pokedex(name, "types")
@@ -745,7 +654,7 @@ def generate_random_pokemon(
     # mu = 31 * (1 - math.exp(-ankimon_tracker_obj.total_reviews / tau))  # At total reviews > 3 * tau, we get mu ~= 31
     # iv = {stat: iv_rand_gauss(mu=mu, sigma=5) for stat in stat_names}  # The higher the number of reviews, the higher the IVs
     iv = {stat: random.randint(0, 31) for stat in stat_names}
-    nature = random.choice(ALL_NATURES)
+    nature = random.choice(["hardy", "lonely", "brave", "adamant", "naughty", "bold", "docile", "relaxed", "impish", "lax", "timid", "hasty", "serious", "jolly", "naive", "modest", "mild", "quiet", "bashful", "rash", "calm", "gentle", "sassy", "careful", "quirky"])
     final_stats = base_stats
 
     ankimon_tracker_obj.pokemon_encounter = 0  # 0: Start of Battle: 1: Current Battle
@@ -877,17 +786,17 @@ def new_pokemon(
         reviewer_obj.refresh_hud()
 
     # Track as seen in Pokedex
-    if hasattr(mw, 'ankimon_db'):
-        if hasattr(mw.ankimon_db, 'mark_as_seen'):
-            mw.ankimon_db.mark_as_seen(pkmn_id)
+    if services.db is not None:
+        if hasattr(services.db, 'mark_as_seen'):
+            services.db.mark_as_seen(pkmn_id)
         else:
             # Fallback tracking if not restarted
             try:
-                seen_ids = mw.ankimon_db.get_user_data("pokedex_seen", [])
+                seen_ids = services.db.get_user_data("pokedex_seen", [])
                 if not isinstance(seen_ids, list): seen_ids = []
                 if pkmn_id not in seen_ids:
                     seen_ids.append(pkmn_id)
-                    mw.ankimon_db.set_user_data("pokedex_seen", seen_ids)
+                    services.db.set_user_data("pokedex_seen", seen_ids)
             except: pass
 
     return pokemon
@@ -1148,8 +1057,8 @@ def save_main_pokemon_progress(
             mainpkmndata["is_favorite"] = main_pokemon.is_favorite
 
         # Save to database (replaces JSON file I/O for performance)
-        mw.ankimon_db.save_main_pokemon(mainpkmndata)
-        mw.ankimon_db.save_pokemon(mainpkmndata)  # Also update the captured pokemon collection
+        services.db.save_main_pokemon(mainpkmndata)
+        services.db.save_pokemon(mainpkmndata)  # Also update the captured pokemon collection
 
     return main_pokemon.level
 
@@ -1287,7 +1196,7 @@ def save_caught_pokemon(
     caught_pokemon["cp"] = calculate_cp_from_dict(caught_pokemon)
 
     # Save to database (replaces JSON file I/O for performance)
-    mw.ankimon_db.save_pokemon(caught_pokemon)
+    services.db.save_pokemon(caught_pokemon)
 
 
 def catch_pokemon(
@@ -1359,13 +1268,7 @@ def handle_enemy_faint(
     """
     Handles what automatically happens when the enemy Pokémon faints, based on auto-battle settings.
     """
-<<<<<<< HEAD
-    if ankimon_tracker_obj.faint_processed:
-        return
-    
-=======
     events.emit("faint", who="enemy", pokemon=enemy_pokemon.name, id=enemy_pokemon.id)
->>>>>>> main
     try:
         auto_battle_setting = int(settings_obj.get("battle.automatic_battle"))
         if not (0 <= auto_battle_setting <= 3):
@@ -1376,8 +1279,8 @@ def handle_enemy_faint(
     name_lower = enemy_pokemon.name.lower()
     forme = search_pokedex(name_lower, "forme")
     
-    is_mega = (enemy_pokemon.id in encounter_data.MEGA)
-    is_gmax = (enemy_pokemon.id in encounter_data.GMAX)
+    is_mega = (enemy_pokemon.id in tier_data.MEGA)
+    is_gmax = (enemy_pokemon.id in tier_data.GMAX)
     
     is_special = (
         enemy_pokemon.tier in ["Ultra", "Legendary", "Mythical", "Starter"] or

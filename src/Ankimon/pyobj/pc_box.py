@@ -1028,66 +1028,11 @@ class PokemonPC(QDialog):
             
         self.sort_combo.currentTextChanged.connect(self.on_sort_changed)
 
-<<<<<<< HEAD
         sort_combo_layout = QHBoxLayout()
         sort_combo_layout.addWidget(sort_label)
         sort_combo_layout.addWidget(self.sort_combo)
         sort_combo_widget = QWidget()
         sort_combo_widget.setLayout(sort_combo_layout)
-=======
-        # Radio buttons for mutually exclusive sorting
-        self.sort_group = QButtonGroup(self)
-        self.sort_by_id = QRadioButton("ID")
-        self.sort_by_name = QRadioButton("Name")
-        self.sort_by_level = QRadioButton("Level")
-        self.sort_by_cp = QRadioButton("CP")
-        self.sort_by_iv = QRadioButton("IV")
-        self.sort_by_ev = QRadioButton("EV")
-        self.sort_by_friendship = QRadioButton("Friendship")
-        self.sort_by_date = QRadioButton("Date")
-
-        self.sort_group.addButton(self.sort_by_id)
-        self.sort_group.addButton(self.sort_by_name)
-        self.sort_group.addButton(self.sort_by_level)
-        self.sort_group.addButton(self.sort_by_cp)
-        self.sort_group.addButton(self.sort_by_iv)
-        self.sort_group.addButton(self.sort_by_ev)
-        self.sort_group.addButton(self.sort_by_friendship)
-        self.sort_group.addButton(self.sort_by_date)
-
-        if self.selected_sort_key == "ID":
-            self.sort_by_id.setChecked(True)
-        elif self.selected_sort_key == "Name":
-            self.sort_by_name.setChecked(True)
-        elif self.selected_sort_key == "Level":
-            self.sort_by_level.setChecked(True)
-        elif self.selected_sort_key == "CP":
-            self.sort_by_cp.setChecked(True)
-        elif self.selected_sort_key == "IV":
-            self.sort_by_iv.setChecked(True)
-        elif self.selected_sort_key == "EV":
-            self.sort_by_ev.setChecked(True)
-        elif self.selected_sort_key == "Friendship":
-            self.sort_by_friendship.setChecked(True)
-        else:  # Date is the default
-            self.sort_by_date.setChecked(True)
-
-        # Connect signals
-        self.sort_group.buttonClicked.connect(self.on_sort_button_clicked)
-
-        sort_radio_layout = QHBoxLayout()
-        sort_radio_layout.addWidget(sort_label)
-        sort_radio_layout.addWidget(self.sort_by_id)
-        sort_radio_layout.addWidget(self.sort_by_name)
-        sort_radio_layout.addWidget(self.sort_by_level)
-        sort_radio_layout.addWidget(self.sort_by_cp)
-        sort_radio_layout.addWidget(self.sort_by_iv)
-        sort_radio_layout.addWidget(self.sort_by_ev)
-        sort_radio_layout.addWidget(self.sort_by_friendship)
-        sort_radio_layout.addWidget(self.sort_by_date)
-        sort_radio_widget = QWidget()
-        sort_radio_widget.setLayout(sort_radio_layout)
->>>>>>> main
 
         # Checkboxes for other options
         is_checked = self.desc_sort.isChecked() if self.desc_sort is not None else True
@@ -1291,22 +1236,10 @@ class PokemonPC(QDialog):
                     bff_id is not None
                     and pokemon.get("individual_id") == bff_id
                 )
-<<<<<<< HEAD
                 # Store base colours so _refresh_slot_selection can build the full sheet
                 pokemon_button._base_bg = bg
                 pokemon_button._hover_bg = h_bg
                 pokemon_button._border = border
-=======
-                if is_bff:
-                    bg = "#FF69B4"  # Hot pink
-                    h_bg = "#FF8DC7"
-                elif pokemon.get("is_favorite"):
-                    bg = theme_vars["favorite_color"]
-                    h_bg = theme_vars["favorite_hover_color"]
-                else:
-                    bg = theme_vars["slot_bg_color"]
-                    h_bg = theme_vars["hover_color"]
->>>>>>> main
                 pokemon_button.setStyleSheet(
                     f"QPushButton {{ background-color: {bg}; border: 1px solid {border}; border-radius: 5px; }}"
                     f" QPushButton:hover {{ background-color: {h_bg}; }}"
@@ -1546,7 +1479,6 @@ class PokemonPC(QDialog):
 
     def refresh_gui(self, recompute_bff: bool = True):
         """
-<<<<<<< HEAD
         Refreshes the user interface by populating the grid.
         Avoids calling create_gui() to prevent full layout rebuilds.
         """
@@ -1558,20 +1490,6 @@ class PokemonPC(QDialog):
             # If no Pokémon is selected (e.g. after account swap), refresh the placeholder
             if self._selected_individual_id is None:
                 self._show_placeholder_details()
-=======
-        Refreshes the entire graphical user interface by rebuilding its structure
-        and then populating the grid.
-
-        Args:
-            recompute_bff (bool): Forwarded to :meth:`refresh_pokemon_grid`.
-                Defaults to ``True`` because the data-mutating callers
-                (favorite toggle, give/remove item, release/trade/rename/evolve
-                via ``refresh_callback``) need a fresh BFF. Non-mutating callers
-                (theme change, selecting a Pokémon) pass ``False``.
-        """
-        self.create_gui()
-        self.refresh_pokemon_grid(recompute_bff=recompute_bff)
->>>>>>> main
         self.layout().invalidate()
         self.layout().activate()
 
@@ -1674,16 +1592,12 @@ class PokemonPC(QDialog):
             "rowid as original_index, json_extract(data, '$.nickname') as nickname, "
             "json_extract(data, '$.gender') as gender, json_extract(data, '$.is_favorite') as is_favorite, "
             "json_extract(data, '$.held_item') as held_item, "
-<<<<<<< HEAD
             "json_extract(data, '$.captured_date') as captured_date, "
             "json_extract(data, '$.iv') as iv_json, json_extract(data, '$.ev') as ev_json, "
-            "json_extract(data, '$.base_stats') as base_stats_json, json_extract(data, '$.nature') as nature "
-=======
+            "json_extract(data, '$.base_stats') as base_stats_json, json_extract(data, '$.nature') as nature, "
             "json_extract(data, '$.friendship') as friendship, "
             "json_extract(data, '$.everstone') as everstone, "
-            "json_extract(data, '$.evolution_rejected') as evolution_rejected, "
-            "json_extract(data, '$.iv') as iv_json, json_extract(data, '$.ev') as ev_json "
->>>>>>> main
+            "json_extract(data, '$.evolution_rejected') as evolution_rejected "
             "FROM captured_pokemon WHERE 1=1"
         ]
         params = []
@@ -1765,18 +1679,7 @@ class PokemonPC(QDialog):
         elif sort_key_str == "id":
             order_clause = f"ORDER BY pokedex_id {direction}"
         elif sort_key_str == "cp":
-<<<<<<< HEAD
             use_python_sort = True
-=======
-            order_clause = f"ORDER BY CAST(json_extract(data, '$.cp') AS REAL) {direction}"
-        elif sort_key_str == "friendship":
-            # COALESCE so a missing/NULL friendship sorts as 0 (grouped with the
-            # zero-friendship Pokémon) instead of NULL drifting to an extreme
-            # end of the list under ASC/DESC.
-            order_clause = f"ORDER BY CAST(COALESCE(json_extract(data, '$.friendship'), 0) AS INTEGER) {direction}"
-        else:
-            # For IV/EV or default, sort by original_index first, then override in Python if needed
->>>>>>> main
             order_clause = f"ORDER BY original_index {direction}"
         elif sort_key_str in ["iv (total)", "ev (total)", "iv", "ev"]:
             # Fallback for legacy keys if they appear
@@ -1811,7 +1714,6 @@ class PokemonPC(QDialog):
                     "everstone": bool(row["everstone"]),
                     "evolution_rejected": bool(row["evolution_rejected"]),
                 }
-<<<<<<< HEAD
                 
                 # Pre-calculate sums/stats for sorting if needed
                 if use_python_sort:
@@ -1848,15 +1750,6 @@ class PokemonPC(QDialog):
                             "base_stats": base_stats_dict
                         })
 
-=======
-
-                # Pre-calculate sums for sorting if needed
-                if sort_key_str in ["iv", "ev"]:
-                    stats_json = row[f"{sort_key_str}_json"]
-                    stats_dict = json.loads(stats_json) if stats_json else {}
-                    p["_sort_value"] = sum(stats_dict.values()) if isinstance(stats_dict, dict) else sum(stats_dict) if isinstance(stats_dict, list) else 0
-                
->>>>>>> main
                 results.append(p)
                 
             # Perform Python sorting
@@ -2036,7 +1929,6 @@ class PokemonPC(QDialog):
             tab_changed_callback=self.on_stats_tab_changed,
             nature=pokemon.get("nature", "serious"),
             base_stats=pokemon.get("base_stats"),
-<<<<<<< HEAD
             old_stats=old_stats,
         )
         
@@ -2200,17 +2092,6 @@ class PokemonPC(QDialog):
             total = shown
             
         self.count_label.setText(f"Showing {shown} / {total} Pokémon")
-=======
-            friendship=pokemon.get("friendship", 0),
-            friendship_time_enabled=self.settings.get(
-                "evolution.friendship_time_enabled", True
-            ),
-        )
-        # Selecting a Pokémon only opens the details panel — no data change, so
-        # reuse the cached BFF. (The refresh_callback above keeps the default
-        # recompute=True for mutating actions like release/trade/rename/evolve.)
-        self.refresh_gui(recompute_bff=False)
->>>>>>> main
 
     def on_stats_tab_changed(self, index: int):
         """Callback to remember which tab (Stats/IV/EV) is selected."""

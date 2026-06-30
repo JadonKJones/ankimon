@@ -1,4 +1,5 @@
 import json
+from ..services import services
 
 from .badges_functions import get_achieved_badges
 from .pokedex_functions import extract_ids_from_file
@@ -78,13 +79,6 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
     evolution_triggered = False
 
     pokemon = db.get_pokemon(xp_share_individual_id)
-<<<<<<< HEAD
-    if not pokemon:
-        # Fixed: if pokemon not found in current DB (e.g. after account swap), skip sharing
-        mw.logger.log("warning", f"XP Share target {xp_share_individual_id} not found in current database.")
-        return exp
-        
-=======
     # The XP-Share target may have been released or traded away since it was
     # selected, leaving a dangling individual_id in settings. get_pokemon then
     # returns None and any pokemon[...] access below would raise
@@ -93,10 +87,9 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
     # main Pokémon still gets its share and the review continues normally.
     if pokemon is None:
         settings_obj.set("trainer.xp_share", None)
-        logger.log("info", "XP Share target no longer exists; cleared the setting.")
+        services.ui.log("warning", f"XP Share target {xp_share_individual_id} not found in current database; cleared the setting.")
         return original_exp
 
->>>>>>> main
     current_level = int(pokemon['level'])  # MODIFIED: Use local variable for level
     if pokemon.get('held_item') == "lucky-egg":
         exp = int(exp * 1.5) # Multiply by 1.5 if pokemon holds lucky egg

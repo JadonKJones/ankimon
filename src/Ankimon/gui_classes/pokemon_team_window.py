@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLi
 from PyQt6.QtGui import QPixmap
 import json
 import os
+from ..services import services
 from aqt import mw
 from aqt.utils import showInfo, showWarning
 from ..resources import mypokemon_path, frontdefault, team_pokemon_path
@@ -80,18 +81,7 @@ class PokemonTeamDialog(QDialog):
 
         # XP Share selection
         self.xp_share_selected_individual_id = None
-<<<<<<< HEAD
-        
-        xp_share_info_layout = QHBoxLayout()
-        self.xp_share_sprite_label = QLabel()
         self.xp_share_label = QLabel("XP Share: None")
-        xp_share_info_layout.addWidget(self.xp_share_sprite_label)
-        xp_share_info_layout.addWidget(self.xp_share_label)
-        xp_share_info_layout.addStretch()
-        
-=======
-        self.xp_share_label = QLabel("XP Share: None")
->>>>>>> main
         xp_share_button = QPushButton("Choose Pokémon with XP Share")
         xp_share_button.clicked.connect(self.choose_xp_share_pokemon)
 
@@ -99,7 +89,6 @@ class PokemonTeamDialog(QDialog):
         xp_share_pokemon_individual_id = self.settings.get("trainer.xp_share")
         if xp_share_pokemon_individual_id:
             self.xp_share_selected_individual_id = xp_share_pokemon_individual_id
-<<<<<<< HEAD
             # Find the name and sprite for display
             for pokemon in self.my_pokemon:
                 if pokemon['individual_id'] == xp_share_pokemon_individual_id:
@@ -113,15 +102,6 @@ class PokemonTeamDialog(QDialog):
                     break
 
         layout.addLayout(xp_share_info_layout)
-=======
-            # Find the name for display
-            for pokemon in self.my_pokemon:
-                if pokemon['individual_id'] == xp_share_pokemon_individual_id:
-                    self.xp_share_label.setText(f"XP Share: {pokemon['name']} (Level {pokemon['level']})")
-                    break
-
-        layout.addWidget(self.xp_share_label)
->>>>>>> main
         layout.addWidget(xp_share_button)
 
         # OK Button
@@ -139,7 +119,7 @@ class PokemonTeamDialog(QDialog):
 
     def load_my_pokemon(self):
         """Load the player's Pokémon data from database using lightweight stubs"""
-        cursor = mw.ankimon_db.execute("""
+        cursor = services.db.execute("""
             SELECT individual_id, 
                    name as name,
                    level as level,
@@ -167,18 +147,15 @@ class PokemonTeamDialog(QDialog):
         from ..business import calculate_pokemon_go_cp, pokemon_go_raw_stats
         
         try:
-            pokemon_data = mw.ankimon_db.get_pokemon(individual_id)
+            pokemon_data = services.db.get_pokemon(individual_id)
             if not pokemon_data:
                 return 0
             
-<<<<<<< HEAD
             # Debug: print available keys
             print(f"Pokemon data keys: {pokemon_data.keys()}")
             print(f"Base stats: {pokemon_data.get('base_stats', 'NOT FOUND')}")
             print(f"Detail stats: {pokemon_data.get('detail_stats', 'NOT FOUND')}")
             
-=======
->>>>>>> main
             base_stats = pokemon_data.get('base_stats', {})
             if not base_stats:
                 base_stats = pokemon_data.get('detail_stats', {})
@@ -193,7 +170,6 @@ class PokemonTeamDialog(QDialog):
                 ev = {stat: 0 for stat in ['hp', 'atk', 'def', 'spa', 'spd', 'spe']}
             
             attack, defense, stamina = pokemon_go_raw_stats(base_stats, iv, ev)
-<<<<<<< HEAD
             print(f"Attack: {attack}, Defense: {defense}, Stamina: {stamina}, Level: {level}")
             
             cp = calculate_pokemon_go_cp(attack, defense, stamina, level)
@@ -202,23 +178,17 @@ class PokemonTeamDialog(QDialog):
             print(f"Error calculating CP for {individual_id}: {e}")
             import traceback
             traceback.print_exc()
-=======
-            cp = calculate_pokemon_go_cp(attack, defense, stamina, level)
-            return cp
-        except Exception as e:
-            self.logger.log("error", f"Error calculating CP for {individual_id}: {e}")
->>>>>>> main
             return 0
 
     def load_pokemon_team(self):
         """Load the player's Pokémon Team from the database"""
-        team_data = mw.ankimon_db.get_team()
+        team_data = services.db.get_team()
         matching_pokemon = []
 
         for pokemon_in_team in team_data:
             individual_id = pokemon_in_team.get('individual_id')
             if individual_id:
-                pokemon = mw.ankimon_db.get_pokemon(individual_id)
+                pokemon = services.db.get_pokemon(individual_id)
                 if pokemon:
                     matching_pokemon.append(pokemon)
 
@@ -238,13 +208,9 @@ class PokemonTeamDialog(QDialog):
                 pokemon_name = pokemon['name']
                 pokemon_level = pokemon['level']
                 cp_value = self._calculate_pokemon_cp(pokemon['individual_id'])
-<<<<<<< HEAD
                 sprite_path = get_sprite_path(
                     "front", "png", pokemon['id'], pokemon.get('shiny', False), pokemon.get('gender', 'N'), pokemon['name']
                 )
-=======
-                sprite_path = os.path.join(frontdefault, f"{pokemon['id']}.png")
->>>>>>> main
 
                 # Update label with name, level, and CP
                 frame_data['label'].setText(f"{pokemon_name} (Level {pokemon_level}) - CP {cp_value}")
@@ -280,10 +246,7 @@ class PokemonTeamDialog(QDialog):
         sort_label = QLabel("Sort by:")
         sort_combo = QComboBox()
         sort_combo.addItems(["Name (A-Z)", "Level (High-Low)", "Pokédex ID", "CP (High-Low)"])
-<<<<<<< HEAD
         sort_combo.setCurrentIndex(3)
-=======
->>>>>>> main
         search_layout.addWidget(sort_label)
         search_layout.addWidget(sort_combo)
 
@@ -346,11 +309,7 @@ class PokemonTeamDialog(QDialog):
                     display_text = f"{pokemon['name']} (Level {pokemon['level']}) - CP {cp_value}"
                     
                     combo_box.addItem(display_text, pokemon)
-<<<<<<< HEAD
                     sprite_path = get_sprite_path("front", "png", pokemon['id'], pokemon["shiny"], pokemon["gender"], pokemon.get("name"))
-=======
-                    sprite_path = get_sprite_path("front", "png", pokemon['id'], pokemon["shiny"], pokemon["gender"])
->>>>>>> main
                     pixmap = QPixmap(sprite_path)
                     combo_box.setItemData(combo_box.count() - 1, pixmap, Qt.ItemDataRole.DecorationRole)
             else:
@@ -455,7 +414,7 @@ class PokemonTeamDialog(QDialog):
         self.settings.set("trainer.xp_share", xp_share_individual_id)  # Save XP Share Pokémon
 
         try:
-            mw.ankimon_db.save_team(team_data)
+            services.db.save_team(team_data)
 
             self.logger.log_and_showinfo("info", "Trainer settings saved to database.")
             self.logger.log_and_showinfo("info", f"You chose the following team: [{', '.join([pokemon['name'] for pokemon in pokemon_names])}]\nXP Share: {xp_share_pokemon}")
@@ -486,10 +445,7 @@ class PokemonTeamDialog(QDialog):
         sort_label = QLabel("Sort by:")
         sort_combo = QComboBox()
         sort_combo.addItems(["Name (A-Z)", "Level (High-Low)", "Pokédex ID", "CP (High-Low)"])
-<<<<<<< HEAD
         sort_combo.setCurrentIndex(3)
-=======
->>>>>>> main
         search_layout.addWidget(sort_label)
         search_layout.addWidget(sort_combo)
 
@@ -547,11 +503,7 @@ class PokemonTeamDialog(QDialog):
                     display_text = f"{pokemon['name']} (Level {pokemon['level']}) - CP {cp_value}"
                     
                     combo_box.addItem(display_text, pokemon['individual_id'])
-<<<<<<< HEAD
                     sprite_path = get_sprite_path("front", "png", pokemon['id'], pokemon["shiny"], pokemon["gender"], pokemon.get("name"))
-=======
-                    sprite_path = get_sprite_path("front", "png", pokemon['id'], pokemon["shiny"], pokemon["gender"])
->>>>>>> main
                     pixmap = QPixmap(sprite_path)
                     combo_box.setItemData(combo_box.count() - 1, pixmap, Qt.ItemDataRole.DecorationRole)
             
@@ -564,11 +516,7 @@ class PokemonTeamDialog(QDialog):
             if individual_id:
                 pokemon = next((p for p in self.my_pokemon if p['individual_id'] == individual_id), None)
                 if pokemon:
-<<<<<<< HEAD
                     sprite_path = get_sprite_path("front", "png", pokemon['id'], pokemon["shiny"], pokemon["gender"], pokemon.get("name"))
-=======
-                    sprite_path = get_sprite_path("front", "png", pokemon['id'], pokemon["shiny"], pokemon["gender"])
->>>>>>> main
                     pixmap = QPixmap(sprite_path)
                     image_label.setPixmap(pixmap.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio))
                     image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -601,7 +549,6 @@ class PokemonTeamDialog(QDialog):
             pokemon = next((p for p in self.my_pokemon if p['individual_id'] == selected_individual_id), None)
             if pokemon:
                 self.xp_share_label.setText(f"XP Share: {pokemon['name']} (Level {pokemon['level']})")
-<<<<<<< HEAD
                 sprite_path = get_sprite_path(
                     "front", "png", pokemon['id'], pokemon.get('shiny', False), pokemon.get('gender', 'N'), pokemon['name']
                 )
@@ -613,9 +560,5 @@ class PokemonTeamDialog(QDialog):
         else:
             self.xp_share_label.setText("XP Share: None")
             self.xp_share_sprite_label.clear()
-=======
-        else:
-            self.xp_share_label.setText("XP Share: None")
->>>>>>> main
     
         dialog.accept()

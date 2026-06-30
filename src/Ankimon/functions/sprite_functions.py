@@ -1,16 +1,8 @@
 import os
 import json
 
-<<<<<<< HEAD
-from aqt import mw
-
-from ..resources import pkmnimgfolder, pokedex_path
-
-from .pokedex_functions import _load_pokedex_cache, safe_int
-=======
 from ..services import services
 from ..resources import pkmnimgfolder
->>>>>>> main
 
 SUBSTITUTE_PATH = f"{pkmnimgfolder}/front_default/substitute.png"
 
@@ -68,10 +60,6 @@ def _try_back(back: bool, id: int, gif: bool, shiny: bool, female: bool):
         return path
 
     if back:
-<<<<<<< HEAD
-        # requested back, fallback to front
-        path = _try_gendered(False, id, gif, shiny, female)
-=======
         # requested back
 
         # special fallback
@@ -82,7 +70,6 @@ def _try_back(back: bool, id: int, gif: bool, shiny: bool, female: bool):
                 return path
 
         path = _try_gendered(False, id, gif, shiny, False)
->>>>>>> main
         if path:
             return path
 
