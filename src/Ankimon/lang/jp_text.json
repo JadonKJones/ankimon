@@ -10,6 +10,7 @@
   "error_occured": "{function}でエラーが発生しました。このエラーメッセージをバグ報告に投稿してください。",
   "missing_mainpokemon_data": "ポケモンデータが見つかりません",
   "pokemon_about_to_evolve": "{main_pokemon_name}はレベル{main_pokemon_level}で{evo_pokemon_name}に進化しようとしています。",
+  "pokemon_about_to_evolve_friendship": "{main_pokemon_name}は{evo_pokemon_name}に進化する準備ができました！",
   "mainpokemon_can_learn_new_attack": "あなたの{main_pokemon_name}は新しい技を覚えることができます！",
   "mainpokemon_learned_new_attack": "あなたの{main_pokemon_name}は{new_attack_name}を覚えました！",
   "mainpokemon_gained_xp": "あなたの{main_pokemon_name}は{exp} XPを獲得しました。\n 次のレベルまで{experience_till_next_level} XPが必要です。\n 現在のXP: {main_pokemon_xp}",
@@ -458,6 +459,7 @@
   "cp_label": "CP",
   "bp_label": "BP",
   "combat_power": "戦闘力",
+<<<<<<< HEAD
   "battle_power": "バトルパワー",
   "pokemon_about_to_evolve_friendship": "{main_pokemon_name}は{evo_pokemon_name}に進化する準備ができました！",
   "friendship_label": "なかよし度",
@@ -468,3 +470,7 @@
   "badge_wait_day": "☀️ 昼の間に進化できます",
   "badge_wait_night": "🌙 夜の間に進化できます"
 }
+=======
+  "battle_power": "バトルパワー"
+}
+>>>>>>> main

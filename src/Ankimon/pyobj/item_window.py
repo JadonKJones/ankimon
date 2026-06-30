@@ -316,6 +316,7 @@ class ItemWindow(QWidget):
             if target_pokemon_data:
                 pokemon_obj = PokemonObject.from_dict(target_pokemon_data)
                 pokemon_obj.give_held_item(item_name)
+<<<<<<< HEAD
 
                 # Sync the main_pokemon singleton if it's the target
                 if (
@@ -328,6 +329,14 @@ class ItemWindow(QWidget):
                     "info",
                     f"{item_name} was given to {target_pokemon_data.get('name')}.",
                 )
+=======
+                                
+                # Sync the main_pokemon singleton if it's the target
+                if self.main_pokemon and self.main_pokemon.individual_id == individual_id:
+                    self.main_pokemon.held_item = item_name
+                   
+                self.logger.log_and_showinfo("info", f"{item_name} was given to {target_pokemon_data.get('name')}.")
+>>>>>>> main
                 self.renewWidgets()
 
                 # Refresh open PC Box window
@@ -692,6 +701,7 @@ class ItemWindow(QWidget):
 
     def load_evolution_items(self):
         try:
+<<<<<<< HEAD
             self.evolution_items = set()
 
             # Load all items from pokedex.json that are used as evolution items (evoType == "useItem")
@@ -706,6 +716,26 @@ class ItemWindow(QWidget):
                         # e.g., Convert "Galarica Cuff" -> "galarica-cuff", "Ice Stone" -> "ice-stone"
                         identifier = evo_item.lower().replace(" ", "-")
                         self.evolution_items.add(identifier)
+=======
+            evolution_item_ids = set()
+            with open(poke_evo_path, mode='r', newline='', encoding='utf-8') as evo_file:
+                reader = csv.DictReader(evo_file)
+                for row in reader:
+                    # Use-item evolutions (trigger 3) consume trigger_item_id.
+                    if row.get('evolution_trigger_id') == '3':
+                        item_id = row.get('trigger_item_id')
+                        if item_id:
+                            evolution_item_ids.add(item_id)
+                    # Trade-with-held-item evolutions (trigger 2) need held_item_id.
+                    # Ankimon has no trading, so surface the held item as usable
+                    # (e.g. Metal Coat -> Steelix/Scizor, Deep Sea Tooth/Scale ->
+                    # Huntail/Gorebyss, Dragon Scale -> Kingdra, King's Rock ->
+                    # Politoed/Slowking).
+                    elif row.get('evolution_trigger_id') == '2':
+                        item_id = row.get('held_item_id')
+                        if item_id:
+                            evolution_item_ids.add(item_id)
+>>>>>>> main
 
         except Exception as e:
             self.logger.log_and_showinfo("error", f"Error loading evolution items: {e}")

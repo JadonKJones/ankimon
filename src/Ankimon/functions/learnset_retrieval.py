@@ -22,6 +22,7 @@ def clear_learnset_cache():
     """Clear the learnset cache if data is updated"""
     global _learnset_cache
     _learnset_cache = None
+<<<<<<< HEAD
 
 def clean_pokeapi_name(name: str) -> str:
     name_lower = name.lower()
@@ -60,6 +61,8 @@ DEOXYS_EXCLUSIONS = {
         "amnesia", "counter", "mirrorcoat"
     }
 }
+=======
+>>>>>>> main
 
 def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
     """
@@ -69,6 +72,7 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
     """
     learnsets = _load_learnset_cache()
 
+<<<<<<< HEAD
     # Try standard key normalization first
     norm_name = pokemon_name.lower().replace("-", "").replace(" ", "").replace("'", "").replace(".", "")
     pokemon_learnset = learnsets.get(norm_name, {}).get("learnset", {})
@@ -109,6 +113,24 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
                     pokemon_learnset = {**base_learnset, **pokemon_learnset}
         except Exception:
             pass
+=======
+    pokemon_name = pokemon_name.lower().replace("-", "").replace(" ", "").replace("'", "").replace(".", "")
+    pokemon_learnset = learnsets.get(pokemon_name, {}).get("learnset", {})
+    
+    # Fallback to base form for Mega/Gigantamax/Primal if no learnset found
+    if not pokemon_learnset and any(x in pokemon_name for x in ["mega", "gmax", "primal"]):
+        # Use pokedex to find the base form via species_id
+        from .pokedex_functions import _load_pokedex_cache, search_pokedex_by_id, search_pokedex
+        pokedex_data = _load_pokedex_cache()
+        
+        # Use search_pokedex to handle normalized names and fallbacks
+        species_id = search_pokedex(pokemon_name, "species_id")
+        
+        if species_id and not isinstance(species_id, list):
+            base_name = search_pokedex_by_id(species_id)
+            if base_name and base_name != "Pokémon not found":
+                pokemon_learnset = learnsets.get(base_name, {}).get("learnset", {})
+>>>>>>> main
 
     moves = {}
     
@@ -118,6 +140,7 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
         target_generation = str(gen)
         
         for move, learn_codes in pokemon_learnset.items():
+<<<<<<< HEAD
             if norm_name in DEOXYS_EXCLUSIONS and move in DEOXYS_EXCLUSIONS[norm_name]:
                 continue
             best = -1
@@ -142,6 +165,15 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
                 else:
                     continue
                 
+=======
+            best = -1
+            for learn_code in learn_codes:
+                move_generation, _, move_level = learn_code.partition("L")
+                if move_generation != target_generation:
+                    continue
+                
+                learn_level = int(move_level)
+>>>>>>> main
                 if pokemon_level >= learn_level > best:
                     best = learn_level
             

@@ -5,7 +5,7 @@ import traceback
 from typing import Union
 
 from ..poke_engine import constants
-from ..singletons import ankimon_tracker_obj, settings_obj
+from ..services import services
 import math
 
 from ..poke_engine.battle import Move
@@ -28,6 +28,11 @@ def _wrapped_get_instructions_from_damage(mutator, defender, damage, accuracy, a
 
 instruction_generator.get_instructions_from_damage = _wrapped_get_instructions_from_damage
 
+
+# Shared state used as bare module globals below; bound to the live registry
+# objects by core.bind_runtime_globals() after composition.
+ankimon_tracker_obj = None
+settings_obj = None
 
 def reset_stat_boosts(pokemon: Pokemon) -> Pokemon:
     """

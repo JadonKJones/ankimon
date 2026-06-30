@@ -2,6 +2,7 @@ from anki.hooks import addHook
 from aqt import gui_hooks, mw
 
 from .singletons import settings_obj, logger
+from .utils import test_online_connectivity
 from .pyobj.ankimon_sync import setup_ankimon_sync_hooks, check_and_sync_pokemon_data
 from .pyobj.tip_of_the_day import show_tip_of_the_day
 from .pyobj.pokemon_trade import check_and_award_monthly_pokemon
@@ -52,6 +53,7 @@ def _on_profile_did_open(online_connectivity=None):
                 parent=mw, exception=e, message="Error showing tip of the day:"
             )
 
+<<<<<<< HEAD
         from aqt.operations import QueryOp
         from .utils import test_online_connectivity
 
@@ -85,6 +87,28 @@ def _on_profile_did_open(online_connectivity=None):
                 logger.log(
                     "info",
                     "Skipping monthly pokemon check due to no internet connectivity.",
+=======
+        def check_connectivity_bg() -> bool:
+            # Only run the actual check if we think we're offline
+            if not online_connectivity:
+                return test_online_connectivity()
+            return online_connectivity
+
+        def on_done(future) -> None:
+            is_online = future.result()
+            # We want to use the result of the background check
+            try:
+                if is_online:
+                    check_and_award_monthly_pokemon(logger)
+                else:
+                    logger.log(
+                        "info",
+                        "Skipping monthly pokemon check due to no internet connectivity.",
+                    )
+            except Exception as e:
+                show_warning_with_traceback(
+                    parent=mw, exception=e, message="Error awarding monthly pokemon:"
+>>>>>>> main
                 )
 
             try:
@@ -98,7 +122,11 @@ def _on_profile_did_open(online_connectivity=None):
 
                 setup_ankimon_sync_hooks(settings_obj, logger)
 
+<<<<<<< HEAD
                 if not connected:
+=======
+                if not is_online:
+>>>>>>> main
                     logger.log(
                         "info", "No connection - AnkiWeb sync is disabled for this session"
                     )
@@ -111,11 +139,15 @@ def _on_profile_did_open(online_connectivity=None):
                     parent=mw, exception=e, message="Error setting up sync system:"
                 )
 
+<<<<<<< HEAD
         QueryOp(
             parent=mw,
             op=lambda _: run_conn_check(),
             success=on_conn_done
         ).without_collection().run_in_background()
+=======
+        mw.taskman.run_in_background(check_connectivity_bg, on_done)
+>>>>>>> main
 
     return handler
 

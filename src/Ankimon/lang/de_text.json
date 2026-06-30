@@ -10,6 +10,7 @@
   "error_occured": "Ein Fehler ist aufgetreten mit {function}. Bitte poste diese Fehlermeldung im Report-Bug-Forum.",
   "missing_mainpokemon_data": "Fehlende Pokémon-Daten",
   "pokemon_about_to_evolve": "{main_pokemon_name} steht kurz davor, sich zu {evo_pokemon_name} auf Level {main_pokemon_level} zu entwickeln.",
+  "pokemon_about_to_evolve_friendship": "{main_pokemon_name} ist bereit, sich zu {evo_pokemon_name} zu entwickeln!",
   "mainpokemon_can_learn_new_attack": "Dein {main_pokemon_name} kann eine neue Attacke erlernen!",
   "mainpokemon_learned_new_attack": "Dein {main_pokemon_name} hat {new_attack_name} erlernt!",
   "mainpokemon_gained_xp": "Dein {main_pokemon_name} hat {exp} EP erhalten.\n Es werden noch {experience_till_next_level} EP für das nächste Level benötigt.\n Dein Pokémon hat derzeit {main_pokemon_xp}.",
@@ -458,6 +459,7 @@
   "cp_label": "WP",
   "bp_label": "KP",
   "combat_power": "Wettkampfpunkte",
+<<<<<<< HEAD
   "battle_power": "Kampfstärke",
   "pokemon_about_to_evolve_friendship": "{main_pokemon_name} ist bereit, sich zu {evo_pokemon_name} zu entwickeln!",
   "friendship_label": "Freundschaft",
@@ -468,3 +470,7 @@
   "badge_wait_day": "☀️ Bereit zur Entwicklung am Tag",
   "badge_wait_night": "🌙 Bereit zur Entwicklung in der Nacht"
 }
+=======
+  "battle_power": "Kampfstärke"
+}
+>>>>>>> main

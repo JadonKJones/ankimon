@@ -3,13 +3,16 @@ import uuid
 import json
 import os
 from typing import Optional
-from aqt import mw
 
+from ..services import services
+# NOTE: give_item is imported lazily inside give_back_held_item() (below) rather
+# than here. utils imports pokedex_functions which imports this module, so a
+# top-level `from ..utils import give_item` forms an import cycle that breaks
+# whichever module in it loads first. The lazy import sidesteps that entirely.
 from ..functions.sprite_functions import get_sprite_path
 
 from ..poke_engine.objects import Pokemon
 from ..resources import pkmnimgfolder, mainpokemon_path, mypokemon_path
-from ..utils import give_item
 
 class PokemonObject:
     def __init__(
@@ -323,7 +326,11 @@ class PokemonObject:
             "base_experience": self.base_experience,
             "growth_rate": self.growth_rate,
             "everstone": self.everstone,
+<<<<<<< HEAD
             "evolution_rejected": getattr(self, "evolution_rejected", False),
+=======
+            "evolution_rejected": self.evolution_rejected,
+>>>>>>> main
             "shiny": self.shiny,
             "captured_date": getattr(self, "captured_date", None),
             "individual_id": self.individual_id,
@@ -533,7 +540,7 @@ class PokemonObject:
 
         If the Pokémon is already holding an item, it is removed first.
         """
-        db = mw.ankimon_db
+        db = services.db
         
         # If the pokemon already holds an object, we remove it to make room for the new one.
         if self.held_item:
@@ -565,8 +572,9 @@ class PokemonObject:
         if self.held_item is None:
             return
 
-        db = mw.ankimon_db
+        db = services.db
 
+        from ..utils import give_item  # lazy: avoids the utils<->pokedex<->pokemon_obj cycle
         give_item(self.held_item)  # We put the item back in the item bag
         self.held_item = None
 
