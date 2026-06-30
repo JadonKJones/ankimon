@@ -61,7 +61,8 @@ class ApiKeyDialog(QDialog):
         try:
             # Save the new credentials to the database
             for key, value in credentials.items():
-                services.db.set_user_data(key, value)
+                if services.db:
+                    services.db.set_user_data(key, value)
             showInfo("Credentials saved successfully!")
         except Exception as e:
             showInfo(f"Error saving credentials: {e}")
@@ -69,11 +70,13 @@ class ApiKeyDialog(QDialog):
 def sync_data_to_leaderboard(data):
 
         # First check if leaderboard is enabled in config
-        if not services.settings.get("misc.leaderboard"):
+        if not services.settings or not services.settings.get("misc.leaderboard"):
             return
 
         try:
             # Load credentials from the database
+            if not services.db:
+                return
             username = services.db.get_user_data("username")
             api_key = services.db.get_user_data("api_key")
 
