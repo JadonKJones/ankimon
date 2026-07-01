@@ -167,3 +167,31 @@ Status legend: **OPEN** (needs owner) · **RECOMMENDED** (Stage A suggests a pat
 - Brief expected `141889580+h0tp-ftw@users.noreply.github.com`; the machine's configured git
   identity is `h0tp-ftw <h0tp-ftw@users.noreply.github.com>` (a valid GitHub **noreply**, so the
   Privacy Check passes with no consent line). Not changed (§4). Stage B inherits this identity.
+
+## NR-15 — origin/BRRRR_Experimental advanced 8 commits past Stage A's snapshot (uncovered work)  ·  OPEN (owner decided: escalate)
+- **What (git ground truth, Stage B):** at Stage B start `origin/BRRRR_Experimental` = `11b5292e`, i.e. **8 non-merge commits ahead** of the tip Stage A enumerated from (`aad0d6b4`). The exp-only change set is now **170 files, not 165** (NR-12). Per invariant 1a (git > docs) Stage B reconciled the delta.
+- **The 8 commits (`aad0d6b4..11b5292e`):** `dfca1848` two bugs from PR #532 pre-merge audit · `8712866b` isolate mocks in test_monthly_challenge_fixes.py · `28bbbf9f` manual port of settings_window bool/int + friendship-evolution fallback · `e62cfd34` migrate legacy string items/badges + backfill individual_ids (#470) · `bf53e341` monthly-challenge shiny-eligibility crash + rate_this/threshold hardening (#483) · `0113b61d` start Discord Rich Presence on first review (#491) · `5ff1a54b` fix ValueError unpacking read_github_file (#489) · `e174af63` bypass data-migration dialog on fresh installs.
+- **5 files OUTSIDE Stage A's 165-file partition (no inventory row covers them):**
+  1. `src/Ankimon/discord_integration.py` + `src/Ankimon/functions/discord_function.py` — Discord Rich Presence first-review start (#491).
+  2. `src/Ankimon/pyobj/help_window.py` — read_github_file ValueError-unpack fix (#489) (paired with `gui_entities.py`, covered by **F43**).
+  3. `src/Ankimon/pyobj/migration_dialog.py` — fresh-install migration bypass + legacy string item/badge migration + individual_id backfill (#470) + #532 audit fix.
+  4. `tests/test_monthly_challenge_fixes.py` — test for #483 monthly-challenge hardening (production hunks land in `database_manager.py`/`pokemon_trade.py`).
+- **Plus extra hunks on 5 ALREADY-COVERED files** (auto-included by those rows' live two-dot manifests at port time → not lost): `pokedex_functions.py`→F17, `settings_window.py`→F28, `database_manager.py`→F14/F25, `pokemon_trade.py`→F48, `gui_entities.py`→F43. Each porting unit is instructed to verify the post-snapshot hunks vs base and call them out in its PR. (F28 PR #544 already carries the settings_window bool/int hunks.)
+- **Owner decision (Stage B, control point #2):** **escalate all uncovered work to NEEDS-REVIEW only** — do NOT auto-open PRs for the 5 uncovered files. Rationale: late upstream bug-fixes (citing merged PRs #470/#483/#489/#491/#532), never in Stage A's contract, possibly already on `main`/base (→ superseded no-ops); owner triages manually.
+- **Recommended next step:** for each uncovered item, `git diff a8abbd663896b05da592ba7f5402ab6923248974..origin/BRRRR_Experimental -- <path>` then diff vs `origin/main` to check if the upstream PR already merged into main; port only the genuinely-absent ones as a small follow-up, or cherry-pick the upstream commits directly. Reconstruct with `git show 0113b61d 5ff1a54b e174af63 e62cfd34 bf53e341 dfca1848 28bbbf9f 8712866b`.
+
+## NR-16 — F03 repository-analysis/ (21 docs) — DROPPED per owner (NR-14 resolution)  ·  RESOLVED
+- **What:** F03 (DEFERRED-TO-STAGE-B leaf) = 21 agent-oriented architecture-audit docs under `repository-analysis/` describing exp's web-shell + **direct-`mw`** world, which contradicts main's service seam (would document a codebase that does not exist on main).
+- **Owner decision (Stage B, control point #2):** **drop** from the shipped tree. Content preserved in this ledger + the diff report at `~/Downloads/main_vs_BRRRR_Experimental_diff_report.md`; reconstructable via `git show origin/BRRRR_Experimental:repository-analysis/<file>`.
+- **Outcome:** no PR; recorded as intentionally dropped (zero-feature-loss satisfied by this entry). Completes F03's set-diff obligation.
+
+## NR-17 — F07 _BRRR_EXPERIMENTAL_FEATURE_LIST.md — DROPPED per owner (NR-14 resolution)  ·  RESOLVED
+- **What:** F07 (DEFERRED-TO-STAGE-B leaf) = `src/Ankimon/_BRRR_EXPERIMENTAL_FEATURE_LIST.md`, a 295-line transient exp planning/changelog index inside the shipped addon dir.
+- **Owner decision (Stage B, control point #2):** **drop** from the shipped tree (content preserved in this ledger + the diff report). Reconstructable via `git show origin/BRRRR_Experimental:src/Ankimon/_BRRR_EXPERIMENTAL_FEATURE_LIST.md`.
+- **Outcome:** no PR; recorded as intentionally dropped. Completes F07's set-diff obligation.
+- **Note:** F04 (`AGENTS.md`) is NOT dropped — owner chose *reconcile onto main's seam guidance*; ships as a docs unit in a later wave.
+
+## NR-18 — F30↔F22 atomic-pair partition refinement (CPM formula + its test)  ·  RESOLVED (Stage B)
+- **What:** exp shipped `business.calculate_cpm()` rescale and its paired assertion `tests/test_cp_formula.py::test_level_100_near_cap` (`0.84`→`2.45`) as ONE atomic change (commit `180bcf29`). Stage A's clean partition split them: `business.py`→**F30**, `test_cp_formula.py`→**F22**. F30 therefore could not ship green in isolation (base test still pinned the old 0.84 cap → 1 new pytest failure).
+- **Resolution (Stage B orchestrator, Wave 1):** authorized **F30 (PR #546)** to carry the single `test_level_100_near_cap` assertion line alongside `business.py`. It is byte-identical to what F22 will also carry, so it **auto-merges** with F22's later PR (no conflict, no semantic double-port). `calculate_cpm(100) = 2.4207… ∈ (2.4, 2.45]`.
+- **Action for the Wave-2 F22 unit:** when porting `test_cp_formula.py`, expect the `test_level_100_near_cap` line already at `2.4 < cpm <= 2.45` (landed by F30); apply the rest of F22's test changes onto it. Do NOT treat the pre-applied line as a conflict.
