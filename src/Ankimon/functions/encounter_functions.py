@@ -1181,6 +1181,10 @@ def save_main_pokemon_progress(
         main_pokemon_data = db.get_main_pokemon()
         if not main_pokemon_data:
             showWarning(translator.translate("missing_mainpokemon_data"))
+        else:
+            main_pokemon.pokemon_defeated += 1
+            main_pokemon_data["pokemon_defeated"] = main_pokemon.pokemon_defeated
+            db.save_main_pokemon(main_pokemon_data)
     except Exception as e:
         mw.logger.log("error", f"Error loading main pokemon data: {str(e)}")
         show_warning_with_traceback(
@@ -1388,7 +1392,6 @@ def save_main_pokemon_progress(
                 getattr(main_pokemon, "evolution_rejected", False),
             )
 
-        main_pokemon.pokemon_defeated += 1
         mainpkmndata["pokemon_defeated"] = main_pokemon.pokemon_defeated
         if hasattr(main_pokemon, "tier"):
             mainpkmndata["tier"] = main_pokemon.tier

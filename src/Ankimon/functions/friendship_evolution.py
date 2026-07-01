@@ -846,13 +846,35 @@ def check_friendship_evolution_for_pokemon(
     ):
         return None
 
-    shim = {"id": pokemon_id, "friendship": friendship, "everstone": everstone}
+    pokemon_defeated = 0
+    from aqt import mw
+    if hasattr(mw, "ankimon_db") and mw.ankimon_db:
+        pkmn_data = mw.ankimon_db.get_pokemon(individual_id)
+        if pkmn_data:
+            pokemon_defeated = pkmn_data.get("pokemon_defeated", 0)
+
+    shim = {
+        "id": pokemon_id,
+        "friendship": friendship,
+        "everstone": everstone,
+        "pokemon_defeated": pokemon_defeated,
+    }
     readiness = evolution_readiness(shim, now)
-    # Only the friendship path auto-prompts here. Level-up evolutions are
-    # auto-handled by check_evolution_for_pokemon (pokedex_functions.py); a
-    # level-ready Pokémon surfaced by evolution_readiness must NOT be auto-
-    # prompted by this friendship checker (the manual PC button still covers it).
+    
+    # 1. Friendship evolution auto-prompts here
     if readiness["method"] == "friendship" and readiness["ready"]:
         evo_window.ask_pokemon_evo(individual_id, pokemon_id, readiness["evo_id"])
         return readiness["evo_id"]
+
+    # 2. minimumDefeated evolution auto-prompts here on victory milestone
+    if readiness["method"] == "level" and readiness["ready"]:
+        from .pokedex_functions import _load_pokedex_cache, search_pokedex_by_id
+        pokedex_data = _load_pokedex_cache()
+        target_name = search_pokedex_by_id(readiness["evo_id"])
+        if target_name in pokedex_data:
+            t_data = pokedex_data[target_name]
+            if (t_data.get("evoCondition") or "").lower() == "minimumdefeated":
+                evo_window.ask_pokemon_evo(individual_id, pokemon_id, readiness["evo_id"])
+                return readiness["evo_id"]
+
     return None

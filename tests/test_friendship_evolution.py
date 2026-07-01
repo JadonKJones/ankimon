@@ -711,5 +711,28 @@ def test_pawmo_minimum_defeated_readiness():
     assert "Ready to evolve into Pawmot!" in res_ready["status_text"]
 
 
+def test_check_friendship_evolution_auto_prompts_pawmo():
+    # Pawmo (922) -> Pawmot (923) has a minimumDefeated condition.
+    # When check_friendship_evolution_for_pokemon is called, it should query the DB,
+    # see the defeat count is >= 100, and auto-prompt.
+    from aqt import mw
+    mw.ankimon_db = mock.MagicMock()
+    mw.ankimon_db.get_pokemon = mock.MagicMock(return_value={"pokemon_defeated": 100})
+    
+    evo_window = mock.MagicMock()
+    
+    res = fe.check_friendship_evolution_for_pokemon(
+        individual_id="some_id",
+        pokemon_id=922,
+        evo_window=evo_window,
+        friendship=50,
+        evolution_rejected=False
+    )
+    
+    assert res == 923  # Pawmot
+    evo_window.ask_pokemon_evo.assert_called_once_with("some_id", 922, 923)
+
+
+
 
 
