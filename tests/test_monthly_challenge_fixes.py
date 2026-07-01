@@ -4,29 +4,44 @@ import importlib.util
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# Mock Anki dependencies
-sys.modules["aqt"] = MagicMock()
-sys.modules["aqt.qt"] = MagicMock()
-sys.modules["aqt.utils"] = MagicMock()
-sys.modules["aqt.theme"] = MagicMock()
-sys.modules["anki"] = MagicMock()
-sys.modules["anki.buildinfo"] = MagicMock()
-sys.modules["anki.utils"] = MagicMock()
-sys.modules["PyQt6"] = MagicMock()
-sys.modules["PyQt6.QtWidgets"] = MagicMock()
-sys.modules["PyQt6.QtGui"] = MagicMock()
-sys.modules["PyQt6.QtCore"] = MagicMock()
-
-# Instead of direct import, use importlib to avoid breaking conftest's module stubbing
 _src = Path(__file__).parent.parent / "src"
-spec = importlib.util.spec_from_file_location(
-    "Ankimon.pyobj.pokemon_trade",
-    _src / "Ankimon" / "pyobj" / "pokemon_trade.py",
-)
-pokemon_trade_module = importlib.util.module_from_spec(spec)
-sys.modules["Ankimon.pyobj.pokemon_trade"] = pokemon_trade_module
-spec.loader.exec_module(pokemon_trade_module)
-check_and_award_monthly_pokemon = pokemon_trade_module.check_and_award_monthly_pokemon
+
+@pytest.fixture(scope="module", autouse=True)
+def mock_dependencies_and_load_module():
+    # Backup original modules before mocking
+    mocked_modules = [
+        "aqt", "aqt.qt", "aqt.utils", "aqt.theme", 
+        "anki", "anki.buildinfo", "anki.utils", 
+        "PyQt6", "PyQt6.QtWidgets", "PyQt6.QtGui", "PyQt6.QtCore",
+        "Ankimon.pyobj.pokemon_trade"
+    ]
+    backup = {name: sys.modules.get(name) for name in mocked_modules}
+
+    # Mock Anki dependencies
+    for name in mocked_modules[:-1]:
+         sys.modules[name] = MagicMock()
+
+    # Instead of direct import, use importlib to avoid breaking conftest's module stubbing
+    spec = importlib.util.spec_from_file_location(
+        "Ankimon.pyobj.pokemon_trade",
+        _src / "Ankimon" / "pyobj" / "pokemon_trade.py",
+    )
+    pokemon_trade_module = importlib.util.module_from_spec(spec)
+    sys.modules["Ankimon.pyobj.pokemon_trade"] = pokemon_trade_module
+    spec.loader.exec_module(pokemon_trade_module)
+    
+    # Expose the functions/modules globally
+    global check_and_award_monthly_pokemon
+    check_and_award_monthly_pokemon = pokemon_trade_module.check_and_award_monthly_pokemon
+
+    yield
+
+    # Restore backup
+    for name, original_val in backup.items():
+        if original_val is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = original_val
 
 
 
