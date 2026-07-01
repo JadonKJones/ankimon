@@ -518,6 +518,13 @@ class ItemWindow(QWidget):
         self.main_pokemon.hp += heal_points
         if self.main_pokemon.hp > (self.main_pokemon.max_hp):
             self.main_pokemon.hp = self.main_pokemon.max_hp
+
+        # Save to database using the services registry
+        from ..services import services
+        pokemon_data = self.main_pokemon.to_dict()
+        services.db.save_pokemon(pokemon_data)
+        services.db.save_main_pokemon(pokemon_data)
+
         self.delete_item(item_name)
         play_effect_sound(self.settings_obj, "HpHeal")
         self.logger.log_and_showinfo("info", f"{prevo_name} was healed for {heal_points}")
