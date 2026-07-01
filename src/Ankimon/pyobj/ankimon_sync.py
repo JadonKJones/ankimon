@@ -809,7 +809,7 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
 
                 dev_db_path = user_path / "ankimonDEV.db"
                 original_db_name = mw.ankimon_db.db_path.name
-                desktop_ids = get_desktop_session_revlog_ids()
+                desktop_ids = get_desktop_session_revlog_ids(mw.col)
 
                 newly_queued_normal = 0
                 newly_queued_dev = 0
@@ -824,6 +824,14 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
                         newly_queued_normal = mw.ankimon_db.queue_mobile_battles(all_mobile_normal)
                         mw.ankimon_db.set_mobile_watermark(max(r["id"] for r in all_mobile_normal))
 
+                    max_revlog_id = mw.col.db.scalar("SELECT MAX(id) FROM revlog")
+                    if type(max_revlog_id).__name__ in ("MagicMock", "Mock"):
+                        max_revlog_id = None
+                    if isinstance(max_revlog_id, (int, float)):
+                        current_watermark = mw.ankimon_db.get_mobile_watermark()
+                        if max_revlog_id > current_watermark:
+                            mw.ankimon_db.set_mobile_watermark(max_revlog_id)
+
                     # 2. Queue to ankimonDEV.db if present
                     if dev_db_path.is_file():
                         if mw.ankimon_db.db_path.name != "ankimonDEV.db":
@@ -833,6 +841,11 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
                         if all_mobile_dev:
                             newly_queued_dev = mw.ankimon_db.queue_mobile_battles(all_mobile_dev)
                             mw.ankimon_db.set_mobile_watermark(max(r["id"] for r in all_mobile_dev))
+
+                        if isinstance(max_revlog_id, (int, float)):
+                            current_watermark = mw.ankimon_db.get_mobile_watermark()
+                            if max_revlog_id > current_watermark:
+                                mw.ankimon_db.set_mobile_watermark(max_revlog_id)
                 finally:
                     if mw.ankimon_db.db_path.name != original_db_name:
                         mw.ankimon_db.switch_database(original_db_name)

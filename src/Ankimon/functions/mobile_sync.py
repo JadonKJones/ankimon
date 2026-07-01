@@ -11,17 +11,43 @@ import threading
 _mobile_sync_lock = threading.Lock()
 
 _desktop_session_revlog_ids: set[int] = set()
+_desktop_session_card_ids: set[int] = set()
 MOBILE_QUEUE_CAP = 10_000
 
-def record_desktop_review(revlog_id: int) -> None:
+def record_desktop_review(revlog_id: int, card_id: int = None) -> None:
     """Record a revlog.id that Ankimon handled on desktop this inter-sync interval."""
-    _desktop_session_revlog_ids.add(revlog_id)
+    if revlog_id:
+        _desktop_session_revlog_ids.add(revlog_id)
+        # Also durably advance the watermark so a restart mid-session can't re-expose this review
+        try:
+            from aqt import mw
+            db = mw.ankimon_db
+            current = db.get_mobile_watermark()
+            if revlog_id > current:
+                db.set_mobile_watermark(revlog_id)
+        except Exception:
+            pass
+    if card_id is not None:
+        _desktop_session_card_ids.add(card_id)
 
-def get_desktop_session_revlog_ids() -> frozenset[int]:
-    return frozenset(_desktop_session_revlog_ids)
+def get_desktop_session_revlog_ids(col=None) -> frozenset[int]:
+    ids = set(_desktop_session_revlog_ids)
+    if col and _desktop_session_card_ids:
+        try:
+            placeholders = ",".join("?" for _ in _desktop_session_card_ids)
+            rows = col.db.list(
+                f"SELECT id FROM revlog WHERE cid IN ({placeholders})",
+                *list(_desktop_session_card_ids)
+            )
+            for r_id in rows:
+                ids.add(r_id)
+        except Exception:
+            pass
+    return frozenset(ids)
 
 def clear_desktop_session() -> None:
     _desktop_session_revlog_ids.clear()
+    _desktop_session_card_ids.clear()
 
 class TempTracker:
     def __init__(self, total_reviews: int):

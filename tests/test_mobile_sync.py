@@ -1774,3 +1774,54 @@ def test_enemy_level_uses_active_companions_only_when_inactive_high_level(temp_e
 
 
 
+def test_desktop_review_watermark_persistence(temp_env):
+    db, tmp_path = temp_env
+    from aqt import mw
+    mw.ankimon_db = db
+
+    db.set_mobile_watermark(500)
+    
+    # 1. Calling record_desktop_review advances watermark durably in DB
+    record_desktop_review(600, 1234)
+    assert db.get_mobile_watermark() == 600
+
+    # 2. Simulate restart: clear memory set, query detect_mobile_reviews.
+    # The desktop reviews (with revlog_id <= 600) should be excluded because of watermark.
+    clear_desktop_session()
+    
+    # Mock collection database query returning reviews filtering by watermark
+    col = MagicMock()
+    def mock_db_all(query, watermark_val):
+        rows = [
+            (550, 1234, 3, 10000, 1), # older review (desktop)
+            (600, 1234, 3, 10000, 1), # current review (desktop)
+            (700, 5678, 3, 10000, 1), # new review (mobile)
+        ]
+        return [r for r in rows if r[0] > watermark_val]
+    col.db.all.side_effect = mock_db_all
+    
+    watermark = db.get_mobile_watermark()
+    desktop_ids = get_desktop_session_revlog_ids(col)
+    
+    # Assert get_desktop_session_revlog_ids returns empty because of session clear
+    assert len(desktop_ids) == 0
+    
+    # Watermark is at 600. So detect_mobile_reviews(col, 600, desktop_ids) should only query/detect > 600
+    mobile_reviews = detect_mobile_reviews(col, watermark, desktop_ids)
+    assert len(mobile_reviews) == 1
+    assert mobile_reviews[0]["id"] == 700
+
+
+def test_timing_race_card_id_resolution():
+    # Test that get_desktop_session_revlog_ids queries card IDs from database when revlog_id was initially 0 or None
+    clear_desktop_session()
+    record_desktop_review(None, 9999) # Only card_id is recorded during review
+
+    col = MagicMock()
+    # Mock that col.db.list returns the matched revlog_id post-sync
+    col.db.list.return_value = [888]
+
+    desktop_ids = get_desktop_session_revlog_ids(col)
+    assert 888 in desktop_ids
+    col.db.list.assert_called_once()
+    assert 9999 in col.db.list.call_args[0][1:] or 9999 in col.db.list.call_args[0]
