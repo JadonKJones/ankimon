@@ -973,3 +973,46 @@ def close_anki():
         mw.close()
     except Exception:
         pass
+
+
+# --- Thread / Qt-liveness helpers (Stage A scaffolding) ---------------------
+#
+# Shared plumbing depended on by the thread-safe DB layer, the async-boot path,
+# and any deferred leaf that touches background threads or long-lived Qt widgets.
+# Re-fit verbatim from BRRRR_Experimental (utils.is_main_thread / is_alive);
+# both use function-local imports so importing utils never drags in PyQt6.
+
+def is_main_thread() -> bool:
+    """True when called on Qt's GUI thread (or when there is no QApplication yet).
+
+    Background workers (QueryOp boot, mobile-review resolution) use this to guard
+    UI-touching work. Headless / pre-app it defaults to True so callers behave as
+    if on the main thread.
+    """
+    # Consult sys.modules rather than importing PyQt6: force-loading Qt in an
+    # aqt-free context (Tier-1 harness) can crash. No Qt loaded → headless → main.
+    import sys
+    qtwidgets = sys.modules.get("PyQt6.QtWidgets")
+    qtcore = sys.modules.get("PyQt6.QtCore")
+    if qtwidgets is None or qtcore is None:
+        return True
+    app = qtwidgets.QApplication.instance()
+    if not app:
+        return True
+    return qtcore.QThread.currentThread() == app.thread()
+
+
+def is_alive(obj) -> bool:
+    """True if a QObject/QWidget's underlying C++ object has not been deleted.
+
+    Guards against 'wrapped C/C++ object of type X has been deleted' RuntimeErrors
+    when a cached widget reference outlives the window (reload-safety, live-update
+    push targets).
+    """
+    if obj is None:
+        return False
+    try:
+        obj.objectName()
+        return True
+    except (RuntimeError, AttributeError):
+        return False
