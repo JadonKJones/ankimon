@@ -28,12 +28,23 @@ Stage A was authored/verified by Claude (Opus 4.8). Report reality, not optimism
   (Tier-2). This baseline was taken on **3.14.6**. Record as a known env delta; if Stage B runs
   on 3.12 it should re-baseline. Everything below passed on 3.14.6.
 - **No system Python packages and no `pip` were preinstalled**; `xvfb`/`xvfb-run` are **absent**.
-  An isolated venv was created in the session scratchpad (NOT in the repo, NOT committed):
+  Isolated venvs were created in the session scratchpad (NOT in the repo, NOT committed).
+
+  ⚠️ **TWO environments are required — do not use one venv for everything** (this mirrors
+  CI's two separate jobs, `harness.yml` `tier1` vs `tier2`). Tier-1 / lint / logic tests MUST
+  run **Qt-free**: if PyQt6 is importable, the Tier-1 harness (and even pytest logic that boots
+  the addon) loads real Qt with no `QCoreApplication` and **segfaults at teardown** — this
+  happens on the *pristine* base too (7/9 Tier-1 checks go red purely from PyQt6 being present,
+  though each probe's own logic still prints OK). So:
 
   ```bash
-  python3 -m venv <venv>                                 # ensurepip → pip 26.1.2
-  <venv>/bin/pip install requests ruff pytest pytest-qt  # Tier-1 + lint + logic tests
-  <venv>/bin/pip install orjson PyQt6 aqt anki           # Tier-2 real-boot / web-engine
+  # venv_t1 — Qt-FREE: compileall, ruff, make check, economy, longrun, pytest logic tests
+  python3 -m venv <venv_t1>                       # ensurepip → pip 26.1.2
+  <venv_t1>/bin/pip install requests ruff pytest
+
+  # venv_qt — FULL Qt: Tier-2 probe_real_boot/play, and the scaffolding smoke tests
+  python3 -m venv <venv_qt>
+  <venv_qt>/bin/pip install requests ruff pytest pytest-qt orjson PyQt6 aqt anki
   ```
 
   Exact versions used for this baseline:
@@ -162,22 +173,32 @@ one QueryOp boot to completion.
 the pre-existing whole-tree ruff debt (not CI-gated) and the auxiliary integrity-smoke modal-dialog
 limitation. Both are flagged in `MERGE_NEEDS_REVIEW.md`.
 
-## 5. Re-verify command (copy/paste)
+## 5. Re-verify command (copy/paste) — TWO environments
 
 ```bash
 cd "$HOME/PycharmProjects/ankimon"
 git submodule update --init --recursive
-# activate the venv described in §2, then:
-export PYTHONPATH="$PWD/src" QT_QPA_PLATFORM=offscreen
-export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-gpu --disable-software-rasterizer"
-export QTWEBENGINE_DISABLE_SANDBOX=1
+export PYTHONPATH="$PWD/src"
+
+# ---- (A) Qt-FREE env (venv_t1): compile, lint, Tier-1, logic tests ----
 python -m compileall -q src/Ankimon
-ruff check  --config ci_ruff_check.toml src/Ankimon
-ruff format --check --config ci_ruff_check.toml src/Ankimon
-python -m pytest tests/ --ignore=tests/test_addon_integrity.py -q
-make check
+ruff check  --config ci_ruff_check.toml src/Ankimon                 # baseline: 10 errors
+ruff format --check --config ci_ruff_check.toml src/Ankimon         # baseline: 78 reformat
+make check                                                          # Tier-1: 9/9
 python3 harness/scenarios/economy.py
 python3 harness/scenarios/longrun.py 3000
+python -m pytest tests/ --ignore=tests/test_addon_integrity.py \
+                        --ignore=tests/test_scaffolding_smoke.py -q  # 149 passed
+
+# ---- (B) Qt env (venv_qt): Tier-2 + scaffolding smoke ----
+export QT_QPA_PLATFORM=offscreen
+export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-gpu --disable-software-rasterizer"
+export QTWEBENGINE_DISABLE_SANDBOX=1
+python -m pytest tests/test_scaffolding_smoke.py -q   # scaffolding smoke, STANDALONE: 4 passed
 python3 -m harness.checks.probe_real_boot
 python3 -m harness.checks.probe_real_play
 ```
+
+> The scaffolding smoke tests (added with the scaffolding) run **standalone** in the Qt env;
+> bundled with the base suite they skip gracefully because several base test files mock
+> PyQt6/aqt in `sys.modules`. The base logic suite (149) runs in EITHER env.
