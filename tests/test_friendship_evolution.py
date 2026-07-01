@@ -681,4 +681,35 @@ def test_pichu_evolution_readiness():
     assert result["evo_name"] == "Pikachu"
 
 
+def test_pawmo_minimum_defeated_readiness():
+    # Pawmo (922) -> Pawmot (923) requires 100 defeated enemies.
+    # Below 100 defeated: not ready, status says "Needs to defeat 100 enemies"
+    pokemon_not_ready = {
+        "id": 922,
+        "level": 25,
+        "friendship": 50,
+        "pokemon_defeated": 50,
+        "everstone": False,
+    }
+    res = fe.evolution_readiness(pokemon_not_ready)
+    assert res["evolvable"] is True
+    assert res["ready"] is False
+    assert "Needs to defeat 100 enemies to evolve" in res["status_text"]
+
+    # At or above 100 defeated: ready to evolve!
+    pokemon_ready = {
+        "id": 922,
+        "level": 25,
+        "friendship": 50,
+        "pokemon_defeated": 100,
+        "everstone": False,
+    }
+    res_ready = fe.evolution_readiness(pokemon_ready)
+    assert res_ready["evolvable"] is True
+    assert res_ready["ready"] is True
+    assert res_ready["evo_name"] == "Pawmot"
+    assert "Ready to evolve into Pawmot!" in res_ready["status_text"]
+
+
+
 

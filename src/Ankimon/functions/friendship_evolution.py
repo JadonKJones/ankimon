@@ -358,9 +358,10 @@ def get_level_evolutions_for_species(
                     min_level = safe_int(target_data.get("evoLevel"))
                     evo_type = target_data.get("evoType")
                     target_id = safe_int(target_data.get("actual_id") or target_data.get("species_id"))
+                    condition = (target_data.get("evoCondition") or "").lower()
                     
                     is_eligible = min_level > 0
-                    if evo_type == "levelMove":
+                    if evo_type == "levelMove" or condition == "minimumdefeated":
                         is_eligible = True
                         if min_level <= 0:
                             min_level = 1
@@ -642,7 +643,7 @@ def _level_readiness(
     if active_region in ("No Region", ""):
         active_region = None
 
-    from .pokedex_functions import _load_pokedex_cache, search_pokedex_by_id
+    from .pokedex_functions import _load_pokedex_cache, search_pokedex_by_id, safe_int
     pokedex_data = _load_pokedex_cache()
 
     filtered_evos = []
@@ -688,6 +689,9 @@ def _level_readiness(
     # Check for levelMove move requirement
     knows_move = True
     required_move = None
+    defeated_ok = True
+    required_defeated = None
+    defeated_count = 0
     target_name = search_pokedex_by_id(chosen.evo_id)
     if target_name in pokedex_data:
         t_data = pokedex_data[target_name]
@@ -704,13 +708,27 @@ def _level_readiness(
                 if any(a.lower().replace(" ", "").replace("-", "") == required_move.lower().replace(" ", "").replace("-", "") for a in p_attacks):
                     knows_move = True
 
-    if not knows_move:
+        condition = (t_data.get("evoCondition") or "").lower()
+        if condition == "minimumdefeated":
+            required_defeated = safe_int(t_data.get("evoDefeated"))
+            if required_defeated > 0:
+                defeated_ok = False
+                if isinstance(pokemon, dict):
+                    defeated_count = safe_int(pokemon.get("pokemon_defeated", 0))
+                elif pokemon is not None:
+                    defeated_count = safe_int(getattr(pokemon, "pokemon_defeated", 0))
+                if defeated_count >= required_defeated:
+                    defeated_ok = True
+
+    if not knows_move or not defeated_ok:
         ready = False
 
     if everstone:
         status_text = "Everstone prevents evolution"
     elif not knows_move and required_move:
         status_text = f"Needs to learn {required_move} to evolve"
+    elif not defeated_ok and required_defeated:
+        status_text = f"Needs to defeat {required_defeated} enemies to evolve (current: {defeated_count})"
     elif ready and evolution_rejected:
         status_text = "Evolution rejected — tap Evolve now to override"
     elif ready:
