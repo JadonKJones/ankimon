@@ -1,12 +1,10 @@
 """
 singletons.py
 
-This module groups up some of the global variables that originally wer ein the __init__.py.
-This module, hopefully, does not have vocation to remain permanently. This is but a transition step
-in the splitting of the __init__.py file.
+This module groups up some of the global variables that originally were in the __init__.py.
+This module serves as the production GUI-dependent adapter layer for Ankimon's game state.
 
-Author: Axil
-Created: 2025-06-03 (YYY-MM-DD)
+Author: Axil, Ankimon contributors
 """
 
 import json
@@ -14,35 +12,55 @@ import uuid
 
 from aqt import mw
 
-from .pyobj.ankimon_tracker import AnkimonTracker
-from .pyobj.settings import Settings
-from .pyobj.pokemon_obj import PokemonObject
-from .pyobj.InfoLogger import ShowInfoLogger
-from .pyobj.trainer_card import TrainerCard
-from .pyobj.translator import Translator
 from .pyobj.ankimon_shop import PokemonShopManager
 from .pyobj.reviewer_obj import Reviewer_Manager
-from .pyobj.database_manager import get_db
-from .functions.update_main_pokemon import update_main_pokemon
-from .functions.badges_functions import populate_achievements_from_badges
 from .resources import addon_dir
 from .utils import is_alive
 
+from .core import build_core, bind_runtime_globals
+from .services import services
+
 # --- RELOAD-SAFE SINGLETONS ---
 # We anchor these to 'mw' so they persist across add-on reloads.
+# Establish core services and game state via the composition root
+core_state = build_core(
+    logger=getattr(mw, "logger", None),
+    db=getattr(mw, "ankimon_db", None),
+    settings=getattr(mw, "settings_obj", None),
+    translator=getattr(mw, "translator", None),
+    main_pokemon=getattr(mw, "main_pokemon", None),
+    enemy_pokemon=getattr(mw, "enemy_pokemon", None),
+    trainer_card=getattr(mw, "trainer_card", None),
+    tracker=getattr(mw, "ankimon_tracker_obj", None),
+    achievements=getattr(mw, "achievements_dict", None),
+)
 
-# logger
-logger = getattr(mw, "logger", None) or ShowInfoLogger()
-mw.logger = logger
+# Anchor everything to mw so they persist
+mw.logger = core_state.logger
+mw.ankimon_db = core_state.ankimon_db
+mw.settings_obj = core_state.settings_obj
+mw.translator = core_state.translator
+mw.main_pokemon = core_state.main_pokemon
+mw.enemy_pokemon = core_state.enemy_pokemon
+mw.trainer_card = core_state.trainer_card
+mw.ankimon_tracker_obj = core_state.ankimon_tracker_obj
+mw.achievements_dict = core_state.achievements
 
-# Initialize the database
-ankimon_db = getattr(mw, "ankimon_db", None) or get_db(logger)
-mw.ankimon_db = ankimon_db
+# Backwards compatibility shims
+logger = core_state.logger
+ankimon_db = core_state.ankimon_db
+settings_obj = core_state.settings_obj
+translator = core_state.translator
+main_pokemon = core_state.main_pokemon
+enemy_pokemon = core_state.enemy_pokemon
+trainer_card = core_state.trainer_card
+ankimon_tracker_obj = core_state.ankimon_tracker_obj
+achievements = core_state.achievements
 
-# Create the Settings object
-settings_obj = getattr(mw, "settings_obj", None) or Settings()
-mw.settings_obj = settings_obj
+# Bind initial production collection
+services.populate(col=getattr(mw, "col", None))
 
+# --- LAZY WINDOWS & DIALOGS ---
 settings_window = None
 
 
@@ -60,71 +78,11 @@ def get_settings_window():
                 load_config_callback=settings_obj.load_config,
             )
             mw.settings_ankimon = settings_window
+        services.populate(settings_window=settings_window)
+        bind_runtime_globals()
     return settings_window
 
 
-# Init Translator
-translator = getattr(mw, "translator", None) or Translator(
-    language=int(settings_obj.get("misc.language"))
-)
-mw.translator = translator
-
-# Main Pokemon
-main_pokemon = getattr(mw, "main_pokemon", None)
-if main_pokemon is None:
-    main_pokemon, _ = update_main_pokemon()
-    mw.main_pokemon = main_pokemon
-
-# Enemy Pokemon
-enemy_pokemon = getattr(mw, "enemy_pokemon", None)
-if enemy_pokemon is None:
-    enemy_pokemon = PokemonObject(
-        name="Rattata",
-        shiny=False,
-        id=19,
-        level=5,
-        ability="Run Away",
-        type=["Normal"],
-        stats={
-            "hp": 39,
-            "atk": 52,
-            "def": 43,
-            "spa": 60,
-            "spd": 50,
-            "spe": 65,
-            "xp": 101,
-        },
-        attacks=["Quick Attack", "Tackle", "Tail Whip"],
-        base_experience=58,
-        growth_rate="medium-slow",
-        hp=30,
-        ev={"hp": 3, "atk": 5, "def": 4, "spa": 1, "spd": 2, "spe": 3},
-        iv={"hp": 27, "atk": 24, "def": 3, "spa": 24, "spd": 16, "spe": 21},
-        gender="M",
-        battle_status="Fighting",
-        xp=0,
-        position=(5, 5),
-        tier="Normal",
-        captured_date=None,
-        individual_id=str(uuid.uuid4()),
-    )
-    mw.enemy_pokemon = enemy_pokemon
-
-# Trainer Card
-trainer_card = getattr(mw, "trainer_card", None)
-if trainer_card is None:
-    trainer_card = TrainerCard(
-        logger,
-        main_pokemon,
-        settings_obj,
-        trainer_name=settings_obj.get("trainer.name"),
-        trainer_id="".join(filter(str.isdigit, str(uuid.uuid4()).replace("-", ""))),
-        team="Pikachu (Level 25), Charizard (Level 50), Bulbasaur (Level 15)",
-        league="Unranked",
-    )
-    mw.trainer_card = trainer_card
-
-# --- LAZY WINDOWS & DIALOGS ---
 starter_window = None
 
 
@@ -137,16 +95,10 @@ def get_starter_window():
 
             starter_window = StarterWindow(logger, settings_obj)
             mw.starter_window = starter_window
+        services.populate(starter_window=starter_window)
+        bind_runtime_globals()
     return starter_window
 
-
-# Ankimon Tracker
-ankimon_tracker_obj = getattr(mw, "ankimon_tracker_obj", None)
-if ankimon_tracker_obj is None:
-    ankimon_tracker_obj = AnkimonTracker(trainer_card=trainer_card)
-    mw.ankimon_tracker_obj = ankimon_tracker_obj
-    ankimon_tracker_obj.set_main_pokemon(main_pokemon)
-    ankimon_tracker_obj.set_enemy_pokemon(enemy_pokemon)
 
 # Test Window
 test_window = None
@@ -169,6 +121,8 @@ def get_test_window():
                 logger=logger,
             )
             mw.test_window = test_window
+        services.populate(test_window=test_window)
+        bind_runtime_globals()
     return test_window
 
 
@@ -180,6 +134,7 @@ shop_manager = getattr(mw, "shop_manager", None) or PokemonShopManager(
     get_callback=settings_obj.get,
 )
 mw.shop_manager = shop_manager
+services.populate(shop_manager=shop_manager)
 
 # Reviewer Manager
 reviewer_obj = getattr(mw, "reviewer_obj", None) or Reviewer_Manager(
@@ -189,14 +144,8 @@ reviewer_obj = getattr(mw, "reviewer_obj", None) or Reviewer_Manager(
     ankimon_tracker=ankimon_tracker_obj,
 )
 mw.reviewer_obj = reviewer_obj
+services.populate(reviewer=reviewer_obj)
 
-# Achievements
-achievements = getattr(mw, "achievements_dict", None)
-if achievements is None:
-    achievements = populate_achievements_from_badges(
-        {str(i): False for i in range(1, 69)}
-    )
-    mw.achievements_dict = achievements
 
 # Windows & Bags
 achievement_bag = None
@@ -211,6 +160,8 @@ def get_achievement_bag():
 
             achievement_bag = AchievementWindow()
             mw.achievement_bag = achievement_bag
+        services.populate(achievement_bag=achievement_bag)
+        bind_runtime_globals()
     return achievement_bag
 
 
@@ -226,6 +177,8 @@ def get_ankimon_tracker_window():
 
             ankimon_tracker_window = AnkimonTrackerWindow(tracker=ankimon_tracker_obj)
             mw.ankimon_tracker_window = ankimon_tracker_window
+        services.populate(ankimon_tracker_window=ankimon_tracker_window)
+        bind_runtime_globals()
     return ankimon_tracker_window
 
 
@@ -240,6 +193,8 @@ def get_ankidex_window():
 
         ankidex_window = Ankidex(addon_dir, ankimon_tracker=ankimon_tracker_obj)
         mw.ankidex_window = ankidex_window
+    services.populate(ankidex_window=ankidex_window)
+    bind_runtime_globals()
     return ankidex_window
 
 
@@ -263,6 +218,8 @@ def get_items_window():
             logger=logger,
         )
         mw.items_web_window = items_web_window
+    services.populate(items_web_window=items_web_window)
+    bind_runtime_globals()
     return items_web_window
 
 
@@ -304,20 +261,21 @@ def get_evo_window():
                         return lambda *args, **kwargs: FakeEvoWindow()
                 evo_window = FakeEvoWindow()
                 mw.evo_window = evo_window
-                return evo_window
+            else:
+                from .pyobj.evolution_window import EvoWindow
 
-            from .pyobj.evolution_window import EvoWindow
-
-            evo_window = EvoWindow(
-                logger,
-                settings_obj,
-                main_pokemon,
-                translator,
-                reviewer_obj,
-                get_test_window(),
-                achievements,
-            )
-            mw.evo_window = evo_window
+                evo_window = EvoWindow(
+                    logger,
+                    settings_obj,
+                    main_pokemon,
+                    translator,
+                    reviewer_obj,
+                    get_test_window(),
+                    achievements,
+                )
+                mw.evo_window = evo_window
+        services.populate(evo_window=evo_window)
+        bind_runtime_globals()
     return evo_window
 
 
@@ -341,6 +299,8 @@ def get_item_window():
                 evo_window=get_evo_window(),
             )
             mw.item_window = item_window
+        services.populate(item_window=item_window)
+        bind_runtime_globals()
     return item_window
 
 
@@ -365,6 +325,8 @@ def get_pokemon_pc():
                 achievements=achievements,
             )
             mw.pokemon_pc = pokemon_pc
+        services.populate(pokemon_pc=pokemon_pc)
+        bind_runtime_globals()
     return pokemon_pc
 
 

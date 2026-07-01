@@ -33,6 +33,8 @@ from .singletons import (
     shop_manager,
     trainer_card,
 )
+from .core import bind_runtime_globals
+bind_runtime_globals()
 from .functions.url_functions import (
     open_team_builder,
     rate_addon_url,

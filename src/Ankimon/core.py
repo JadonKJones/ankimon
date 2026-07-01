@@ -71,7 +71,17 @@ def _build_placeholder_enemy() -> PokemonObject:
     )
 
 
-def build_core() -> SimpleNamespace:
+def build_core(
+    logger=None,
+    db=None,
+    settings=None,
+    translator=None,
+    main_pokemon=None,
+    enemy_pokemon=None,
+    trainer_card=None,
+    tracker=None,
+    achievements=None,
+) -> SimpleNamespace:
     """Construct the core game objects and register them in ``services``.
 
     Returns a ``SimpleNamespace`` of the constructed objects so a caller
@@ -79,59 +89,99 @@ def build_core() -> SimpleNamespace:
     back-compat.
     """
     # Logger + DB first, and registered immediately: Settings() reads services.db.
-    logger = ShowInfoLogger()
+    if logger is None:
+        logger = ShowInfoLogger()
     services.populate(logger=logger)
 
-    ankimon_db = get_db(logger)
-    services.populate(db=ankimon_db)
+    if db is None:
+        db = get_db(logger)
+    services.populate(db=db)
 
-    settings_obj = Settings()
-    services.populate(settings=settings_obj)
+    if settings is None:
+        settings = Settings()
+    services.populate(settings=settings)
 
-    translator = Translator(language=int(settings_obj.get("misc.language")))
+    if translator is None:
+        translator = Translator(language=int(settings.get("misc.language")))
     services.populate(translator=translator)
 
     # Game state.
-    main_pokemon, mainpokemon_empty = update_main_pokemon()
-    enemy_pokemon = _build_placeholder_enemy()
+    mainpokemon_empty = False
+    if main_pokemon is None:
+        main_pokemon, mainpokemon_empty = update_main_pokemon()
 
-    trainer_card = TrainerCard(
-        logger,
-        main_pokemon,
-        settings_obj,
-        trainer_name=settings_obj.get("trainer.name"),
-        trainer_id="".join(filter(str.isdigit, str(uuid.uuid4()).replace("-", ""))),
-        team="Pikachu (Level 25), Charizard (Level 50), Bulbasaur (Level 15)",
-        league="Unranked",
+    if enemy_pokemon is None:
+        enemy_pokemon = _build_placeholder_enemy()
+
+    if trainer_card is None:
+        trainer_card = TrainerCard(
+            logger,
+            main_pokemon,
+            settings,
+            trainer_name=settings.get("trainer.name"),
+            trainer_id="".join(filter(str.isdigit, str(uuid.uuid4()).replace("-", ""))),
+            team="Pikachu (Level 25), Charizard (Level 50), Bulbasaur (Level 15)",
+            league="Unranked",
+        )
+
+    if tracker is None:
+        tracker = AnkimonTracker(trainer_card=trainer_card)
+        tracker.set_main_pokemon(main_pokemon)
+        tracker.set_enemy_pokemon(enemy_pokemon)
+
+    if achievements is None:
+        achievements = populate_achievements_from_badges(
+            {str(i): False for i in range(1, 69)}
+        )
+
+    # Load in-memory caches to eliminate disk I/O during reviews/gameplay
+    from .functions.pokedex_functions import (
+        _load_pokedex_cache,
+        _load_pokedex_id_index,
+        _load_poke_species_cache,
+        _load_pokemon_csv_cache,
+        _load_stats_csv_cache,
+        _load_poke_evo_cache,
+        _load_moves_cache,
+        _load_pokemon_names_csv,
+        _load_pokemon_descriptions_csv,
     )
+    from .functions.pokemon_functions import _load_next_lvl_cache
 
-    ankimon_tracker_obj = AnkimonTracker(trainer_card=trainer_card)
-    ankimon_tracker_obj.set_main_pokemon(main_pokemon)
-    ankimon_tracker_obj.set_enemy_pokemon(enemy_pokemon)
-
-    achievements = populate_achievements_from_badges(
-        {str(i): False for i in range(1, 69)}
-    )
+    caches = {
+        "pokedex": _load_pokedex_cache(),
+        "pokedex_id_index": _load_pokedex_id_index(),
+        "poke_species": _load_poke_species_cache(),
+        "pokemon_csv": _load_pokemon_csv_cache(),
+        "stats_csv": _load_stats_csv_cache(),
+        "poke_evo": _load_poke_evo_cache(),
+        "moves": _load_moves_cache(),
+        "pokemon_names": _load_pokemon_names_csv(),
+        "pokemon_descriptions": _load_pokemon_descriptions_csv(),
+        "next_lvl": _load_next_lvl_cache(),
+    }
 
     services.populate(
-        tracker=ankimon_tracker_obj,
+        tracker=tracker,
         main_pokemon=main_pokemon,
         enemy_pokemon=enemy_pokemon,
         trainer_card=trainer_card,
         achievements=achievements,
+        caches=caches,
     )
 
     return SimpleNamespace(
         logger=logger,
-        ankimon_db=ankimon_db,
-        settings_obj=settings_obj,
+        ankimon_db=db,
+        settings_obj=settings,
         translator=translator,
         main_pokemon=main_pokemon,
         mainpokemon_empty=mainpokemon_empty,
         enemy_pokemon=enemy_pokemon,
         trainer_card=trainer_card,
-        ankimon_tracker_obj=ankimon_tracker_obj,
+        ankimon_tracker_obj=tracker,
         achievements=achievements,
+        caches=caches,
     )
 
 

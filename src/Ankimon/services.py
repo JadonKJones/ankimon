@@ -81,6 +81,7 @@ class Services:
         self.enemy_pokemon: Optional["PokemonObject"] = None
         self.trainer_card: Optional["TrainerCard"] = None
         self.achievements: Optional[dict] = None
+        self.caches: Optional[dict] = None
 
         # UI port. Defaults to a GUI-less presenter so core logic can always
         # call ``services.ui.*`` safely; the production root swaps in a Qt one.
@@ -94,6 +95,14 @@ class Services:
         self.evo_window = None
         self.pokemon_pc = None
         self.reviewer = None
+        self.shop_manager = None
+        self.items_web_window = None
+        self.ankidex_window = None
+        self.item_window = None
+        self.starter_window = None
+        self.achievement_bag = None
+        self.ankimon_tracker_window = None
+        self.settings_window = None
 
         # The Anki collection (``mw.col``) when running inside Anki; None headless.
         self.col = None
@@ -116,6 +125,15 @@ class Services:
         pokemon_pc=None,
         reviewer=None,
         col=None,
+        caches=None,
+        shop_manager=None,
+        items_web_window=None,
+        ankidex_window=None,
+        item_window=None,
+        starter_window=None,
+        achievement_bag=None,
+        ankimon_tracker_window=None,
+        settings_window=None,
     ) -> None:
         """Wire up services/state at the composition root.
 
@@ -152,6 +170,24 @@ class Services:
             self.reviewer = reviewer
         if col is not None:
             self.col = col
+        if caches is not None:
+            self.caches = caches
+        if shop_manager is not None:
+            self.shop_manager = shop_manager
+        if items_web_window is not None:
+            self.items_web_window = items_web_window
+        if ankidex_window is not None:
+            self.ankidex_window = ankidex_window
+        if item_window is not None:
+            self.item_window = item_window
+        if starter_window is not None:
+            self.starter_window = starter_window
+        if achievement_bag is not None:
+            self.achievement_bag = achievement_bag
+        if ankimon_tracker_window is not None:
+            self.ankimon_tracker_window = ankimon_tracker_window
+        if settings_window is not None:
+            self.settings_window = settings_window
 
     def reset(self) -> None:
         """Clear every service/state. Intended for test isolation."""
@@ -164,12 +200,21 @@ class Services:
         self.enemy_pokemon = None
         self.trainer_card = None
         self.achievements = None
+        self.caches = None
         from .ui_port import HeadlessPresenter
         self.ui = HeadlessPresenter()
         self.test_window = None
         self.evo_window = None
         self.pokemon_pc = None
         self.reviewer = None
+        self.shop_manager = None
+        self.items_web_window = None
+        self.ankidex_window = None
+        self.item_window = None
+        self.starter_window = None
+        self.achievement_bag = None
+        self.ankimon_tracker_window = None
+        self.settings_window = None
         self.col = None
 
 
