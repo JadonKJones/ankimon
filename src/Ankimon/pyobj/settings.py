@@ -7,6 +7,14 @@ from ..services import services
 
 DEFAULT_CONFIG = {
     "battle.automatic_battle": 0,
+    "battle.auto_catch_legendary": True,
+    "battle.auto_catch_mythical": True,
+    "battle.auto_catch_ultra": True,
+    "battle.auto_catch_starter": True,
+    "battle.auto_catch_mega": True,
+    "battle.auto_catch_gmax": True,
+    "battle.auto_catch_regional": True,
+    "battle.auto_catch_wishlist": [25, 133],
     "battle.cards_per_round": 2,
     "battle.daily_average": 100,
     "battle.card_max_time": 60,
@@ -19,6 +27,8 @@ DEFAULT_CONFIG = {
     "controls.pokemon_buttons": True,
     "controls.defeat_key": "5",
     "controls.catch_key": "6",
+    "controls.team_cycle_key": "9",
+    "controls.team_cycle_count": 3,
     "controls.key_for_opening_closing_ankimon": "Ctrl+Shift+P",
     "controls.allow_to_choose_moves": False,
     "gui.animate_time": True,
@@ -31,7 +41,7 @@ DEFAULT_CONFIG = {
     "gui.reviewer_text_message_box": True,
     "gui.reviewer_text_message_box_time": 3,
     "gui.show_mainpkmn_in_reviewer": 1,
-    "gui.hud_hidden_on_startup": False,    
+    "gui.hud_hidden_on_startup": False,
     "gui.team_deck_view": True,
     "gui.view_main_front": True,
     "gui.xp_bar_config": True,
@@ -49,6 +59,7 @@ DEFAULT_CONFIG = {
     "misc.gen7": True,
     "misc.gen8": True,
     "misc.gen9": False,
+    "misc.active_region": None,
     "misc.remove_level_cap": False,
     "misc.language": 9,
     "misc.ssh": True,
@@ -67,8 +78,12 @@ DEFAULT_CONFIG = {
     "trainer.cash_reward_interval": 10,
     "trainer.cash_earned_today": 0,
     "trainer.last_cash_reward_date": "",
+    "trainer.mobile_reviews_resolved_since_payout": 0,
     "trainer.level": 0,
     "trainer.xp": 0,
+    "mobile.enabled": True,
+    "mobile.resolution_mode": "manual",
+    "mobile.inactive_companions": [],
 }
 
 
@@ -91,33 +106,36 @@ class Settings:
                     self._apply_type_coercion(config)
             except Exception as e:
                 print(f"Ankimon: Error loading config from database: {e}")
-        
+
         # If no config in database, fall back to config.obf for migration
         if not config:
             obfuscated_config_path = user_path / "config.obf"
             if obfuscated_config_path.is_file():
                 try:
                     from ..pyobj.ankimon_sync import AnkimonDataSync
+
                     sync_handler = AnkimonDataSync()
-                    
+
                     with open(obfuscated_config_path, "r", encoding="utf-8") as f:
                         obfuscated_str = f.read()
                     config = sync_handler._deobfuscate_data(obfuscated_str)
-                    
+
                     # Migration: remove legacy keys
                     if "items" in config and isinstance(config["items"], list):
                         del config["items"]
                     if "trainer.team" in config:
                         del config["trainer.team"]
-                    
+
                     self._apply_type_coercion(config)
-                    
+
                     # Migrate config to database
                     if services.db is not None:
                         try:
                             services.db.save_all_config(config)
-                            print("Ankimon: Migrated config from config.obf to database")
-                            
+                            print(
+                                "Ankimon: Migrated config from config.obf to database"
+                            )
+
                             # Archive config.obf after successful migration
                             try:
                                 backup_dir = user_path / "json"
@@ -127,26 +145,38 @@ class Settings:
                                 print(f"Ankimon: Archived config.obf to {backup_dir}")
                             except Exception as e:
                                 print(f"Ankimon: Failed to archive config.obf: {e}")
-                                
+
                         except Exception as e:
                             print(f"Ankimon: Failed to migrate config to database: {e}")
-                            
+
                 except Exception as e:
-                    print(f"Ankimon: Error loading config from config.obf: {e}. Falling back to default config.")
+                    print(
+                        f"Ankimon: Error loading config from config.obf: {e}. Falling back to default config."
+                    )
                     config = {}
 
-        # Ensure all default settings are present
+        # Ensure all default settings are present. A stored value of ``None`` is
+        # treated as "unset" and falls back to the DEFAULT_CONFIG value — the
+        # schema plumbing that keys such as misc.active_region depend on.
         modified = False
         for key in DEFAULT_CONFIG:
-            if key not in config:
+            if key not in config or config[key] is None:
                 modified = True
                 config[key] = DEFAULT_CONFIG[key]
 
         if modified:
             self.save_config(config)
 
-        return config
-    
+        # Preserve the identity of ``self.config`` across (re)loads: external
+        # holders of the dict keep observing updates instead of a stale rebind.
+        if not hasattr(self, "config"):
+            self.config = {}
+        if self.config is not config:
+            self.config.clear()
+            self.config.update(config)
+        self.compute_gui_config()
+        return self.config
+
     def _apply_type_coercion(self, config):
         """Apply type coercion to config values that need to be integers."""
         keys_to_coerce_to_int = [
@@ -158,13 +188,16 @@ class Settings:
             "trainer.cash_reward_amount",
             "trainer.cash_reward_interval",
             "trainer.cash_earned_today",
+            "controls.team_cycle_count",
         ]
         for key in keys_to_coerce_to_int:
             if key in config and isinstance(config[key], str):
                 try:
                     config[key] = int(config[key])
                 except ValueError:
-                    print(f"Ankimon: Warning: Could not convert '{config[key]}' for key '{key}' to int.")
+                    print(
+                        f"Ankimon: Warning: Could not convert '{config[key]}' for key '{key}' to int."
+                    )
 
     def save_config(self, config):
         # 1. Always save to database if available
@@ -175,8 +208,14 @@ class Settings:
             except Exception as e:
                 print(f"Ankimon: Failed to save config to database: {e}")
 
-        # 2. Also save to obfuscated file if it exists (legacy support)
-        self.config = config
+        # 2. Also save to obfuscated file if it exists (legacy support).
+        # Preserve the identity of ``self.config`` (clear/update in place) so
+        # external holders of the dict observe the update across reloads.
+        if not hasattr(self, "config"):
+            self.config = {}
+        if self.config is not config:
+            self.config.clear()
+            self.config.update(config)
         self._save_legacy_obf_if_present()
         self.compute_gui_config()
 
@@ -191,6 +230,7 @@ class Settings:
             # Imported lazily, and only when a legacy config.obf is present, so this
             # module never drags in ankimon_sync (and thus aqt) at import time.
             from ..pyobj.ankimon_sync import AnkimonDataSync
+
             sync_handler = AnkimonDataSync()  # Re-use the obfuscation logic
             obfuscated_str = sync_handler._obfuscate_data(self.config)
             warning_message = "WARNING: This file contains important user data. Do not delete or modify this file. Deleting or modifying this file can lead to data loss in the Ankimon addon.\n---"
@@ -201,7 +241,14 @@ class Settings:
             print(f"Ankimon: Could not save obfuscated config: {e}")
 
     def get(self, key, default=None):
-        return self.config.get(key, default)
+        # Resolve a None (unset) value to the caller default, then to the schema
+        # default in DEFAULT_CONFIG, so newly-added keys always yield a value.
+        value = self.config.get(key)
+        if value is not None:
+            return value
+        if default is not None:
+            return default
+        return DEFAULT_CONFIG.get(key)
 
     def set(self, key, value):
         self.config[key] = value
