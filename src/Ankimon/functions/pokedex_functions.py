@@ -728,33 +728,35 @@ def get_time_of_day():
     try:
         from datetime import datetime, timedelta, timezone
         from ..singletons import settings_obj
-        
+
         # Check if settings_obj exists and is fully initialized
         if settings_obj is None:
             return "day"
-            
-        offset_str = settings_obj.get("evolution.timezone_offset", "auto")
-        if offset_str == "auto":
+
+        # Use timezone_auto (bool, default True) to decide between local clock and fixed offset.
+        # timezone_offset is a float (default 0.0) and must never be compared to the string "auto".
+        if settings_obj.get("evolution.timezone_auto", True):
             moment = datetime.now()
         else:
             try:
-                offset_hours = float(offset_str)
+                offset_hours = float(settings_obj.get("evolution.timezone_offset", 0.0))
+                offset_hours = max(-14.0, min(14.0, offset_hours))  # clamp to valid UTC range
                 tz = timezone(timedelta(hours=offset_hours))
                 moment = datetime.now(tz)
             except Exception:
                 moment = datetime.now()
-                
+
         hour = moment.hour
-        
+
         def coerce_hour(val, default):
             try:
                 return max(0, min(23, int(float(val))))
             except Exception:
                 return default
-                
+
         day_start = coerce_hour(settings_obj.get("evolution.day_start_hour", 6), 6)
         night_start = coerce_hour(settings_obj.get("evolution.night_start_hour", 18), 18)
-        
+
         return "day" if day_start <= hour < night_start else "night"
     except Exception:
         # Fallback to local system time in case of any exception/import error

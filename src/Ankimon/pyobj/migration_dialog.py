@@ -255,11 +255,43 @@ class MigrationDialog(QDialog):
                 self._update_progress(66, "Migrating team...")
                 with open(self.team_path, 'r', encoding='utf-8') as f:
                     team_list = json.load(f)
+
+                # Build a lookup of already-migrated collection so we can match team members
+                # by identity (name + level + species_id) instead of generating new UUIDs.
+                # Without this, team members without individual_id get a DIFFERENT random UUID
+                # from the one assigned during Step 1, leaving the team table pointing to
+                # non-existent captured_pokemon rows.
+                try:
+                    all_captured = self.db.get_all_pokemon()
+                    # Index by (name, level, species_id) for fast lookup
+                    _collection_index = {}
+                    for p in all_captured:
+                        key = (
+                            str(p.get("name", "")).lower(),
+                            str(p.get("level", "")),
+                            str(p.get("species_id", p.get("id", ""))),
+                        )
+                        if key not in _collection_index:
+                            _collection_index[key] = p.get("individual_id")
+                except Exception:
+                    _collection_index = {}
+
                 valid_team_list = []
                 for member in team_list:
                     if isinstance(member, dict):
                         if not member.get("individual_id"):
-                            member["individual_id"] = str(uuid.uuid4())
+                            # Try to find the matching entry from the migrated collection
+                            match_key = (
+                                str(member.get("name", "")).lower(),
+                                str(member.get("level", "")),
+                                str(member.get("species_id", member.get("id", ""))),
+                            )
+                            matched_id = _collection_index.get(match_key)
+                            if matched_id:
+                                member["individual_id"] = matched_id
+                            else:
+                                # Last resort: generate a new UUID (team member not in collection)
+                                member["individual_id"] = str(uuid.uuid4())
                         valid_team_list.append(member)
                 if self.db.save_team(valid_team_list):
                     stats["team"] = len(valid_team_list)
