@@ -17,6 +17,7 @@ import json
 import random
 import csv
 from ..pyobj.error_handler import show_warning_with_traceback
+from ..pyobj.pokemon_obj import PokemonObject
 
 GROWTH_RATES = {
     1: "slow",
@@ -806,6 +807,22 @@ def check_evolution_for_pokemon(
                     target_data = pokedex_data.get(normalized_target) or pokedex_data.get(target_evo_name.lower())
                     
                     if target_data:
+                        # In Smogon-style pokedex.json, evoLevel is stored on the evolved species
+                        condition = (target_data.get("evoCondition") or "").lower()
+
+                        if condition == "minimumdefeated":
+                            evo_defeated = safe_int(target_data.get("evoDefeated"))
+                            if evo_defeated > 0:
+                                pokemon_data = mw.ankimon_db.get_pokemon(individual_id)
+                                if pokemon_data:
+                                    pokemon_obj = PokemonObject.from_dict(pokemon_data)
+                                    if (pokemon_obj.pokemon_defeated or 0) >= evo_defeated:
+                                        evo_id = safe_int(target_data.get("actual_id") or target_data.get("species_id"))
+                                        if evo_id > 0:
+                                            evo_window.ask_pokemon_evo(individual_id, pokemon_id, evo_id)
+                                            return evo_id
+                            continue
+
                         min_level = safe_int(target_data.get("evoLevel"))
                         is_level_evo = min_level > 0 and level >= min_level and target_data.get("evoType") not in ("useItem", "trade", "levelFriendship")
                         
