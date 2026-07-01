@@ -55,6 +55,7 @@ poke_species_path = data_files_path / "pokemon_species.csv"
 eff_chart_html_path = addon_dir / "addon_files" / "eff_chart_html.html"
 effectiveness_chart_file_path = addon_dir / "addon_files" / "eff_chart.json"
 table_gen_id_html_path = addon_dir / "addon_files" / "table_gen_id.html"
+nature_chart_html_path = addon_dir / "addon_files" / "nature_chart.html"
 icon_path = addon_dir / "addon_files" / "pokeball.png"
 sound_list_path = addon_dir / "addon_files" / "sound_list.json"
 badges_list_path = addon_dir / "addon_files" / "badges.json"
@@ -427,6 +428,11 @@ POKEMON_TIERS = {
   1022,  # iron-boulder
   1023,  # iron-crown
   1024,  # terapagos
+  10245, 10246,  # dialgaorigin, palkiaorigin
+  10007,         # giratinaorigin
+  10019, 10020, 10021, 10249, # tornadustherian, thundurustherian, landorustherian, enamorustherian
+  10181,         # zygarde10
+  10191,         # urshifurapidstrike
 ]
 ,
   "Mythical": [
@@ -436,10 +442,13 @@ POKEMON_TIERS = {
   251,        # Celebi
   # Gen 3
   385, 386,   # Jirachi, Deoxys
+  10001, 10002, 10003,       # deoxysattack, deoxysdefense, deoxysspeed
   # Gen 4
   489, 490, 491, 492, 493,   # Phione, Manaphy, Darkrai, Shaymin, Arceus
+  10006,                     # shayminsky
   # Gen 5
   494, 647, 648, 649,        # Victini, Keldeo, Meloetta, Genesect
+  10024, 10018,              # keldeoresolute, meloettapirouette
   # Gen 6
   719, 720, 721,             # Diancie, Hoopa, Volcanion
   # Gen 7
