@@ -7,12 +7,97 @@ replacing multiple JSON files with a single, obfuscated database file.
 
 import json
 import sqlite3
+import threading
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import csv
 from ..resources import user_path, csv_file_items_cost, mypokemon_path, mainpokemon_path, items_path, badges_path, team_pokemon_path as team_path
+
+
+# --- Thread-safe connection layer (Stage A scaffolding) --------------------
+#
+# Re-fit from BRRRR_Experimental: a thin ConnectionWrapper plus per-thread
+# connections let the async-boot path and (deferred) mobile-review engine touch
+# the DB off the GUI thread without tripping sqlite's default same-thread guard.
+# Kept aqt-free (the thread check imports PyQt6 lazily and degrades to "main
+# thread" when there is no QApplication). Backward compatible: on the GUI thread
+# callers get the same single shared connection they always did, now WAL-mode.
+
+class ConnectionWrapper:
+    """Wraps a sqlite3.Connection, proxying everything, with a re-entrant
+    ``with conn:`` transaction and an opt-out commit flag (used by bulk paths)."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._disable_commit = False
+
+    def commit(self):
+        if not self._disable_commit:
+            self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    def execute(self, *args, **kwargs):
+        return self._conn.execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        return self._conn.executemany(*args, **kwargs)
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __enter__(self):
+        if getattr(self, "_txn_depth", 0) == 0:
+            self._conn.execute("BEGIN")
+        self._txn_depth = getattr(self, "_txn_depth", 0) + 1
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._txn_depth = getattr(self, "_txn_depth", 1) - 1
+        if self._txn_depth == 0:
+            if exc_type is not None:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+            else:
+                try:
+                    self._conn.commit()
+                except Exception:
+                    pass
+        return False
+
+
+def _is_main_thread() -> bool:
+    """True on Qt's GUI thread, or whenever Qt is not loaded (headless / the
+    Tier-1 no-Qt harness / tests).
+
+    Deliberately consults ``sys.modules`` instead of importing PyQt6: force-loading
+    the Qt libraries inside the aqt-free Tier-1 harness (where PyQt6 may be
+    *installed* but must never be *initialized*) crashes with 'Qt requires a
+    QCoreApplication'. If Qt has not been loaded, we are headless → treat as main
+    thread. In real Anki, Qt is always already loaded, so the real check runs."""
+    import sys
+    qtwidgets = sys.modules.get("PyQt6.QtWidgets")
+    qtcore = sys.modules.get("PyQt6.QtCore")
+    if qtwidgets is None or qtcore is None:
+        return True
+    try:
+        app = qtwidgets.QApplication.instance()
+        if not app:
+            return True
+        return qtcore.QThread.currentThread() == app.thread()
+    except Exception:
+        return True
 
 
 class AnkimonDB:
@@ -20,11 +105,36 @@ class AnkimonDB:
     
     DB_FILENAME = "ankimon.db"
 
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, db_path: Optional[Union[str, Path]] = None,
+                 *, wal: bool = False):
         self.logger = logger
-        self.db_path = user_path / self.DB_FILENAME
-        self._connection: Optional[sqlite3.Connection] = None
+        # db_path override supports multi-profile / account switching (switch_database).
+        if db_path:
+            self.db_path = Path(db_path)
+        else:
+            self.db_path = user_path / self.DB_FILENAME
+        # WAL is OPT-IN (default off) to preserve main's single-file persistence /
+        # backup guard: probe_persistence and BackupManager copy just ``ankimon.db``,
+        # which would miss WAL's ``-wal`` sidecar. A deferred concurrent-writer leaf
+        # (mobile-sync) turns WAL on together with a checkpoint-before-copy backup fix.
+        self._wal = wal
+        self._connection: Optional[ConnectionWrapper] = None       # GUI-thread connection
+        self._local_conn = threading.local()                       # per-background-thread
         self._setup_database()
+
+    def _prepare_connection(self, conn):
+        """Apply row factory and (only when opted in) WAL-family PRAGMAs, then wrap."""
+        conn.row_factory = sqlite3.Row  # Access columns by name
+        if self._wal:
+            try:
+                mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
+                if str(mode).lower() != "wal":
+                    conn.execute("PRAGMA journal_mode=WAL;")
+                conn.execute("PRAGMA synchronous=NORMAL;")
+                conn.execute("PRAGMA temp_store=MEMORY;")
+            except Exception as e:
+                self._log("warning", f"Failed to set WAL PRAGMAs: {e}")
+        return ConnectionWrapper(conn)
 
     def _log(self, level: str, message: str):
         """Helper for logging."""
@@ -35,18 +145,62 @@ class AnkimonDB:
 
     # --- Connection Management ---
 
-    def _get_connection(self) -> sqlite3.Connection:
-        """Gets or creates a database connection."""
+    def _get_connection(self) -> ConnectionWrapper:
+        """Gets or creates a database connection for the CURRENT thread.
+
+        GUI thread: the single shared ``self._connection`` (as before, now WAL).
+        Background threads: a dedicated per-thread connection (``check_same_thread``
+        is disabled so a connection may be created off the GUI thread safely, and
+        each thread keeps its own so they never share a cursor)."""
+        if not _is_main_thread():
+            local = self._local_conn
+            if (not hasattr(local, "conn") or local.conn is None
+                    or getattr(local, "db_path", None) != self.db_path):
+                if getattr(local, "conn", None) is not None:
+                    try:
+                        local.conn.close()
+                    except Exception:
+                        pass
+                conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+                local.conn = self._prepare_connection(conn)
+                local.db_path = self.db_path
+            elif not isinstance(local.conn, ConnectionWrapper):
+                local.conn = ConnectionWrapper(local.conn)
+                local.db_path = self.db_path
+            return local.conn
+
         if self._connection is None:
-            self._connection = sqlite3.connect(str(self.db_path))
-            self._connection.row_factory = sqlite3.Row  # Access columns by name
+            conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self._connection = self._prepare_connection(conn)
+        elif not isinstance(self._connection, ConnectionWrapper):
+            self._connection = ConnectionWrapper(self._connection)
         return self._connection
 
     def close(self):
-        """Closes the database connection."""
+        """Closes the GUI-thread connection and this thread's background connection."""
         if self._connection:
-            self._connection.close()
+            try:
+                self._connection.close()
+            except Exception:
+                pass
             self._connection = None
+        if hasattr(self, "_local_conn") and getattr(self._local_conn, "conn", None):
+            try:
+                self._local_conn.conn.close()
+            except Exception:
+                pass
+            self._local_conn.conn = None
+
+    def switch_database(self, db_filename: str):
+        """Close current connections and reopen against a different profile DB file.
+
+        The multi-profile / account-switch primitive (DB layer only). The
+        account-switch menu action that calls this is a deferred Stage-B leaf."""
+        self.close()
+        self.db_path = user_path / db_filename
+        self._connection = None
+        self._setup_database()
+        self._log("info", f"Switched database to {db_filename}")
 
     # --- Obfuscation / De-obfuscation ---
 
@@ -173,6 +327,41 @@ class AnkimonDB:
                 value TEXT NOT NULL
             )
         """)
+
+        # --- Mobile-review scaffolding tables (Stage A) ---------------------
+        # Schema/migrations only; the mobile-review SYNC ENGINE and UI that read
+        # and write these are deferred Stage-B leaves. Idempotent, so shipping the
+        # empty tables in the base is harmless and lets those leaves land additively.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pending_mobile_battles (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                revlog_id     INTEGER UNIQUE NOT NULL,
+                card_id       INTEGER NOT NULL,
+                ease          INTEGER NOT NULL,
+                review_time   INTEGER NOT NULL,
+                review_type   INTEGER NOT NULL,
+                queued_at     INTEGER NOT NULL,
+                resolved      INTEGER NOT NULL DEFAULT 0,
+                resolved_at   INTEGER
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mobile_battle_history (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp         INTEGER NOT NULL,
+                enemy_id          INTEGER NOT NULL,
+                enemy_name        TEXT NOT NULL,
+                enemy_level       INTEGER NOT NULL,
+                enemy_shiny       INTEGER NOT NULL,
+                companion_name    TEXT,
+                companion_level   INTEGER,
+                outcome           TEXT NOT NULL,
+                xp_gained         INTEGER DEFAULT 0,
+                trainer_xp_gained INTEGER DEFAULT 0,
+                cash_gained       INTEGER DEFAULT 0
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_timestamp ON mobile_battle_history(timestamp)")
 
         conn.commit()
         self._log("info", "AnkimonDB: Database schema initialized.")
