@@ -12,12 +12,55 @@ from ..poke_engine.battle import Move
 from ..poke_engine.objects import Pokemon, State, StateMutator, Side
 from ..poke_engine.helpers import normalize_name
 from ..poke_engine.find_state_instructions import get_all_state_instructions
+from ..poke_engine import instruction_generator
 from ..pyobj.error_handler import show_warning_with_traceback
 
 # Shared state used as bare module globals below; bound to the live registry
 # objects by core.bind_runtime_globals() after composition.
 ankimon_tracker_obj = None
 settings_obj = None
+
+# --- F37: review-based damage multiplier, applied at the poke-engine level ---
+# poke_engine.find_state_instructions calls
+# ``instruction_generator.get_instructions_from_damage`` via module attribute, so
+# wrapping that attribute scales opponent-directed damage by the reviewer
+# multiplier during instruction generation (and flags it so the post-hoc pass in
+# ``simulate_battle_with_poke_engine`` does not double-apply). Guarded against
+# double-wrapping on module reload (reload-safe singletons): capture the pristine
+# original and install the wrapper only once.
+if not getattr(
+    instruction_generator.get_instructions_from_damage,
+    "_ankimon_review_wrapped",
+    False,
+):
+    _original_get_instructions_from_damage = (
+        instruction_generator.get_instructions_from_damage
+    )
+
+    def _wrapped_get_instructions_from_damage(
+        mutator, defender, damage, accuracy, attacking_move, instruction
+    ):
+        if (
+            defender == constants.OPPONENT
+            and hasattr(mutator, "review_based_damage_multiplier")
+            and damage is not None
+        ):
+            if damage > 0:
+                damage = max(
+                    1, math.floor(damage * mutator.review_based_damage_multiplier)
+                )
+            else:
+                damage = math.floor(damage * mutator.review_based_damage_multiplier)
+            mutator.review_based_damage_multiplier_applied = True
+        return _original_get_instructions_from_damage(
+            mutator, defender, damage, accuracy, attacking_move, instruction
+        )
+
+    _wrapped_get_instructions_from_damage._ankimon_review_wrapped = True
+    instruction_generator.get_instructions_from_damage = (
+        _wrapped_get_instructions_from_damage
+    )
+
 
 def reset_stat_boosts(pokemon: Pokemon) -> Pokemon:
     """
@@ -38,7 +81,8 @@ def reset_stat_boosts(pokemon: Pokemon) -> Pokemon:
     pokemon.evasion_boost = 0
     return pokemon
 
-def reset_side(pokemon: Pokemon, side_conditions: Union[dict, None]=None) -> Side:
+
+def reset_side(pokemon: Pokemon, side_conditions: Union[dict, None] = None) -> Side:
     """
     Resets and returns a new Side object for the given Pokemon with default or provided side conditions.
 
@@ -54,16 +98,19 @@ def reset_side(pokemon: Pokemon, side_conditions: Union[dict, None]=None) -> Sid
               default wish and future sight settings, and the given or default side conditions.
     """
     if side_conditions is None:
-        side_conditions = defaultdict(int, {
-            'stealthrock': 0,
-            'spikes': 0,
-            'toxicspikes': 0,
-            'tailwind': 0,
-            'reflect': 0,
-            'lightscreen': 0,
-            'auroraveil': 0,
-            'protect': 0,
-        })
+        side_conditions = defaultdict(
+            int,
+            {
+                "stealthrock": 0,
+                "spikes": 0,
+                "toxicspikes": 0,
+                "tailwind": 0,
+                "reflect": 0,
+                "lightscreen": 0,
+                "auroraveil": 0,
+                "protect": 0,
+            },
+        )
     side = Side(
         active=pokemon,
         reserve={},
@@ -73,14 +120,15 @@ def reset_side(pokemon: Pokemon, side_conditions: Union[dict, None]=None) -> Sid
     )
     return side
 
+
 def simulate_battle_with_poke_engine(
     main_pokemon: Pokemon,
     enemy_pokemon: Pokemon,
     main_move: str,
     enemy_move: str,
     mutator_full_reset: int,
-    state: Union[State, None]=None,
-    ):
+    state: Union[State, None] = None,
+):
     """
     Simulates a battle between two Pokémon using the poke-engine if available.
     The function selects the Pokémon moves (either provided or random), handles state changes,
@@ -124,9 +172,10 @@ def simulate_battle_with_poke_engine(
     if not enemy_move:
         enemy_move = "Splash"
 
-
-    if (state is not None) and (state.user.active.id != main_pokemon.name.lower()):
-        mutator_full_reset = 1 # reset AFTER Pokemon is changed !
+    if (state is not None) and (
+        state.user.active.id != normalize_name(main_pokemon.name)
+    ):
+        mutator_full_reset = 1  # reset AFTER Pokemon is changed !
     if mutator_full_reset not in (0, 1):
         mutator_full_reset = 1
 
@@ -134,19 +183,18 @@ def simulate_battle_with_poke_engine(
         main_move_normalized = normalize_name(main_move)
         enemy_move_normalized = normalize_name(enemy_move)
 
-
         # Store only the chosen outcome
         battle_header = {
-            'user': {
-                'name': main_pokemon.name,
-                'level': main_pokemon.level,
-                'move': main_move
+            "user": {
+                "name": main_pokemon.name,
+                "level": main_pokemon.level,
+                "move": main_move,
             },
-            'opponent': {
-                'name': enemy_pokemon.name,
-                'level': enemy_pokemon.level,
-                'move': enemy_move
-            }
+            "opponent": {
+                "name": enemy_pokemon.name,
+                "level": enemy_pokemon.level,
+                "move": enemy_move,
+            },
         }
 
         # Create Pokemon objects
@@ -154,16 +202,19 @@ def simulate_battle_with_poke_engine(
         enemy_pokemon_poke_engine = enemy_pokemon.to_poke_engine_Pokemon()
 
         # Default side_conditions with all needed keys
-        side_conditions = defaultdict(int, {
-            'stealthrock': 0,
-            'spikes': 0,
-            'toxicspikes': 0,
-            'tailwind': 0,
-            'reflect': 0,
-            'lightscreen': 0,
-            'auroraveil': 0,
-            'protect': 0,
-        })
+        side_conditions = defaultdict(
+            int,
+            {
+                "stealthrock": 0,
+                "spikes": 0,
+                "toxicspikes": 0,
+                "tailwind": 0,
+                "reflect": 0,
+                "lightscreen": 0,
+                "auroraveil": 0,
+                "protect": 0,
+            },
+        )
 
         if state is None:
             state = State(
@@ -172,7 +223,7 @@ def simulate_battle_with_poke_engine(
                 weather=None,
                 field=None,
                 trick_room=False,
-                )
+            )
         else:
             if mutator_full_reset == 0:  # Combat is ongoing
                 pass
@@ -182,34 +233,43 @@ def simulate_battle_with_poke_engine(
                 state.opponent = reset_side(enemy_pokemon_poke_engine)
 
                 # Reset battle_status and volatile_status for both engine state Pokémon
-                if hasattr(state.user.active, 'battle_status'):
-                    state.user.active.battle_status = 'fighting'
-                if hasattr(state.user.active, 'volatile_status'):
+                if hasattr(state.user.active, "battle_status"):
+                    state.user.active.battle_status = "fighting"
+                if hasattr(state.user.active, "volatile_status"):
                     state.user.active.volatile_status = set()
-                if hasattr(state.opponent.active, 'battle_status'):
-                    state.opponent.active.battle_status = 'fighting'
-                if hasattr(state.opponent.active, 'volatile_status'):
+                if hasattr(state.opponent.active, "battle_status"):
+                    state.opponent.active.battle_status = "fighting"
+                if hasattr(state.opponent.active, "volatile_status"):
                     state.opponent.active.volatile_status = set()
                 # Clear Future Sight state on reset - NEW
-                if hasattr(state.user, 'future_sight'):
+                if hasattr(state.user, "future_sight"):
                     state.user.future_sight = (0, 0)
-                if hasattr(state.opponent, 'future_sight'):
+                if hasattr(state.opponent, "future_sight"):
                     state.opponent.future_sight = (0, 0)
 
                 # Also reset the main_pokemon and enemy_pokemon Python objects
-                main_pokemon.battle_status = 'fighting'
+                main_pokemon.battle_status = "fighting"
                 main_pokemon.volatile_status = set()
-                enemy_pokemon.battle_status = 'fighting'
+                enemy_pokemon.battle_status = "fighting"
                 enemy_pokemon.volatile_status = set()
 
-                state.weather = None # Reset weather to None
-                state.field = None # Reset field to None
-                state.trick_room = False # Reset trick room to None
+                state.weather = None  # Reset weather to None
+                state.field = None  # Reset field to None
+                state.trick_room = False  # Reset trick room to None
 
             else:
-                raise ValueError(f"Wrong mutator_full_reset encountered : {mutator_full_reset}")
+                raise ValueError(
+                    f"Wrong mutator_full_reset encountered : {mutator_full_reset}"
+                )
 
         mutator = StateMutator(state)
+
+        if settings_obj and settings_obj.get("battle.review_based_damage"):
+            mutator.review_based_damage_multiplier = (
+                ankimon_tracker_obj.multiplier
+                if (ankimon_tracker_obj and hasattr(ankimon_tracker_obj, "multiplier"))
+                else 1.0
+            )
 
         if state.opponent.active.hp == 0:
             main_move = "Splash"
@@ -225,13 +285,26 @@ def simulate_battle_with_poke_engine(
         weights = [outcome.percentage for outcome in transpose_instructions]
         chosen_outcome = random.choices(transpose_instructions, weights=weights, k=1)[0]
 
-    
-        if settings_obj.get("battle.review_based_damage"):
+        if settings_obj and settings_obj.get("battle.review_based_damage"):
             instrs = []
             for instr in chosen_outcome.instructions:
                 if instr[0] == constants.DAMAGE and instr[1] == constants.OPPONENT:
-                    modified_instr = (instr[0], instr[1], math.floor(instr[2] * ankimon_tracker_obj.multiplier)) + instr[3:]
-                    instrs.append(modified_instr)
+                    if hasattr(mutator, "review_based_damage_multiplier_applied"):
+                        # Engine-level wrapper already scaled this damage.
+                        instrs.append(instr)
+                    else:
+                        tracker_mult = (
+                            ankimon_tracker_obj.multiplier
+                            if ankimon_tracker_obj
+                            else 1.0
+                        )
+                        raw_dmg = instr[2]
+                        if raw_dmg > 0:
+                            mult_dmg = max(1, math.floor(raw_dmg * tracker_mult))
+                        else:
+                            mult_dmg = math.floor(raw_dmg * tracker_mult)
+                        modified_instr = (instr[0], instr[1], mult_dmg) + instr[3:]
+                        instrs.append(modified_instr)
                 else:
                     instrs.append(instr)
         else:
@@ -255,42 +328,43 @@ def simulate_battle_with_poke_engine(
         enemy_pokemon.current_hp = state.opponent.active.hp
 
         main_pokemon.stat_stages = {
-            'atk': state.user.active.attack_boost,
-            'def': state.user.active.defense_boost,
-            'spa': state.user.active.special_attack_boost,
-            'spd': state.user.active.special_defense_boost,
-            'spe': state.user.active.speed_boost,
-            'accuracy': state.user.active.accuracy_boost,
-            'evasion': state.user.active.evasion_boost
+            "atk": state.user.active.attack_boost,
+            "def": state.user.active.defense_boost,
+            "spa": state.user.active.special_attack_boost,
+            "spd": state.user.active.special_defense_boost,
+            "spe": state.user.active.speed_boost,
+            "accuracy": state.user.active.accuracy_boost,
+            "evasion": state.user.active.evasion_boost,
         }
 
         # Save volatile status from poke-engine state to Pokemon object - NEW
-        if hasattr(state.user.active, 'volatile_status'):
+        if hasattr(state.user.active, "volatile_status"):
             main_pokemon.volatile_status = state.user.active.volatile_status.copy()
-        elif not hasattr(main_pokemon, 'volatile_status'):
+        elif not hasattr(main_pokemon, "volatile_status"):
             main_pokemon.volatile_status = set()
-
 
         # Same for enemy Pokemon
         enemy_pokemon.stat_stages = {
-            'atk': state.opponent.active.attack_boost,
-            'def': state.opponent.active.defense_boost,
-            'spa': state.opponent.active.special_attack_boost,
-            'spd': state.opponent.active.special_defense_boost,
-            'spe': state.opponent.active.speed_boost,
-            'accuracy': state.opponent.active.accuracy_boost,
-            'evasion': state.opponent.active.evasion_boost
+            "atk": state.opponent.active.attack_boost,
+            "def": state.opponent.active.defense_boost,
+            "spa": state.opponent.active.special_attack_boost,
+            "spd": state.opponent.active.special_defense_boost,
+            "spe": state.opponent.active.speed_boost,
+            "accuracy": state.opponent.active.accuracy_boost,
+            "evasion": state.opponent.active.evasion_boost,
         }
 
         # Save volatile status for enemy - NEW
-        if hasattr(state.opponent.active, 'volatile_status'):
+        if hasattr(state.opponent.active, "volatile_status"):
             enemy_pokemon.volatile_status = state.opponent.active.volatile_status.copy()
-        elif not hasattr(enemy_pokemon, 'volatile_status'):
+        elif not hasattr(enemy_pokemon, "volatile_status"):
             enemy_pokemon.volatile_status = set()
 
         new_state = copy.deepcopy(state)
 
-        mutator_full_reset = 0 # preserve battle state - until something else changes this value
+        mutator_full_reset = (
+            0  # preserve battle state - until something else changes this value
+        )
 
         user_hp_after = int(new_state.user.active.hp)
         opponent_hp_after = int(new_state.opponent.active.hp)
@@ -316,16 +390,24 @@ def simulate_battle_with_poke_engine(
             battle_effects.append(list(instr))  # Convert tuples to lists
 
         battle_info = {
-            'battle_header': battle_header,
-            'instructions': battle_effects,
-            'state': new_state
-            }
+            "battle_header": battle_header,
+            "instructions": battle_effects,
+            "state": new_state,
+        }
 
         print(f"{unlucky_life * 100}% chance: {battle_effects}")
-        return battle_info, new_state, dmg_from_enemy_move, dmg_from_user_move, mutator_full_reset, battle_info_changes
+        return (
+            battle_info,
+            new_state,
+            dmg_from_enemy_move,
+            dmg_from_user_move,
+            mutator_full_reset,
+            battle_info_changes,
+        )
 
     except Exception as e:
         show_warning_with_traceback(exception=e, message="Error simulating battle:")
+
 
 def diff_states(state_before, state_after, path="", changes=None):
     """
@@ -339,52 +421,48 @@ def diff_states(state_before, state_after, path="", changes=None):
     if state_before is None and state_after is None:
         return changes
     if state_before is None or state_after is None:
-        changes.append({
-            'key': path or 'root',
-            'before': state_before,
-            'after': state_after
-        })
+        changes.append(
+            {"key": path or "root", "before": state_before, "after": state_after}
+        )
         return changes
 
     # Handle primitive types (int, float, str, bool)
-    if isinstance(state_before, (int, float, str, bool)) or isinstance(state_after, (int, float, str, bool)):
+    if isinstance(state_before, (int, float, str, bool)) or isinstance(
+        state_after, (int, float, str, bool)
+    ):
         if state_before != state_after:
-            changes.append({
-                'key': path or 'root',
-                'before': state_before,
-                'after': state_after
-            })
+            changes.append(
+                {"key": path or "root", "before": state_before, "after": state_after}
+            )
         return changes
 
     # Handle sets
     if isinstance(state_before, set) or isinstance(state_after, set):
         if state_before != state_after:
-            changes.append({
-                'key': path or 'root',
-                'before': state_before,
-                'after': state_after
-            })
+            changes.append(
+                {"key": path or "root", "before": state_before, "after": state_after}
+            )
         return changes
 
     # Handle tuples
     if isinstance(state_before, tuple) or isinstance(state_after, tuple):
         if state_before != state_after:
-            changes.append({
-                'key': path or 'root',
-                'before': state_before,
-                'after': state_after
-            })
+            changes.append(
+                {"key": path or "root", "before": state_before, "after": state_after}
+            )
         return changes
 
     # Handle lists
     if isinstance(state_before, list) and isinstance(state_after, list):
         # Compare list lengths and elements
         if len(state_before) != len(state_after):
-            changes.append({
-                'key': f"{path}.length" if path else 'length',
-                'before': len(state_before),
-                'after': len(state_after)
-            })
+            changes.append(
+                {
+                    "key": f"{path}.length" if path else "length",
+                    "before": len(state_before),
+                    "after": len(state_after),
+                }
+            )
 
         # Compare elements up to the shorter length
         min_len = min(len(state_before), len(state_after))
@@ -396,19 +474,15 @@ def diff_states(state_before, state_after, path="", changes=None):
         if len(state_before) > min_len:
             for i in range(min_len, len(state_before)):
                 new_path = f"{path}[{i}]" if path else f"[{i}]"
-                changes.append({
-                    'key': new_path,
-                    'before': state_before[i],
-                    'after': None
-                })
+                changes.append(
+                    {"key": new_path, "before": state_before[i], "after": None}
+                )
         elif len(state_after) > min_len:
             for i in range(min_len, len(state_after)):
                 new_path = f"{path}[{i}]" if path else f"[{i}]"
-                changes.append({
-                    'key': new_path,
-                    'before': None,
-                    'after': state_after[i]
-                })
+                changes.append(
+                    {"key": new_path, "before": None, "after": state_after[i]}
+                )
         return changes
 
     # Handle dictionaries
@@ -423,11 +497,9 @@ def diff_states(state_before, state_after, path="", changes=None):
 
     # Handle custom objects - check if they're the same type
     if type(state_before) != type(state_after):
-        changes.append({
-            'key': path or 'root',
-            'before': state_before,
-            'after': state_after
-        })
+        changes.append(
+            {"key": path or "root", "before": state_before, "after": state_after}
+        )
         return changes
 
     # Custom class: recurse into attributes (__dict__ and __slots__ on the class)
@@ -459,8 +531,7 @@ def print_state_changes(changes):
         return
 
     for change in changes:
-        key = change['key']
-        before = change['before']
-        after = change['after']
+        key = change["key"]
+        before = change["before"]
+        after = change["after"]
         print(f"{key}: {before} -> {after}")
-
