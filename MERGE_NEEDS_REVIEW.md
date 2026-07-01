@@ -9,7 +9,13 @@ owner ping. Stage A (this session) owns the branch and appends directly. Stage B
 to the integration branch directly — it appends via PRs the owner merges (one consolidated
 escalations PR per wave, plus each feature PR carrying its own append).
 
-Status legend: **OPEN** (needs owner) · **RESOLVED** (owner decided) · **INFO** (recorded, no action).
+Status legend: **OPEN** (needs owner) · **RECOMMENDED** (Stage A suggests a path; not decided) ·
+**RESOLVED** (owner decided) · **INFO** (recorded, no action).
+
+> **On recommendations.** Any "Recommended path" written below is **non-binding guidance from Stage A**,
+> not a mandate. Stage B and the owner are free to pursue a different approach — the recommendation
+> is a default to save a round-trip, not a decision. Whoever acts should append their **actual**
+> choice + rationale (git stays ground truth); a different, well-reasoned path is entirely welcome.
 
 ---
 
@@ -49,7 +55,7 @@ Status legend: **OPEN** (needs owner) · **RESOLVED** (owner decided) · **INFO*
   (`notify_stats_changed` + `stats_changed` signal). `singletons.py` is untouched. Stage B wires
   producers (cash/xp/level/caught changes) to call `host.live_bridge.notify_stats_changed(...)`.
 
-## NR-05 — WAL is opt-in; live WAL enablement deferred (persistence guard)  ·  OPEN (Stage B)
+## NR-05 — WAL is opt-in; live WAL enablement deferred (persistence guard)  ·  RECOMMENDED (Stage B's call)
 - **What:** exp runs the SQLite DB in WAL for concurrent background access. But the harness
   `probe_persistence` and `BackupManager` simulate/perform a restart by copying **only**
   `ankimon.db` — WAL buffers committed writes in the `-wal` sidecar, so a single-file copy loses
@@ -59,20 +65,32 @@ Status legend: **OPEN** (needs owner) · **RESOLVED** (owner decided) · **INFO*
   (`check_same_thread=False` + per-thread connections) ships **without** forcing WAL, preserving
   main's persistence/backup behavior (probe_persistence stays green). The `wal=True` capability
   is proven by the scaffolding smoke test on a scratch DB.
-- **Stage-B requirement:** the concurrent-writer leaf (mobile-sync) that needs WAL must enable
-  it (`wal=True`) **together with** a checkpoint-before-copy fix in `BackupManager`/any db-file
-  copy path (`PRAGMA wal_checkpoint(TRUNCATE)`), or copy all of `.db`/`.db-wal`/`.db-shm`.
-  **Do not enable WAL live without that fix** or restart-persistence regresses.
+- **Hard invariant (not negotiable):** if the live DB is ever put into WAL, restart-persistence
+  regresses (probe_persistence goes red, real user saves can be lost) **unless** the WAL is flushed
+  into `ankimon.db` before any single-file copy. Don't ship live WAL without solving that.
+- **Recommended path (non-binding — Stage B may choose otherwise):** keep `wal=False` until a leaf
+  genuinely needs concurrent read-during-write (only the mobile-sync engine, F14/F29, plausibly does);
+  when it does, enable `wal=True` **and** add `PRAGMA wal_checkpoint(TRUNCATE)` before every db-file
+  copy in `BackupManager`/`switch_database`/any backup path, then re-green probe_persistence.
+  - Equally acceptable alternatives if Stage B prefers: copy all three files (`.db`/`.db-wal`/`.db-shm`)
+    in the backup path; or keep WAL off entirely and rely on per-thread connections + short
+    transactions (the base already works this way and passes the gate); or a different concurrency
+    model altogether. Any of these is fine — just don't violate the hard invariant above, and append
+    the chosen approach here.
 
-## NR-06 — `reloader.py` deferred (mw-coupled dev tool)  ·  OPEN (Stage B)
+## NR-06 — `reloader.py` deferred (mw-coupled dev tool)  ·  RECOMMENDED (Stage B's call)
 - **What:** exp's `reloader.py` hot-reload is listed as scaffolding (§9) but is inherently
   `mw`-coupled (tears down `gui_hooks`, `mw.pokemenu`, `mw.form.menubar`) and references leaf
   windows that don't exist on main (`item_window`, `ankidex`, the web shell). It is also
   Developer-Mode-gated (a leaf) and no §16 smoke test needs it.
-- **Recommendation:** DEFER to Stage B, landing with the Developer-Mode + web-shell leaves so its
-  teardown list matches the then-present windows. Re-express its `mw.*` teardown through the seam
-  where possible; full seam re-expression of a runtime-teardown dev tool may be disproportionate
-  (a NEEDS-REVIEW for Stage B, not a license to keep direct-mw in shipped feature code).
+- **Recommended path (non-binding — Stage B may choose otherwise):** land it in Stage B alongside the
+  Developer-Mode + web-shell leaves, so its window-teardown list matches the then-present windows;
+  re-express `mw.*` teardown through the seam where reasonable. A runtime-teardown dev tool that
+  operates on Anki's own `gui_hooks`/menubar is a legitimate place where full seam re-expression may be
+  disproportionate — if so, escalate it as its own item rather than treating it as license to keep
+  direct-`mw` in shipped feature code.
+  - Stage B is free to instead bring `reloader.py` earlier (as a standalone dev primitive that no-ops
+    on missing windows), rewrite it differently, or drop it — its call, appended here with rationale.
 
 ## NR-07 — Pre-existing whole-tree ruff debt on the base (baseline red)  ·  INFO
 - **What:** `ruff check --config ci_ruff_check.toml src/Ankimon` = **10 errors** (all `UP018`,
@@ -126,7 +144,7 @@ Status legend: **OPEN** (needs owner) · **RESOLVED** (owner decided) · **INFO*
   **145** non-merge exp-only commits (brief ~143); exp-only change set = **165 files**
   (`git diff --stat a8abbd66..origin/BRRRR_Experimental`). Git wins; recorded for Stage B.
 
-## NR-14 — Meta-docs disposition (repository-analysis / AGENTS.md / feature-list)  ·  OPEN
+## NR-14 — Meta-docs disposition (repository-analysis / AGENTS.md / feature-list)  ·  RECOMMENDED (owner/Stage B call)
 - **What:** three exp meta-docs are DEFERRED leaves but need an explicit keep-vs-drop-vs-reconcile call
   (surfaced by the independent cross-check):
   - **F03** `repository-analysis/` (21 files) — an agent-oriented architecture audit that describes exp's
@@ -135,11 +153,15 @@ Status legend: **OPEN** (needs owner) · **RESOLVED** (owner decided) · **INFO*
   - **F04** `AGENTS.md` — edit-vs-edit with main (main +126 lines seam-oriented; exp +373 lines pointing at
     direct-mw + `repository-analysis/`). Must be reconciled onto main's seam guidance, not overwritten.
   - **F07** `src/Ankimon/_BRRR_EXPERIMENTAL_FEATURE_LIST.md` — a transient planning/changelog doc.
-- **Recommendation:** F04 → reconcile (keep main's seam guidance, graft any still-true exp notes).
-  F03 → keep only if rewritten to main's architecture, else drop (or move under `docs/` clearly labelled
-  "describes the pre-integration exp branch"). F07 → drop from the shipped tree (its content is preserved
-  in this ledger + the diff report).
-- **Owner decision needed** before Stage B ports F03/F04/F07.
+- **Recommended path (non-binding — owner/Stage B may choose otherwise):**
+  - **F04 `AGENTS.md`** → reconcile: keep main's seam-oriented guidance as the base, graft any still-true
+    exp notes; do NOT adopt exp's direct-`mw`/`repository-analysis` framing.
+  - **F03 `repository-analysis/`** → keep only if rewritten to describe main's (seam) architecture; else
+    drop, or move under `docs/` clearly labelled "describes the pre-integration exp branch."
+  - **F07 `_BRRR_EXPERIMENTAL_FEATURE_LIST.md`** → drop from the shipped tree (its content is preserved in
+    this ledger + the diff report in `~/Downloads`).
+  - These are docs only — no runtime/gate impact — so any choice (keep all, drop all, reconcile) is safe.
+    Owner/Stage B: pick freely and append the decision; the above is just a sensible default.
 
 ## NR-13 — Commit identity differs from the brief (both are noreply)  ·  INFO
 - Brief expected `141889580+h0tp-ftw@users.noreply.github.com`; the machine's configured git
