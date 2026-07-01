@@ -6,6 +6,7 @@ from ..resources import learnset_path
 # === Cache learnset data ===
 _learnset_cache = None
 
+
 def _load_learnset_cache():
     """Load learnset JSON once and cache it in memory"""
     global _learnset_cache
@@ -18,68 +19,214 @@ def _load_learnset_cache():
             _learnset_cache = {}
     return _learnset_cache
 
+
 def clear_learnset_cache():
     """Clear the learnset cache if data is updated"""
     global _learnset_cache
     _learnset_cache = None
 
+
+def clean_pokeapi_name(name: str) -> str:
+    name_lower = name.lower()
+
+    # Handle female forms (PokéAPI "-female" -> Smogon "f")
+    if name_lower.endswith("-female"):
+        return name[:-7] + "f"
+
+    suffixes_to_strip = [
+        "-standard",
+        "-normal",
+        "-altered",
+        "-land",
+        "-red-striped",
+        "-male",
+        "-ordinary",
+        "-aria",
+        "-average",
+        "-disguised",
+        "-amped",
+        "-ice",
+        "-single-strike",
+        "-zero",
+        "-curly",
+        "-two-segment",
+        "-green-plumage",
+        "-plant",
+        "-mask",
+    ]
+    for suffix in suffixes_to_strip:
+        if name_lower.endswith(suffix):
+            return name[: -len(suffix)]
+
+    return name
+
+
+DEOXYS_EXCLUSIONS = {
+    "deoxys": {
+        "spikes",
+        "superpower",
+        "extremespeed",
+        "zapcannon",
+        "irondefense",
+        "amnesia",
+        "agility",
+        "counter",
+        "mirrorcoat",
+    },
+    "deoxysattack": {
+        "spikes",
+        "extremespeed",
+        "cosmicpower",
+        "irondefense",
+        "amnesia",
+        "agility",
+        "recover",
+        "counter",
+        "mirrorcoat",
+        "doubleteam",
+    },
+    "deoxysdefense": {
+        "superpower",
+        "extremespeed",
+        "cosmicpower",
+        "zapcannon",
+        "agility",
+        "doubleteam",
+    },
+    "deoxysspeed": {
+        "spikes",
+        "superpower",
+        "cosmicpower",
+        "zapcannon",
+        "irondefense",
+        "amnesia",
+        "counter",
+        "mirrorcoat",
+    },
+}
+
+
 def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
     """
     Return all moves a Pokémon can know at *pokemon_level* in a single *generation*.
-
-    Args:
-        pokemon_name: Pokémon name (case-insensitive).
-        pokemon_level: Current level of the Pokémon.
-        generation: Generation to filter learn_codes by (default 9).
-
-    Returns:
-        dict mapping move_name -> learn_level for every move learnable
-        at or below *pokemon_level* within the specified generation.
+    Falls back to earlier generations if no moves are found.
+    Handles Mega/Gigantamax forms by falling back to base form learnset.
     """
     learnsets = _load_learnset_cache()
 
-    pokemon_name = pokemon_name.lower().replace("-", "").replace(" ", "").replace("'", "").replace(".", "")
-    pokemon_learnset = learnsets.get(pokemon_name, {}).get("learnset", {})
-    
-    # Fallback to base form for Mega/Gigantamax/Primal if no learnset found
-    if not pokemon_learnset and any(x in pokemon_name for x in ["mega", "gmax", "primal"]):
+    # Try standard key normalization first
+    norm_name = (
+        pokemon_name.lower()
+        .replace("-", "")
+        .replace(" ", "")
+        .replace("'", "")
+        .replace(".", "")
+    )
+    pokemon_learnset = learnsets.get(norm_name, {}).get("learnset", {})
+
+    # Fallback 1: clean PokéAPI suffix mismatches (e.g. "darmanitan-galar-standard" -> "darmanitangalar")
+    if not pokemon_learnset:
+        cleaned_name = clean_pokeapi_name(pokemon_name)
+        cleaned_norm = (
+            cleaned_name.lower()
+            .replace("-", "")
+            .replace(" ", "")
+            .replace("'", "")
+            .replace(".", "")
+        )
+        pokemon_learnset = learnsets.get(cleaned_norm, {}).get("learnset", {})
+
+    # Fallback 2: reverse lookup canonical key using pokedex ID index
+    if not pokemon_learnset:
+        try:
+            from .pokedex_functions import (
+                search_pokedex,
+                search_pokedex_by_id,
+                safe_int,
+            )
+
+            actual_id = safe_int(search_pokedex(pokemon_name, "actual_id"))
+            if actual_id:
+                canonical_key = search_pokedex_by_id(actual_id)
+                if canonical_key and canonical_key != "Pokémon not found":
+                    pokemon_learnset = learnsets.get(canonical_key, {}).get(
+                        "learnset", {}
+                    )
+        except Exception:
+            pass
+
+    # Fallback 3: base form for Mega/Gigantamax/Special forms if no level-up moves found
+    has_lvl_moves = any(
+        any("L" in code for code in codes) for codes in pokemon_learnset.values()
+    )
+    if not pokemon_learnset or not has_lvl_moves:
         # Use pokedex to find the base form via species_id
-        from .pokedex_functions import _load_pokedex_cache, search_pokedex_by_id, search_pokedex
-        pokedex_data = _load_pokedex_cache()
-        
-        # Use search_pokedex to handle normalized names and fallbacks
-        species_id = search_pokedex(pokemon_name, "species_id")
-        
-        if species_id and not isinstance(species_id, list):
-            base_name = search_pokedex_by_id(species_id)
-            if base_name and base_name != "Pokémon not found":
-                pokemon_learnset = learnsets.get(base_name, {}).get("learnset", {})
+        try:
+            from .pokedex_functions import (
+                _load_pokedex_cache,
+                search_pokedex_by_id,
+                search_pokedex,
+            )
+
+            pokedex_data = _load_pokedex_cache()
+
+            # Use search_pokedex to handle normalized names and fallbacks
+            species_id = search_pokedex(norm_name, "species_id")
+
+            if species_id and not isinstance(species_id, list):
+                base_name = search_pokedex_by_id(species_id)
+                if (
+                    base_name
+                    and base_name != "Pokémon not found"
+                    and base_name != norm_name
+                ):
+                    base_learnset = learnsets.get(base_name, {}).get("learnset", {})
+                    pokemon_learnset = {**base_learnset, **pokemon_learnset}
+        except Exception:
+            pass
 
     moves = {}
-    
+
     # Try the requested generation first, then fallback to all earlier generations
     for gen in range(generation, 0, -1):  # Try from requested gen down to gen 1
         moves = {}
         target_generation = str(gen)
-        
+
         for move, learn_codes in pokemon_learnset.items():
+            if norm_name in DEOXYS_EXCLUSIONS and move in DEOXYS_EXCLUSIONS[norm_name]:
+                continue
             best = -1
             for learn_code in learn_codes:
-                move_generation, _, move_level = learn_code.partition("L")
-                if move_generation != target_generation:
+                if not learn_code or learn_code[0] != target_generation:
                     continue
-                
-                learn_level = int(move_level)
+
+                # Parse method: L (level-up), R (relearn), S (special/event level)
+                method = learn_code[1] if len(learn_code) > 1 else ""
+                if method == "L":
+                    try:
+                        learn_level = int(learn_code[2:])
+                    except ValueError:
+                        continue
+                elif method == "R":
+                    learn_level = 1  # Relearn moves can be learned at any level >= 1
+                elif method == "S":
+                    try:
+                        learn_level = int(learn_code[2:])
+                    except ValueError:
+                        continue
+                else:
+                    continue
+
                 if pokemon_level >= learn_level > best:
                     best = learn_level
-            
+
             if best >= 0:
                 moves[move] = best
-        
+
         # If we found moves, return them
         if moves:
             break
-    
+
     return moves
 
 
@@ -100,4 +247,6 @@ def get_levelup_move_for_pokemon(pokemon_name, pokemon_level, generation=9):
     """Return a list of moves learned at exactly *pokemon_level* (never None)."""
     all_moves = _get_learnset_moves(pokemon_name, pokemon_level, generation)
 
-    return [move for move, learn_level in all_moves.items() if learn_level == pokemon_level]
+    return [
+        move for move, learn_level in all_moves.items() if learn_level == pokemon_level
+    ]
