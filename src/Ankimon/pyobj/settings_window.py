@@ -262,8 +262,8 @@ class SettingsWindow(QMainWindow):
             true_radio.setChecked(value)
             false_radio.setChecked(not value)
             button_group = QButtonGroup(self)
-            button_group.addButton(true_radio)
-            button_group.addButton(false_radio)
+            button_group.addButton(true_radio, 1)
+            button_group.addButton(false_radio, 0)
             if key.startswith("misc.gen"):
                 button_group.buttonClicked.connect(lambda: self._on_gen_toggled())
             h_layout.addWidget(true_radio)
@@ -634,12 +634,12 @@ class SettingsWindow(QMainWindow):
                             self.config[key] = original_value
 
                 # Standard handling for other settings
-                elif isinstance(original_value, int):
+                elif type(original_value) is int:
                     try:
                         self.config[key] = int(new_text)
                     except ValueError:
                         self.config[key] = original_value
-                elif isinstance(original_value, float):
+                elif type(original_value) is float:
                     try:
                         self.config[key] = float(new_text)
                     except ValueError:
@@ -647,7 +647,7 @@ class SettingsWindow(QMainWindow):
                 else:
                     self.config[key] = str(new_text)
             elif isinstance(widget, QButtonGroup):
-                self.config[key] = widget.checkedButton().text() == "Enabled"
+                self.config[key] = widget.checkedId() == 1
             elif isinstance(widget, QComboBox):
                 self.config[key] = widget.currentData()
 
@@ -722,7 +722,10 @@ class SettingsWindow(QMainWindow):
             key: self.config[key]
             for key in self.config
             if not any(pattern in key for pattern in excluded_patterns)
-            and self.config[key] != self.original_config.get(key)
+            and (
+                self.config[key] != self.original_config.get(key)
+                or type(self.config[key]) is not type(self.original_config.get(key))
+            )
         }
 
         if changed_settings:
