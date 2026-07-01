@@ -83,7 +83,7 @@ DEFAULT_CONFIG = {
     "trainer.sprite": "ash",
     "trainer.id": 0,
     "trainer.cash": 0,
-    "trainer.cash_reward_amount": 100,
+    "trainer.cash_reward_amount": 40,
     "trainer.cash_reward_interval": 10,
     "trainer.mobile_reviews_resolved_since_payout": 0,
     "trainer.level": 0,
