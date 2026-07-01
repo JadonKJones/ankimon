@@ -21,6 +21,43 @@ import pytest
 pytest.importorskip("PyQt6")  # Qt env only; skipped in the aqt-free Tier-1 env.
 
 
+@pytest.fixture(autouse=True)
+def _scaffolding_env_guard():
+    """Make these smoke tests robust to the base suite's non-hermetic mocking.
+
+    Several base test files mock ``PyQt6``/``aqt`` in ``sys.modules`` and rebind
+    ``sys.modules['Ankimon']`` to a bare module. The Stage-A gate runs THIS file
+    standalone (``pytest tests/test_scaffolding_smoke.py``), where PyQt6 is real and
+    ``Ankimon`` resolves cleanly. If instead it is run bundled with the mocking suite,
+    skip gracefully rather than fail on another test's mock — un-mocking a compiled
+    Qt extension mid-process is not reliable."""
+    import sys
+    import types
+    from pathlib import Path
+
+    from PyQt6.QtWidgets import QDialog
+
+    if not isinstance(QDialog, type):  # PyQt6 was mocked by another test in this run
+        pytest.skip(
+            "real PyQt6 not active (mocked by another test); "
+            "run tests/test_scaffolding_smoke.py standalone"
+        )
+
+    # A prior test may have rebound Ankimon as a non-package; restore a real one.
+    src = Path(__file__).parent.parent / "src"
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+    ank = sys.modules.get("Ankimon")
+    if ank is None or not getattr(ank, "__path__", None):
+        pkg = types.ModuleType("Ankimon")
+        pkg.__path__ = [str(src / "Ankimon")]
+        pkg.__package__ = "Ankimon"
+        sys.modules["Ankimon"] = pkg
+        for stale in [m for m in sys.modules if m.startswith("Ankimon.")]:
+            del sys.modules[stale]
+    yield
+
+
 # --- (a) web-shell host mounts a stub screen -------------------------------
 
 
