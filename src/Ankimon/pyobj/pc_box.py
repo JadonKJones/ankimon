@@ -1584,7 +1584,8 @@ class PokemonPC(QDialog):
             "json_extract(data, '$.evolution_rejected') as evolution_rejected, "
             "json_extract(data, '$.iv') as iv_json, json_extract(data, '$.ev') as ev_json, "
             "json_extract(data, '$.base_stats') as base_stats_json, json_extract(data, '$.stats') as stats_json, json_extract(data, '$.nature') as nature, "
-            "json_extract(data, '$.attacks') as attacks_json "
+            "json_extract(data, '$.attacks') as attacks_json, "
+            "json_extract(data, '$.pokemon_defeated') as pokemon_defeated "
             "FROM captured_pokemon WHERE 1=1"
         ]
         params = []
@@ -1703,6 +1704,7 @@ class PokemonPC(QDialog):
                     "friendship": int(row["friendship"] or 0),
                     "evolution_rejected": bool(row["evolution_rejected"]),
                     "attacks": json.loads(row["attacks_json"]) if row["attacks_json"] else [],
+                    "pokemon_defeated": int(row["pokemon_defeated"] or 0),
                 }
                 
                 # Pre-calculate sums/stats for sorting if needed
