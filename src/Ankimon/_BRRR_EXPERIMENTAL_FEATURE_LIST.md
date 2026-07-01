@@ -106,6 +106,7 @@ The reviewer interface received a "HUD Portal" upgrade for better injection and 
 - **Time-of-Day Enforcement**: Level-up evolutions now strictly respect time-of-day constraints (day/night) parsed from `pokedex.json` or CSVs. The PC Box displays dynamic status text (e.g., "waiting for Night") when the level is met but the time is wrong.
 - **Stone Evolution Consumption**: Dedicated stones are consumed upon manual evolution confirmation, updating the inventory and refreshing item displays.
 - **Move-Based Manual Evolution**: Supports manual evolutions that depend on learning specific moves (e.g., Koffing -> Galarian Weezing, Stantler -> Wyrdeer).
+- **Defeat-Based Evolution (minimumDefeated)**: Fully supports evolutions triggered by a minimum number of defeated opponents (e.g. Pawmo -> Pawmot, Rellor -> Rabsca, requiring 100 defeated enemies). Automatically evaluates defeat counts against `pokedex.json` thresholds, displays remaining defeats in the PC details view, shows grid status indicators correctly, and auto-prompts evolution upon victory battles.
 - **Region-Aware Level Evolution**: Level-up evolutions prefer regional targets (Galarian/Alolan) over base targets when `active_region` is set.
 
 ### Rare & Level-Gated Encounters
@@ -191,8 +192,9 @@ A premium, interactive web-based dashboard integrated directly into Ankimon's he
 - **Learnset Retrieval Upgrades**: Supported Relearn (`R`) and Special (`S`) moves to allow iconic moves like Behemoth Blade/Bash, Sunsteel Strike, Moongeistbeam to show in Move Manager. Programmatic exclusions (e.g., `DEOXYS_EXCLUSIONS`) prevent Deoxys forms from cross-learning each other's signature moves.
 - **3-Tier Suffix Fallbacks**: PokéAPI suffix-cleaning and 3-tier fallback to resolve form learnset errors (e.g., Galarian Darmanitan).
 - **Sprite Fallbacks**: Improved naming logic and back-sprite fallbacks for special forms to prevent "MissingNo" errors.
-- **Reward Balancing**: Configurable cash reward amounts and payout intervals. Unlike the `main` branch which pays a single flat 200¥ daily reward upon hitting the daily average, the experimental branch grants cash dynamically and continuously (defaulting to 100¥ every 10 reviews). Fixed infinite cash reward exploits by correcting day cutoff calculation.
+- **Reward Balancing**: Configurable cash reward amounts and payout intervals. Unlike the `main` branch which pays a single flat 200¥ daily reward upon hitting the daily average, the experimental branch grants cash dynamically and continuously (defaulting to 40¥ every 10 reviews for new profiles to balance pacing). Fixed infinite cash reward exploits by correcting day cutoff calculation.
 - **Dynamic PC Box Stat Scaling**: Implemented a global square-root scaling formula for PC box stat bars to make visual stat differences look more balanced.
+- **Database-Specific Backups**: Implemented isolated backup and restore functionality for production (`ankimon.db`) and dev (`ankimonDEV.db`) files. Restores target only the active database to prevent cross-contamination of profiles, and manual backup triggers only clone the current active database.
 
 ### Settings Upgrades
 
@@ -221,6 +223,7 @@ A modern startup check and installation system designed specifically to keep use
 - **Commit Logs Feed**: Displays commit messages and titles inside a scrollable `QTextBrowser` styled dynamically for both Anki light and dark night modes.
 - **Weekly Snooze Option**: A checkbox allows users to snooze update checks and prompts for exactly 1 week, saving the snooze timestamp cleanly in `update_state.json`.
 - **Locked-Files Bypass Safety**: Gracefully bypasses Windows permission locks on static assets (such as loaded `.ttf` fonts like `Early GameBoy.ttf`) by displaying a non-fatal warning and successfully installing code updates.
+- **Git Clone & Development-Safe In-App Updates**: Redesigned the update applicator to be fully safe on git clones by using `git pull --ff-only` asynchronously in a background thread if the directory is a git repository, prompting a warning about overwriting code on manual Pull Request installations, and filtering out legacy release tags prior to version v2.0.
 - **Simplified Menu Interface**: Action renamed to **Check for Updates** under `Ankimon => Help` for standard UX naming.
 
 ---

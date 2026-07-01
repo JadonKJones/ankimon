@@ -85,7 +85,8 @@ In standard Ankimon branches, JSON writes were heavily obfuscated. In our local 
 ## 3. Automated Backups
 
 To guard against file corruption:
-*   **Startup Backup:** Upon Anki profile open, `BackupManager` creates a compressed backup of the active SQLite database inside the `backup/` subfolder.
+*   **Startup Backup:** Upon Anki profile open, `BackupManager` creates a compressed backup of the active SQLite database file (`ankimon.db` or `ankimonDEV.db`) inside the `backup/` subfolder.
+*   **Database Isolation:** Backups and restores are segregated based on active database mode (production vs dev). Restoring a backup only applies to the database corresponding to the active mode, preventing state leakage or contamination.
 *   **Rollback Path:** In the event of schema migration errors or corrupt indices, the add-on recovers by rolling back to the latest valid backup.
 
 > [!CAUTION]

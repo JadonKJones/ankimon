@@ -126,6 +126,8 @@ The `data` text column holds the complete serialized dictionary of the `PokemonO
   "battle_status": "Fighting",
   "xp": 0,
   "tier": "Normal",
+  "nature": "Serious",
+  "pokemon_defeated": 0,
   "captured_date": "2026-05-20T12:00:00Z",
   "individual_id": "8b9e6a4b-d30a-44c5-84a8-6ad37cc243bb"
 }

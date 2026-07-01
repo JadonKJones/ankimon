@@ -39,6 +39,8 @@ Below is a detailed map of all configuration parameters active in the system:
 | `trainer.cash` | `int` | `3000` | In-game balance used to buy shop items. |
 | `trainer.daily_average` | `int` | `50` | Active review targets. Reaching this yields daily gold awards. |
 | `trainer.mobile_reviews_resolved_since_payout` | `int` | `0` | Tracks reviews completed during mobile sync since the last cash payout milestone. |
+| `trainer.cash_reward_amount` | `int` | `40` | Cash amount paid to the trainer per review milestone interval. |
+| `trainer.cash_reward_interval` | `int` | `10` | Review interval required to trigger a cash reward payout. |
 | **Mobile Reviews** | | | |
 | `mobile.enabled` | `bool` | `true` | Expose reviews completed on AnkiMobile during syncing. |
 | `mobile.resolution_mode` | `str` | `"manual"` | How pending mobile reviews are resolved (`"manual"` or `"auto"`). |
