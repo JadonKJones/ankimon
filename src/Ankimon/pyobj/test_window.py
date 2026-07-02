@@ -1,4 +1,5 @@
 import json
+import time
 
 from aqt import mw
 
@@ -11,7 +12,7 @@ from aqt.qt import (
     Qt,
     QVBoxLayout,
     QWidget,
-    qconnect
+    qconnect,
 )
 
 from aqt.utils import showWarning
@@ -32,7 +33,11 @@ from ..utils import random_item, load_custom_font
 
 from ..functions.drawing_utils import draw_gender_symbols, draw_stat_boosts
 
-from ..functions.pokedex_functions import get_pokemon_diff_lang_name, search_pokedex
+from ..functions.pokedex_functions import (
+    get_pokemon_diff_lang_name,
+    get_pretty_name_for_name,
+    search_pokedex,
+)
 
 from ..functions.pokemon_functions import find_experience_for_level
 
@@ -60,16 +65,15 @@ from ..resources import (
 
 
 class TestWindow(QWidget):
-
     def __init__(
         self,
         main_pokemon,
         enemy_pokemon,
         settings_obj,
         parent=mw,
-        ankimon_tracker_obj: AnkimonTracker=None,
-        translator: Translator=None,
-        logger: ShowInfoLogger=None,
+        ankimon_tracker_obj: AnkimonTracker = None,
+        translator: Translator = None,
+        logger: ShowInfoLogger = None,
     ):
         super().__init__(parent)  # <-- set parent here
 
@@ -77,9 +81,11 @@ class TestWindow(QWidget):
         self.setWindowFlag(Qt.WindowType.Tool, True)
 
         # Optionally: ensure it raises above the parent when shown
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)  # Explicitly disable global always-on-top
+        self.setWindowFlag(
+            Qt.WindowType.WindowStaysOnTopHint, False
+        )  # Explicitly disable global always-on-top
 
-        self.pkmn_window = False  #if fighting window open
+        self.pkmn_window = False  # if fighting window open
         self.first_start = False
         self.enemy_pokemon = enemy_pokemon
         self.main_pokemon = main_pokemon
@@ -89,47 +95,61 @@ class TestWindow(QWidget):
         self.translator = translator
 
         if translator is None:
-            self.translator = Translator(language=int(settings_obj.get("misc.language")))
+            self.translator = Translator(
+                language=int(settings_obj.get("misc.language"))
+            )
 
         self.test = 1
 
         self.default_path = f"{pkmnimgfolder}/front_default/substitute.png"
 
+        self.current_view = None
+        self.main_label = None
+        self.kill_button = None
+        self.catch_button = None
+        self.nickname_input = None
+        self._last_display_time = 0
+
         self.init_ui()
-        #self.update()
+        # self.update()
 
     def init_ui(self):
-        layout = QVBoxLayout()
+        # Use a single persistent layout
+        if self.layout() is None:
+            self.setLayout(QVBoxLayout())
 
-        # Main window layout
-        layout = QVBoxLayout()
+        layout = self.layout()
+        self.clear_layout(layout)
 
-        image_file = "ankimon_logo.png"
-        image_path = str(addon_dir) + "/" + image_file
+        # Main label that will persist and show everything (Logo, Battle, Death)
+        self.main_label = QLabel()
+        self.main_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.main_label)
 
-        image_label = QLabel()
-        pixmap = QPixmap()
-        pixmap.load(str(image_path))
+        # Optional buttons for death screen (hidden by default)
+        self.button_widget = QWidget()
+        self.button_layout = QHBoxLayout()
+        self.kill_button = QPushButton()
+        self.catch_button = QPushButton()
+        self.nickname_input = QLineEdit()
+        self.button_layout.addWidget(self.kill_button)
+        self.button_layout.addWidget(self.catch_button)
+        self.button_layout.addWidget(self.nickname_input)
+        self.button_widget.setLayout(self.button_layout)
+        layout.addWidget(self.button_widget)
+        self.button_widget.hide()
 
-        if pixmap.isNull():
-            showWarning("Failed to load Ankimon Logo image")
-        else:
-            image_label.setPixmap(pixmap)
+        # Initial Logo
+        image_path = addon_dir / "ankimon_logo.png"
+        pixmap = QPixmap(str(image_path))
+        if not pixmap.isNull():
+            scaled_pixmap = pixmap.scaled(400, 400, Qt.AspectRatioMode.KeepAspectRatio)
+            self.main_label.setPixmap(scaled_pixmap)
 
-        scaled_pixmap = pixmap.scaled(400, 400, Qt.AspectRatioMode.KeepAspectRatio)
-        image_label.setPixmap(scaled_pixmap)
-
-        layout.addWidget(image_label)
-
-        self.first_start = True
-
-        self.setLayout(layout)
-
-        # Set window
+        self.setStyleSheet("background-color: rgb(44,44,44);")
         self._reset_window_title()
-        self.setWindowIcon(QIcon(str(icon_path)))  # Add a Pokeball icon
-
-        # Display the Pokémon image
+        self.setWindowIcon(QIcon(str(icon_path)))
+        self.setFixedSize(556, 300)
 
     def open_dynamic_window(self):
         # Create and show the dynamic window
@@ -137,7 +157,7 @@ class TestWindow(QWidget):
             if self.pkmn_window == False:
                 self.display_first_encounter()
                 self.pkmn_window = True
-                #self.show()
+                # self.show()
 
             if self.isVisible():
                 self.close()  # Testfenster schließen, wenn Shift gedrückt wird
@@ -156,8 +176,8 @@ class TestWindow(QWidget):
             x = int(main_screen_geometry.center().x() - self.width() / 2)
             y = int(main_screen_geometry.center().y() - self.height() / 2)
 
-            self.setGeometry(x, y, 256, 256 )
-            self.move(x,y)
+            self.setGeometry(x, y, 256, 256)
+            self.move(x, y)
 
             self.show()
 
@@ -213,6 +233,45 @@ class TestWindow(QWidget):
         painter.drawText(326, 216, f"{cp_lbl} {main_cp:,}")
         painter.drawText(326, 230, f"{bp_lbl} {main_bp:,}")
 
+    def _get_display_name(self, pokemon):
+        """Helper to safely get localized or pretty name for normal and special forms."""
+        if hasattr(pokemon, "name") and any(
+            f in pokemon.name.lower() for f in ["mega", "gmax"]
+        ):
+            return get_pretty_name_for_name(pokemon.name)
+        return get_pokemon_diff_lang_name(
+            int(pokemon.id), int(self.settings_obj.get("misc.language"))
+        )
+
+    def _same_view_debounced(self, view):
+        """True when a duplicate render of ``view`` arrives inside the debounce window.
+
+        Exp debounced every display call against one shared timestamp; on main
+        the battle loop legitimately calls ``display_battle()`` right before
+        ``handle_enemy_faint`` shows the death screen, so the guard is keyed to
+        the CURRENT view: only an immediate repeat of the same view is dropped
+        (anti-flicker for duplicate hooks, especially during add-on reloads).
+        """
+        now = time.time()
+        if self.current_view == view and now - self._last_display_time < 0.05:
+            return True
+        self._last_display_time = now
+        return False
+
+    def _trigger_catch_pokemon(self):
+        """Catch via the hook_registry seam (same path profile_hooks wires to mw)."""
+        # Lazy import: hook_registry/reviewer_ui pull in singletons, which would
+        # be circular (and Anki-bound) at module-import time.
+        from .. import hook_registry, reviewer_ui
+
+        hook_registry.CatchPokemonHook(reviewer_ui._collected_pokemon_ids)
+
+    def _trigger_defeat_pokemon(self):
+        """Defeat via the hook_registry seam (same path profile_hooks wires to mw)."""
+        from .. import hook_registry
+
+        hook_registry.DefeatPokemonHook()
+
     def pokemon_display_first_encounter(self):
         # Main window layout
         layout = QVBoxLayout()
@@ -224,15 +283,18 @@ class TestWindow(QWidget):
         self.ankimon_tracker_obj.caught = 0
 
         # Capitalize the first letter of the Pokémon's name
-        lang_name = get_pokemon_diff_lang_name(int(self.enemy_pokemon.id), int(self.settings_obj.get('misc.language')))
+        lang_name = self._get_display_name(self.enemy_pokemon)
 
         # calculate wild pokemon max hp
-        message_box_text = f"{mw.translator.translate('wild_pokemon_appeared', enemy_pokemon_name=lang_name.capitalize())}"
+        message_box_text = f"{self.translator.translate('wild_pokemon_appeared', enemy_pokemon_name=lang_name.capitalize())}"
 
         bckgimage_path = battlescene_path / self.ankimon_tracker_obj.battlescene_file
 
         if self.ankimon_tracker_obj.pokemon_encounter > 0:
-            bckgimage_path = battlescene_path_without_dialog / self.ankimon_tracker_obj.battlescene_file
+            bckgimage_path = (
+                battlescene_path_without_dialog
+                / self.ankimon_tracker_obj.battlescene_file
+            )
 
         msg_font = load_custom_font(32, int(self.settings_obj.get("misc.language")))
 
@@ -255,7 +317,7 @@ class TestWindow(QWidget):
         pixmap = QPixmap()
 
         try:
-            pixmap.load(str(self.enemy_pokemon.get_sprite_path('front', 'png')))
+            pixmap.load(str(self.enemy_pokemon.get_sprite_path("front", "png")))
         except:
             pixmap.load(str(self.default_path))
 
@@ -263,7 +325,7 @@ class TestWindow(QWidget):
         pixmap2 = QPixmap()
 
         try:
-            pixmap2.load(str(self.main_pokemon.get_sprite_path('back', 'png')))
+            pixmap2.load(str(self.main_pokemon.get_sprite_path("back", "png")))
         except:
             pixmap2.load(str(self.default_path))
 
@@ -287,7 +349,7 @@ class TestWindow(QWidget):
 
         # Merge the background image and the Pokémon image
         merged_pixmap = QPixmap(pixmap_bckg.size())
-        #merged_pixmap.fill(Qt.transparent)
+        # merged_pixmap.fill(Qt.transparent)
         merged_pixmap.fill(QColor(0, 0, 0, 0))
         # RGBA where A (alpha) is 0 for full transparency
 
@@ -302,24 +364,34 @@ class TestWindow(QWidget):
         # draw background to a specific pixel
         painter.drawPixmap(0, 0, pixmap_bckg)
 
-        painter = self.draw_hp_bar(118, 76, 8, 116, self.enemy_pokemon.hp, self.enemy_pokemon.max_hp, painter)  # enemy pokemon hp_bar
+        painter = self.draw_hp_bar(
+            118, 76, 8, 116, self.enemy_pokemon.hp, self.enemy_pokemon.max_hp, painter
+        )  # enemy pokemon hp_bar
 
-        painter = self.draw_hp_bar(401, 208, 8, 116, self.main_pokemon.hp, self.main_pokemon.max_hp, painter)  # main pokemon hp_bar
+        painter = self.draw_hp_bar(
+            401, 208, 8, 116, self.main_pokemon.hp, self.main_pokemon.max_hp, painter
+        )  # main pokemon hp_bar
 
         painter.drawPixmap(0, 0, pixmap_ui)
 
         # Find the Pokemon Images Height and Width
-        wpkmn_width = (new_width // 2)
+        wpkmn_width = new_width // 2
         wpkmn_height = new_height
 
-        mpkmn_width = (new_width2 // 2)
+        mpkmn_width = new_width2 // 2
         mpkmn_height = new_height2
 
         # draw pokemon image to a specific pixel
         painter.drawPixmap((410 - wpkmn_width), (170 - wpkmn_height), pixmap)
         painter.drawPixmap((144 - mpkmn_width), (290 - mpkmn_height), pixmap2)
 
-        experience = int(find_experience_for_level(self.main_pokemon.growth_rate, self.main_pokemon.level, self.settings_obj.get("misc.remove_level_cap")))
+        experience = int(
+            find_experience_for_level(
+                self.main_pokemon.growth_rate,
+                self.main_pokemon.level,
+                self.settings_obj.get("misc.remove_level_cap"),
+            )
+        )
 
         mainxp_bar_width = 5
         mainpokemon_xp_value = int(((self.main_pokemon.xp or 0) / experience) * 148)
@@ -330,7 +402,9 @@ class TestWindow(QWidget):
 
         # custom font
         custom_font = load_custom_font(26, int(self.settings_obj.get("misc.language")))
-        hp_enemy_text_font = load_custom_font(18, int(self.settings_obj.get("misc.language")))
+        hp_enemy_text_font = load_custom_font(
+            18, int(self.settings_obj.get("misc.language"))
+        )
         msg_font = load_custom_font(32, int(self.settings_obj.get("misc.language")))
 
         # Draw the text on top of the image
@@ -338,9 +412,8 @@ class TestWindow(QWidget):
         painter.setFont(custom_font)
         painter.setPen(QColor(31, 31, 39))  # Text color
 
-        enemy_name = get_pokemon_diff_lang_name(int(self.enemy_pokemon.id), int(self.settings_obj.get('misc.language')))
-
-        main_name = get_pokemon_diff_lang_name(int(self.main_pokemon.id), int(self.settings_obj.get('misc.language')))
+        enemy_name = self._get_display_name(self.enemy_pokemon)
+        main_name = self._get_display_name(self.main_pokemon)
 
         if self.enemy_pokemon.shiny:
             enemy_name += " 🌠 "
@@ -352,16 +425,22 @@ class TestWindow(QWidget):
         painter.drawText(326, 200, main_name)
 
         # Drawing the gender of each Pokemon
-        draw_gender_symbols(self.main_pokemon, self.enemy_pokemon, painter, (457, 196), (175, 64))
+        draw_gender_symbols(
+            self.main_pokemon, self.enemy_pokemon, painter, (457, 196), (175, 64)
+        )
 
-        draw_stat_boosts(self.main_pokemon, self.enemy_pokemon, painter, (326, 155), (48, 25))
+        draw_stat_boosts(
+            self.main_pokemon, self.enemy_pokemon, painter, (326, 155), (48, 25)
+        )
 
         painter.drawText(208, 67, f"{self.enemy_pokemon.level}")
-        #painter.drawText(55, 85, gender_text)
+        # painter.drawText(55, 85, gender_text)
         painter.drawText(490, 199, f"{self.main_pokemon.level}")
 
         hp_x = 442 if int(self.main_pokemon.hp) < 100 else 430  # Shift left if 3 digits
-        max_hp_x = 487 if int(self.main_pokemon.max_hp) < 100 else 480  # Shift left if 3 digits
+        max_hp_x = (
+            487 if int(self.main_pokemon.max_hp) < 100 else 480
+        )  # Shift left if 3 digits
 
         painter.drawText(max_hp_x, 238, str(int(self.main_pokemon.max_hp)))
         painter.drawText(hp_x, 238, str(int(self.main_pokemon.hp)))
@@ -373,10 +452,22 @@ class TestWindow(QWidget):
 
         painter.setFont(hp_enemy_text_font)
         painter.setPen(QColor(31, 31, 39))  # Text color
-        enemy_hp_x = 41 if int(self.enemy_pokemon.max_hp) < 100 else 40  # Shift left if 3 digits
-        enemy_max_hp_x = 64 if int(self.enemy_pokemon.max_hp) < 100 else 56  # Shift left if 3 digits
-        painter.drawText(enemy_hp_x, 84 if int(self.enemy_pokemon.max_hp) < 100 else 80 , str(int(self.enemy_pokemon.hp)) + "/")
-        painter.drawText(enemy_max_hp_x, 84 if int(self.enemy_pokemon.max_hp) < 100 else 88, str(int(self.enemy_pokemon.max_hp)))
+        enemy_hp_x = (
+            41 if int(self.enemy_pokemon.max_hp) < 100 else 40
+        )  # Shift left if 3 digits
+        enemy_max_hp_x = (
+            64 if int(self.enemy_pokemon.max_hp) < 100 else 56
+        )  # Shift left if 3 digits
+        painter.drawText(
+            enemy_hp_x,
+            84 if int(self.enemy_pokemon.max_hp) < 100 else 80,
+            str(int(self.enemy_pokemon.hp)) + "/",
+        )
+        painter.drawText(
+            enemy_max_hp_x,
+            84 if int(self.enemy_pokemon.max_hp) < 100 else 88,
+            str(int(self.enemy_pokemon.max_hp)),
+        )
 
         self._draw_cp_pp(painter)
 
@@ -407,12 +498,15 @@ class TestWindow(QWidget):
         return painter
 
     def pokemon_display_battle(self):
-        self.ankimon_tracker_obj.pokemon_encounter += 1
-
+        # No pokemon_encounter increment here — the battle loop owns the
+        # per-round counter; incrementing per render double-counted rounds.
         bckgimage_path = battlescene_path / self.ankimon_tracker_obj.battlescene_file
 
         if self.ankimon_tracker_obj.pokemon_encounter > 1:
-            bckgimage_path = battlescene_path_without_dialog / self.ankimon_tracker_obj.battlescene_file
+            bckgimage_path = (
+                battlescene_path_without_dialog
+                / self.ankimon_tracker_obj.battlescene_file
+            )
 
         ui_path = battle_ui_path
 
@@ -429,7 +523,7 @@ class TestWindow(QWidget):
         pixmap = QPixmap()
 
         try:
-            pixmap.load(str(self.enemy_pokemon.get_sprite_path('front', 'png')))
+            pixmap.load(str(self.enemy_pokemon.get_sprite_path("front", "png")))
         except:
             pixmap.load(str(self.default_path))
 
@@ -437,7 +531,7 @@ class TestWindow(QWidget):
         pixmap2 = QPixmap()
 
         try:
-            pixmap2.load(str(self.main_pokemon.get_sprite_path('back', 'png')))
+            pixmap2.load(str(self.main_pokemon.get_sprite_path("back", "png")))
         except:
             pixmap2.load(str(self.default_path))
 
@@ -446,7 +540,7 @@ class TestWindow(QWidget):
         original_width = pixmap.width()
         original_height = pixmap.height()
         new_width = max_width
-        new_height = (original_height * max_width) //original_width
+        new_height = (original_height * max_width) // original_width
 
         pixmap = pixmap.scaled(new_width, new_height)
 
@@ -461,8 +555,10 @@ class TestWindow(QWidget):
 
         # Merge the background image and the Pokémon image
         merged_pixmap = QPixmap(pixmap_bckg.size())
-        #merged_pixmap.fill(Qt.transparent)
-        merged_pixmap.fill(QColor(0, 0, 0, 0))  # RGBA where A (alpha) is 0 for full transparency
+        # merged_pixmap.fill(Qt.transparent)
+        merged_pixmap.fill(
+            QColor(0, 0, 0, 0)
+        )  # RGBA where A (alpha) is 0 for full transparency
 
         # merge both images together
         painter = QPainter(merged_pixmap)
@@ -475,17 +571,21 @@ class TestWindow(QWidget):
         # draw background to a specific pixel
         painter.drawPixmap(0, 0, pixmap_bckg)
 
-        painter = self.draw_hp_bar(118, 76, 8, 116, self.enemy_pokemon.hp, self.enemy_pokemon.max_hp, painter)  # enemy pokemon hp_bar
+        painter = self.draw_hp_bar(
+            118, 76, 8, 116, self.enemy_pokemon.hp, self.enemy_pokemon.max_hp, painter
+        )  # enemy pokemon hp_bar
 
-        painter = self.draw_hp_bar(401, 208, 8, 116, self.main_pokemon.hp, self.main_pokemon.max_hp, painter)  # main pokemon hp_bar
+        painter = self.draw_hp_bar(
+            401, 208, 8, 116, self.main_pokemon.hp, self.main_pokemon.max_hp, painter
+        )  # main pokemon hp_bar
 
         painter.drawPixmap(0, 0, pixmap_ui)
 
         # Find the Pokemon Images Height and Width
-        wpkmn_width = (new_width // 2)
+        wpkmn_width = new_width // 2
         wpkmn_height = new_height
 
-        mpkmn_width = (new_width2 // 2)
+        mpkmn_width = new_width2 // 2
         mpkmn_height = new_height2
 
         # draw pokemon image to a specific pixel
@@ -493,7 +593,13 @@ class TestWindow(QWidget):
         # Reposition main pokemon to be fully visible when message box disappears
         painter.drawPixmap((144 - mpkmn_width), (270 - mpkmn_height), pixmap2)
 
-        experience = int(find_experience_for_level(self.main_pokemon.growth_rate, self.main_pokemon.level, self.settings_obj.get("misc.remove_level_cap")))
+        experience = int(
+            find_experience_for_level(
+                self.main_pokemon.growth_rate,
+                self.main_pokemon.level,
+                self.settings_obj.get("misc.remove_level_cap"),
+            )
+        )
 
         mainxp_bar_width = 5
         mainpokemon_xp_value = int(((self.main_pokemon.xp or 0) / experience) * 148)
@@ -504,7 +610,9 @@ class TestWindow(QWidget):
 
         # custom font
         custom_font = load_custom_font(26, int(self.settings_obj.get("misc.language")))
-        hp_enemy_text_font = load_custom_font(18, int(self.settings_obj.get("misc.language")))
+        hp_enemy_text_font = load_custom_font(
+            18, int(self.settings_obj.get("misc.language"))
+        )
         msg_font = load_custom_font(28, int(self.settings_obj.get("misc.language")))
 
         # Draw the text on top of the image
@@ -512,43 +620,60 @@ class TestWindow(QWidget):
         painter.setFont(custom_font)
         painter.setPen(QColor(31, 31, 39))  # Text color
 
-        enemy_name = get_pokemon_diff_lang_name(int(self.enemy_pokemon.id), int(self.settings_obj.get('misc.language')))
-
-        main_name = get_pokemon_diff_lang_name(int(self.main_pokemon.id), int(self.settings_obj.get('misc.language')))
+        enemy_name = self._get_display_name(self.enemy_pokemon)
+        main_name = self._get_display_name(self.main_pokemon)
 
         if self.enemy_pokemon.shiny:
-            enemy_name += f" 🌠"  # Green sparkle
+            enemy_name += " 🌠"  # Green sparkle
 
         if self.main_pokemon.shiny:
-            main_name += f" 🌠"  # Green sparkles
+            main_name += " 🌠"  # Green sparkles
 
         painter.drawText(48, 67, enemy_name)
         painter.drawText(326, 200, main_name)
 
         # Drawing the gender of each Pokemon
-        draw_gender_symbols(self.main_pokemon, self.enemy_pokemon, painter, (457, 196), (175, 64))
+        draw_gender_symbols(
+            self.main_pokemon, self.enemy_pokemon, painter, (457, 196), (175, 64)
+        )
 
-        draw_stat_boosts(self.main_pokemon, self.enemy_pokemon, painter, (326, 155), (48, 25))
+        draw_stat_boosts(
+            self.main_pokemon, self.enemy_pokemon, painter, (326, 155), (48, 25)
+        )
 
         painter.drawText(208, 67, f"{self.enemy_pokemon.level}")
         painter.drawText(490, 199, f"{self.main_pokemon.level}")
 
         hp_x = 442 if int(self.main_pokemon.hp) < 100 else 430  # Shift left if 3 digits
-        max_hp_x = 487 if int(self.main_pokemon.max_hp) < 100 else 480  # Shift left if 3 digits
+        max_hp_x = (
+            487 if int(self.main_pokemon.max_hp) < 100 else 480
+        )  # Shift left if 3 digits
 
         painter.drawText(max_hp_x, 238, str(int(self.main_pokemon.max_hp)))
         painter.drawText(hp_x, 238, str(int(self.main_pokemon.hp)))
 
         painter.setFont(msg_font)
         painter.setPen(QColor(31, 31, 39))  # Text color
-        
-        #Drawing enemy pokemon hp
+
+        # Drawing enemy pokemon hp
         painter.setFont(hp_enemy_text_font)
         painter.setPen(QColor(31, 31, 39))  # Text color
-        enemy_hp_x = 41 if int(self.enemy_pokemon.max_hp) < 100 else 40  # Shift left if 3 digits
-        enemy_max_hp_x = 64 if int(self.enemy_pokemon.max_hp) < 100 else 56  # Shift left if 3 digits
-        painter.drawText(enemy_hp_x, 84 if int(self.enemy_pokemon.max_hp) < 100 else 80 , str(int(self.enemy_pokemon.hp)) + "/")
-        painter.drawText(enemy_max_hp_x, 84 if int(self.enemy_pokemon.max_hp) < 100 else 88, str(int(self.enemy_pokemon.max_hp)))
+        enemy_hp_x = (
+            41 if int(self.enemy_pokemon.max_hp) < 100 else 40
+        )  # Shift left if 3 digits
+        enemy_max_hp_x = (
+            64 if int(self.enemy_pokemon.max_hp) < 100 else 56
+        )  # Shift left if 3 digits
+        painter.drawText(
+            enemy_hp_x,
+            84 if int(self.enemy_pokemon.max_hp) < 100 else 80,
+            str(int(self.enemy_pokemon.hp)) + "/",
+        )
+        painter.drawText(
+            enemy_max_hp_x,
+            84 if int(self.enemy_pokemon.max_hp) < 100 else 88,
+            str(int(self.enemy_pokemon.max_hp)),
+        )
 
         self._draw_cp_pp(painter)
 
@@ -591,8 +716,10 @@ class TestWindow(QWidget):
 
         # Merge the background image and the Pokémon image
         merged_pixmap = QPixmap(pixmap_bckg.size())
-        merged_pixmap.fill(QColor(0, 0, 0, 0))  # RGBA where A (alpha) is 0 for full transparency
-        #merged_pixmap.fill(Qt.transparent)
+        merged_pixmap.fill(
+            QColor(0, 0, 0, 0)
+        )  # RGBA where A (alpha) is 0 for full transparency
+        # merged_pixmap.fill(Qt.transparent)
 
         # merge both images together
         painter = QPainter(merged_pixmap)
@@ -600,17 +727,31 @@ class TestWindow(QWidget):
         # draw background to a specific pixel
         painter.drawPixmap(0, 0, pixmap_bckg)
 
-        #item = str(item)
-        if item.endswith("-up") or item.endswith("-max") or item.endswith("protein") or item.endswith("zinc") or item.endswith("carbos") or item.endswith("calcium") or item.endswith("repel") or item.endswith("statue"):
-            painter.drawPixmap(200,50,item_pixmap)
+        # item = str(item)
+        if (
+            item.endswith("-up")
+            or item.endswith("-max")
+            or item.endswith("protein")
+            or item.endswith("zinc")
+            or item.endswith("carbos")
+            or item.endswith("calcium")
+            or item.endswith("repel")
+            or item.endswith("statue")
+        ):
+            painter.drawPixmap(200, 50, item_pixmap)
         elif item.endswith("soda-pop"):
-            painter.drawPixmap(200,30,item_pixmap)
-        elif item.endswith("-heal") or item.endswith("awakening") or item.endswith("ether") or item.endswith("leftovers"):
-            painter.drawPixmap(200,50,item_pixmap)
+            painter.drawPixmap(200, 30, item_pixmap)
+        elif (
+            item.endswith("-heal")
+            or item.endswith("awakening")
+            or item.endswith("ether")
+            or item.endswith("leftovers")
+        ):
+            painter.drawPixmap(200, 50, item_pixmap)
         elif item.endswith("-berry") or item.endswith("potion"):
-            painter.drawPixmap(200,80,item_pixmap)
+            painter.drawPixmap(200, 80, item_pixmap)
         else:
-            painter.drawPixmap(200,90,item_pixmap)
+            painter.drawPixmap(200, 90, item_pixmap)
 
         # custom font
         custom_font = load_custom_font(26, int(self.settings_obj.get("misc.language")))
@@ -620,13 +761,13 @@ class TestWindow(QWidget):
         # Draw the text on top of the image
         # Adjust the font size as needed
         painter.setFont(custom_font)
-        painter.setPen(QColor(255,255,255))  # Text color
+        painter.setPen(QColor(255, 255, 255))  # Text color
 
         painter.drawText(50, 290, message_box_text)
 
         custom_font = load_custom_font(20, int(self.settings_obj.get("misc.language")))
         painter.setFont(custom_font)
-        #painter.drawText(10, 330, "You can look this up in your item bag.")
+        # painter.drawText(10, 330, "You can look this up in your item bag.")
 
         painter.end()
 
@@ -641,7 +782,9 @@ class TestWindow(QWidget):
             global badges
 
             bckgimage_path = addon_dir / "addon_sprites" / "starter_screen" / "bg.png"
-            badge_path = addon_dir / "user_files" / "sprites" / "badges" / f"{badge_number}.png"
+            badge_path = (
+                addon_dir / "user_files" / "sprites" / "badges" / f"{badge_number}.png"
+            )
 
             # Load the background image
             pixmap_bckg = QPixmap()
@@ -670,8 +813,10 @@ class TestWindow(QWidget):
 
             # Merge the background image and the Pokémon image
             merged_pixmap = QPixmap(pixmap_bckg.size())
-            merged_pixmap.fill(QColor(0, 0, 0, 0))  # RGBA where A (alpha) is 0 for full transparency
-            #merged_pixmap.fill(Qt.transparent)
+            merged_pixmap.fill(
+                QColor(0, 0, 0, 0)
+            )  # RGBA where A (alpha) is 0 for full transparency
+            # merged_pixmap.fill(Qt.transparent)
 
             # merge both images together
             painter = QPainter(merged_pixmap)
@@ -679,11 +824,13 @@ class TestWindow(QWidget):
             # draw background to a specific pixel
             painter.drawPixmap(0, 0, pixmap_bckg)
 
-            #item = str(item)
-            painter.drawPixmap(200,90,item_pixmap)
+            # item = str(item)
+            painter.drawPixmap(200, 90, item_pixmap)
 
             # custom font
-            custom_font = load_custom_font(20, int(self.settings_obj.get("misc.language")))
+            custom_font = load_custom_font(
+                20, int(self.settings_obj.get("misc.language"))
+            )
 
             message_box_text = self.translator.translate("received_a_badge")
 
@@ -695,14 +842,16 @@ class TestWindow(QWidget):
             # Draw the text on top of the image
             # Adjust the font size as needed
             painter.setFont(custom_font)
-            painter.setPen(QColor(255,255,255))  # Text color
+            painter.setPen(QColor(255, 255, 255))  # Text color
 
             painter.drawText(120, 270, message_box_text)
             painter.drawText(140, 290, message_box_text2)
 
-            custom_font = load_custom_font(20, int(self.settings_obj.get("misc.language")))
+            custom_font = load_custom_font(
+                20, int(self.settings_obj.get("misc.language"))
+            )
             painter.setFont(custom_font)
-            #painter.drawText(10, 330, "You can look this up in your item bag.")
+            # painter.drawText(10, 330, "You can look this up in your item bag.")
 
             painter.end()
 
@@ -713,7 +862,11 @@ class TestWindow(QWidget):
             return image_label
 
         except Exception as e:
-            show_warning_with_traceback(parent=self, exception=e, message=f"An error occured in badges window {e}")
+            show_warning_with_traceback(
+                parent=self,
+                exception=e,
+                message=f"An error occured in badges window {e}",
+            )
 
     def pokemon_display_dead_pokemon(self):
         caught = self.ankimon_tracker_obj.caught
@@ -722,12 +875,22 @@ class TestWindow(QWidget):
         type = self.enemy_pokemon.type
 
         # Create the dialog
-        lang_name = get_pokemon_diff_lang_name(int(id), int(self.settings_obj.get('misc.language')))
+        lang_name = self._get_display_name(self.enemy_pokemon)
 
-        self.setWindowTitle(f"{self.translator.translate('catch_or_free', enemy_pokemon_name=lang_name.capitalize())}")
+        self.setWindowTitle(
+            f"{self.translator.translate('catch_or_free', enemy_pokemon_name=lang_name.capitalize())}"
+        )
 
-        # Display the Pokémon image
-        pkmnimage_file = f"{int(search_pokedex(self.enemy_pokemon.name.lower(),'species_id'))}.png"
+        # Display the Pokémon image. ``search_pokedex`` returns ``[]`` when the
+        # name has no match (or on any lookup error), so guard the ``int()`` —
+        # falling back to the species id, then to the substitute sprite.
+        species_id = search_pokedex(self.enemy_pokemon.name.lower(), "species_id")
+        if isinstance(species_id, list) or species_id is None:
+            species_id = self.enemy_pokemon.id
+        try:
+            pkmnimage_file = f"{int(species_id)}.png"
+        except (ValueError, TypeError):
+            pkmnimage_file = "substitute.png"
         pkmnimage_path = frontdefault / pkmnimage_file
 
         pkmnimage_label = QLabel()
@@ -750,7 +913,7 @@ class TestWindow(QWidget):
 
         # Create a painter to add text on top of the image
         painter2 = QPainter(pkmnpixmap_bckg)
-        painter2.drawPixmap(15,15,pkmnpixmap)
+        painter2.drawPixmap(15, 15, pkmnpixmap)
 
         # Create level text
         # Draw the text on top of the image
@@ -758,16 +921,15 @@ class TestWindow(QWidget):
         font.setPointSize(20)  # Adjust the font size as needed
         painter2.setFont(font)
 
-        painter2.drawText(270,107,f"{lang_name}")
+        painter2.drawText(270, 107, f"{lang_name}")
 
         font.setPointSize(17)  # Adjust the font size as needed
         painter2.setFont(font)
 
-        painter2.drawText(315,192,f"Level: {level}")
+        painter2.drawText(315, 192, f"Level: {level}")
         types = self.enemy_pokemon.type or []
         type_text = ", ".join(t.capitalize() for t in types) if types else "Unknown"
         painter2.drawText(322, 225, f"Type: {type_text}")
-
 
         painter2.setFont(font)
 
@@ -793,17 +955,27 @@ class TestWindow(QWidget):
         # Create buttons for catching and killing the Pokémon
         catch_button = QPushButton(self.translator.translate("catch_button"))
         catch_button.setFixedSize(175, 30)  # Adjust the size as needed
-        catch_button.setFont(QFont("Arial", 12))  # Adjust the font size and style as needed
+        catch_button.setFont(
+            QFont("Arial", 12)
+        )  # Adjust the font size and style as needed
         catch_button.setStyleSheet("background-color: rgb(44,44,44);")
-        #catch_button.setFixedWidth(150)
-        qconnect(catch_button.clicked, lambda: self._reset_window_title(mw.catchpokemon))
+        # catch_button.setFixedWidth(150)
+        qconnect(
+            catch_button.clicked,
+            lambda: self._reset_window_title(self._trigger_catch_pokemon),
+        )
 
         kill_button = QPushButton(self.translator.translate("defeat_button"))
         kill_button.setFixedSize(175, 30)  # Adjust the size as needed
-        kill_button.setFont(QFont("Arial", 12))  # Adjust the font size and style as needed
+        kill_button.setFont(
+            QFont("Arial", 12)
+        )  # Adjust the font size and style as needed
         kill_button.setStyleSheet("background-color: rgb(44,44,44);")
-        #kill_button.setFixedWidth(150)
-        qconnect(kill_button.clicked, lambda: self._reset_window_title(mw.defeatpokemon))
+        # kill_button.setFixedWidth(150)
+        qconnect(
+            kill_button.clicked,
+            lambda: self._reset_window_title(self._trigger_defeat_pokemon),
+        )
 
         # Set the merged image as the pixmap for the QLabel
         pkmnimage_label.setPixmap(pkmnpixmap_bckg)
@@ -814,42 +986,27 @@ class TestWindow(QWidget):
         return pkmnimage_label, kill_button, catch_button, nickname_input
 
     def display_first_encounter(self):
-        # pokemon encounter image
-        self.clear_layout(self.layout())
-        #self.setFixedWidth(556)
-        #self.setFixedHeight(371)
-
-        layout = self.layout()
-
-        battle_widget = self.pokemon_display_first_encounter()
-        #battle_widget.setScaledContents(True) #scalable ankimon window
-
-        layout.addWidget(battle_widget)
-
+        self.ankimon_tracker_obj.pokemon_encounter = 0
+        # Clear the debounce timestamp so a fresh encounter's first battle
+        # render is never dropped as a same-view repeat of the PREVIOUS
+        # encounter's last render (which could land inside the 50 ms window).
+        self._last_display_time = 0
+        new_label = self.pokemon_display_first_encounter()
+        self.main_label.setPixmap(new_label.pixmap())
+        self.button_widget.hide()
         self.setStyleSheet("background-color: rgb(44,44,44);")
-        self.setLayout(layout)
-
-        self.setMaximumWidth(556)
-        self.setMaximumHeight(300)
+        self.current_view = "battle"
 
     def display_battle(self):
-        # pokemon encounter image
-        self.clear_layout(self.layout())
-        #self.setFixedWidth(556)
-        #self.setFixedHeight(371)
+        # Debounce: prevent flicker from duplicate hooks (especially during reloads)
+        if self._same_view_debounced("battle"):
+            return
 
-        layout = self.layout()
-
-        battle_widget = self.pokemon_display_battle()
-        #battle_widget.setScaledContents(True) #scalable ankimon window
-
-        layout.addWidget(battle_widget)
-
-        self.setStyleSheet("background-color: rgb(44,44,44);")
-        self.setLayout(layout)
-
-        self.setMaximumWidth(556)
-        self.setMaximumHeight(300)
+        # Update the existing label without clearing the layout
+        new_label = self.pokemon_display_battle()
+        self.main_label.setPixmap(new_label.pixmap())
+        self.button_widget.hide()
+        self.current_view = "battle"
 
     def rate_display_item(self, item):
         Receive_Window = QDialog(mw)
@@ -882,31 +1039,38 @@ class TestWindow(QWidget):
         Receive_Window.show()
 
     def display_pokemon_death(self):
-        # pokemon encounter image
-        self.clear_layout(self.layout())
+        # Debounce duplicate death renders (same guard as display_battle)
+        if self._same_view_debounced("death"):
+            return
 
-        layout = self.layout()
+        img_label, kill_btn, catch_btn, nick_input = self.pokemon_display_dead_pokemon()
 
-        pkmnimage_label, kill_button, catch_button, nickname_input = self.pokemon_display_dead_pokemon()
+        # Update the image
+        self.main_label.setPixmap(img_label.pixmap())
 
-        layout.addWidget(pkmnimage_label)
+        # Sync the persistent buttons (update text/placeholder)
+        self.kill_button.setText(kill_btn.text())
+        self.catch_button.setText(catch_btn.text())
+        self.nickname_input.setPlaceholderText(nick_input.placeholderText())
 
-        button_widget = QWidget()
-        button_layout = QHBoxLayout()
+        # Re-connect buttons safely
+        try:
+            self.kill_button.clicked.disconnect()
+            self.catch_button.clicked.disconnect()
+        except TypeError:
+            pass  # nothing was connected yet
+        qconnect(
+            self.kill_button.clicked,
+            lambda: self._reset_window_title(self._trigger_defeat_pokemon),
+        )
+        qconnect(
+            self.catch_button.clicked,
+            lambda: self._reset_window_title(self._trigger_catch_pokemon),
+        )
 
-        button_layout.addWidget(kill_button)
-        button_layout.addWidget(catch_button)
-        button_layout.addWidget(nickname_input)
-
-        button_widget.setLayout(button_layout)
-
-        layout.addWidget(button_widget)
-
+        self.button_widget.show()
         self.setStyleSheet("background-color: rgb(177,147,209);")
-        self.setLayout(layout)
-
-        self.setMaximumWidth(500)
-        self.setMaximumHeight(300)
+        self.current_view = "death"
 
     def clear_layout(self, layout):
         while layout.count():
@@ -916,10 +1080,10 @@ class TestWindow(QWidget):
             if widget:
                 widget.deleteLater()
 
-    def closeEvent(self,event):
+    def closeEvent(self, event):
         self.pkmn_window = False
 
     def _reset_window_title(self, callback_func=None):
-        self.setWindowTitle('Ankimon Window')
+        self.setWindowTitle("Ankimon Window")
         if callback_func:
             callback_func()
