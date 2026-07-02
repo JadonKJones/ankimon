@@ -459,5 +459,12 @@
   "cp_label": "CP",
   "bp_label": "BP",
   "combat_power": "战斗力",
-  "battle_power": "对战能力"
+  "battle_power": "对战能力",
+  "friendship_label": "亲密度",
+  "friendship_tooltip": "测量你和宝可梦之间的羁绊。",
+  "bff_tooltip": "💖 最好的朋友 (最高亲密度)",
+  "evolve_now_button": "⇈ 进化为 {evo_name}！ ⇈",
+  "badge_ready": "⇈ 准备进化！",
+  "badge_wait_day": "☀️ 准备在白天进化",
+  "badge_wait_night": "🌙 准备在夜晚进化"
 }
