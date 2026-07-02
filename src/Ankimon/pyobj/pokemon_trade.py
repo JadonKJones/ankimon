@@ -56,10 +56,12 @@ def add_pokemon_to_collection(new_pokemon, refresh_callback=None, parent_window=
         if refresh_callback:
             refresh_callback()
 
-        from ..singletons import pokemon_pc
+        # Refresh open PC Box window. Read services.pokemon_pc directly:
+        # `from ..singletons import pokemon_pc` lands in the lazy __getattr__
+        # factory and would force-construct a PC window the user never opened.
         from ..utils import is_alive
-        if is_alive(pokemon_pc):
-            pokemon_pc.refresh_pokemon_grid()
+        if is_alive(services.pokemon_pc):
+            services.pokemon_pc.refresh_pokemon_grid()
     except Exception as e:
         show_warning_with_traceback(parent=parent_window, exception=e, message="Error adding Pokemon to collection")
 
@@ -324,6 +326,10 @@ class PokemonTrade:
 
         self.copy_button = QPushButton("Copy")
         self.copy_button.setToolTip("Copy the trade code to your clipboard")
+        # Connect once and read the live display text at click time, rather than
+        # disconnecting/reconnecting a fresh lambda on every checkbox toggle
+        # (which is fragile and can raise TypeError/RuntimeError in PyQt).
+        self.copy_button.clicked.connect(lambda: self.copy_to_clipboard(self.trade_code_display.text()))
         self.code_display_layout.addWidget(self.copy_button)
         self.trade_code_layout.addLayout(self.code_display_layout)
 
@@ -333,11 +339,6 @@ class PokemonTrade:
             else:
                 code = f"-200,{self.id},{self.level},{self.format_gender()},{self.format_shiny()},{self.ev_string()},{self.iv_string()},{self.format_nature()},{self.attack_ids()}"
             self.trade_code_display.setText(code)
-            try:
-                self.copy_button.clicked.disconnect()
-            except TypeError:
-                pass
-            self.copy_button.clicked.connect(lambda: self.copy_to_clipboard(code))
 
         self.legacy_checkbox.stateChanged.connect(lambda _: update_my_trade_code())
         update_my_trade_code()
@@ -538,16 +539,19 @@ class PokemonTrade:
 
     def get_pokemon_name_by_id(self, pokemon_id):
         try:
-            with open(self.pokedex_path, 'r', encoding='utf-8') as file:
-                pokedex = json.load(file)
-                # First pass: check actual_id for precise form match (e.g. Mega Diancie)
-                for details in pokedex.values():
-                    if details.get('actual_id') == pokemon_id:
-                        return details.get('name', str(pokemon_id))
-                # Second pass fallback: check species_id
-                for details in pokedex.values():
-                    if details.get('species_id') == pokemon_id:
-                        return details.get('name', str(pokemon_id))
+            from ..functions.pokedex_functions import _load_pokedex_cache
+            # Use the in-memory pokedex cache: update_other_pokemon_sprite calls
+            # this on every keystroke in the trade-code input, so re-reading and
+            # re-parsing pokedex.json from disk each time stalls the GUI thread.
+            pokedex = _load_pokedex_cache()
+            # First pass: check actual_id for precise form match (e.g. Mega Diancie)
+            for details in pokedex.values():
+                if details.get('actual_id') == pokemon_id:
+                    return details.get('name', str(pokemon_id))
+            # Second pass fallback: check species_id
+            for details in pokedex.values():
+                if details.get('species_id') == pokemon_id:
+                    return details.get('name', str(pokemon_id))
         except Exception as e:
             show_warning_with_traceback(parent=self.parent_window, exception=e, message=f"An error occurred while getting the Pokémon name for ID {pokemon_id}.")
         return str(pokemon_id)
@@ -683,16 +687,18 @@ class PokemonTrade:
 
     def find_pokemon_by_id(self, pokemon_id):
         try:
-            with open(self.pokedex_path, 'r', encoding='utf-8') as file:
-                pokedex = json.load(file)
-                # First pass: check actual_id for precise form match (e.g. Mega Diancie)
-                for details in pokedex.values():
-                    if details.get('actual_id') == pokemon_id:
-                        return details
-                # Second pass fallback: check species_id
-                for details in pokedex.values():
-                    if details.get('species_id') == pokemon_id:
-                        return details
+            from ..functions.pokedex_functions import _load_pokedex_cache
+            # Use the in-memory pokedex cache instead of re-reading/parsing
+            # pokedex.json from disk on the GUI thread for every trade lookup.
+            pokedex = _load_pokedex_cache()
+            # First pass: check actual_id for precise form match (e.g. Mega Diancie)
+            for details in pokedex.values():
+                if details.get('actual_id') == pokemon_id:
+                    return details
+            # Second pass fallback: check species_id
+            for details in pokedex.values():
+                if details.get('species_id') == pokemon_id:
+                    return details
             self.logger.log_and_showinfo("warning",f"No Pokémon found with ID: {pokemon_id}")
             return None
         except FileNotFoundError as e:
