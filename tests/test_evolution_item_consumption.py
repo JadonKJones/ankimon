@@ -267,3 +267,61 @@ def test_evolve_pokemon_nickname_update():
         assert pokemon_data_custom["nickname"] == "Sparky"
     finally:
         patch.stopall()
+
+
+def test_evolve_pokemon_regional_form_growth_rate_fallback():
+    """A regional-form target (10xxx id) whose growth rate can't be resolved must
+    still evolve, keeping the pre-evolution's growth rate instead of aborting.
+
+    On the integration base ``get_growth_rate`` raises ``ValueError`` for the
+    10xxx form ids that this unit surfaces (Cubone -> Alolan Marowak etc.), until
+    F17's graceful-fallback version merges. ``evolve_pokemon`` must swallow that
+    and complete the evolution (``save_pokemon`` still called), not bubble the
+    error to the outer handler and leave the Pokémon unevolved.
+    """
+    evo_mod, _ = _load_evo_window()
+    mock_db = MagicMock()
+    evo_mod.services.db = mock_db
+
+    handles = _apply_common_patches()
+    try:
+        handles["search"].side_effect = lambda name, key: (
+            ["Fire", "Ghost"]
+            if key == "types"
+            else {"hp": 60}
+            if key == "baseStats"
+            else {}
+        )
+        # Simulate the base's get_growth_rate raising on the 10xxx form id.
+        handles["growth"].side_effect = ValueError(10115)
+
+        pokemon_data = {
+            "id": 104,
+            "name": "Cubone",
+            "nickname": "",
+            "level": 28,
+            "attacks": [],
+            "iv": {},
+            "ev": {},
+            "xp": 100,
+            "growth_rate": "medium",
+        }
+        mock_db.get_pokemon.return_value = pokemon_data
+
+        win = _make_evo_window(evo_mod)
+        win.evolve_pokemon(
+            individual_id="some-uuid",
+            prevo_id=104,
+            prevo_name="cubone",
+            evo_id=10115,
+            evo_name="marowak-alola",
+            main_pokemon=None,
+        )
+
+        # Evolution completed (not aborted by the raised ValueError) ...
+        mock_db.save_pokemon.assert_called_once()
+        # ... and the pre-evolution's growth rate was preserved as the fallback.
+        assert pokemon_data["growth_rate"] == "medium"
+        assert int(pokemon_data["id"]) == 10115
+    finally:
+        patch.stopall()

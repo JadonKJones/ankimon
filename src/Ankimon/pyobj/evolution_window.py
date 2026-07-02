@@ -408,7 +408,16 @@ class EvoWindow(QWidget):
             level = pokemon["level"]
             hp = calculate_hp(hp_stat, level, ev, iv)
             pokemon["current_hp"] = int(hp)
-            pokemon["growth_rate"] = get_growth_rate(int(evo_id))
+            try:
+                pokemon["growth_rate"] = get_growth_rate(int(evo_id))
+            except (ValueError, TypeError):
+                # Regional/other forms carry 10xxx ids that aren't in
+                # poke_species.csv, so get_growth_rate raises for them on this
+                # base (until F17's graceful-fallback version lands). Keep the
+                # pre-evolution's growth rate — a family-level trait — so the
+                # evolution still completes instead of aborting. Matches F17's
+                # eventual "medium" fallback for ids it cannot resolve.
+                pokemon["growth_rate"] = pokemon.get("growth_rate") or "medium"
             pokemon["base_experience"] = get_base_experience(int(evo_id))
             abilities = search_pokedex(evo_name.lower(), "abilities")
             numeric_abilities = None
