@@ -67,6 +67,11 @@ class BackupManager:
         summary so the dialog can read them without knowing about dual-DB.
         """
         backups = []
+        # If the database service isn't initialized yet (e.g. early boot or a
+        # headless environment), there is no active mode to filter on — return an
+        # empty list rather than crashing on ``None.db_path``.
+        if services.db is None:
+            return backups
         active_db = services.db.db_path.name
         for backup_dir in sorted(self.backups_path.iterdir(), reverse=True):
             if backup_dir.is_dir():
@@ -173,12 +178,19 @@ class BackupManager:
                 cursor.execute("SELECT COUNT(*) AS count FROM items")
                 stats["item_count"] = cursor.fetchone()["count"]
 
-                cursor.execute("SELECT data FROM captured_pokemon WHERE is_main = 1 LIMIT 1")
-                main_row = cursor.fetchone()
-                if main_row:
-                    main_data = json.loads(main_row["data"])
-                    stats["main_pokemon_name"] = main_data.get("name", "N/A")
-                    stats["main_pokemon_level"] = main_data.get("level", "N/A")
+                # Older backup files predate the ``is_main`` migration
+                # (database_manager adds this column on upgrade), so reading such
+                # a raw file directly can raise "no such column: is_main". Guard
+                # it so the trainer/config read below still runs.
+                try:
+                    cursor.execute("SELECT data FROM captured_pokemon WHERE is_main = 1 LIMIT 1")
+                    main_row = cursor.fetchone()
+                    if main_row:
+                        main_data = json.loads(main_row["data"])
+                        stats["main_pokemon_name"] = main_data.get("name", "N/A")
+                        stats["main_pokemon_level"] = main_data.get("level", "N/A")
+                except sqlite3.OperationalError:
+                    pass
 
                 # Trainer info lives in the `config` table as flat dotted
                 # key/value rows (e.g. key='trainer.name', value='Ash'). Guard
@@ -335,6 +347,12 @@ class BackupManager:
             return
 
         try:
+            # Without an initialized database service we cannot tell which mode
+            # (normal vs dev) is active, so refuse the destructive restore rather
+            # than guessing or crashing on ``None.db_path``.
+            if services.db is None:
+                showWarning("The Ankimon database is not initialized yet; cannot restore a backup.")
+                return
             active_db = services.db.db_path.name
             backup_file = backup_path / active_db
             if backup_file.exists():
