@@ -304,10 +304,11 @@ class ItemWindow(QWidget):
                 self.logger.log_and_showinfo("info", f"{item_name} was given to {target_pokemon_data.get('name')}.")
                 self.renewWidgets()
 
-                # Refresh open PC Box window
-                from ..singletons import pokemon_pc
-                if is_alive(pokemon_pc):
-                    pokemon_pc.refresh_gui()
+                # Refresh open PC Box window. Read services.pokemon_pc directly:
+                # `from ..singletons import pokemon_pc` lands in the lazy __getattr__
+                # factory and would force-construct a PC window the user never opened.
+                if is_alive(services.pokemon_pc):
+                    services.pokemon_pc.refresh_gui()
             else:
                 self.logger.log_and_showinfo("error", "Could not find Pokemon data.")
 
@@ -526,10 +527,17 @@ class ItemWindow(QWidget):
             save_fossil_pokemon(fossil_id)
             self._pokemon_choices_cache = None
             self.delete_item(item_name)
+            # Re-fetch the starter window if its C++ side was deleted (mirrors the
+            # evo_window guard in Check_Evo_Item); a cached-but-dead reference would
+            # raise RuntimeError inside display_fossil_pokemon.
+            if not is_alive(self.starter_window):
+                from ..singletons import get_starter_window
+                self.starter_window = get_starter_window()
             self.starter_window.display_fossil_pokemon(fossil_id, fossil_poke_name)
-            from ..singletons import pokemon_pc
-            if is_alive(pokemon_pc):
-                pokemon_pc.refresh_pokemon_grid()
+            # Read services.pokemon_pc directly rather than importing pokemon_pc from
+            # singletons, which would force-construct a PC window the user never opened.
+            if is_alive(services.pokemon_pc):
+                services.pokemon_pc.refresh_pokemon_grid()
             return True
         except Exception as e:
             show_warning_with_traceback(parent=self, exception=e, message=f"Error using fossil item '{item_name}'")
