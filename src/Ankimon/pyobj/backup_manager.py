@@ -7,9 +7,9 @@ import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from aqt import mw
 from aqt.utils import showInfo, showWarning, askUser
 
+from ..services import services
 from ..utils import close_anki
 from ..resources import user_path, addon_dir
 
@@ -19,6 +19,7 @@ class BackupManager:
     _OBFUSCATION_KEY = "H0tP-!s-N0t-4-C@tG!rL_v2"
     FILES_TO_BACKUP = [
         "ankimon.db",
+        "ankimonDEV.db",
         # config.obf removed - now stored in ankimon.db
     ]
     MAX_BACKUPS = 5
@@ -37,7 +38,7 @@ class BackupManager:
         try:
             new_separator = "---DATA_START---"
             old_separator = "\n---"
-            
+
             if new_separator in obfuscated_str:
                 parts = obfuscated_str.split(new_separator)
                 obfuscated_data = parts[1]
@@ -58,30 +59,67 @@ class BackupManager:
             return None
 
     def get_backups(self) -> List[Dict[str, Any]]:
-        """Returns a list of available backups with their summary stats."""
+        """Returns a list of available backups with their summary stats.
+
+        Only backups that contain the database for the *currently active* mode
+        (normal ``ankimon.db`` vs developer ``ankimonDEV.db``) are shown, and the
+        per-DB stats section for the active mode is merged onto the root of the
+        summary so the dialog can read them without knowing about dual-DB.
+        """
         backups = []
+        active_db = services.db.db_path.name
         for backup_dir in sorted(self.backups_path.iterdir(), reverse=True):
             if backup_dir.is_dir():
+                # Only show a backup if it contains the database for the active mode.
+                if not (backup_dir / active_db).exists():
+                    continue
                 summary_path = backup_dir / "summary.json"
                 if summary_path.exists():
                     with open(summary_path, 'r', encoding='utf-8') as f:
                         try:
                             summary = json.load(f)
+                            # Shape the summary to match what the UI expects for the active DB.
+                            stats_key = "dev_stats" if active_db == "ankimonDEV.db" else "normal_stats"
+                            db_stats = summary.get(stats_key, {})
+
+                            # Merge DB-specific stats into the root summary object for the UI.
+                            summary.update(db_stats)
                             summary['path'] = str(backup_dir)
                             backups.append(summary)
                         except json.JSONDecodeError:
                             self.logger.log("error", f"Could not read summary for backup: {backup_dir.name}")
+                elif active_db == "ankimon.db":
+                    # Fallback for older backups without summary.json.
+                    summary = {
+                        "date": backup_dir.name.replace("backup_", "").replace("_", " "),
+                        "path": str(backup_dir),
+                    }
+                    backups.append(summary)
         return backups
 
     def create_backup(self, manual=False):
         """Creates a new backup."""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         backup_dir = self.backups_path / f"backup_{timestamp}"
-        
+
         try:
+            # Checkpoint the active database first to flush all WAL changes to disk,
+            # so the single-file copy below captures the latest committed state.
+            if services.db is not None:
+                try:
+                    services.db.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                    self.logger.log("info", "Checkpoint database before backup.")
+                except Exception as e:
+                    self.logger.log("error", f"Failed to checkpoint database before backup: {e}")
+
             backup_dir.mkdir()
-            
-            for filename in self.FILES_TO_BACKUP:
+
+            # For manual backups, only back up the currently active database.
+            files_to_copy = self.FILES_TO_BACKUP
+            if manual and services.db is not None:
+                files_to_copy = [services.db.db_path.name]
+
+            for filename in files_to_copy:
                 source_path = self.user_files_path / filename
                 if source_path.exists():
                     shutil.copy2(source_path, backup_dir / filename)
@@ -90,7 +128,7 @@ class BackupManager:
             summary['manual'] = manual
             with open(backup_dir / "summary.json", 'w', encoding='utf-8') as f:
                 json.dump(summary, f, indent=4)
-            
+
             if manual:
                 showInfo("Manual backup created successfully.")
             self.logger.log("info", f"Created backup: {backup_dir.name}")
@@ -99,128 +137,193 @@ class BackupManager:
             self.logger.log("error", f"Failed to create backup: {e}")
             if manual:
                 showWarning(f"Failed to create backup: {e}")
-        
+
         self.cleanup_backups()
 
-    def _generate_summary(self, backup_dir: Path) -> Dict[str, Any]:
-        """Generates a summary for a backup."""
-        summary = {
-            "date": backup_dir.name.replace("backup_", "").replace("_", " "),
+    def _get_db_file_stats(self, db_file_path: Path) -> Dict[str, Any]:
+        """Reads summary stats directly from one Ankimon SQLite backup file.
+
+        Used to build the per-database (normal / dev) sections of a backup
+        summary. Reads the backup file's OWN data (not the live database) so the
+        summary reflects that backup's historical state.
+        """
+        stats = {
             "main_pokemon_name": "N/A",
             "main_pokemon_level": "N/A",
             "pokemon_count": 0,
             "trainer_name": "N/A",
             "trainer_cash": 0,
-            "trainer_level": 0,
+            "trainer_level": 1,
             "item_count": 0,
         }
+        if not db_file_path.exists():
+            return stats
 
-        # Prefer stats from the backup's OWN ankimon.db (not the live mw.ankimon_db),
-        # so the summary reflects this backup's historical state rather than the
-        # current database.
-        db_path = backup_dir / "ankimon.db"
-        if db_path.exists():
-            import sqlite3
-            import json
-            from contextlib import closing
+        import sqlite3
+        import json
+        from contextlib import closing
+        try:
+            with closing(sqlite3.connect(str(db_file_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+
+                cursor.execute("SELECT COUNT(*) AS count FROM captured_pokemon")
+                stats["pokemon_count"] = cursor.fetchone()["count"]
+
+                cursor.execute("SELECT COUNT(*) AS count FROM items")
+                stats["item_count"] = cursor.fetchone()["count"]
+
+                cursor.execute("SELECT data FROM captured_pokemon WHERE is_main = 1 LIMIT 1")
+                main_row = cursor.fetchone()
+                if main_row:
+                    main_data = json.loads(main_row["data"])
+                    stats["main_pokemon_name"] = main_data.get("name", "N/A")
+                    stats["main_pokemon_level"] = main_data.get("level", "N/A")
+
+                # Trainer info lives in the `config` table as flat dotted
+                # key/value rows (e.g. key='trainer.name', value='Ash'). Guard
+                # on the table existing so an older backup can't abort the counts.
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='config'"
+                )
+                if cursor.fetchone():
+                    def _cfg(key):
+                        cursor.execute("SELECT value FROM config WHERE key = ?", (key,))
+                        r = cursor.fetchone()
+                        return r["value"] if r else None
+
+                    name = _cfg("trainer.name")
+                    if name is not None:
+                        stats["trainer_name"] = name
+                    for cfg_key, sum_key in (
+                        ("trainer.cash", "trainer_cash"),
+                        ("trainer.level", "trainer_level"),
+                    ):
+                        raw = _cfg(cfg_key)
+                        if raw is not None:
+                            try:
+                                stats[sum_key] = int(raw)
+                            except (ValueError, TypeError):
+                                pass
+        except Exception as e:
+            self.logger.log("error", f"Failed to read stats from {db_file_path.name}: {e}")
+        return stats
+
+    def _generate_summary(self, backup_dir: Path) -> Dict[str, Any]:
+        """Generates a summary for a backup, with per-database (normal/dev) stats."""
+        active_db_name = (
+            services.db.db_path.name if services.db is not None else "ankimon.db"
+        )
+
+        # Read stats from the database files stored inside this backup directory.
+        normal_stats = self._get_db_file_stats(backup_dir / "ankimon.db")
+        dev_stats = self._get_db_file_stats(backup_dir / "ankimonDEV.db")
+
+        normal_exists = (backup_dir / "ankimon.db").exists()
+        dev_exists = (backup_dir / "ankimonDEV.db").exists()
+
+        # If the backup folder has no DB files yet (e.g. a freshly-created dummy
+        # in tests, or a summary generated for the live session), fall back to
+        # the active database connection's current live state.
+        db = services.db
+        if not normal_exists and not dev_exists and db is not None:
             try:
-                with closing(sqlite3.connect(str(db_path))) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cursor = conn.cursor()
+                stats = db.get_stats()
+                live_stats = {
+                    "pokemon_count": stats.get("pokemon", 0),
+                    "item_count": stats.get("items", 0),
+                    "main_pokemon_name": "N/A",
+                    "main_pokemon_level": "N/A",
+                    "trainer_name": db.get_config_value("trainer.name", "N/A"),
+                    "trainer_cash": db.get_config_value("trainer.cash", 0),
+                    "trainer_level": db.get_config_value("trainer.level", 1),
+                }
+                main_pokemon = db.get_main_pokemon()
+                if main_pokemon:
+                    live_stats["main_pokemon_name"] = main_pokemon.get("name", "N/A")
+                    live_stats["main_pokemon_level"] = main_pokemon.get("level", "N/A")
 
-                    cursor.execute("SELECT COUNT(*) AS count FROM captured_pokemon")
-                    summary["pokemon_count"] = cursor.fetchone()["count"]
-
-                    cursor.execute("SELECT COUNT(*) AS count FROM items")
-                    summary["item_count"] = cursor.fetchone()["count"]
-
-                    cursor.execute("SELECT data FROM captured_pokemon WHERE is_main = 1 LIMIT 1")
-                    main_row = cursor.fetchone()
-                    if main_row:
-                        main_data = json.loads(main_row["data"])
-                        summary["main_pokemon_name"] = main_data.get("name", "N/A")
-                        summary["main_pokemon_level"] = main_data.get("level", "N/A")
-
-                    # Trainer info lives in the `config` table as flat dotted
-                    # key/value rows (e.g. key='trainer.name', value='Ash'). Guard
-                    # on the table existing so an older backup can't abort the counts.
-                    cursor.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name='config'"
-                    )
-                    if cursor.fetchone():
-                        def _cfg(key):
-                            cursor.execute("SELECT value FROM config WHERE key = ?", (key,))
-                            r = cursor.fetchone()
-                            return r["value"] if r else None
-
-                        name = _cfg("trainer.name")
-                        if name is not None:
-                            summary["trainer_name"] = name
-                        for cfg_key, sum_key in (
-                            ("trainer.cash", "trainer_cash"),
-                            ("trainer.level", "trainer_level"),
-                        ):
-                            raw = _cfg(cfg_key)
-                            if raw is not None:
-                                try:
-                                    summary[sum_key] = int(raw)
-                                except (ValueError, TypeError):
-                                    pass
-
-                    return summary
+                if active_db_name == "ankimonDEV.db":
+                    dev_stats = live_stats
+                else:
+                    normal_stats = live_stats
             except Exception as e:
                 self.logger.log("error", f"Failed to get DB stats for backup summary: {e}")
 
-        # Fallback to legacy JSON for older backups or migration period
-        # (Remaining legacy code omitted for brevity but I will keep it in the replacement)
-        
-        # Read mainpokemon.json for main Pokémon info
-        mainpokemon_path = backup_dir / "mainpokemon.json"
-        if mainpokemon_path.exists():
-            with open(mainpokemon_path, 'r', encoding='utf-8') as f:
-                try:
-                    mainpokemon_data = json.load(f)
-                    if mainpokemon_data:
-                        summary["main_pokemon_name"] = mainpokemon_data[0].get("name", "N/A")
-                        summary["main_pokemon_level"] = mainpokemon_data[0].get("level", "N/A")
-                except (json.JSONDecodeError, IndexError):
-                    pass
+        summary = {
+            "date": backup_dir.name.replace("backup_", "").replace("_", " "),
+            "normal_stats": normal_stats,
+            "dev_stats": dev_stats,
+        }
 
-        # Read mypokemon.json for total Pokémon count
-        mypokemon_path = backup_dir / "mypokemon.json"
-        if mypokemon_path.exists():
-            with open(mypokemon_path, 'r', encoding='utf-8') as f:
-                try:
-                    mypokemon_data = json.load(f)
-                    summary["pokemon_count"] = len(mypokemon_data)
-                except json.JSONDecodeError:
-                    pass
+        # Merge the active DB's stats onto the root of the summary for backwards
+        # compatibility with the UI (and the tests).
+        stats_key = "dev_stats" if active_db_name == "ankimonDEV.db" else "normal_stats"
+        summary.update(summary.get(stats_key, {}))
 
-        # Read items.json for total item count
-        items_path = backup_dir / "items.json"
-        if items_path.exists():
-            with open(items_path, 'r', encoding='utf-8') as f:
-                try:
-                    items_data = json.load(f)
-                    summary["item_count"] = sum(item.get('quantity', 0) for item in items_data)
-                except json.JSONDecodeError:
-                    pass
+        # Fallback to legacy JSON for older backups or migration period, only when
+        # there are no DB files in the backup and no live database to read from.
+        if not normal_exists and not dev_exists and db is None:
+            legacy_stats = {
+                "main_pokemon_name": "N/A",
+                "main_pokemon_level": "N/A",
+                "pokemon_count": 0,
+                "trainer_name": "N/A",
+                "trainer_cash": 0,
+                "trainer_level": 1,
+                "item_count": 0,
+            }
 
-        # Read config.obf for trainer info
-        config_path = backup_dir / "config.obf"
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
-                obfuscated_data = f.read()
-            config_data = self._deobfuscate_data(obfuscated_data)
-            if config_data:
-                summary["trainer_name"] = config_data.get("trainer.name", "N/A")
-                summary["trainer_cash"] = config_data.get("trainer.cash", 0)
-                summary["trainer_level"] = config_data.get("trainer.level", 1)
-        
+            # Read mainpokemon.json for main Pokémon info
+            mainpokemon_path = backup_dir / "mainpokemon.json"
+            if mainpokemon_path.exists():
+                with open(mainpokemon_path, 'r', encoding='utf-8') as f:
+                    try:
+                        mainpokemon_data = json.load(f)
+                        if mainpokemon_data:
+                            legacy_stats["main_pokemon_name"] = mainpokemon_data[0].get("name", "N/A")
+                            legacy_stats["main_pokemon_level"] = mainpokemon_data[0].get("level", "N/A")
+                    except (json.JSONDecodeError, IndexError):
+                        pass
+
+            # Read mypokemon.json for total Pokémon count
+            mypokemon_path = backup_dir / "mypokemon.json"
+            if mypokemon_path.exists():
+                with open(mypokemon_path, 'r', encoding='utf-8') as f:
+                    try:
+                        mypokemon_data = json.load(f)
+                        legacy_stats["pokemon_count"] = len(mypokemon_data)
+                    except json.JSONDecodeError:
+                        pass
+
+            # Read items.json for total item count
+            items_path = backup_dir / "items.json"
+            if items_path.exists():
+                with open(items_path, 'r', encoding='utf-8') as f:
+                    try:
+                        items_data = json.load(f)
+                        legacy_stats["item_count"] = sum(item.get('quantity', 0) for item in items_data)
+                    except json.JSONDecodeError:
+                        pass
+
+            # Read config.obf for trainer info (legacy backups predate the DB config table)
+            config_path = backup_dir / "config.obf"
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    obfuscated_data = f.read()
+                config_data = self._deobfuscate_data(obfuscated_data)
+                if config_data:
+                    legacy_stats["trainer_name"] = config_data.get("trainer.name", "N/A")
+                    legacy_stats["trainer_cash"] = config_data.get("trainer.cash", 0)
+                    legacy_stats["trainer_level"] = config_data.get("trainer.level", 1)
+
+            summary["normal_stats"] = legacy_stats
+            summary.update(legacy_stats)
+
         return summary
 
     def restore_backup(self, backup_path_str: str):
-        """Restores a selected backup."""
+        """Restores a selected backup (only the currently active database)."""
         backup_path = Path(backup_path_str)
         if not backup_path.is_dir():
             showWarning("Selected backup path does not exist.")
@@ -232,15 +335,15 @@ class BackupManager:
             return
 
         try:
-            for filename in self.FILES_TO_BACKUP:
-                backup_file = backup_path / filename
-                if backup_file.exists():
-                    shutil.copy2(backup_file, self.user_files_path / filename)
-                else:
-                    # If a file doesn't exist in backup, it should be removed from user_files
-                    user_file = self.user_files_path / filename
-                    if user_file.exists():
-                        os.remove(user_file)
+            active_db = services.db.db_path.name
+            backup_file = backup_path / active_db
+            if backup_file.exists():
+                shutil.copy2(backup_file, self.user_files_path / active_db)
+            else:
+                showWarning(
+                    f"The selected backup does not contain a backup for the active database ({active_db})."
+                )
+                return
 
             showInfo("Backup restored successfully. Anki will now close. Please restart Anki to see the changes.")
             close_anki()
@@ -267,7 +370,7 @@ class BackupManager:
         """Deletes old backups based on retention policy."""
         # Get only directories and sort them by modification time
         backups = sorted([p for p in self.backups_path.iterdir() if p.is_dir()], key=os.path.getmtime)
-        
+
         backups_to_keep = []
         for backup_dir in backups:
             backup_time = datetime.datetime.fromtimestamp(os.path.getmtime(backup_dir))
