@@ -721,7 +721,8 @@ def boot_env(monkeypatch):
             "Ankimon.events", events=SimpleNamespace(emit=rec("events.emit"))
         ),
         "Ankimon.gui_classes.overview_team": _stub_module(
-            "Ankimon.gui_classes.overview_team"
+            "Ankimon.gui_classes.overview_team",
+            register_overview_hooks=rec("register_overview_hooks"),
         ),
         "Ankimon.card_hooks": _stub_module(
             "Ankimon.card_hooks",
@@ -776,7 +777,8 @@ def boot_env(monkeypatch):
         ),
     )
 
-    # `from .gui_classes import overview_team` resolves via the parent module.
+    # `from .gui_classes.overview_team import register_overview_hooks` resolves
+    # the submodule (stubbed above) via this parent package.
     gui_classes_pkg = _stub_module("Ankimon.gui_classes")
     gui_classes_pkg.overview_team = stubs["Ankimon.gui_classes.overview_team"]
     monkeypatch.setitem(sys.modules, "Ankimon.gui_classes", gui_classes_pkg)

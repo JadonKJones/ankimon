@@ -66,9 +66,12 @@ from .events import events
 # once menu_buttons stops building its own translator.
 mw.translator = translator
 
-# Importing overview_team registers its deck-browser/overview hooks exactly
-# once, at module scope, gated by the gui.team_deck_view setting.
-from .gui_classes import overview_team
+# Deck-browser / deck-overview team grid (F19). Registration is gated on the
+# gui.team_deck_view setting and reload-safe (F31 registry-anchored record on
+# services), so an add-on reload swaps the handlers instead of stacking them.
+from .gui_classes.overview_team import register_overview_hooks
+
+register_overview_hooks()
 
 # --- Startup readiness flag (F32 async boot) ---
 # Expressed on the services registry (not mw): reviews that arrive before the

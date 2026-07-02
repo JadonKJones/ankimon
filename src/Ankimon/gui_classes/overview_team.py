@@ -6,16 +6,20 @@ Deck Overview pages via ``gui_hooks``.
 
 Key public components:
 
-* :func:`load_pokemon_team` — reads ``team.json`` / ``mypokemon.json`` and
-  returns an ordered list of Pokémon dictionaries.
+* :func:`load_pokemon_team` — reads from AnkimonDB via the ``services.db``
+  seam and falls back to ``team.json`` / ``mypokemon.json``, returning an
+  ordered list of Pokémon dictionaries.
 * :func:`deck_browser_will_render` — hook callback that prepends the grid
   to the Deck Browser stats area.
 * :func:`on_overview_will_render_content` — hook callback that prepends the
   grid to the Deck Overview table area.
+* :func:`register_overview_hooks` — registers the two hook callbacks above.
 
-Hook registration is performed at **import time** and is gated behind the
-``gui.team_deck_view`` user setting.  Toggling the setting therefore requires
-an Anki restart to take effect.
+Hook registration is performed by :func:`register_overview_hooks`, invoked
+once from the add-on's composition root (``__init__.py``) and gated behind the
+``gui.team_deck_view`` user setting.  The (hook, handler) record lives on the
+``services`` registry, so an add-on reload swaps the handlers rather than
+stacking a duplicate set (F31 reload-safety).
 
 Note:
     Sprites are embedded as base64 data-URIs so the generated HTML is fully
@@ -28,11 +32,12 @@ import json
 import os
 from typing import Any
 
-from aqt import gui_hooks, mw
+from aqt import gui_hooks
 
 from ..business import calculate_cp_from_dict
 from ..functions.sprite_functions import get_sprite_path
 from ..resources import mypokemon_path, icon_path as pokeball_path, team_pokemon_path
+from ..services import services
 from ..utils import png_to_base64
 
 # ---------------------------------------------------------------------------
@@ -215,9 +220,11 @@ def _build_card_html(pokemon: dict[str, Any], id_prefix: str) -> str:
     Returns:
         An HTML string representing one ``.poke-item`` element.
     """
+    from ..functions.pokedex_functions import format_lore_name
+
     name = pokemon.get("name", "Unknown")
     nickname = pokemon.get("nickname", "")
-    display_name = nickname or name
+    display_name = nickname or format_lore_name(name)
     level = pokemon.get("level", 1)
     gender = pokemon.get("gender", "M")
     current_hp = pokemon.get("current_hp", 0)
@@ -232,6 +239,7 @@ def _build_card_html(pokemon: dict[str, Any], id_prefix: str) -> str:
         pokemon.get("id", 132),
         pokemon.get("shiny", False),
         gender,
+        pokemon.get("name"),
     )
     sprite_src = png_to_base64(sprite_path)
 
@@ -267,58 +275,93 @@ def load_pokemon_team() -> list[dict[str, Any]]:
 
     Resolution order:
 
-    1. If ``team.json`` exists, read the ordered ``individual_id`` values,
-       resolve each against ``mypokemon.json``, and return the matching
-       Pokémon in team order (skipping any unresolved entries).
-    2. If ``team.json`` is absent **or** resolution yields an empty list,
-       fall back to the full contents of ``mypokemon.json``.
-    3. On any I/O or parse error, return an empty list (never raises).
+    1. Priority: query AnkimonDB (SQLite) through the ``services.db`` seam.
+       Active team entries are resolved by ``individual_id``; when the team is
+       empty the first available Pokémon in the collection are used instead.
+       A DB error falls through to the legacy JSON path rather than raising.
+    2. Legacy fallback: if ``team.json`` exists, read the ordered
+       ``individual_id`` values, resolve each against ``mypokemon.json``, and
+       return the matching Pokémon in team order (skipping unresolved entries).
+    3. Final fallback: return the full contents of ``mypokemon.json``.
+    4. On any DB, I/O, or parse error, return an empty list (never raises).
 
     Returns:
-        Ordered list of Pokémon dictionaries (`list[dict[str, Any]]`).
-        May be empty when no data files exist or parsing fails.
+        Ordered list of Pokémon dictionaries (`list[dict[str, Any]]`), capped
+        at :data:`_MAX_TEAM_SIZE`.  May be empty when no data exists or parsing
+        fails.
     """
     try:
+        # Priority: AnkimonDB (SQLite) through the services.db seam. Any DB
+        # hiccup is swallowed here so it can never crash the Deck Browser —
+        # execution then falls through to the legacy JSON path below.
+        db = services.db
+        if db is not None:
+            try:
+                team_stub = db.get_team()
+                if team_stub:
+                    team: list[dict[str, Any]] = []
+                    for entry in team_stub:
+                        ind_id = (
+                            entry.get("individual_id")
+                            if isinstance(entry, dict)
+                            else None
+                        )
+                        if ind_id:
+                            pokemon = db.get_pokemon(ind_id)
+                            if pokemon:
+                                team.append(pokemon)
+                    if team:
+                        return team[:_MAX_TEAM_SIZE]
+
+                all_pokemon = db.get_all_pokemon()
+                if all_pokemon:
+                    return all_pokemon[:_MAX_TEAM_SIZE]
+            except Exception as e:
+                print(f"Ankimon Team Overview - DB Error: {e}")
+
+        # Legacy JSON fallback: resolve team.json order against mypokemon.json.
         if os.path.exists(team_pokemon_path):
             try:
                 with open(team_pokemon_path, "r", encoding="utf-8") as fh:
                     team_entries = json.load(fh)
+                if not isinstance(team_entries, list):
+                    team_entries = []
             except (json.JSONDecodeError, OSError):
                 team_entries = []
 
             individual_ids = [
                 entry.get("individual_id")
                 for entry in team_entries
-                if entry.get("individual_id") is not None
+                if isinstance(entry, dict) and entry.get("individual_id") is not None
             ]
 
             try:
                 with open(mypokemon_path, "r", encoding="utf-8") as fh:
                     all_pokemon = json.load(fh)
+                if not isinstance(all_pokemon, list):
+                    all_pokemon = []
             except (json.JSONDecodeError, OSError):
                 all_pokemon = []
 
             pokemon_by_id = {
                 p.get("individual_id"): p
                 for p in all_pokemon
-                if p.get("individual_id") is not None
+                if isinstance(p, dict) and p.get("individual_id") is not None
             }
             ordered = [
                 pokemon_by_id[ind] for ind in individual_ids if ind in pokemon_by_id
             ]
             if ordered:
-                return ordered
+                return ordered[:_MAX_TEAM_SIZE]
 
-        # Fallback: return every Pokémon from mypokemon.json.
+        # Final fallback: return every Pokémon from mypokemon.json.
         with open(mypokemon_path, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        # Fallback for I/O or parse errors during the final fallback attempt.
+            return json.load(fh)[:_MAX_TEAM_SIZE]
+    except (OSError, json.JSONDecodeError, TypeError):
+        # I/O / parse / non-list-slice errors during the final fallback.
         return []
     except Exception as e:
         # Unexpected errors are logged but not allowed to crash Anki's UI.
-        # mw.progress has no chrome_logger attribute — the previous call
-        # would raise AttributeError and mask the original exception.
         print(f"Ankimon Team Overview Error: {e}")
         return []
 
@@ -384,9 +427,41 @@ def on_overview_will_render_content(overview: Any, content: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Hook registration (runs at import time, gated by user setting)
+# Hook registration (reload-safe, gated by user setting)
 # ---------------------------------------------------------------------------
 
-if mw.settings_obj.get("gui.team_deck_view") is True:
-    gui_hooks.deck_browser_will_render_content.append(deck_browser_will_render)
-    gui_hooks.overview_will_render_content.append(on_overview_will_render_content)
+# Reload safety (F31): the (hook, handler) record lives on the services
+# registry — which, unlike a module-level flag, survives a re-execution of this
+# module (an add-on reload). It stores the exact handler objects appended, so a
+# second boot removes those originals before appending the reloaded module's
+# functions, swapping the registration instead of stacking a duplicate set.
+_HANDLER_RECORD = "_overview_team_hook_handlers"
+
+
+def register_overview_hooks() -> None:
+    """Register the Deck Browser / Deck Overview team-grid hooks.
+
+    Called once from the add-on's composition root (``__init__.py``). Gated on
+    the ``gui.team_deck_view`` setting and reload-safe via the services-anchored
+    ``_HANDLER_RECORD`` (see the module docstring). When the setting is off, any
+    previously registered handlers are still removed (so toggling off then
+    reloading clears the grid) but nothing new is appended.
+    """
+    # Drop any prior registration first. No-op on a first boot (no record); on a
+    # re-boot the stored pairs are removed so the appends below cannot
+    # double-register. gui_hooks' remove() tolerates already-absent callbacks.
+    for hook, handler in getattr(services, _HANDLER_RECORD, ()):
+        hook.remove(handler)
+    setattr(services, _HANDLER_RECORD, ())
+
+    settings = services.settings
+    if settings is None or settings.get("gui.team_deck_view") is not True:
+        return
+
+    handlers = (
+        (gui_hooks.deck_browser_will_render_content, deck_browser_will_render),
+        (gui_hooks.overview_will_render_content, on_overview_will_render_content),
+    )
+    for hook, handler in handlers:
+        hook.append(handler)
+    setattr(services, _HANDLER_RECORD, handlers)
