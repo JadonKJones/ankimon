@@ -11,8 +11,11 @@ from ..resources import (
     stats_csv,
     pokemon_csv,
 )
-from aqt.utils import showWarning
-from aqt import mw
+from ..services import services
+try:
+    from aqt import mw
+except Exception:
+    mw = None
 import json
 import random
 import csv
@@ -393,7 +396,6 @@ def search_pokedex(pokemon_name, variable):
 
     except Exception as e:
         show_warning_with_traceback(
-            parent=mw,
             exception=e,
             message=f"Error searching for pokemon '{pokemon_name}'",
         )
@@ -401,7 +403,6 @@ def search_pokedex(pokemon_name, variable):
 
     except Exception as e:
         show_warning_with_traceback(
-            parent=mw,
             exception=e,
             message=f"Error searching for pokemon '{pokemon_name}'",
         )
@@ -601,11 +602,11 @@ def get_pokemon_diff_lang_name(pokemon_id: int, language: int):
 def extract_ids_from_file():
     try:
         # get_all_pokemon_ids returns a set of integer IDs natively from SQLite virtual columns
-        ids = mw.ankimon_db.get_all_pokemon_ids()
+        ids = services.db.get_all_pokemon_ids() if services.db else set()
         return sorted(list(ids))
     except Exception as e:
         show_warning_with_traceback(
-            parent=mw, exception=e, message="Error extracting IDs from file"
+            exception=e, message="Error extracting IDs from file"
         )
         return []
 
@@ -632,12 +633,12 @@ def find_details_move(move_name: str) -> dict:
             return move
         else:
             move = moves_data.get("tackle")
+            from aqt.utils import showWarning
             showWarning(f"Move '{move_name}' not found. Returning default move 'tackle'.")
             return move
                 
     except Exception as e:
         show_warning_with_traceback(
-            parent=mw,
             exception=e,
             message=f"There is an issue in find_details_move for move: {move_name}. Returning to default move 'tackle'."
         )
@@ -674,8 +675,8 @@ def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
                 item_name = return_identifier_for_item_id(item_id)
                 if item_name:
                     active_region = None
-                    if hasattr(mw, "settings_obj") and mw.settings_obj:
-                        active_region = mw.settings_obj.get("misc.active_region")
+                    if services.settings is not None:
+                        active_region = services.settings.get("misc.active_region")
                         if active_region:
                             active_region = active_region.strip()
                     
@@ -685,40 +686,39 @@ def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
                     eligible_evos = []
                     
                     for target_evo_name in evo_list:
-                        normalized_target = target_evo_name.lower().replace(" ", "").replace("-", "").replace("'", "").replace(".", "").replace(":", "")
-                        target_data = pokedex_data.get(normalized_target) or pokedex_data.get(target_evo_name.lower())
-                        
-                        if target_data and target_data.get("evoType") == "useItem":
-                            required_item = (target_data.get("evoItem") or "").lower().replace(" ", "-")
-                            if required_item == item_name:
-                                target_region = target_data.get("evoRegion")
-                                
-                                if target_region:
-                                    if active_region and active_region.lower() == target_region.lower():
-                                        eligible_evos.append(target_data)
-                                else:
-                                    # Standard form is only allowed if there is no regional sibling for this region/method
-                                    has_matching_regional_sibling = False
-                                    for sibling_name in evo_list:
-                                        sib_norm = sibling_name.lower().replace(" ", "").replace("-", "").replace("'", "").replace(".", "").replace(":", "")
-                                        sib_data = pokedex_data.get(sib_norm) or pokedex_data.get(sibling_name.lower())
-                                        if sib_data and sib_data.get("evoRegion") and active_region and sib_data.get("evoRegion").lower() == active_region.lower():
-                                            if sib_data.get("evoType") == target_data.get("evoType") and (sib_data.get("evoItem") or "").lower() == (target_data.get("evoItem") or "").lower():
-                                                has_matching_regional_sibling = True
-                                                break
-                                    if not has_matching_regional_sibling:
-                                        eligible_evos.append(target_data)
-                                        
+                         normalized_target = target_evo_name.lower().replace(" ", "").replace("-", "").replace("'", "").replace(".", "").replace(":", "")
+                         target_data = pokedex_data.get(normalized_target) or pokedex_data.get(target_evo_name.lower())
+                         
+                         if target_data and target_data.get("evoType") == "useItem":
+                             required_item = (target_data.get("evoItem") or "").lower().replace(" ", "-")
+                             if required_item == item_name:
+                                 target_region = target_data.get("evoRegion")
+                                 
+                                 if target_region:
+                                     if active_region and active_region.lower() == target_region.lower():
+                                         eligible_evos.append(target_data)
+                                 else:
+                                     # Standard form is only allowed if there is no regional sibling for this region/method
+                                     has_matching_regional_sibling = False
+                                     for sibling_name in evo_list:
+                                         sib_norm = sibling_name.lower().replace(" ", "").replace("-", "").replace("'", "").replace(".", "").replace(":", "")
+                                         sib_data = pokedex_data.get(sib_norm) or pokedex_data.get(sibling_name.lower())
+                                         if sib_data and sib_data.get("evoRegion") and active_region and sib_data.get("evoRegion").lower() == active_region.lower():
+                                             if sib_data.get("evoType") == target_data.get("evoType") and (sib_data.get("evoItem") or "").lower() == (target_data.get("evoItem") or "").lower():
+                                                 has_matching_regional_sibling = True
+                                                 break
+                                     if not has_matching_regional_sibling:
+                                         eligible_evos.append(target_data)
+                                         
                     if eligible_evos:
-                        eligible_evos.sort(key=lambda x: 0 if x.get("evoRegion") else 1)
-                        target_data = eligible_evos[0]
-                        evo_id = safe_int(target_data.get("actual_id") or target_data.get("species_id"))
-                        if evo_id > 0:
-                            return evo_id
+                         eligible_evos.sort(key=lambda x: 0 if x.get("evoRegion") else 1)
+                         target_data = eligible_evos[0]
+                         evo_id = safe_int(target_data.get("actual_id") or target_data.get("species_id"))
+                         if evo_id > 0:
+                             return evo_id
         return None
     except Exception as e:
         show_warning_with_traceback(
-            parent=mw,
             exception=e,
             message=f"Error checking item evolution for Pokémon ID {pokemon_id}",
         )
@@ -791,8 +791,8 @@ def check_evolution_for_pokemon(
             
             if evo_list:
                 active_region = None
-                if hasattr(mw, "settings_obj") and mw.settings_obj:
-                    active_region = mw.settings_obj.get("misc.active_region")
+                if services.settings is not None:
+                    active_region = services.settings.get("misc.active_region")
                     if active_region:
                         active_region = active_region.strip()
                 
@@ -812,7 +812,7 @@ def check_evolution_for_pokemon(
                         if condition == "minimumdefeated":
                             evo_defeated = safe_int(target_data.get("evoDefeated"))
                             if evo_defeated > 0:
-                                pokemon_data = mw.ankimon_db.get_pokemon(individual_id)
+                                pokemon_data = services.db.get_pokemon(individual_id) if services.db else None
                                 if pokemon_data:
                                     from ..pyobj.pokemon_obj import PokemonObject
                                     pokemon_obj = PokemonObject.from_dict(pokemon_data)
@@ -831,7 +831,7 @@ def check_evolution_for_pokemon(
                             required_move = target_data.get("evoMove")
                             knows_move = False
                             
-                            db = mw.ankimon_db if hasattr(mw, "ankimon_db") else None
+                            db = services.db
                             pkmn_data = db.get_pokemon(individual_id) if db else None
                             if pkmn_data and "attacks" in pkmn_data:
                                 p_attacks = pkmn_data["attacks"]
@@ -882,7 +882,6 @@ def check_evolution_for_pokemon(
         
     except Exception as e:
         show_warning_with_traceback(
-            parent=mw,
             exception=e,
             message=f"Error checking evolution for Pokémon ID {pokemon_id}",
         )
@@ -937,7 +936,6 @@ def get_pokemon_evolution_data(pokemon_id):
         return None
     except Exception as e:
         show_warning_with_traceback(
-            parent=mw,
             exception=e,
             message=f"Error retrieving evolution data for Pokémon ID {pokemon_id}",
         )
@@ -1031,15 +1029,15 @@ def return_name_for_id(pokemon_id):
                     return row.get("identifier")  # Return the identifier from the CSV row
 
         # Log a message if the item is not found
+        from aqt.utils import showWarning
         showWarning(f"Name for Pokemon with ID '{pokemon_id}' not found in the CSV.")
         return None
     except Exception as e:
         # Log any unexpected errors
         show_warning_with_traceback(
-            parent=mw,
             exception=e,
             message=f"No evolution data found for Pokémon ID '{pokemon_id}'",
-        )(f"Error retrieving name for Pokémon ID '{pokemon_id}': {e}")
+        )
         return None
 
 
@@ -1067,11 +1065,11 @@ def return_id_for_item_name(item_name):
                     return row["id"]  # Return the id from the CSV row
 
         # Log a message if the item is not found
+        from aqt.utils import showWarning
         showWarning("warning", f"Item '{item_name}' not found in the CSV.")
         return None
     except Exception as e:
         show_warning_with_traceback(
-            parent=mw,
             exception=e,
             message=f"Error retrieving ID for item '{item_name}'",
         )

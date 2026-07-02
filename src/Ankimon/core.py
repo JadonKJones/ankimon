@@ -244,4 +244,7 @@ def bind_runtime_globals() -> None:
             real_module_path = root_pkg + module_path[len("Ankimon"):]
         module = importlib.import_module(real_module_path)
         for global_name, attr in mapping.items():
+            current_val = getattr(module, global_name, None)
+            if current_val is not None and type(current_val).__name__ == "ServiceProxy":
+                continue
             setattr(module, global_name, getattr(services, attr))

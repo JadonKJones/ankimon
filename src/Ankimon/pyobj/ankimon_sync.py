@@ -7,15 +7,31 @@ import shutil
 from pathlib import Path
 from typing import Dict, List, Any
 
-from aqt import mw, gui_hooks
-from aqt.utils import showInfo, tooltip
-from ..pyobj.error_handler import show_warning_with_traceback
+_HAVE_QT = False
+try:
+    from aqt import mw, gui_hooks
+    from aqt.utils import showInfo, tooltip
+    from PyQt6.QtGui import QTextOption
+    from PyQt6.QtWidgets import QLabel, QVBoxLayout, QTextEdit, QPushButton, QDialog, QHBoxLayout, QScrollArea, QWidget
+    _HAVE_QT = True
+except (ImportError, ModuleNotFoundError):
+    class QDialog: pass
+    class QWidget: pass
+    mw = None
+    gui_hooks = None
+    showInfo = None
+    tooltip = None
+    QTextOption = None
+    QLabel = None
+    QVBoxLayout = None
+    QTextEdit = None
+    QPushButton = None
+    QHBoxLayout = None
+    QScrollArea = None
 
+from ..pyobj.error_handler import show_warning_with_traceback
 from ..resources import user_path, addon_dir
 from ..utils import close_anki
-
-from PyQt6.QtGui import QTextOption
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QTextEdit, QPushButton, QDialog, QHBoxLayout, QScrollArea, QWidget
 
 class ImprovedPokemonDataSync(QDialog):
     """

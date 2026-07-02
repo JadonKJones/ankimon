@@ -1,18 +1,12 @@
 import json
 import os
-from aqt import mw
-from aqt.utils import showInfo
-from PyQt6.QtWidgets import (
-    QApplication,
-    QWidget,
-    QVBoxLayout,
-    QLabel,
-    QLineEdit,
-    QPushButton,
-)
-from PyQt6.QtWidgets import QRadioButton, QHBoxLayout, QMainWindow, QScrollArea
 from pathlib import Path
 from ..resources import user_path
+from ..services import services
+try:
+    from aqt import mw
+except Exception:
+    mw = None
 
 DEFAULT_CONFIG = {
     "battle.automatic_battle": 0,
@@ -103,15 +97,14 @@ class Settings:
         return self.descriptions.get(key, "No description available.")
 
     def load_config(self):
-        from aqt import mw
-        
         config = {}
         
         # First, try to load from database
-        if hasattr(mw, 'ankimon_db') and mw.ankimon_db is not None:
+        db = services.db or (getattr(mw, "ankimon_db", None) if mw else None)
+        if db is not None:
             try:
-                if mw.ankimon_db.has_config():
-                    config = mw.ankimon_db.get_all_config()
+                if db.has_config():
+                    config = db.get_all_config()
                     self._apply_type_coercion(config)
             except Exception as e:
                 print(f"Ankimon: Error loading config from database: {e}")
@@ -137,9 +130,9 @@ class Settings:
                     self._apply_type_coercion(config)
                     
                     # Migrate config to database
-                    if hasattr(mw, 'ankimon_db') and mw.ankimon_db is not None:
+                    if db is not None:
                         try:
-                            mw.ankimon_db.save_all_config(config)
+                            db.save_all_config(config)
                             print("Ankimon: Migrated config from config.obf to database")
                         except Exception as e:
                             print(f"Ankimon: Failed to migrate config to database: {e}")
@@ -190,9 +183,10 @@ class Settings:
         sync_handler = AnkimonDataSync()  # Re-use the obfuscation logic
 
         # Always save to the database if available
-        if hasattr(mw, 'ankimon_db') and mw.ankimon_db is not None:
+        db = services.db or (getattr(mw, "ankimon_db", None) if mw else None)
+        if db is not None:
             try:
-                mw.ankimon_db.save_all_config(config)
+                db.save_all_config(config)
             except Exception as e:
                 print(f"Ankimon: Failed to save config to database: {e}")
 

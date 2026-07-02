@@ -17,8 +17,7 @@ for module in [
     "Ankimon.pyobj.translator", "Ankimon.pyobj.error_handler",
     "Ankimon.functions.pokemon_functions",
     "Ankimon.functions.trainer_functions", "Ankimon.functions.badges_functions",
-    "Ankimon.functions.drawing_utils", "Ankimon.utils", "Ankimon.business", 
-    "Ankimon.const", "Ankimon.singletons", "Ankimon.resources"
+    "Ankimon.functions.drawing_utils", "Ankimon.singletons"
 ]:
     sys.modules[module] = mock.MagicMock()
 
@@ -50,6 +49,13 @@ ef.trainer_card = mock.MagicMock()
 
 # Execute the module
 spec.loader.exec_module(ef)
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def ensure_sys_modules():
+    sys.modules["Ankimon.functions.encounter_functions"] = ef
+    yield
 
 def test_modify_percentages_does_not_raise_nameerror():
     # Setup mocks

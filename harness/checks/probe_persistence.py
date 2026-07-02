@@ -71,6 +71,7 @@ def main():
     print("played: caught 3, defeated 2 -> %s" % after)
 
     # --- Restart: copy the save, boot a brand-new session on it ---------------
+    d.services.db.close()
     saved = os.path.join(tempfile.mkdtemp(), "save.db")
     shutil.copy(os.path.join(d.env.user_path, "ankimon.db"), saved)
     reloaded = _snap(Driver(db=saved))

@@ -13,8 +13,11 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QPixmap, QImage
 from PyQt6.QtCore import Qt
-from aqt import mw
-from anki.buildinfo import version as anki_version
+from ..services import services
+try:
+    from anki.buildinfo import version as anki_version
+except Exception:
+    anki_version = "unknown"
 
 # Path configurations
 addon_dir = Path(__file__).parents[1]
@@ -73,7 +76,8 @@ def load_error_images(json_path: Path) -> Dict[str, str]:
             error_images = json.load(f)
         return random.choice(error_images)
     except Exception as e:
-        mw.logger.log("error", f"Failed to load error images: {str(e)}")
+        if services.logger:
+            services.logger.log("error", f"Failed to load error images: {str(e)}")
         return default_image
 
 def create_error_label(message: str, exception: Exception) -> QLabel:
@@ -208,7 +212,7 @@ def setup_dialog_style(dialog: QDialog) -> None:
     """)
 
 def show_warning_with_traceback(
-    parent: QDialog = mw,
+    parent: Optional[QDialog] = None,
     exception: Optional[Exception] = None,
     message: str = "An error occurred during execution."
 ) -> None:
@@ -216,10 +220,31 @@ def show_warning_with_traceback(
     if not exception:
         raise ValueError("An exception must be provided.")
 
+    if parent is None:
+        try:
+            from aqt import mw
+            parent = mw
+        except ImportError:
+            parent = None
+
     # Generate and sanitize traceback
     tb_text = scrub_traceback(traceback.format_exc())
     env_info = get_environment_info()
-    mw.logger.log("error", f"{message}: {exception}\n{env_info}\n{tb_text}")
+
+    if services.logger:
+        services.logger.log("error", f"{message}: {exception}\n{env_info}\n{tb_text}")
+
+    # Emit structured "error" event
+    try:
+        from ..events import emit
+        emit("error", message=message, exception=str(exception), traceback=tb_text)
+    except Exception:
+        pass
+
+    # Do not show GUI dialog if running headless or under pytest
+    from PyQt6.QtWidgets import QApplication
+    if QApplication.instance() is None or os.getenv("QT_QPA_PLATFORM") == "offscreen" or os.getenv("PYTEST_CURRENT_TEST") is not None:
+        return
 
     # Load error images
     error_json_path = pyobj_path / 'error_images.json'
@@ -241,7 +266,24 @@ def show_warning_with_traceback(
     def copy_debug_info():
         # Wrap in triple backticks for markdown code block formatting
         full_debug = f"```python\n{env_info}\n\n{tb_text}\n```"
-        mw.app.clipboard().setText(full_debug)
+        
+        # Resolve clipboard safely
+        clipboard = None
+        try:
+            from aqt import mw
+            if mw and mw.app:
+                clipboard = mw.app.clipboard()
+        except ImportError:
+            pass
+        
+        if not clipboard:
+            from PyQt6.QtWidgets import QApplication
+            app_inst = QApplication.instance()
+            if app_inst:
+                clipboard = app_inst.clipboard()
+                
+        if clipboard:
+            clipboard.setText(full_debug)
 
         # Update dialog to show copy confirmation (without env_info)
         dialog.findChild(QLabel).setText(
@@ -257,3 +299,4 @@ def show_warning_with_traceback(
     # Finalize and show dialog
     dialog.adjustSize()
     dialog.exec()
+

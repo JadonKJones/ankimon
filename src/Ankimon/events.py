@@ -114,3 +114,5 @@ class _EventBus:
 
 # The single shared event bus. Import this, not the class.
 events = _EventBus()
+emit = events.emit
+

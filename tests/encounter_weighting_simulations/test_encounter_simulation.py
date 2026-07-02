@@ -37,171 +37,181 @@ BYPASS_MIN_LEVEL_CHECK = False
 BYPASS_BASE_FORM_CHECK = True
 # ---------------------------
 
+ef = None
+mock_settings = None
+collected_ids_mock = None
+cached_meets = None
+cached_owns = None
+pokedex_data = {}
+base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import types
 class MockModule(MagicMock):
     pass
 
-# Initialize addon, addon.pyobj and addon.functions as packages so relative imports resolve
-for pkg in ("addon", "addon.pyobj", "addon.functions"):
-    mod = types.ModuleType(pkg)
-    mod.__path__ = []
-    sys.modules[pkg] = mod
+def initialize():
+    global ef, mock_settings, collected_ids_mock, cached_meets, cached_owns, pokedex_data
+    
+    # Initialize addon, addon.pyobj and addon.functions as packages so relative imports resolve
+    for pkg in ("addon", "addon.pyobj", "addon.functions"):
+        mod = types.ModuleType(pkg)
+        mod.__path__ = []
+        sys.modules[pkg] = mod
 
-modules_to_mock = [
-    "aqt", "aqt.qt", "aqt.utils", "anki", "anki.hooks",
-    "addon.pyobj.ankimon_tracker", "addon.pyobj.pokemon_obj",
-    "addon.pyobj.reviewer_obj", "addon.pyobj.test_window", "addon.pyobj.trainer_card",
-    "addon.pyobj.InfoLogger", "addon.pyobj.evolution_window", "addon.pyobj.attack_dialog",
-    "addon.pyobj.translator", "addon.pyobj.error_handler",
-    "addon.functions.pokemon_functions", "addon.functions.pokedex_functions",
-    "addon.functions.trainer_functions", "addon.functions.badges_functions",
-    "addon.functions.drawing_utils", "addon.utils", "addon.business", "addon.const",
-    "addon.singletons", "addon.functions.encounter_data", "addon.functions.friendship_evolution"
-]
-for mod in modules_to_mock:
-    sys.modules[mod] = MockModule()
+    modules_to_mock = [
+        "aqt", "aqt.qt", "aqt.utils", "anki", "anki.hooks",
+        "addon.pyobj.ankimon_tracker", "addon.pyobj.pokemon_obj",
+        "addon.pyobj.reviewer_obj", "addon.pyobj.test_window", "addon.pyobj.trainer_card",
+        "addon.pyobj.InfoLogger", "addon.pyobj.evolution_window", "addon.pyobj.attack_dialog",
+        "addon.pyobj.translator", "addon.pyobj.error_handler",
+        "addon.functions.pokemon_functions", "addon.functions.pokedex_functions",
+        "addon.functions.trainer_functions", "addon.functions.badges_functions",
+        "addon.functions.drawing_utils", "addon.utils", "addon.business", "addon.const",
+        "addon.singletons", "addon.functions.encounter_data", "addon.functions.friendship_evolution",
+        "addon.services"
+    ]
+    for mod in modules_to_mock:
+        sys.modules[mod] = MockModule()
 
-sys.modules["addon.pyobj.ankimon_tracker"].AnkimonTracker = MockModule
-sys.modules["addon.pyobj.pokemon_obj"].PokemonObject = MockModule
-sys.modules["addon.pyobj.reviewer_obj"].Reviewer_Manager = MockModule
-sys.modules["addon.pyobj.test_window"].TestWindow = MockModule
-sys.modules["addon.pyobj.trainer_card"].TrainerCard = MockModule
-sys.modules["addon.pyobj.InfoLogger"].ShowInfoLogger = MockModule
-sys.modules["addon.pyobj.evolution_window"].EvoWindow = MockModule
-sys.modules["addon.pyobj.attack_dialog"].AttackDialog = MockModule
-sys.modules["addon.pyobj.translator"].Translator = MockModule
-sys.modules["addon.pyobj.error_handler"].show_warning_with_traceback = lambda *args, **kwargs: None
+    sys.modules["addon.pyobj.ankimon_tracker"].AnkimonTracker = MockModule
+    sys.modules["addon.pyobj.pokemon_obj"].PokemonObject = MockModule
+    sys.modules["addon.pyobj.reviewer_obj"].Reviewer_Manager = MockModule
+    sys.modules["addon.pyobj.test_window"].TestWindow = MockModule
+    sys.modules["addon.pyobj.trainer_card"].TrainerCard = MockModule
+    sys.modules["addon.pyobj.InfoLogger"].ShowInfoLogger = MockModule
+    sys.modules["addon.pyobj.evolution_window"].EvoWindow = MockModule
+    sys.modules["addon.pyobj.attack_dialog"].AttackDialog = MockModule
+    sys.modules["addon.pyobj.translator"].Translator = MockModule
+    sys.modules["addon.pyobj.error_handler"].show_warning_with_traceback = lambda *args, **kwargs: None
 
-sys.modules["addon.functions.pokemon_functions"].find_experience_for_level = lambda *args: 0
-sys.modules["addon.functions.pokemon_functions"].get_levelup_move_for_pokemon = lambda *args: None
-sys.modules["addon.functions.pokemon_functions"].pick_random_gender = lambda *args: "Male"
-sys.modules["addon.functions.pokemon_functions"].shiny_chance = lambda *args: False
+    sys.modules["addon.functions.pokemon_functions"].find_experience_for_level = lambda *args: 0
+    sys.modules["addon.functions.pokemon_functions"].get_levelup_move_for_pokemon = lambda *args: None
+    sys.modules["addon.functions.pokemon_functions"].pick_random_gender = lambda *args: "Male"
+    sys.modules["addon.functions.pokemon_functions"].shiny_chance = lambda *args: False
 
-base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-pokedex_path = os.path.join(base_dir, "src", "Ankimon", "data_files", "pokedex.json")
-with open(pokedex_path, "r", encoding="utf-8") as f:
-    pokedex_data = json.load(f)
+    pokedex_path = os.path.join(base_dir, "src", "Ankimon", "data_files", "pokedex.json")
+    with open(pokedex_path, "r", encoding="utf-8") as f:
+        pokedex_data = json.load(f)
 
-id_to_name = {}
-for name, data in pokedex_data.items():
-    if "actual_id" in data:
-        id_to_name[data["actual_id"]] = name
+    def search_pokedex(query):
+        res = []
+        for name, data in pokedex_data.items():
+            if str(query).lower() in name.lower():
+                data_copy = data.copy()
+                data_copy["name"] = name
+                res.append(data_copy)
+        return res
 
-def search_pokedex_by_id(pkmn_id):
-    return id_to_name.get(pkmn_id, "Pokémon not found")
+    def search_pokedex_by_id(pkmn_id):
+        for name, data in pokedex_data.items():
+            if "actual_id" in data and data["actual_id"] == pkmn_id:
+                data_copy = data.copy()
+                data_copy["name"] = name
+                return data_copy
+        return None
 
-def search_pokedex(name, key):
-    if not isinstance(name, str):
-        return []
-    # Normalize name to match JSON keys (e.g., "Darumaka-Galar" -> "darumakagalar")
-    name_key = name.lower().replace("-", "").replace(" ", "").replace("'", "")
-    if name_key in pokedex_data:
-        val = pokedex_data[name_key].get(key)
-        if val is not None:
-            return val
-    return []
+    def get_pretty_name_for_name(name):
+        return name
 
+    sys.modules["addon.functions.pokedex_functions"].search_pokedex_by_id = search_pokedex_by_id
+    sys.modules["addon.functions.pokedex_functions"].search_pokedex = search_pokedex
+    sys.modules["addon.functions.pokedex_functions"].get_growth_rate = lambda *args: "Medium Fast"
+    sys.modules["addon.functions.pokedex_functions"].get_effort_values = lambda *args: {}
+    sys.modules["addon.functions.pokedex_functions"].get_base_experience = lambda *args: 100
+    sys.modules["addon.functions.pokedex_functions"].check_evolution_for_pokemon = lambda *args: None
+    sys.modules["addon.functions.pokedex_functions"].get_all_pokemon_moves = lambda *args: []
 
-def safe_int(val):
-    try:
-        return int(val)
-    except:
-        return 0
+    def safe_int(val, default=0):
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return default
 
-sys.modules["addon.functions.pokedex_functions"].check_evolution_for_pokemon = lambda *args: None
-sys.modules["addon.functions.pokedex_functions"].get_all_pokemon_moves = lambda *args: []
-sys.modules["addon.functions.pokedex_functions"].get_base_experience = lambda *args: 100
-sys.modules["addon.functions.pokedex_functions"].get_effort_values = lambda *args: {}
-sys.modules["addon.functions.pokedex_functions"].get_growth_rate = lambda *args: "Medium Fast"
-sys.modules["addon.functions.pokedex_functions"].return_name_for_id = search_pokedex_by_id
-sys.modules["addon.functions.pokedex_functions"].search_pokedex = search_pokedex
-sys.modules["addon.functions.pokedex_functions"].search_pokedex_by_id = search_pokedex_by_id
-sys.modules["addon.functions.pokedex_functions"].safe_int = safe_int
-sys.modules["addon.functions.pokedex_functions"].get_pretty_name_for_name = lambda name: name
+    sys.modules["addon.functions.pokedex_functions"].safe_int = safe_int
+    sys.modules["addon.functions.pokedex_functions"].get_pretty_name_for_name = lambda name: name
 
-sys.modules["addon.functions.trainer_functions"].xp_share_gain_exp = lambda *args: None
-sys.modules["addon.functions.badges_functions"].check_for_badge = lambda *args: False
-sys.modules["addon.functions.badges_functions"].receive_badge = lambda *args: None
-sys.modules["addon.functions.drawing_utils"].tooltipWithColour = lambda *args: None
+    sys.modules["addon.functions.trainer_functions"].xp_share_gain_exp = lambda *args: None
+    sys.modules["addon.functions.badges_functions"].check_for_badge = lambda *args: False
+    sys.modules["addon.functions.badges_functions"].receive_badge = lambda *args: None
+    sys.modules["addon.functions.drawing_utils"].tooltipWithColour = lambda *args: None
 
-collected_ids_mock = set(range(1, 11000))
-sys.modules["addon.utils"].limit_ev_yield = lambda *args: None
-sys.modules["addon.utils"].play_effect_sound = lambda *args: None
-sys.modules["addon.utils"].get_ev_spread = lambda *args: {}
-sys.modules["addon.utils"].is_alive = lambda *args: True
-sys.modules["addon.utils"].load_collected_pokemon_ids = lambda: collected_ids_mock
+    collected_ids_mock = set(range(1, 11000))
+    sys.modules["addon.utils"].limit_ev_yield = lambda *args: None
+    sys.modules["addon.utils"].play_effect_sound = lambda *args: None
+    sys.modules["addon.utils"].get_ev_spread = lambda *args: {}
+    sys.modules["addon.utils"].is_alive = lambda *args: True
+    sys.modules["addon.utils"].load_collected_pokemon_ids = lambda: collected_ids_mock
 
-sys.modules["addon.business"].calc_experience = lambda *args: 0
-sys.path.insert(0, os.path.join(base_dir, "src", "Ankimon"))
-import const
-import functions.encounter_data as ed
+    sys.modules["addon.business"].calc_experience = lambda *args: 0
+    sys.path.insert(0, os.path.join(base_dir, "src", "Ankimon"))
+    import const
+    import functions.encounter_data as ed
 
-sys.modules["addon.const"].gen_ids = const.gen_ids
-sys.modules["addon.functions.encounter_data"] = ed
-sys.modules["addon.functions"].encounter_data = ed
+    sys.modules["addon.const"].gen_ids = const.gen_ids
+    sys.modules["addon.functions.encounter_data"] = ed
+    sys.modules["addon.functions"].encounter_data = ed
 
-class MockPokemon:
-    def __init__(self):
-        self.level = MAIN_POKEMON_LEVEL
-class MockTrainerCard:
-    def __init__(self):
-        self.level = 10
-class MockSettings:
-    def __init__(self):
-        self.config = {}
-        self.config["battle.daily_average"] = 100
-    def get(self, key, default=None):
-        return self.config.get(key, default)
-    def set_config(self, cfg):
-        self.config.update(cfg)
+    class MockPokemon:
+        def __init__(self):
+            self.level = MAIN_POKEMON_LEVEL
+    class MockTrainerCard:
+        def __init__(self):
+            self.level = 10
+    class MockSettings:
+        def __init__(self):
+            self.config = {}
+            self.config["battle.daily_average"] = 100
+        def get(self, key, default=None):
+            return self.config.get(key, default)
+        def set_config(self, cfg):
+            self.config.update(cfg)
 
-sys.modules["addon.singletons"].main_pokemon = MockPokemon()
-sys.modules["addon.singletons"].ankimon_tracker_obj = MockModule()
-sys.modules["addon.singletons"].ankimon_tracker_obj.get_total_reviews = lambda: 100
-sys.modules["addon.singletons"].trainer_card = MockTrainerCard()
-mock_settings = MockSettings()
-sys.modules["addon.singletons"].settings_obj = mock_settings
-sys.modules["addon.singletons"].translator = MockModule()
-sys.modules["addon.singletons"].ankimon_db = MockModule()
-sys.modules["addon.singletons"].pokemon_pc = MockModule()
+    sys.modules["addon.singletons"].main_pokemon = MockPokemon()
+    sys.modules["addon.singletons"].ankimon_tracker_obj = MockModule()
+    sys.modules["addon.singletons"].ankimon_tracker_obj.get_total_reviews = lambda: 100
+    sys.modules["addon.singletons"].trainer_card = MockTrainerCard()
+    mock_settings = MockSettings()
+    sys.modules["addon.singletons"].settings_obj = mock_settings
+    sys.modules["addon.singletons"].translator = MockModule()
+    sys.modules["addon.singletons"].ankimon_db = MockModule()
+    sys.modules["addon.singletons"].pokemon_pc = MockModule()
 
-spec = importlib.util.spec_from_file_location("addon.functions.encounter_functions", os.path.join(base_dir, "src", "Ankimon", "functions", "encounter_functions.py"))
-ef = importlib.util.module_from_spec(spec)
-sys.modules["addon.functions.encounter_functions"] = ef
-spec.loader.exec_module(ef)
+    spec = importlib.util.spec_from_file_location("addon.functions.encounter_functions", os.path.join(base_dir, "src", "Ankimon", "functions", "encounter_functions.py"))
+    ef = importlib.util.module_from_spec(spec)
+    sys.modules["addon.functions.encounter_functions"] = ef
+    spec.loader.exec_module(ef)
 
-if BYPASS_PREREQUISITES:
-    ef._meets_prerequisites = lambda pokemon_id, collected_ids: True
-if BYPASS_MIN_LEVEL_CHECK:
-    ef.check_min_generate_level = lambda name: 1
-if BYPASS_BASE_FORM_CHECK:
-    ef._player_owns_base_form = lambda actual_id, collected_ids: True
+    if BYPASS_PREREQUISITES:
+        ef._meets_prerequisites = lambda pokemon_id, collected_ids: True
+    if BYPASS_MIN_LEVEL_CHECK:
+        ef.check_min_generate_level = lambda name: 1
+    if BYPASS_BASE_FORM_CHECK:
+        ef._player_owns_base_form = lambda actual_id, collected_ids: True
 
-# Mock get_all_pokemon_in_tier to enable Starters in the simulation tests
-original_get_all_pokemon_in_tier = ef.get_all_pokemon_in_tier
-ef.get_all_pokemon_in_tier = lambda tier: ed.STARTERS if tier == "Starter" else original_get_all_pokemon_in_tier(tier)
+    # Mock get_all_pokemon_in_tier to enable Starters in the simulation tests
+    original_get_all_pokemon_in_tier = ef.get_all_pokemon_in_tier
+    ef.get_all_pokemon_in_tier = lambda tier: ed.STARTERS if tier == "Starter" else original_get_all_pokemon_in_tier(tier)
 
+    from functools import lru_cache
+    # Cache the heavy utility lookups
+    ef.search_pokedex = lru_cache(maxsize=None)(ef.search_pokedex)
+    ef.check_min_generate_level = lru_cache(maxsize=None)(ef.check_min_generate_level)
 
-from functools import lru_cache
-# Cache the heavy utility lookups
-ef.search_pokedex = lru_cache(maxsize=None)(ef.search_pokedex)
-ef.check_min_generate_level = lru_cache(maxsize=None)(ef.check_min_generate_level)
+    # Special handling for functions with unhashable 'set' arguments
+    original_meets = ef._meets_prerequisites
+    @lru_cache(maxsize=None)
+    def cached_meets(pid):
+        return original_meets(pid, collected_ids_mock)
+    ef._meets_prerequisites = lambda pid, coll: cached_meets(pid)
 
-# Special handling for functions with unhashable 'set' arguments
-original_meets = ef._meets_prerequisites
-@lru_cache(maxsize=None)
-def cached_meets(pid):
-    return original_meets(pid, collected_ids_mock)
-ef._meets_prerequisites = lambda pid, coll: cached_meets(pid)
+    original_owns = ef._player_owns_base_form
+    @lru_cache(maxsize=None)
+    def cached_owns(pid):
+        return original_owns(pid, collected_ids_mock)
+    ef._player_owns_base_form = lambda pid, coll: cached_owns(pid)
 
-original_owns = ef._player_owns_base_form
-@lru_cache(maxsize=None)
-def cached_owns(pid):
-    return original_owns(pid, collected_ids_mock)
-ef._player_owns_base_form = lambda pid, coll: cached_owns(pid)
-
-original_check_id_ok = ef.check_id_ok
-ef.check_id_ok = lru_cache(maxsize=None)(original_check_id_ok)
+    original_check_id_ok = ef.check_id_ok
+    ef.check_id_ok = lru_cache(maxsize=None)(original_check_id_ok)
 
 def set_config(cfg):
     # Clear all caches for the new configuration
@@ -943,6 +953,7 @@ if __name__ == "__main__":
     results_path = os.path.join(base_dir, "simulation_results.json")
     report_path = os.path.join(base_dir, "simulation_report.txt")
     try:
+        initialize()
         run_all()
     finally:
         with open(results_path, "w") as f:

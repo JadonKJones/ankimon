@@ -49,7 +49,6 @@ sys.modules["Ankimon.resources"] = MockResources()
 
 # Also mock singletons if needed
 sys.modules["Ankimon.singletons"] = MagicMock()
-sys.modules["Ankimon.utils"] = MagicMock()
 mock_pyobj = MagicMock()
 sys.modules["Ankimon.pyobj"] = mock_pyobj
 sys.modules["Ankimon.pyobj.error_handler"] = mock_pyobj.error_handler

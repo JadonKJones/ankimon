@@ -148,17 +148,25 @@ class AnkimonDB:
 
     def close(self):
         """Closes the database connection."""
+        print("DEBUG: AnkimonDB.close() started")
         if self._connection:
+            print("DEBUG: closing self._connection")
             try:
                 self._connection.close()
-            except Exception: pass
+                print("DEBUG: self._connection closed successfully")
+            except Exception as e:
+                print(f"DEBUG: error closing self._connection: {e}")
             self._connection = None
         if hasattr(self, "_local_conn"):
             if hasattr(self._local_conn, "conn") and self._local_conn.conn:
+                print("DEBUG: closing self._local_conn.conn")
                 try:
                     self._local_conn.conn.close()
-                except Exception: pass
+                    print("DEBUG: self._local_conn.conn closed successfully")
+                except Exception as e:
+                    print(f"DEBUG: error closing self._local_conn.conn: {e}")
                 self._local_conn.conn = None
+        print("DEBUG: AnkimonDB.close() finished")
 
     # --- Obfuscation / De-obfuscation ---
 
@@ -409,10 +417,13 @@ class AnkimonDB:
     def _clear_reviewer_ownership_cache(self):
         """Clears the Reviewer_Manager's ownership cache and the internal Pokémon ID cache when database changes."""
         self._all_pokemon_ids_cache = None
-        from aqt import mw
-        if hasattr(mw, "reviewer_obj") and mw.reviewer_obj is not None:
-            if hasattr(mw.reviewer_obj, "_ownership_cache"):
-                mw.reviewer_obj._ownership_cache.clear()
+        try:
+            from aqt import mw
+            if hasattr(mw, "reviewer_obj") and mw.reviewer_obj is not None:
+                if hasattr(mw.reviewer_obj, "_ownership_cache"):
+                    mw.reviewer_obj._ownership_cache.clear()
+        except (ImportError, ModuleNotFoundError):
+            pass
 
     def delete_pokemon(self, individual_id: str) -> bool:
         """Deletes a pokemon from the captured collection."""
@@ -1444,3 +1455,18 @@ def get_db(logger=None) -> AnkimonDB:
     if _db_instance is None:
         _db_instance = AnkimonDB(logger)
     return _db_instance
+
+
+def reset_db() -> None:
+    """Drop the cached singleton (closing its connection).
+
+    For test / agent-harness isolation: lets a fresh ``user_path`` produce a
+    fresh database within the same process. Never called in normal Anki use.
+    """
+    global _db_instance
+    if _db_instance is not None:
+        try:
+            _db_instance.close()
+        except Exception:
+            pass
+    _db_instance = None

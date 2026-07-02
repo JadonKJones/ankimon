@@ -1,20 +1,57 @@
+from __future__ import annotations
 from typing import Optional
 
-from aqt import mw
-from aqt.qt import QPainter, QLabel, Qt, sip
-from PyQt6.QtGui import QColor, QFont, QColor, QPalette
-from PyQt6.QtCore import Qt, QRect, QPoint, QSize, QPoint, QTimer
-from PyQt6.QtWidgets import QApplication, QLabel, QFrame
+_HAVE_QT = False
+try:
+    from aqt import mw
+    from aqt.qt import QPainter, QLabel, Qt, sip
+    from PyQt6.QtGui import QColor, QFont, QPalette
+    from PyQt6.QtCore import QRect, QPoint, QSize, QTimer
+    from PyQt6.QtWidgets import QApplication, QFrame
+    _HAVE_QT = True
+except (ImportError, ModuleNotFoundError):
+    # Dummy fallbacks to avoid NameError on function signatures and annotations
+    class QPainter: pass
+    class QLabel: pass
+    class Qt:
+        class WindowType: ToolTip = 0
+        class AlignmentFlag: AlignBottom = 0; AlignHCenter = 0; AlignCenter = 0
+    class sip:
+        @staticmethod
+        def isdeleted(obj): return True
+    class QColor:
+        def __init__(self, *args): pass
+    class QFont:
+        class Weight: Bold = 0
+        def __init__(self, *args, **kwargs): pass
+    class QPalette:
+        class ColorRole: Window = 0; WindowText = 0
+        def __init__(self, *args, **kwargs): pass
+        def setColor(self, *args): pass
+    class QRect: pass
+    class QPoint: pass
+    class QSize: pass
+    class QTimer: pass
+    class QApplication: pass
+    class QFrame:
+        class Shape: StyledPanel = 0
+    mw = None
 
+from ..services import services
+from ..events import events
 from ..pyobj.pokemon_obj import PokemonObject
 
 
 def tooltipWithColour(
     msg, color, x=0, y=20, xref=1, parent=None, width=0, height=0, centered=False
 ):
-    reviewer_text_message_box = mw.settings_obj.get("gui.reviewer_text_message_box")
+    events.emit("tooltip", message=msg, color=color)
+    if not _HAVE_QT:
+        return
+
+    reviewer_text_message_box = services.settings.get("gui.reviewer_text_message_box")
     period = int(
-        mw.settings_obj.get("gui.reviewer_text_message_box_time") * 1000
+        services.settings.get("gui.reviewer_text_message_box_time") * 1000
     )  # time for pop up message
 
     class CustomLabel(QLabel):
@@ -66,7 +103,7 @@ def tooltipWithColour(
             QTimer.singleShot(
                 3000, lambda: lab.hide() if lab and not sip.isdeleted(lab) else None
             )
-        mw.logger.log_and_showinfo("game", msg)
+        services.logger.log_and_showinfo("game", msg)
 
 
 def draw_gender_symbols(

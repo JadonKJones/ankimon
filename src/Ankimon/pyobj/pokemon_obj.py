@@ -3,13 +3,16 @@ import uuid
 import json
 import os
 from typing import Optional
-from aqt import mw
+from ..services import services
+try:
+    from aqt import mw
+except Exception:
+    mw = None
 
 from ..functions.sprite_functions import get_sprite_path
 
-from ..poke_engine.objects import Pokemon
 from ..resources import pkmnimgfolder, mainpokemon_path, mypokemon_path
-from ..utils import give_item
+from ..poke_engine.objects import Pokemon
 
 class PokemonObject:
     def __init__(
@@ -70,7 +73,12 @@ class PokemonObject:
 
         # Stats
         self.base_stats = base_stats or {"hp": 1, "atk": 1, "def": 1, "spa": 1, "spd": 1, "spe": 1}
-        self.ev = {k: int(v) for k, v in (ev or {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}).items()}
+        try:
+            self.ev = {k: int(v) for k, v in (ev or {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}).items()}
+        except Exception as e:
+            import os
+            print(f"POKEMON_OBJ_INIT_ERROR: ev is: {ev} (type: {type(ev)})", flush=True)
+            raise e
         self.iv = {k: int(v) for k, v in (iv or {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}).items()}
         self.ev_yield = {k: int(v) for k, v in (ev_yield or {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}).items()}
 
@@ -108,10 +116,10 @@ class PokemonObject:
         """Returns the nickname if present and not redundant, otherwise the official pretty name."""
         try:
             from ..functions.pokedex_functions import get_pokemon_diff_lang_name, get_pretty_name_for_name
-            # Access language setting via mw if available
+            # Access language setting via services if available
             lang = 9
-            if mw and hasattr(mw, 'settings_obj'):
-                lang = int(mw.settings_obj.get("misc.language", 9))
+            if services.settings is not None:
+                lang = int(services.settings.get("misc.language", 9))
             
             pretty_name = get_pokemon_diff_lang_name(self.id, lang)
             if pretty_name == "No Translation in this language":
@@ -533,7 +541,7 @@ class PokemonObject:
 
         If the Pokémon is already holding an item, it is removed first.
         """
-        db = mw.ankimon_db
+        db = services.db
         
         # If the pokemon already holds an object, we remove it to make room for the new one.
         if self.held_item:
@@ -555,8 +563,8 @@ class PokemonObject:
             db.save_main_pokemon(main_pokemon)
 
         # Sync in-memory main_pokemon singleton if it's the target
-        if mw and getattr(mw, "main_pokemon", None) and mw.main_pokemon.individual_id == self.individual_id:
-            mw.main_pokemon.held_item = held_item
+        if services.main_pokemon is not None and services.main_pokemon.individual_id == self.individual_id:
+            services.main_pokemon.held_item = held_item
 
     def remove_held_item(self) -> None:
         """
@@ -565,8 +573,9 @@ class PokemonObject:
         if self.held_item is None:
             return
 
-        db = mw.ankimon_db
+        db = services.db
 
+        from ..utils import give_item
         give_item(self.held_item)  # We put the item back in the item bag
         self.held_item = None
 
@@ -583,8 +592,8 @@ class PokemonObject:
             db.save_main_pokemon(main_pokemon)
 
         # Sync in-memory main_pokemon singleton if it's the target
-        if mw and getattr(mw, "main_pokemon", None) and mw.main_pokemon.individual_id == self.individual_id:
-            mw.main_pokemon.held_item = None
+        if services.main_pokemon is not None and services.main_pokemon.individual_id == self.individual_id:
+            services.main_pokemon.held_item = None
 
 
 class PokemonEncoder(json.JSONEncoder):

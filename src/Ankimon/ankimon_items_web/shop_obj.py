@@ -668,6 +668,11 @@ class MobileBridge(QObject):
             day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
 
             if "PYTEST_CURRENT_TEST" in os.environ:
+                from Ankimon.services import services
+                import Ankimon.singletons as singletons
+                print("DEBUG resolveNext: services.settings =", services.settings, flush=True)
+                print("DEBUG resolveNext: singletons.settings_obj =", singletons.settings_obj, flush=True)
+                print("DEBUG resolveNext: settings_obj passed =", settings_obj, flush=True)
                 res = resolve_next(
                     companion_id=companion_id,
                     db=db,
@@ -730,6 +735,8 @@ class MobileBridge(QObject):
 
                 return {"loading": True}
         except Exception as e:
+            if "PYTEST_CURRENT_TEST" in os.environ:
+                raise
             import traceback
             logger = getattr(mw, "logger", None)
             if logger:

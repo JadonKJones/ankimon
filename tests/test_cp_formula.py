@@ -1,6 +1,7 @@
 """Unit tests for the CP formula and related business functions."""
 import sys
 import types
+import pytest
 from pathlib import Path
 
 # Stub Ankimon packages so we can import business.py without triggering __init__.py
@@ -37,6 +38,32 @@ from Ankimon.business import (
     cp_breakdown_tooltip,
     _load_type_chart,
 )
+
+@pytest.fixture(autouse=True)
+def bind_live_business_functions():
+    import sys
+    import importlib
+    from unittest.mock import Mock
+    from conftest import ParentlessMock
+    bus_mod = sys.modules.get("Ankimon.business")
+    if bus_mod is None or isinstance(bus_mod, (Mock, ParentlessMock)):
+        sys.modules.pop("Ankimon.business", None)
+        try:
+            bus_mod = importlib.import_module("Ankimon.business")
+        except Exception:
+            pass
+    if bus_mod is not None:
+        globals()["calculate_cpm"] = getattr(bus_mod, "calculate_cpm", None)
+        globals()["calculate_pokemon_go_cp"] = getattr(bus_mod, "calculate_pokemon_go_cp", None)
+        globals()["calculate_present_power"] = getattr(bus_mod, "calculate_present_power", None)
+        globals()["pokemon_go_raw_stats"] = getattr(bus_mod, "pokemon_go_raw_stats", None)
+        globals()["type_compatibility_multiplier"] = getattr(bus_mod, "type_compatibility_multiplier", None)
+        globals()["calculate_cp_from_dict"] = getattr(bus_mod, "calculate_cp_from_dict", None)
+        globals()["cp_breakdown_tooltip"] = getattr(bus_mod, "cp_breakdown_tooltip", None)
+        globals()["_load_type_chart"] = getattr(bus_mod, "_load_type_chart", None)
+        ltc = getattr(bus_mod, "_load_type_chart", None)
+        if ltc is not None:
+            ltc.cache_clear()
 
 
 class TestCalculateCPM:

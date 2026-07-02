@@ -103,6 +103,7 @@ def main():
 
     # --- Re-boot on the migrated DB: the upgraded save must be playable --------
     import shutil
+    d.services.db.close()
     saved = os.path.join(tempfile.mkdtemp(), "save.db")
     shutil.copy(os.path.join(d.env.user_path, "ankimon.db"), saved)
     st = Driver(db=saved).get_state()

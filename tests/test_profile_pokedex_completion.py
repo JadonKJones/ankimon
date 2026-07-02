@@ -31,13 +31,18 @@ def setup_mocks():
 
     if "Ankimon" not in sys.modules:
         sys.modules["Ankimon"] = Ankimon = types.ModuleType("Ankimon")
+        Ankimon.__path__ = [str(_src / "Ankimon")]
+        Ankimon.__package__ = "Ankimon"
     else:
         Ankimon = sys.modules["Ankimon"]
+        if not hasattr(Ankimon, "__path__"):
+            Ankimon.__path__ = [str(_src / "Ankimon")]
 
     sys.modules["Ankimon.resources"] = MockResources()
-    sys.modules["Ankimon.singletons"] = MagicMock()
-    sys.modules["Ankimon.utils"] = MagicMock()
-    sys.modules["Ankimon.pyobj"] = MagicMock()
+    if "Ankimon.pyobj" not in sys.modules or isinstance(sys.modules["Ankimon.pyobj"], MagicMock):
+        sys.modules["Ankimon.pyobj"] = Ankimon_pyobj = types.ModuleType("Ankimon.pyobj")
+        Ankimon_pyobj.__path__ = [str(_src / "Ankimon" / "pyobj")]
+        Ankimon_pyobj.__package__ = "Ankimon.pyobj"
     
     # Wire subpackages as attributes on the Ankimon parent module
     sys.modules["Ankimon.ankimon_profile_web"] = ankimon_profile_web = types.ModuleType("Ankimon.ankimon_profile_web")
@@ -45,8 +50,12 @@ def setup_mocks():
 
     if "Ankimon.functions" not in sys.modules:
         sys.modules["Ankimon.functions"] = Ankimon_functions = types.ModuleType("Ankimon.functions")
+        Ankimon_functions.__path__ = [str(_src / "Ankimon" / "functions")]
+        Ankimon_functions.__package__ = "Ankimon.functions"
     else:
         Ankimon_functions = sys.modules["Ankimon.functions"]
+        if not hasattr(Ankimon_functions, "__path__"):
+            Ankimon_functions.__path__ = [str(_src / "Ankimon" / "functions")]
     Ankimon.functions = Ankimon_functions
 
 setup_mocks()
@@ -84,6 +93,7 @@ class MockLogger:
 @pytest.fixture
 def temp_db(tmp_path):
     """Setup a temporary database manager in a clean environment."""
+    print("DEBUG: temp_db fixture started!", flush=True)
     with patch.object(_db_mod, "user_path", tmp_path):
         db = AnkimonDB(MockLogger())
         yield db

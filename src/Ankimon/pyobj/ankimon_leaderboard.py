@@ -1,11 +1,16 @@
-import sys
-import json
-from PyQt6.QtWidgets import QApplication, QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton
-from aqt.utils import showInfo
+_HAVE_QT = False
+try:
+    from PyQt6.QtWidgets import QApplication, QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton
+    from aqt.utils import showInfo
+    from aqt import mw
+    _HAVE_QT = True
+except (ImportError, ModuleNotFoundError):
+    class QDialog: pass
+    def showInfo(*args, **kwargs): pass
+    mw = None
+
 from ..resources import user_path_credentials, mypokemon_path
-import json
 import requests
-from aqt import mw # import setting values direct from init file
 
 #ANKIMON_LEADERBOARD_API_URL = "https://ankimon.com/api/leaderboard"  # Replace with the actual API URL
 ANKIMON_LEADERBOARD_API_URL = "https://leaderboard-api.ankimon.com/update_stats"  # Replace with the actual API URL
@@ -66,6 +71,8 @@ class ApiKeyDialog(QDialog):
             showInfo(f"Error saving credentials: {e}")
 
 def sync_data_to_leaderboard(data):
+        if not _HAVE_QT or mw is None or mw.settings_obj is None:
+            return
 
         # First check if leaderboard is enabled in config
         if not mw.settings_obj.get("misc.leaderboard"):

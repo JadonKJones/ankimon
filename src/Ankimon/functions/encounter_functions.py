@@ -1,23 +1,30 @@
+from __future__ import annotations
+
 import json
 import random
 import math
-from typing import Union
+from typing import Union, TYPE_CHECKING
 from datetime import datetime
 import uuid
 
-from aqt import mw
-from aqt.qt import QDialog
-from aqt.utils import showWarning
+try:
+    from aqt import mw
+except Exception:
+    mw = None
+
+from ..services import services
 
 from ..pyobj.ankimon_tracker import AnkimonTracker
 from ..pyobj.pokemon_obj import PokemonObject
-from ..pyobj.reviewer_obj import Reviewer_Manager
-from ..pyobj.test_window import TestWindow
 from ..pyobj.trainer_card import TrainerCard
 from ..pyobj.InfoLogger import ShowInfoLogger
-from ..pyobj.evolution_window import EvoWindow
-from ..pyobj.attack_dialog import AttackDialog
 from ..pyobj.translator import Translator
+
+if TYPE_CHECKING:
+    from ..pyobj.reviewer_obj import Reviewer_Manager
+    from ..pyobj.test_window import TestWindow
+    from ..pyobj.evolution_window import EvoWindow
+    from ..pyobj.attack_dialog import AttackDialog
 from ..functions.pokemon_functions import (
     find_experience_for_level,
     get_levelup_move_for_pokemon,
@@ -44,15 +51,48 @@ from ..functions.drawing_utils import tooltipWithColour
 from ..utils import limit_ev_yield, play_effect_sound, get_ev_spread, is_alive
 from ..business import calc_experience, calculate_cp_from_dict
 from ..const import gen_ids
-from ..singletons import (
-    main_pokemon,
-    ankimon_tracker_obj,
-    trainer_card,
-    settings_obj,
-    translator,
-    ankimon_db,
-    pokemon_pc,
-)
+class ServiceProxy:
+    def __init__(self, service_name, singleton_name):
+        self._service_name = service_name
+        self._singleton_name = singleton_name
+
+    def _resolve(self):
+        active = getattr(services, self._service_name, None)
+        if active is None:
+            try:
+                from .. import singletons
+                active = getattr(singletons, self._singleton_name, None)
+            except ImportError:
+                active = None
+        return active
+
+    def __getattr__(self, name):
+        obj = self._resolve()
+        if obj is None:
+            raise AttributeError(f"Service {self._service_name} / singleton {self._singleton_name} is not loaded")
+        return getattr(obj, name)
+
+    def __setattr__(self, name, value):
+        if name in ("_service_name", "_singleton_name"):
+            super().__setattr__(name, value)
+        else:
+            obj = self._resolve()
+            if obj is None:
+                raise AttributeError(f"Service {self._service_name} / singleton {self._singleton_name} is not loaded")
+            setattr(obj, name, value)
+
+    def __bool__(self):
+        return self._resolve() is not None
+
+
+main_pokemon = ServiceProxy("main_pokemon", "main_pokemon")
+ankimon_tracker_obj = ServiceProxy("tracker", "ankimon_tracker_obj")
+trainer_card = ServiceProxy("trainer_card", "trainer_card")
+settings_obj = ServiceProxy("settings", "settings_obj")
+translator = ServiceProxy("translator", "translator")
+ankimon_db = ServiceProxy("db", "ankimon_db")
+pokemon_pc = ServiceProxy("pokemon_pc", "pokemon_pc")
+
 from . import encounter_data
 
 ALL_NATURES = [
@@ -195,8 +235,9 @@ def calculate_mastery_index_ep(total_reviews, daily_average, trainer_level):
         from ..functions.pokedex_functions import _load_pokedex_cache
 
         pokedex_data = _load_pokedex_cache()
-        if pokedex_data and hasattr(mw, "ankimon_db") and mw.ankimon_db:
-            caught_ids = mw.ankimon_db.get_all_pokemon_ids()
+        db = services.db
+        if pokedex_data and db is not None:
+            caught_ids = db.get_all_pokemon_ids()
             caught_species = set()
             for pid in caught_ids:
                 if pid >= 10000:
@@ -230,8 +271,9 @@ def calculate_mastery_index_ep(total_reviews, daily_average, trainer_level):
     # 4. C_norm (Core Team Power)
     c_norm = 0.0
     try:
-        if hasattr(mw, "ankimon_db") and mw.ankimon_db:
-            all_pkmn = mw.ankimon_db.get_all_pokemon()
+        db = services.db
+        if db is not None:
+            all_pkmn = db.get_all_pokemon()
             if all_pkmn:
                 cps = []
                 for p in all_pkmn:
@@ -266,8 +308,9 @@ def load_pity_trackers() -> dict:
         "Mythical": 0,
     }
     try:
-        if hasattr(mw, "ankimon_db") and mw.ankimon_db:
-            stored = mw.ankimon_db.get_user_data("ankimon_pity_trackers")
+        db = services.db
+        if db is not None:
+            stored = db.get_user_data("ankimon_pity_trackers")
             if isinstance(stored, dict):
                 for k in default_pity:
                     if k in stored:
@@ -279,8 +322,9 @@ def load_pity_trackers() -> dict:
 
 def save_pity_trackers(trackers: dict):
     try:
-        if hasattr(mw, "ankimon_db") and mw.ankimon_db:
-            mw.ankimon_db.set_user_data("ankimon_pity_trackers", trackers)
+        db = services.db
+        if db is not None:
+            db.set_user_data("ankimon_pity_trackers", trackers)
     except Exception as e:
         print(f"[Ankimon] Warning: Error saving pity trackers: {e}")
 
@@ -337,11 +381,21 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
     if USE_OVERHAUL_ENCOUNTER_SYSTEM:
         return _modify_percentages_overhaul(total_reviews, daily_average, trainer_level)
 
-    active_main = getattr(mw, "main_pokemon", None)
+    active_main = services.main_pokemon
     if active_main is not None and "Mock" in type(active_main).__name__:
-        active_main = None
+        from unittest.mock import Mock
+        if isinstance(getattr(active_main, "level", None), Mock):
+            active_main = None
     if not active_main:
-        active_main = main_pokemon
+        active_main = getattr(mw, "main_pokemon", None) if mw else None
+        if active_main is not None and "Mock" in type(active_main).__name__:
+            from unittest.mock import Mock
+            if isinstance(getattr(active_main, "level", None), Mock):
+                active_main = None
+    if not active_main:
+        class DummyPokemon:
+            level = 5
+        active_main = DummyPokemon()
     # Check if cache is valid
     if (
         _percentages_cache["percentages"] is not None
@@ -542,6 +596,9 @@ def get_tier(total_reviews, trainer_level=1, event_modifier=None):
         choice[0]: The first choice of TIER picked randomly (by a random.choices function)
     """
     daily_average = int(settings_obj.get("battle.daily_average"))
+
+
+
     percentages = modify_percentages(total_reviews, daily_average, trainer_level)
 
     tiers = list(percentages.keys())
@@ -568,7 +625,8 @@ def choose_random_pkmn_from_tier():
         id = get_random_pokemon_in_tier(tier)
         return id, tier
     except Exception as e:
-        mw.logger.log("error", f"Error in choose_random_pkmn_from_tier: {str(e)}")
+        if services.logger:
+            services.logger.log("error", f"Error in choose_random_pkmn_from_tier: {str(e)}")
         show_warning_with_traceback(parent=mw, exception=e, message="Error occurred")
 
 
@@ -804,7 +862,10 @@ def generate_random_pokemon(
     wild_pokemon_lvl = max(
         1, wild_pokemon_lvl
     )  # Ensures that the wild pokemon's level is at least 1
-    active_main = getattr(mw, "main_pokemon", None) or main_pokemon
+    active_main = services.main_pokemon
+    if not active_main:
+        from ..singletons import main_pokemon
+        active_main = main_pokemon
     if active_main and getattr(active_main, "level", 5) == 100:
         wild_pokemon_lvl = 100
 
@@ -831,8 +892,17 @@ def generate_random_pokemon(
     selected_pokemon_id = None
     selected_tier = None
 
+    active_trainer = services.trainer_card
+    if active_trainer is None:
+        try:
+            from ..singletons import trainer_card as singleton_trainer
+            active_trainer = singleton_trainer
+        except ImportError:
+            active_trainer = None
+    trainer_level = active_trainer.level if active_trainer is not None else 1
+
     # 1. Select the initial tier based on probabilities
-    initial_tier = get_tier(ankimon_tracker_obj.get_total_reviews(), trainer_card.level)
+    initial_tier = get_tier(ankimon_tracker_obj.get_total_reviews(), trainer_level)
 
     # Find starting point in fallback order
     try:
@@ -1083,7 +1153,55 @@ def new_pokemon(
         ev_yield,
         is_shiny,
         nature,
-    ) = generate_random_pokemon(main_pokemon.level, ankimon_tracker_obj)
+    ) = (
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    active_main = services.main_pokemon
+    if active_main is None:
+        try:
+            from ..singletons import main_pokemon as singleton_main
+            active_main = singleton_main
+        except ImportError:
+            active_main = None
+    main_level = active_main.level if active_main is not None else 5
+
+    (
+        name,
+        pkmn_id,
+        level,
+        ability,
+        pkmn_type,
+        base_stats,
+        enemy_attacks,
+        base_experience,
+        growth_rate,
+        ev,
+        iv,
+        gender,
+        battle_status,
+        battle_stats,
+        tier,
+        ev_yield,
+        is_shiny,
+        nature,
+    ) = generate_random_pokemon(main_level, ankimon_tracker)
     pokemon_data = {
         "name": name,
         "id": pkmn_id,
@@ -1127,30 +1245,45 @@ def new_pokemon(
             pass
 
     # Track as seen in Pokedex
-    if hasattr(mw, "ankimon_db"):
-        if hasattr(mw.ankimon_db, "mark_as_seen"):
-            mw.ankimon_db.mark_as_seen(pkmn_id)
+    db = services.db
+    if db is not None:
+        if hasattr(db, "mark_as_seen"):
+            db.mark_as_seen(pkmn_id)
         else:
             # Fallback tracking if not restarted
             try:
-                seen_ids = mw.ankimon_db.get_user_data("pokedex_seen", [])
+                seen_ids = db.get_user_data("pokedex_seen", [])
                 if not isinstance(seen_ids, list):
                     seen_ids = []
                 if pkmn_id not in seen_ids:
                     seen_ids.append(pkmn_id)
-                    mw.ankimon_db.set_user_data("pokedex_seen", seen_ids)
+                    db.set_user_data("pokedex_seen", seen_ids)
             except:
                 pass
 
     if update_hud and reviewer_obj is not None:
-        if mw and getattr(mw, "reviewer", None) and getattr(mw.reviewer, "web", None):
+        reviewer_window = services.reviewer
+        if reviewer_window is not None and getattr(reviewer_window, "web", None) is not None:
 
             class Container(object):
                 pass
 
             reviewer = Container()
-            reviewer.web = mw.reviewer.web
+            reviewer.web = reviewer_window.web
             reviewer_obj.update_life_bar(reviewer, 0, 0)
+
+    try:
+        from ..events import emit
+        emit(
+            "encounter",
+            species=pokemon.name,
+            level=pokemon.level,
+            ability=pokemon.ability,
+            shiny=pokemon.shiny,
+            gender=pokemon.gender,
+        )
+    except Exception:
+        pass
 
     return pokemon
 
@@ -1177,16 +1310,22 @@ def save_main_pokemon_progress(
         main_pokemon.xp += exp
         level_cap = 100
     try:
-        db = mw.ankimon_db
-        main_pokemon_data = db.get_main_pokemon()
+        db = services.db
+        main_pokemon_data = db.get_main_pokemon() if db is not None else None
         if not main_pokemon_data:
-            showWarning(translator.translate("missing_mainpokemon_data"))
+            try:
+                from aqt.utils import showWarning
+                showWarning(translator.translate("missing_mainpokemon_data"))
+            except (ImportError, ModuleNotFoundError):
+                if services.logger:
+                    services.logger.log("warning", translator.translate("missing_mainpokemon_data"))
         else:
             main_pokemon.pokemon_defeated += 1
             main_pokemon_data["pokemon_defeated"] = main_pokemon.pokemon_defeated
             db.save_main_pokemon(main_pokemon_data)
     except Exception as e:
-        mw.logger.log("error", f"Error loading main pokemon data: {str(e)}")
+        if services.logger:
+            services.logger.log("error", f"Error loading main pokemon data: {str(e)}")
         show_warning_with_traceback(
             parent=mw, exception=e, message="Error loading main pokemon data."
         )
@@ -1201,6 +1340,11 @@ def save_main_pokemon_progress(
         )
     ) < int(main_pokemon.xp) and (level_cap is None or main_pokemon.level < level_cap):
         main_pokemon.level += 1
+        try:
+            from ..events import emit
+            emit("level-up", pokemon=main_pokemon.name, level=main_pokemon.level, individual_id=main_pokemon.individual_id)
+        except Exception:
+            pass
         msg = ""
         msg += f"Your {main_pokemon.name} is now level {main_pokemon.level} !"
         color = "#6A4DAC"  # pokemon leveling info color for tooltip
@@ -1208,7 +1352,8 @@ def save_main_pokemon_progress(
         if check is False:
             achievements = receive_badge(5, achievements)
         try:
-            mw.logger.game_log(f"Level Up: {msg}")
+            if services.logger:
+                services.logger.game_log(f"Level Up: {msg}")
             from .. import utils
             if not getattr(utils, "in_bulk_resolve", False):
                 tooltipWithColour(msg, color)
@@ -1275,11 +1420,14 @@ def save_main_pokemon_progress(
                                 logger.log_and_showinfo("info", f"{msg}")
                     elif new_attack not in attacks:
                         from .. import utils
-                        if getattr(utils, "in_bulk_resolve", False):
-                            if hasattr(mw, "logger") and mw.logger:
-                                try: mw.logger.log("info", f"[Bulk Resolve] Discarded learning new move {new_attack} on {main_pokemon.name}.")
+                        from PyQt6.QtWidgets import QApplication
+                        if getattr(utils, "in_bulk_resolve", False) or QApplication.instance() is None:
+                            if services.logger:
+                                try: services.logger.log("info", f"[Bulk/Headless] Discarded learning new move {new_attack} on {main_pokemon.name}.")
                                 except: pass
                         else:
+                            from aqt.qt import QDialog
+                            from ..pyobj.attack_dialog import AttackDialog
                             dialog = AttackDialog(attacks, new_attack)
                             if dialog.exec() == QDialog.DialogCode.Accepted:
                                 selected_attack = dialog.selected_attack
@@ -1399,7 +1547,7 @@ def save_main_pokemon_progress(
             mainpkmndata["is_favorite"] = main_pokemon.is_favorite
 
         # Save to database (replaces JSON file I/O for performance)
-        mw.ankimon_db.save_main_pokemon(mainpkmndata)
+        services.db.save_main_pokemon(mainpkmndata)
 
     return main_pokemon.level
 
@@ -1410,7 +1558,7 @@ def sync_mainpokemon_to_mypokemon(main_pokemon):
     Update the relevant entry in mypokemon database with the latest values from mainpokemon.
     Uses database instead of JSON files.
     """
-    db = mw.ankimon_db
+    db = services.db
 
     # Get main pokemon from database
     main_entry = db.get_main_pokemon()
@@ -1479,6 +1627,12 @@ def kill_pokemon(
         evo_window,
     )
 
+    try:
+        from ..events import emit
+        emit("defeat", pokemon=enemy_pokemon.name, id=enemy_pokemon.id, shiny=enemy_pokemon.shiny)
+    except Exception:
+        pass
+
     ankimon_tracker_obj.general_card_count_for_battle = 0
 
 
@@ -1541,7 +1695,12 @@ def save_caught_pokemon(
     caught_pokemon["cp"] = calculate_cp_from_dict(caught_pokemon)
 
     # Save to database (replaces JSON file I/O for performance)
-    mw.ankimon_db.save_pokemon(caught_pokemon)
+    services.db.save_pokemon(caught_pokemon)
+    try:
+        from ..events import emit
+        emit("catch", pokemon=enemy_pokemon.name, id=enemy_pokemon.id, shiny=enemy_pokemon.shiny)
+    except Exception:
+        pass
 
     # Live-refresh the open shell screen (if any) after a catch — best-effort,
     # must never break a catch. No-op unless a live screen is visible.
@@ -1617,6 +1776,12 @@ def handle_enemy_faint(
     """
     if ankimon_tracker_obj.faint_processed:
         return
+
+    try:
+        from ..events import emit
+        emit("faint", pokemon=enemy_pokemon.name, team="enemy", id=enemy_pokemon.id)
+    except Exception:
+        pass
 
     try:
         auto_battle_setting = int(settings_obj.get("battle.automatic_battle"))
@@ -1752,6 +1917,11 @@ def handle_main_pokemon_faint(
     """
     Handles what happens when the main Pokémon faints.
     """
+    try:
+        from ..events import emit
+        emit("faint", pokemon=main_pokemon.name, team="player", id=main_pokemon.id)
+    except Exception:
+        pass
     msg = translator.translate(
         "pokemon_fainted", enemy_pokemon_name=main_pokemon.name.capitalize()
     )

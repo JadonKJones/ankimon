@@ -73,6 +73,9 @@ def _load_friendship_evolution():
 
     # Fake singletons exposing a mutable settings_obj.
     fake_settings = _FakeSettings()
+    from Ankimon.services import services
+    services.populate(settings=fake_settings)
+
     singletons_stub = importlib.util.module_from_spec(
         importlib.util.spec_from_loader("Ankimon.singletons", loader=None)
     )
@@ -140,6 +143,8 @@ def _reset_settings():
     """Restore our singletons stub and default settings before every test."""
     sys.modules["Ankimon.singletons"] = _SINGLETONS_STUB
     sys.modules["Ankimon.functions.pokedex_functions"] = _POKEDEX_FUNCTIONS_STUB
+    from Ankimon.services import services
+    services.populate(settings=settings)
     settings.values.update(
         {
             "evolution.day_start_hour": 6,

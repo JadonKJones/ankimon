@@ -93,20 +93,25 @@ def start_session(
 
     # Build core game state and install GUI fakes with events OFF, so none of the
     # setup noise (config save, etc.) lands in the buffer the agent reads.
+    print("DEBUG: starting events.disable()")
     events.disable()
     events.reset()
+    print("DEBUG: starting build_core()")
     with quiet():
         build_core()
+    print("DEBUG: build_core() finished, starting fakes.install_fakes()")
     fakes.install_fakes(evolution_policy=evolution_policy)
+    print("DEBUG: fakes.install_fakes() finished")
 
     if settings_overrides:
+        print("DEBUG: applying settings_overrides")
         with quiet():
             for key, value in settings_overrides.items():
                 services.settings.set(key, value)
 
-    # Now that core + GUI fakes are all registered, bind the core logic modules'
-    # bare globals (main_pokemon, settings_obj, test_window, …) to them.
+    print("DEBUG: starting bind_runtime_globals()")
     bind_runtime_globals()
+    print("DEBUG: bind_runtime_globals() finished")
 
     # Battle state: the set of already-collected pokedex ids + reset counters.
     from Ankimon.battle_loop import init_battle_state, on_review_card
@@ -117,16 +122,17 @@ def start_session(
     )
     from Ankimon.utils import load_collected_pokemon_ids
 
+    print("DEBUG: starting load_collected_pokemon_ids()")
     collected_ids = load_collected_pokemon_ids()
+    print("DEBUG: load_collected_pokemon_ids() finished, starting init_battle_state()")
     init_battle_state(collected_ids)
+    print("DEBUG: init_battle_state() finished")
 
-    # From here on, capture events for the agent.
     events.enable(sink=event_sink)
     events.reset()
 
     if first_encounter:
-        # Replace the placeholder Rattata with a real, level-scaled wild Pokemon
-        # so the session opens on a genuine encounter (emits an "encounter" event).
+        print("DEBUG: starting first_encounter new_pokemon()")
         with quiet():
             new_pokemon(
                 services.enemy_pokemon,
@@ -134,6 +140,8 @@ def start_session(
                 services.tracker,
                 services.reviewer,
             )
+        print("DEBUG: first_encounter new_pokemon() finished")
+    print("DEBUG: start_session returning")
 
     return SimpleNamespace(
         user_path=user_path,

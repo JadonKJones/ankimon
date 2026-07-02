@@ -98,7 +98,8 @@ def _now_in_configured_tz() -> datetime:
     (``evolution.timezone_offset``, in hours) is applied instead. Only the
     resulting wall-clock hour/time is consumed by the day/night logic.
     """
-    from ..singletons import settings_obj  # lazy: avoids load-time circular import
+    from ..services import services
+    settings_obj = services.settings
 
     if settings_obj.get("evolution.timezone_auto", True):
         return datetime.now()
@@ -169,7 +170,8 @@ def get_time_of_day(now: Optional[datetime] = None) -> str:
     Returns:
         ``"day"`` or ``"night"``.
     """
-    from ..singletons import settings_obj  # lazy: avoids load-time circular import
+    from ..services import services
+    settings_obj = services.settings
 
     moment = now if now is not None else _now_in_configured_tz()
     hour = moment.hour
@@ -193,7 +195,8 @@ def current_time_label(now: Optional[datetime] = None) -> str:
         A short, emoji-prefixed label including the current ``HH:MM`` time (and
         the UTC offset when a manual time zone is configured).
     """
-    from ..singletons import settings_obj  # lazy: avoids load-time circular import
+    from ..services import services
+    settings_obj = services.settings
 
     moment = now if now is not None else _now_in_configured_tz()
     tod = get_time_of_day(moment)
@@ -632,9 +635,9 @@ def _level_readiness(
     # Filter based on active region
     active_region = None
     try:
-        from aqt import mw
-        if hasattr(mw, "settings_obj") and mw.settings_obj:
-            active_region = mw.settings_obj.get("misc.active_region")
+        from ..services import services
+        if services.settings is not None:
+            active_region = services.settings.get("misc.active_region")
             if active_region:
                 active_region = active_region.strip()
     except Exception:
@@ -833,7 +836,8 @@ def check_friendship_evolution_for_pokemon(
     Returns:
         The evolved species id if the evolution was triggered, else ``None``.
     """
-    from ..singletons import settings_obj  # lazy: avoids load-time circular import
+    from ..services import services
+    settings_obj = services.settings
     from ..utils import is_alive
     if not is_alive(evo_window):
         from ..singletons import get_evo_window
@@ -847,9 +851,10 @@ def check_friendship_evolution_for_pokemon(
         return None
 
     pokemon_defeated = 0
-    from aqt import mw
-    if hasattr(mw, "ankimon_db") and mw.ankimon_db:
-        pkmn_data = mw.ankimon_db.get_pokemon(individual_id)
+    from ..services import services
+    db = services.db
+    if db is not None:
+        pkmn_data = db.get_pokemon(individual_id)
         if pkmn_data:
             pokemon_defeated = pkmn_data.get("pokemon_defeated", 0)
 

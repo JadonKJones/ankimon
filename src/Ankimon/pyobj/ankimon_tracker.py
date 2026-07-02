@@ -1,10 +1,29 @@
-from PyQt6.QtCore import QTimer
 from .pokemon_obj import PokemonObject
 from datetime import datetime
 from .error_handler import show_warning_with_traceback
 from ..functions.pokedex_functions import extract_ids_from_file
-from ..utils import random_battle_scene
-from aqt import mw
+try:
+    from aqt import mw
+except Exception:
+    mw = None
+
+class ServicesProxy:
+    @property
+    def db(self):
+        from ..services import services
+        return services.db or (getattr(mw, "ankimon_db", None) if mw else None)
+
+    @property
+    def col(self):
+        from ..services import services
+        return services.col or (getattr(mw, "col", None) if mw else None)
+
+    @property
+    def logger(self):
+        from ..services import services
+        return services.logger or (getattr(mw, "logger", None) if mw else None)
+
+services = ServicesProxy()
 import re
 
 
@@ -20,6 +39,7 @@ class AnkimonTracker:
         self.current_mode = "idle"
 
         # Session and card timers
+        from PyQt6.QtCore import QTimer
         self.session_timer = QTimer()
         self.session_timer.timeout.connect(self.update_session_timer)
         self.card_timer = QTimer()
@@ -74,19 +94,19 @@ class AnkimonTracker:
         self.start_session_timer()
 
     def get_total_reviews(self):
-        if mw.col is None:
+        if services.col is None:
             return 0
         try:
             # Query Anki's database directly for review logs since today's scheduler cutoff.
             # This is language-agnostic, robust, and handles custom day boundaries.
-            cutoff = mw.col.sched.day_cutoff
-            return mw.col.db.scalar(
+            cutoff = services.col.sched.day_cutoff
+            return services.col.db.scalar(
                 "SELECT count() FROM revlog WHERE id > ?", (cutoff - 86400) * 1000
             )
         except Exception:
             # Fallback to parsing localized string if the database query fails.
             try:
-                text = mw.col.studied_today()
+                text = services.col.studied_today()
                 nums = re.findall(r'\d+', text)
                 if nums:
                     return int(nums[0])
@@ -266,6 +286,7 @@ class AnkimonTracker:
             owned_pokemon_ids = extract_ids_from_file()
             self.owned_pokemon_ids = owned_pokemon_ids
         except Exception as e:
+            from aqt import mw
             show_warning_with_traceback(
                 parent=mw,
                 exception=e,
@@ -276,4 +297,5 @@ class AnkimonTracker:
     #    pass
 
     def randomize_battle_scene(self):
+        from ..utils import random_battle_scene
         self.battlescene_file = random_battle_scene()

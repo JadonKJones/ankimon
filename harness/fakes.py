@@ -52,6 +52,9 @@ class FakeReviewer(_RecordingFake):
 
     _target = "reviewer"
 
+    def __init__(self):
+        self._ownership_cache = {}
+
     def refresh_hud(self):
         events.emit("hud", action="refresh")
 

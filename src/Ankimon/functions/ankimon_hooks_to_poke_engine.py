@@ -5,7 +5,8 @@ import traceback
 from typing import Union
 
 from ..poke_engine import constants
-from ..singletons import ankimon_tracker_obj, settings_obj
+ankimon_tracker_obj = None
+settings_obj = None
 import math
 
 from ..poke_engine.battle import Move
@@ -221,9 +222,13 @@ def simulate_battle_with_poke_engine(
 
         mutator = StateMutator(state)
 
-        from aqt import mw
-        settings = getattr(mw, "settings_obj", None) or settings_obj
-        tracker = getattr(mw, "ankimon_tracker_obj", None) or ankimon_tracker_obj
+        try:
+            from aqt import mw
+            settings = getattr(mw, "settings_obj", None) or settings_obj
+            tracker = getattr(mw, "ankimon_tracker_obj", None) or ankimon_tracker_obj
+        except (ImportError, ModuleNotFoundError):
+            settings = settings_obj
+            tracker = ankimon_tracker_obj
 
         if settings and settings.get("battle.review_based_damage"):
             mutator.review_based_damage_multiplier = tracker.multiplier if (tracker and hasattr(tracker, 'multiplier')) else 1.0

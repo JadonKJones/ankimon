@@ -23,7 +23,18 @@ def setup_mocks():
     
     # Configure default settings_obj on mw mock so singletons.py doesn't crash on import
     aqt_mock = sys.modules["aqt"]
-    mw_mock = aqt_mock.mw
+    class MockMainWindow(MagicMock):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            for attr in [
+                "ankimon_db", "settings_obj", "main_pokemon", "enemy_pokemon",
+                "ankimon_tracker_obj", "logger", "trainer_card", "col", "reviewer",
+                "shop_manager", "items_web_window", "ankidex_window", "item_window",
+                "starter_window", "achievement_bag", "ankimon_tracker_window", "settings_window"
+            ]:
+                object.__setattr__(self, attr, None)
+    mw_mock = MockMainWindow()
+    aqt_mock.mw = mw_mock
     settings_mock = MagicMock()
     settings_mock.get.side_effect = lambda key, default=None: "0" if key == "misc.language" else (default if default is not None else MagicMock())
     mw_mock.settings_obj = settings_mock
@@ -41,9 +52,10 @@ def setup_mocks():
 
     # Correct package structure for sys.modules
     sys.modules["Ankimon"] = types.ModuleType("Ankimon")
+    sys.modules["Ankimon"].__path__ = [str(_src / "Ankimon")]
+    sys.modules["Ankimon"].__package__ = "Ankimon"
     sys.modules["Ankimon.resources"] = MaskedResources = MockResources()
     sys.modules["Ankimon.singletons"] = MagicMock()
-    sys.modules["Ankimon.utils"] = MagicMock()
     sys.modules["Ankimon.pyobj"] = MagicMock()
 
 setup_mocks()

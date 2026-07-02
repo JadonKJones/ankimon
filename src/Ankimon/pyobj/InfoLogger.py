@@ -52,11 +52,12 @@ class ShowInfoLogger:
 
         if level in ['info', 'warning', 'error']:
             # Show the message in a QMessageBox dialog
-            msg_box = QMessageBox()
-            msg_box.setWindowTitle("Log Message")
-            msg_box.setText(message)
-            msg_box.setIcon(QMessageBox.Icon.Information)
-            msg_box.exec()
+            if QApplication.instance() is not None:
+                msg_box = QMessageBox()
+                msg_box.setWindowTitle("Log Message")
+                msg_box.setText(message)
+                msg_box.setIcon(QMessageBox.Icon.Information)
+                msg_box.exec()
 
     def log(self, level, message):
         # Log the message

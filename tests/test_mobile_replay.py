@@ -212,6 +212,8 @@ def test_encounter_seeding_alignment_with_simulation(tmp_path, qtbot):
     # Save original database to restore it after the test
     orig_db = getattr(mw, "ankimon_db", None)
     mw.ankimon_db = db
+
+
     
     # Mock settings
     settings_mock = MagicMock()
@@ -227,7 +229,9 @@ def test_encounter_seeding_alignment_with_simulation(tmp_path, qtbot):
         "battle.auto_catch_gmax": True,
         "battle.auto_catch_regional": True,
         "battle.xp_multiplier": 1.0,
-        "controls.allow_to_choose_moves": False
+        "controls.allow_to_choose_moves": False,
+        "battle.daily_average": 100,
+        "misc.active_region": "Kanto"
     }
     settings_mock.get.side_effect = lambda key, default=None: mock_settings_dict.get(
         key, default if default is not None else MagicMock()
@@ -244,6 +248,23 @@ def test_encounter_seeding_alignment_with_simulation(tmp_path, qtbot):
     )
     mw.main_pokemon.attacks = ["Slash"]
 
+    import sys
+    # Explicitly import both services modules to ensure they are loaded and in sys.modules
+    import Ankimon.services
+    try:
+        import src.Ankimon.services
+    except ImportError:
+        pass
+
+    for name in ("Ankimon.services", "src.Ankimon.services"):
+        mod = sys.modules.get(name)
+        if mod is not None:
+            services_instance = getattr(mod, "services", None)
+            if services_instance is not None:
+                services_instance.settings = settings_mock
+                services_instance.db = db
+                services_instance.main_pokemon = mw.main_pokemon
+
     # Monkeypatch PokemonObject.display_name on ALL loaded pokemon_obj modules in memory
     orig_displays = {}
     for module_name, module in list(sys.modules.items()):
@@ -256,7 +277,7 @@ def test_encounter_seeding_alignment_with_simulation(tmp_path, qtbot):
 
 
     # Call simulation
-    from src.Ankimon.functions.mobile_sync import simulate_pending_mobile_battles
+    from Ankimon.functions.mobile_sync import simulate_pending_mobile_battles
     
     reviews_rows = db.execute(
         "SELECT id, revlog_id, card_id, ease, review_time, review_type, queued_at FROM pending_mobile_battles WHERE resolved = 0"
@@ -279,7 +300,7 @@ def test_encounter_seeding_alignment_with_simulation(tmp_path, qtbot):
         return ([], None, getattr(companion, "hp", 100), 0, 1)
 
     try:
-        with patch("src.Ankimon.functions.ankimon_hooks_to_poke_engine.simulate_battle_with_poke_engine", side_effect=mock_simulate):
+        with patch("Ankimon.functions.ankimon_hooks_to_poke_engine.simulate_battle_with_poke_engine", side_effect=mock_simulate):
             sim_res = simulate_pending_mobile_battles(
                 reviews_list, mw.main_pokemon, settings_mock, None, None, ankimon_db=db
             )
@@ -324,9 +345,9 @@ def test_encounter_seeding_alignment_with_simulation(tmp_path, qtbot):
                 settings_obj=settings_mock
             )
         
-        with patch("src.Ankimon.functions.ankimon_hooks_to_poke_engine.simulate_battle_with_poke_engine", side_effect=mock_simulate):
+        with patch("Ankimon.functions.ankimon_hooks_to_poke_engine.simulate_battle_with_poke_engine", side_effect=mock_simulate):
             replay_res = web_win._mobile_bridge.resolveNext()
-        
+        assert "enemy_name" in replay_res, f"replay_res is: {replay_res} (type: {type(replay_res)})"
         assert replay_res["enemy_name"] == sim_pokemon["name"]
         assert replay_res["enemy_id"] == sim_pokemon["id"]
         assert replay_res["enemy_level"] == sim_pokemon["level"]
@@ -337,6 +358,14 @@ def test_encounter_seeding_alignment_with_simulation(tmp_path, qtbot):
         mw.ankimon_db = orig_db
         mw.settings_obj = orig_settings
         mw.main_pokemon = orig_main
+        for name in ("Ankimon.services", "src.Ankimon.services"):
+            mod = sys.modules.get(name)
+            if mod is not None:
+                services_instance = getattr(mod, "services", None)
+                if services_instance is not None:
+                    services_instance.settings = None
+                    services_instance.db = None
+                    services_instance.main_pokemon = None
         sys.modules.pop("Ankimon.ankimon_items_web.shop_obj", None)
 
 

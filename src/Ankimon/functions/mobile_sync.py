@@ -176,7 +176,10 @@ def _generate_encounter(level: int, tracker, collected_ids=None, settings_obj=No
         pkmn_name, pkmn_id, pkmn_lvl, ability, pkmn_type, base_stats, \
         enemy_attacks, base_exp, growth_rate, ev, iv, gender, \
         battle_status, battle_stats, pkmn_tier, ev_yield, pkmn_shiny, nature = res
-    except Exception:
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+
         pkmn_name = "Pikachu"
         pkmn_id = 25
         pkmn_lvl = level

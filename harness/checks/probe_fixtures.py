@@ -42,6 +42,7 @@ def main():
           % (st["main"]["level"], st["collection"]["count"]))
 
     # 2) Save -> load a fresh session ON that save -----------------------------
+    d.services.db.close()
     saved = os.path.join(tempfile.mkdtemp(), "save.db")
     shutil.copy(os.path.join(d.env.user_path, "ankimon.db"), saved)
     d2 = Driver(db=saved)

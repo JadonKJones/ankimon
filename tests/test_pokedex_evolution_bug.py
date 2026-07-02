@@ -31,7 +31,6 @@ def setup_mocks():
     sys.modules["Ankimon"] = types.ModuleType("Ankimon")
     sys.modules["Ankimon.resources"] = MockResources()
     sys.modules["Ankimon.singletons"] = MagicMock()
-    sys.modules["Ankimon.utils"] = MagicMock()
     sys.modules["Ankimon.pyobj"] = MagicMock()
 
 setup_mocks()

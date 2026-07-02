@@ -439,7 +439,11 @@ def test_mobile_bridge_resolve_all(temp_env):
     from Ankimon.ankimon_items_web.shop_obj import MobileBridge
     from aqt import mw
  
+    import Ankimon.ankimon_items_web.shop_obj
+    Ankimon.ankimon_items_web.shop_obj.mw = mw
+
     # Set singletons on mw mock
+    mw.col = None
     mw.ankimon_db = db
     mw.main_pokemon = FakePokemon(name="Charizard", level=50, id=6, attacks=["Slash"], individual_id=1003)
  
@@ -543,9 +547,11 @@ def test_items_web_mobile_integration(temp_env):
         import aqt
         aqt.QDialog = QDialogStub
         aqt.QVBoxLayout = MagicMock
-        class MockQFrame(MagicMock):
+        class MockQFrame(QDialogStub):
             class Shape:
                 NoFrame = 0
+            def layout(self):
+                return MagicMock()
         aqt.qt.QFrame = MockQFrame
         aqt.qt.QVBoxLayout = MagicMock
         

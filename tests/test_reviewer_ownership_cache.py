@@ -43,12 +43,19 @@ def setup_mocks():
     mock_singletons = types.ModuleType("Ankimon.singletons")
     mock_singletons.main_pokemon = MagicMock()
     mock_singletons.main_pokemon.level = 50
-    mock_singletons.ankimon_tracker_obj = MagicMock()
-    mock_singletons.trainer_card = MagicMock()
-    mock_singletons.trainer_card.level = 5
+    mock_singletons.enemy_pokemon = MagicMock()
     mock_singletons.settings_obj = MagicMock()
     mock_singletons.settings_obj.get.return_value = 100
+    mock_singletons.reviewer_obj = MagicMock()
+    mock_singletons.ankimon_tracker_obj = MagicMock()
+    mock_singletons.test_window = MagicMock()
+    mock_singletons.evo_window = MagicMock()
+    mock_singletons.logger = MagicMock()
+    mock_singletons.achievements = MagicMock()
+    mock_singletons.trainer_card = MagicMock()
+    mock_singletons.trainer_card.level = 5
     mock_singletons.translator = MagicMock()
+    mock_singletons.notify_stats_changed = MagicMock()
     mock_singletons.ankimon_db = MagicMock()
     mock_singletons.pokemon_pc = MagicMock()
     sys.modules["Ankimon.singletons"] = mock_singletons
@@ -415,13 +422,18 @@ def test_new_pokemon_with_update_hud():
         return orig_choice(seq)
 
     # Call new_pokemon with update_hud=True
+    from Ankimon.services import services
+    mock_reviewer_window = MagicMock()
+    mock_reviewer_window.web = MagicMock()
+    services.populate(reviewer=mock_reviewer_window)
+
     with patch("random.randint", return_value=5), \
          patch("random.choice", side_effect=mock_choice), \
          patch.object(ef_mod, "get_tier", return_value="Normal"), \
          patch.object(ef_mod, "get_all_pokemon_in_tier", return_value=[25]), \
          patch("Ankimon.functions.encounter_functions.mw") as mock_mw:
         
-        mock_mw.reviewer.web = MagicMock()
+        mock_mw.reviewer.web = mock_reviewer_window.web
         ef_mod.new_pokemon(enemy_pokemon, MagicMock(), mock_tracker, mock_reviewer, update_hud=True)
         
         # Verify update_life_bar got called on reviewer_obj

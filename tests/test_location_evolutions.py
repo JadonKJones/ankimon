@@ -3,9 +3,14 @@ import os
 import sys
 import json
 from unittest.mock import MagicMock
+from conftest import ParentlessMock
 from datetime import datetime
 
-# Restore correct resources to prevent test pollution
+# Mock aqt and other namespaces
+sys.modules["aqt"] = ParentlessMock()
+sys.modules["aqt.qt"] = ParentlessMock()
+sys.modules["aqt.utils"] = ParentlessMock()
+
 import aqt
 import Ankimon.resources as resources
 import Ankimon.functions.pokedex_functions as pf
@@ -31,7 +36,7 @@ def setup_mock_environment(monkeypatch):
     fe.get_friendship_evolutions_for_species.cache_clear()
     
     # Mock settings cleanly without breaking other settings
-    mock_settings = MagicMock()
+    mock_settings = ParentlessMock()
     mock_settings.active_region_val = "No Region"
     
     def get_setting(key, default=None):
@@ -46,14 +51,14 @@ def setup_mock_environment(monkeypatch):
     mock_settings.get.side_effect = get_setting
     
     # Mock database
-    mock_db = MagicMock()
+    mock_db = ParentlessMock()
     mock_db.get_pokemon.return_value = {
         "id": 234, # Stantler
         "attacks": ["Psyshield Bash", "Tackle"]
     }
     
     # Mock main window (mw)
-    mock_mw = MagicMock()
+    mock_mw = ParentlessMock()
     mock_mw.settings_obj = mock_settings
     mock_mw.ankimon_db = mock_db
     
@@ -68,6 +73,7 @@ def setup_mock_environment(monkeypatch):
 def test_pikachu_evolution_by_active_region():
     # Pikachu is ID 25, Thunder Stone is item ID 83
     # Under "No Region", should evolve into standard Raichu (ID 26)
+    
     pf.mw.settings_obj.active_region_val = "No Region"
     evo_id = pf.check_evolution_by_item(25, 83)
     assert evo_id == 26

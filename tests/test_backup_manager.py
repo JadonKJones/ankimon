@@ -47,9 +47,6 @@ def setup_mocks():
     
     if "Ankimon.singletons" not in sys.modules:
         sys.modules["Ankimon.singletons"] = MagicMock()
-    if "Ankimon.utils" not in sys.modules:
-        sys.modules["Ankimon.utils"] = MagicMock()
-        
     if "Ankimon.pyobj" not in sys.modules:
         _pyobj = types.ModuleType("Ankimon.pyobj")
         _pyobj.__path__ = [str(_src / "Ankimon" / "pyobj")]
@@ -93,6 +90,7 @@ def mock_env(tmp_path):
          patch.object(_bm_mod, "addon_dir", addon_dir):
         
         # Instantiate test database manager
+        from Ankimon.pyobj.database_manager import AnkimonDB
         db = AnkimonDB(MockLogger())
         
         # Set config settings in the database config table
@@ -106,6 +104,7 @@ def mock_env(tmp_path):
             "misc.developer_mode": False
         }.get(k, default)
         
+        from Ankimon.pyobj.backup_manager import BackupManager
         bm = BackupManager(MockLogger(), settings_mock)
         
         # Mock global mw and its ankimon_db attribute

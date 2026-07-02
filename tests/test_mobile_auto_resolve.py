@@ -565,15 +565,23 @@ def test_auto_resolve_xp_attribution_multi_companion(temp_env):
          ]), \
          patch("Ankimon.menu_buttons.update_mobile_badge"), \
          patch("Ankimon.functions.encounter_functions.limit_ev_yield", side_effect=lambda ev, y: {"hp": 0, "attack": 0, "defense": 0, "special-attack": 0, "special-defense": 0, "speed": 0}):
-
+ 
         # In auto-resolve, select_best_companion will be called. Let's mock it to return Pikachu first, Bulbasaur second and third
         pika_clone = FakePokemon(**active_pika)
         
         bulba_clone = FakePokemon(**override_bulba)
         
         assert db.get_main_pokemon() is not None
-        with patch("Ankimon.functions.mobile_sync.select_best_companion", side_effect=[pika_clone, pika_clone, bulba_clone]):
-            res = bridge.resolveAll()
+        try:
+            ef.services.db = db
+            ef.services.translator = MagicMock()
+            ef.services.logger = MagicMock()
+            with patch("Ankimon.functions.mobile_sync.select_best_companion", side_effect=[pika_clone, pika_clone, bulba_clone]):
+                res = bridge.resolveAll()
+        finally:
+            ef.services.db = None
+            ef.services.translator = None
+            ef.services.logger = None
 
     pika_db = db.get_pokemon_by_individual_id("active-uuid")
     bulba_db = db.get_pokemon_by_individual_id("override-uuid")
@@ -701,7 +709,8 @@ def test_auto_resolve_zero_xp_ev_gain_still_increments_defeated(temp_env):
     ]
     db.queue_mobile_battles(reviews)
 
-    enemy_mock = MagicMock(id=19, name="Rattata", display_name="Rattata", level=3, shiny=False, ev_yield={"atk": 1}, tier="normal")
+    enemy_mock = MagicMock(id=19, name="Rattata", display_name="Rattata", level=3, shiny=False, tier="normal")
+    enemy_mock.ev_yield = {"atk": 1}
     enemy_mock.to_dict.return_value = {
         "id": 19, "name": "Rattata", "level": 3, "shiny": False,
         "base_stats": {"hp": 30, "atk": 56, "def": 35, "spa": 25, "spd": 35, "spe": 72},

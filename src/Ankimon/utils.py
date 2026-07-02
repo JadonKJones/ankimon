@@ -7,17 +7,11 @@ import csv
 import base64
 from typing import Any, Optional
 
-from aqt import mw
-from aqt.utils import showWarning, showInfo
-
-from aqt.qt import QFontDatabase, QFont, QUrl
-from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+from .services import services
 
 from .pyobj.settings import Settings
 from .pyobj.InfoLogger import ShowInfoLogger
 
-from .functions.battle_functions import calculate_hp
-from .functions.pokedex_functions import find_details_move, search_pokedex
 
 from .pyobj.error_handler import show_warning_with_traceback
 from .resources import (
@@ -40,13 +34,27 @@ from .resources import (
 from .move_names import format_move_name
 
 
-audio_output = QAudioOutput()
-media_player = QMediaPlayer()
-media_player.setAudioOutput(audio_output)
+_audio_output = None
+_media_player = None
 
-with open(pokedex_path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-    POKEMON_NAME_LOOKUP = {x: data[x]["name"] for x in data}
+def _get_audio_player():
+    global _audio_output, _media_player
+    if _media_player is None:
+        try:
+            from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+            _audio_output = QAudioOutput()
+            _media_player = QMediaPlayer()
+            _media_player.setAudioOutput(_audio_output)
+        except Exception:
+            pass
+    return _audio_output, _media_player
+
+try:
+    with open(pokedex_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        POKEMON_NAME_LOOKUP = {x: data[x]["name"] for x in data}
+except Exception:
+    POKEMON_NAME_LOOKUP = {}
 
 
 def is_main_thread() -> bool:
@@ -121,6 +129,7 @@ def addon_config_editor_will_display_json(text: str) -> str:
         config = json.loads(text)
         if "mainpokemon" in config:
             # showInfo(f"{config}")
+            from aqt.utils import showInfo
             showInfo(
                 "This Configuration is old and wont be used anymore. \n Please use the Settings Window in the Ankimon Menu => Settings"
             )
@@ -184,9 +193,14 @@ def random_battle_scene():
     # TODO: choice?
     # TODO: merge with random_berries and
     battle_scenes = {}
-    for index, filename in enumerate(os.listdir(battlescene_path)):
-        if filename.endswith(".png"):
-            battle_scenes[index + 1] = filename
+    try:
+        for index, filename in enumerate(os.listdir(battlescene_path)):
+            if filename.endswith(".png"):
+                battle_scenes[index + 1] = filename
+    except Exception:
+        pass
+    if not battle_scenes:
+        return "default.png"
     # Get the corresponding file name
     battlescene_file = battle_scenes.get(random.randint(1, len(battle_scenes)))
     return battlescene_file
@@ -194,9 +208,14 @@ def random_battle_scene():
 
 def random_berries():
     berries = {}
-    for index, filename in enumerate(os.listdir(berries_path)):
-        if filename.endswith(".png"):
-            berries[index + 1] = filename
+    try:
+        for index, filename in enumerate(os.listdir(berries_path)):
+            if filename.endswith(".png"):
+                berries[index + 1] = filename
+    except Exception:
+        pass
+    if not berries:
+        return "default.png"
     # Get the corresponding file name
     berries_file = berries.get(random.randint(1, len(berries)))
     return berries_file
@@ -213,6 +232,7 @@ def filter_item_sprites(string):
             item_names.append(file[:-4])
     # filter by -ball, -repel..etc
     item_names = [name for name in item_names if name.endswith(f"{string}")]
+    from aqt.utils import showInfo
     showInfo(f"{item_names}")
     return item_names
 
@@ -446,12 +466,15 @@ def get_item_price(item_name, file_path=csv_file_items_cost):
                     cost = row["cost"]
                     return int(cost)
     except FileNotFoundError:
+        from aqt.utils import showWarning
         showWarning(f"Error: File {file_path} not found.")
         return 1000
     except KeyError:
+        from aqt.utils import showWarning
         showWarning("Error: CSV file does not contain the expected headers.")
         return 1000
     except Exception as e:
+        from aqt.utils import showWarning
         showWarning(f"Unexpected error: {e}")
         return 1000
 
@@ -590,7 +613,7 @@ def load_custom_font(font_size, language):
         font_file = "Early GameBoy.ttf"
         font_size = int((font_size * 2) / 5)
 
-    # Register the custom font with its file path if not already added
+    from aqt.qt import QFontDatabase, QFont
     font_id = QFontDatabase.addApplicationFont(str(font_path / font_file))
     
     custom_font = QFont(
@@ -642,9 +665,12 @@ def play_effect_sound(settings_obj, sound_type):
         if not audio_path.is_file():
             return
         else:
-            audio_output.setVolume(settings_obj.get("audio.volume"))
-            media_player.setSource(QUrl.fromLocalFile(str(audio_path)))
-            media_player.play()
+            ao, mp = _get_audio_player()
+            if ao and mp:
+                from aqt.qt import QUrl
+                ao.setVolume(settings_obj.get("audio.volume"))
+                mp.setSource(QUrl.fromLocalFile(str(audio_path)))
+                mp.play()
     else:
         pass
 
@@ -734,14 +760,17 @@ def play_sound(enemy_pokemon_id: int, settings_obj: Settings):
         file_name = f"{enemy_pokemon_id}.ogg"
         audio_path = addon_dir / "user_files" / "sprites" / "sounds" / file_name
         if audio_path.is_file():
-            audio_output.setVolume(settings_obj.get("audio.volume"))
-            media_player.setSource(QUrl.fromLocalFile(str(audio_path)))
-            media_player.play()
+            ao, mp = _get_audio_player()
+            if ao and mp:
+                from aqt.qt import QUrl
+                ao.setVolume(settings_obj.get("audio.volume"))
+                mp.setSource(QUrl.fromLocalFile(str(audio_path)))
+                mp.play()
 
 
 def load_collected_pokemon_ids() -> set:
     """Loads all captured pokemon IDs from the database."""
-    return mw.ankimon_db.get_all_pokemon_ids()
+    return services.db.get_all_pokemon_ids() if services.db else set()
 
 
 def limit_ev_yield(
@@ -910,6 +939,7 @@ def safe_get_random_move(
         dict: A dictionary containing the details of a valid move if found;
             otherwise, the details for the move "Splash".
     """
+    from .functions.pokedex_functions import find_details_move
     rand_moves = pokemon_moves.copy()
     random.shuffle(rand_moves)
     # We go through the shuffled list to find the first move that gets successfully parsed
@@ -951,21 +981,30 @@ def png_to_base64(path: str) -> str:
 
 
 def close_anki():
-    mw.close()
+    try:
+        from aqt import mw
+        if mw:
+            mw.close()
+    except Exception:
+        pass
 
 
 def is_dev_mode() -> bool:
     """Check if the user is a developer based on profile name or trainer name."""
     try:
         # Check Anki profile name (case-insensitive check for 'dev' triggers)
-        if mw and mw.pm and mw.pm.name:
-            profile_name = mw.pm.name.lower()
-            if "dev_" in profile_name or "_dev" in profile_name:
-                return True
+        try:
+            from aqt import mw
+            if mw and mw.pm and mw.pm.name:
+                profile_name = mw.pm.name.lower()
+                if "dev_" in profile_name or "_dev" in profile_name:
+                    return True
+        except Exception:
+            pass
                 
         # Check Trainer name in config
-        if mw and hasattr(mw, "settings_obj") and mw.settings_obj:
-            trainer_name = mw.settings_obj.get("trainer.name", "").lower()
+        if services.settings is not None:
+            trainer_name = services.settings.get("trainer.name", "").lower()
             if "dev_" in trainer_name or "_dev" in trainer_name:
                 return True
     except Exception:

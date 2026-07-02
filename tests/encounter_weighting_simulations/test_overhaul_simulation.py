@@ -6,12 +6,31 @@ from unittest.mock import MagicMock
 import importlib.util
 from pathlib import Path
 
+# Stub out parent package so we can import services
+import types
+_src = Path(__file__).parent.parent.parent / "src"
+if "Ankimon" not in sys.modules:
+    _mod = types.ModuleType("Ankimon")
+    _mod.__path__ = [str(_src / "Ankimon")]
+    sys.modules["Ankimon"] = _mod
+
+from Ankimon.services import services
+
 # --- BACKUP SYS.MODULES ---
 _orig_modules = sys.modules.copy()
 
 # --- DIRECTORY RESOLUTION ---
 base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, base_dir)
+
+ef = None
+mock_pokemon = None
+mock_trainer = None
+mock_settings = None
+mock_db = None
+pokedex_data = {}
+id_to_name = {}
+base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # --- MOCK LIFECYCLE ---
 class MockModule(MagicMock):
@@ -29,27 +48,6 @@ modules_to_mock = [
     "Ankimon.functions.drawing_utils", "Ankimon.utils",
     "Ankimon.singletons", "Ankimon.functions.encounter_data", "Ankimon.functions.friendship_evolution"
 ]
-for mod in modules_to_mock:
-    sys.modules[mod] = MockModule()
-
-# Stub out standard loaders and helpers
-sys.modules["Ankimon.pyobj.error_handler"].show_warning_with_traceback = lambda *args, **kwargs: None
-sys.modules["Ankimon.functions.pokemon_functions"].pick_random_gender = lambda *args: "Female"
-sys.modules["Ankimon.functions.pokemon_functions"].shiny_chance = lambda *args: False
-
-pokedex_path = os.path.join(base_dir, "src", "Ankimon", "data_files", "pokedex.json")
-pokedex_data = {}
-try:
-    with open(pokedex_path, "r", encoding="utf-8") as f:
-        pokedex_data = json.load(f)
-except Exception as e:
-    # If not found during headless runs, create a mock minimal pokedex
-    pokedex_data = {str(i): {"species_id": i, "actual_id": i} for i in range(1, 1000)}
-
-id_to_name = {}
-for name, data in pokedex_data.items():
-    if "actual_id" in data:
-        id_to_name[data["actual_id"]] = name
 
 def search_pokedex_by_id(pkmn_id):
     return id_to_name.get(pkmn_id, "Pokémon not found")
@@ -67,11 +65,6 @@ def search_pokedex(name, key):
 def safe_int(val):
     try: return int(val)
     except: return 0
-
-sys.modules["Ankimon.functions.pokedex_functions"].search_pokedex = search_pokedex
-sys.modules["Ankimon.functions.pokedex_functions"].search_pokedex_by_id = search_pokedex_by_id
-sys.modules["Ankimon.functions.pokedex_functions"].safe_int = safe_int
-sys.modules["Ankimon.functions.pokedex_functions"]._load_pokedex_cache = lambda: pokedex_data
 
 # Stub database manager to mock state variables
 class MockAnkimonDB:
@@ -92,7 +85,6 @@ class MockAnkimonDB:
     def set_user_data(self, key, value):
         self.user_data[key] = value
 
-mock_db = MockAnkimonDB()
 class MockPokemon:
     def __init__(self):
         self.level = 5
@@ -107,38 +99,78 @@ class MockSettings:
             return self.daily_average
         return default
 
-mock_pokemon = MockPokemon()
-mock_trainer = MockTrainerCard()
-mock_settings = MockSettings()
+def setup_module():
+    global ef, mock_pokemon, mock_trainer, mock_settings, mock_db, _orig_modules, pokedex_data, id_to_name
+    _orig_modules = sys.modules.copy()
+    
+    # 1. Setup MockModule and mock modules in sys.modules
+    for mod in modules_to_mock:
+        sys.modules[mod] = MockModule()
+        
+    # Stub out standard loaders and helpers
+    sys.modules["Ankimon.pyobj.error_handler"].show_warning_with_traceback = lambda *args, **kwargs: None
+    sys.modules["Ankimon.functions.pokemon_functions"].pick_random_gender = lambda *args: "Female"
+    sys.modules["Ankimon.functions.pokemon_functions"].shiny_chance = lambda *args: False
+    
+    pokedex_path = os.path.join(base_dir, "src", "Ankimon", "data_files", "pokedex.json")
+    pokedex_data.clear()
+    try:
+        with open(pokedex_path, "r", encoding="utf-8") as f:
+            pokedex_data.update(json.load(f))
+    except Exception as e:
+        # If not found during headless runs, create a mock minimal pokedex
+        pokedex_data.update({str(i): {"species_id": i, "actual_id": i} for i in range(1, 1000)})
+        
+    id_to_name.clear()
+    for name, data in pokedex_data.items():
+        if "actual_id" in data:
+            id_to_name[data["actual_id"]] = name
+            
+    sys.modules["Ankimon.functions.pokedex_functions"].search_pokedex = search_pokedex
+    sys.modules["Ankimon.functions.pokedex_functions"].search_pokedex_by_id = search_pokedex_by_id
+    sys.modules["Ankimon.functions.pokedex_functions"].safe_int = safe_int
+    sys.modules["Ankimon.functions.pokedex_functions"]._load_pokedex_cache = lambda: pokedex_data
+    
+    mock_db = MockAnkimonDB()
+    mock_pokemon = MockPokemon()
+    mock_trainer = MockTrainerCard()
+    mock_settings = MockSettings()
+    
+    # Ensure both Ankimon.singletons and aqt.mw point to the same mock database
+    sys.modules["aqt"].mw = MockModule()
+    sys.modules["aqt"].mw.ankimon_db = mock_db
+    sys.modules["aqt"].mw.settings_obj = mock_settings
 
-# Ensure both Ankimon.singletons and aqt.mw point to the same mock database
-sys.modules["aqt"].mw = MockModule()
-sys.modules["aqt"].mw.ankimon_db = mock_db
-sys.modules["aqt"].mw.settings_obj = mock_settings
+    sys.modules["Ankimon.singletons"].mw = sys.modules["aqt"].mw
+    sys.modules["Ankimon.singletons"].main_pokemon = mock_pokemon
+    sys.modules["Ankimon.singletons"].trainer_card = mock_trainer
+    sys.modules["Ankimon.singletons"].settings_obj = mock_settings
+    sys.modules["Ankimon.singletons"].ankimon_tracker_obj = MockModule()
+    sys.modules["Ankimon.singletons"].ankimon_tracker_obj.get_total_reviews = lambda: 0
 
-sys.modules["Ankimon.singletons"].mw = sys.modules["aqt"].mw
-sys.modules["Ankimon.singletons"].main_pokemon = mock_pokemon
-sys.modules["Ankimon.singletons"].trainer_card = mock_trainer
-sys.modules["Ankimon.singletons"].settings_obj = mock_settings
-sys.modules["Ankimon.singletons"].ankimon_tracker_obj = MockModule()
-sys.modules["Ankimon.singletons"].ankimon_tracker_obj.get_total_reviews = lambda: 0
+    # Configure Ankimon.services mock attributes on the services singleton
+    sys.modules["Ankimon.services"].services.db = mock_db
+    sys.modules["Ankimon.services"].services.main_pokemon = mock_pokemon
+    sys.modules["Ankimon.services"].services.trainer_card = mock_trainer
+    sys.modules["Ankimon.services"].services.settings = mock_settings
+    sys.modules["Ankimon.services"].services.tracker = sys.modules["Ankimon.singletons"].ankimon_tracker_obj
 
-# --- DYNAMIC SPEC LOAD ---
-_src = Path(base_dir) / "src"
-spec = importlib.util.spec_from_file_location(
-    "Ankimon.functions.encounter_functions",
-    _src / "Ankimon" / "functions" / "encounter_functions.py"
-)
-ef = importlib.util.module_from_spec(spec)
-sys.modules["Ankimon.functions.encounter_functions"] = ef
-spec.loader.exec_module(ef)
+    # --- DYNAMIC SPEC LOAD ---
+    _src = Path(base_dir) / "src"
+    spec = importlib.util.spec_from_file_location(
+        "Ankimon.functions.encounter_functions",
+        _src / "Ankimon" / "functions" / "encounter_functions.py"
+    )
+    ef = importlib.util.module_from_spec(spec)
+    sys.modules["Ankimon.functions.encounter_functions"] = ef
+    spec.loader.exec_module(ef)
 
-# Bypass long prerequisite recursion checks during rollout
-ef._meets_prerequisites = lambda *args: True
-ef._player_owns_base_form = lambda *args: True
-ef.check_id_ok = lambda *args: True
-ef.check_min_generate_level = lambda name: 1
-ef.load_collected_pokemon_ids = lambda: set(range(1, 1000))
+    # Bypass long prerequisite recursion checks during rollout
+    ef._meets_prerequisites = lambda *args: True
+    ef._player_owns_base_form = lambda *args: True
+    ef.check_id_ok = lambda *args: True
+    ef.check_min_generate_level = lambda name: 1
+    ef.load_collected_pokemon_ids = lambda: set(range(1, 1000))
 
 # --- TEST SUITE DEFINITIONS ---
 report_lines = []
@@ -169,6 +201,11 @@ def run_scenario_sim(name, N=5000):
 # ------------------------------------------------------------------------------
 def simulate_scenario_a():
     log_header("SCENARIO A: The Beginner Player (Level 5 Main, 0% Progress)")
+    
+    services.main_pokemon = mock_pokemon
+    services.trainer_card = mock_trainer
+    services.settings = mock_settings
+    services.db = mock_db
     
     # Configure beginner environment
     ef.USE_OVERHAUL_ENCOUNTER_SYSTEM = True
@@ -217,6 +254,11 @@ def simulate_scenario_a():
 # ------------------------------------------------------------------------------
 def simulate_scenario_b():
     log_header("SCENARIO B: Mid-Game Progression (Level 35 Main, EP ~25)")
+    
+    services.main_pokemon = mock_pokemon
+    services.trainer_card = mock_trainer
+    services.settings = mock_settings
+    services.db = mock_db
     
     mock_pokemon.level = 35  # locks Legendary, Mega, Gmax, Mythical, Starter; unlocks Ultra
     mock_trainer.level = 20
@@ -268,6 +310,11 @@ def simulate_scenario_b():
 # ------------------------------------------------------------------------------
 def simulate_scenario_c():
     log_header("SCENARIO C: Endgame Master (Level 85 Main, EP ~48)")
+    
+    services.main_pokemon = mock_pokemon
+    services.trainer_card = mock_trainer
+    services.settings = mock_settings
+    services.db = mock_db
     
     mock_pokemon.level = 85  # All locks cleared
     mock_trainer.level = 50  # Maxed Trainer norm (Trainer cap = 50)
@@ -323,6 +370,11 @@ def simulate_scenario_c():
 def simulate_scenario_d():
     log_header("SCENARIO D: Pity Tracking & Reset Simulation")
     
+    services.main_pokemon = mock_pokemon
+    services.trainer_card = mock_trainer
+    services.settings = mock_settings
+    services.db = mock_db
+    
     # Establish Endgame Master environment
     mock_pokemon.level = 85
     mock_trainer.level = 50
@@ -364,7 +416,7 @@ def simulate_scenario_d():
     ef.search_pokedex_by_id = lambda pid: "mewtwo"
     
     # Run one generation to trigger the pity tracker updates
-    res = ef.generate_random_pokemon(85, sys.modules["Ankimon.singletons"].ankimon_tracker_obj)
+    res = ef.generate_random_pokemon(85, ef.ankimon_tracker_obj)
     log(f"DEBUG: generate_random_pokemon returned name={res[0]}, id={res[1]}, tier={res[14]}")
     
     # Retrieve updated trackers from mock database

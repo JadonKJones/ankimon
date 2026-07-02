@@ -17,8 +17,7 @@ for module in [
     "Ankimon.pyobj.translator", "Ankimon.pyobj.error_handler",
     "Ankimon.functions.pokemon_functions", "Ankimon.functions.pokedex_functions",
     "Ankimon.functions.trainer_functions", "Ankimon.functions.badges_functions",
-    "Ankimon.functions.drawing_utils", "Ankimon.utils", "Ankimon.business", 
-    "Ankimon.const", "Ankimon.singletons", "Ankimon.resources"
+    "Ankimon.functions.drawing_utils", "Ankimon.singletons"
 ]:
     sys.modules[module] = mock.MagicMock()
 
@@ -29,6 +28,7 @@ spec = importlib.util.spec_from_file_location(
     _src / "Ankimon" / "functions" / "encounter_functions.py",
 )
 ef = importlib.util.module_from_spec(spec)
+sys.modules["Ankimon.functions.encounter_functions"] = ef
 
 # Pre-patch singletons and dependencies used in the module
 ef.main_pokemon = mock.MagicMock()
@@ -36,12 +36,25 @@ ef.settings_obj = mock.MagicMock()
 ef.ankimon_tracker_obj = mock.MagicMock()
 ef.trainer_card = mock.MagicMock()
 
-# Patch mw in both places
+# Patch mw in both places and assign explicit attributes to be visible in __dict__
 ef.mw = mock.MagicMock()
+ef.mw.settings_obj = ef.settings_obj
+ef.mw.main_pokemon = ef.main_pokemon
+ef.mw.trainer_card = ef.trainer_card
+ef.mw.ankimon_tracker_obj = ef.ankimon_tracker_obj
+ef.mw.ankimon_db = mock.MagicMock()
 sys.modules["aqt"].mw = ef.mw
 
 # Execute the module
 spec.loader.exec_module(ef)
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def ensure_sys_modules():
+    sys.modules["Ankimon.functions.encounter_functions"] = ef
+    sys.modules["aqt"].mw = ef.mw
+    yield
 
 def test_legacy_mode_works_when_toggle_is_false():
     # Force legacy mode

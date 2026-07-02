@@ -3,22 +3,19 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from aqt import mw
-from aqt.qt import QDialog
+from .services import services
 
-from .singletons import (
-    main_pokemon,
-    enemy_pokemon,
-    settings_obj,
-    reviewer_obj,
-    ankimon_tracker_obj,
-    test_window,
-    evo_window,
-    logger,
-    achievements,
-    trainer_card,
-    translator,
-)
+main_pokemon = None
+enemy_pokemon = None
+settings_obj = None
+reviewer_obj = None
+ankimon_tracker_obj = None
+test_window = None
+evo_window = None
+logger = None
+achievements = None
+trainer_card = None
+translator = None
 from .functions.encounter_functions import handle_enemy_faint, handle_main_pokemon_faint
 from .functions.badges_functions import (
     handle_review_count_achievement,
@@ -71,7 +68,15 @@ def _get_cards_per_round() -> int:
 
 
 def on_review_card(*args):
-    if not getattr(mw, "ankimon_startup_finished", False):
+    try:
+        from aqt import mw
+        if mw is None:
+            startup_finished = True
+        else:
+            startup_finished = getattr(mw, "ankimon_startup_finished", False)
+    except ImportError:
+        startup_finished = True
+    if not startup_finished:
         return
 
     global _state
@@ -99,7 +104,7 @@ def on_review_card(*args):
         s.item_receive_value -= 1
         if s.item_receive_value <= 0:
             s.item_receive_value = random.randint(3, 385)
-            win = getattr(mw, "test_window", None)
+            win = services.test_window
             if is_alive(win):
                 try:
                     win.display_item()
@@ -156,6 +161,7 @@ def on_review_card(*args):
                 and enemy_pokemon.hp > 0
             ):
                 if settings_obj.get("controls.allow_to_choose_moves") == True:
+                    from aqt.qt import QDialog
                     dialog = MoveSelectionDialog(main_pokemon.attacks)
                     if dialog.exec() == QDialog.DialogCode.Accepted:
                         if dialog.selected_move:
@@ -208,6 +214,32 @@ def on_review_card(*args):
             main_pokemon.current_hp = s.new_state.user.active.hp
             enemy_pokemon.hp = s.new_state.opponent.active.hp
             enemy_pokemon.current_hp = s.new_state.opponent.active.hp
+
+            try:
+                from .events import emit
+                emit(
+                    "battle",
+                    user=main_pokemon.name,
+                    enemy=enemy_pokemon.name,
+                    user_move=user_attack,
+                    enemy_move=enemy_attack,
+                    dmg_to_enemy=true_dmg_from_user_move,
+                    dmg_to_user=true_dmg_from_enemy_move,
+                    user_hp=main_pokemon.hp,
+                    enemy_hp=enemy_pokemon.hp,
+                    multiplier=multiplier,
+                )
+                emit(
+                    "battle_turn",
+                    user_attack=user_attack,
+                    enemy_attack=enemy_attack,
+                    user_damage=true_dmg_from_enemy_move,
+                    enemy_damage=true_dmg_from_user_move,
+                    user_hp=main_pokemon.hp,
+                    enemy_hp=enemy_pokemon.hp,
+                )
+            except Exception:
+                pass
 
             enemy_status_changed, main_status_changed = update_pokemon_battle_status(
                 battle_info, enemy_pokemon, main_pokemon
@@ -263,13 +295,13 @@ def on_review_card(*args):
 
             if enemy_pokemon.hp < 1:
                 enemy_pokemon.hp = 0
-                win = getattr(mw, "test_window", None)
+                win = services.test_window
                 handle_enemy_faint(
                     main_pokemon,
                     enemy_pokemon,
                     s.collected_pokemon_ids,
                     win if is_alive(win) else None,
-                    getattr(mw, "evo_window", None),
+                    services.evo_window,
                     reviewer_obj,
                     logger,
                     achievements,
@@ -280,7 +312,7 @@ def on_review_card(*args):
             play_sound(enemy_pokemon.id, settings_obj)
 
         if main_pokemon.hp < 1:
-            win = getattr(mw, "test_window", None)
+            win = services.test_window
             handle_main_pokemon_faint(
                 main_pokemon, 
                 enemy_pokemon, 
@@ -294,9 +326,10 @@ def on_review_card(*args):
             pass
 
         reviewer = Container()
-        reviewer.web = mw.reviewer.web
+        reviewer_window = services.reviewer
+        reviewer.web = reviewer_window.web if reviewer_window else None
         reviewer_obj.update_life_bar(reviewer, 0, 0)
-        win = getattr(mw, "test_window", None)
+        win = services.test_window
         if is_alive(win):
             if enemy_pokemon.hp > 0:
                 try:
@@ -307,16 +340,18 @@ def on_review_card(*args):
         try:
             if len(args) >= 2:
                 card = args[1]
-                revlog_id = mw.col.db.scalar(
-                    "SELECT id FROM revlog WHERE cid=? ORDER BY id DESC LIMIT 1",
-                    card.id
-                )
-                from .functions.mobile_sync import record_desktop_review
-                record_desktop_review(revlog_id, card.id)
+                col = services.col
+                if col:
+                    revlog_id = col.db.scalar(
+                        "SELECT id FROM revlog WHERE cid=? ORDER BY id DESC LIMIT 1",
+                        card.id
+                    )
+                    from .functions.mobile_sync import record_desktop_review
+                    record_desktop_review(revlog_id, card.id)
         except Exception:
             pass
 
     except Exception as e:
         show_warning_with_traceback(
-            parent=mw, exception=e, message="An error occurred in reviewer:"
+            exception=e, message="An error occurred in reviewer:"
         )

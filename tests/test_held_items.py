@@ -116,8 +116,8 @@ def temp_env(tmp_path):
                 return
             db.add_item(item_name, 1, {"type": item_type} if item_type else None)
         
-        # Inject the mock give_item into utils and pokemon_obj namespaces
-        with patch("Ankimon.pyobj.pokemon_obj.give_item", side_effect=mock_give_item):
+        # Inject the mock give_item into utils namespace
+        with patch("Ankimon.utils.give_item", side_effect=mock_give_item):
             yield db, mock_mw, mock_give_item
 
 def test_held_item_lifecycle(temp_env):
@@ -198,6 +198,8 @@ def test_main_pokemon_singleton_sync(temp_env):
     
     # Set as the global singleton
     mock_mw.main_pokemon = main_pkm
+    from Ankimon.services import services
+    services.populate(main_pokemon=main_pkm)
     
     db.save_pokemon(main_pkm.to_dict())
     db.add_item("lucky-egg", 1)

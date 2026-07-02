@@ -51,6 +51,14 @@ if "mock" in mw.__class__.__name__.lower():
             return DummyMock()
         def __call__(self, *args, **kwargs):
             return DummyMock()
+        def __str__(self):
+            return ""
+        def __repr__(self):
+            return ""
+        def __add__(self, other):
+            return str(other)
+        def __radd__(self, other):
+            return str(other)
     mw.translator = DummyMock()
     _base = "&Ankimon"
     _ankimon_menu_base_title = _base
