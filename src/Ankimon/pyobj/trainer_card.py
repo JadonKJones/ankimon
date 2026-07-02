@@ -2,6 +2,7 @@ from ..resources import trainer_sprites_path, mypokemon_path, team_pokemon_path
 from ..functions.trainer_functions import find_trainer_rank
 from ..functions.badges_functions import get_achieved_badges
 from ..services import services
+from ..events import events
 import math
 import json
 
@@ -247,6 +248,13 @@ class TrainerCard:
         self.total_xp = self.settings_obj.get("trainer.total_xp")
         print(f"Gained {xp_gained} XP from defeating a {tier} Pokémon!")
         self.check_level_up()
+
+        # Live-refresh any open web-shell screen's XP / level / Total XP. This is
+        # exp's on-gain-exp hook re-expressed on the seam: it emits the shared
+        # "stats_changed" event (the QWebChannel live-update bridge listens for
+        # it) instead of importing singletons.notify_stats_changed directly.
+        # events.emit is a no-op unless a live screen / the harness is listening.
+        events.emit("stats_changed")
 
     def check_level_up(self):
         """Update level based on XP."""
