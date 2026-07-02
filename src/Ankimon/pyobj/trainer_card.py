@@ -89,6 +89,32 @@ class TrainerCard:
                 "error", f"Error in syncing data to leaderboard {e}"
             )
 
+    def refresh(self):
+        """Reload trainer data from current settings + database (in place).
+
+        Used after a database switch (swap_ankimon_account) so the cached
+        level/xp/cash/sprite/league/team fields reflect the now-active account.
+        """
+        self.trainer_name = self.settings_obj.get("trainer.name")
+        self.level = int(self.settings_obj.get("trainer.level"))
+        self.xp = int(self.settings_obj.get("trainer.xp"))
+        self.total_xp = int(self.settings_obj.get("trainer.total_xp", 0))
+        self.cash = int(self.settings_obj.get("trainer.cash"))
+        self.image_path = (
+            f"{trainer_sprites_path}"
+            + "/"
+            + self.settings_obj.get("trainer.sprite")
+            + ".png"
+        )
+        self.league = find_trainer_rank(
+            int(self.highest_pokemon_level()), int(self.level)
+        )
+        self.reload_team()
+        if getattr(self, "main_pokemon", None):
+            self.favorite_pokemon = self.main_pokemon.name
+        else:
+            self.favorite_pokemon = "None"
+
     # Number of badges the trainer has earned
     def badge_count(self):
         return len(self.badges)
