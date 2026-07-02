@@ -94,13 +94,18 @@ def test_change_language_accepts_string_numeric_like_init():
 
 def test_change_language_swallows_load_error(monkeypatch, capsys):
     t = Translator(9)
+    before_filepath = t.filepath
+    before_translations = t.translations
 
     def _boom(*args, **kwargs):
         raise OSError("simulated read failure")
 
     monkeypatch.setattr("builtins.open", _boom)
-    # Must not raise even though the reload open() fails.
+    # Must not raise even though the reload open() fails, and the previous
+    # language must stay fully intact (no torn filepath/translations state).
     t.change_language(6)
+    assert t.filepath == before_filepath
+    assert t.translations is before_translations
     out = capsys.readouterr().out
     assert "Error reloading language" in out
 

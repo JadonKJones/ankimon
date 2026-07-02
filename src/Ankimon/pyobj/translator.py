@@ -93,8 +93,9 @@ class Translator:
         """
         try:
             short_language = LANG_NUMBERS.get(int(language), "en")
-            self.filepath = LANG_PATHS.get(short_language, lang_path_en)
-            with open(self.filepath, "r", encoding="utf-8") as f:
+            filepath = LANG_PATHS.get(short_language, lang_path_en)
+            with open(filepath, "r", encoding="utf-8") as f:
                 self.translations = json.load(f)
+            self.filepath = filepath
         except Exception as e:
             print(f"Ankimon: Error reloading language {language}: {e}")
