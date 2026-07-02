@@ -1079,6 +1079,11 @@ class AnkimonItemsWeb(QDialog):
         # ready, so just skip here.
         if self.current_screen not in self.ready_screens:
             return
+        # The persistent-singleton window can be reopened / switched back to after
+        # the captured-Pokémon DB changed externally (a catch during reviews, a
+        # release from the PC box). Drop the picker's roster cache on every screen
+        # (re)entry so the next getPokemonChoices() rebuilds from fresh DB state.
+        self._invalidate_pokemon_cache()
         if self.current_screen == SCREEN_ITEMS:
             data = self.get_inventory_data()
             # Apply a menu-requested View filter exactly once, atomically with
@@ -1142,6 +1147,12 @@ class AnkimonItemsWeb(QDialog):
         screen has a registered refresher. Several calls in the same event-loop
         turn coalesce into a single refresh (so e.g. a defeat that grants XP and
         a cash reward only triggers one re-render)."""
+        # A gameplay event may have added/removed/evolved a captured Pokémon, so
+        # the "Give Item"/"Evolve" picker's roster cache is now stale. Drop it up
+        # front — before the visibility/screen early-returns — so the cache is
+        # correct even when the event fires while the window is on a non-live
+        # screen (e.g. Items) or hidden.
+        self._invalidate_pokemon_cache()
         if not self.isVisible():
             return
         if self.current_screen not in self.ready_screens:
@@ -1766,9 +1777,14 @@ class AnkimonItemsWeb(QDialog):
                         target_data = pokedex_data.get(normalized_target) or pokedex_data.get(target_evo_name.lower())
 
                         if target_data and target_data.get("evoType") == "useItem":
-                            # required_item is normalized to match the input item_name (e.g. "Fire Stone" -> "fire-stone")
-                            required_item = (target_data.get("evoItem") or "").lower().replace(" ", "-")
-                            if required_item == item_name:
+                            # Normalize both sides by stripping spaces, hyphens and
+                            # apostrophes so pokedex.json display names (e.g.
+                            # "King's Rock") match items.csv identifiers (e.g.
+                            # "kings-rock"), which drop the apostrophe. Mirrors the
+                            # canonical logic in functions/pokedex_functions.py.
+                            required_item = (target_data.get("evoItem") or "").lower().replace(" ", "").replace("-", "").replace("'", "")
+                            normalized_item_name = (item_name or "").lower().replace(" ", "").replace("-", "").replace("'", "")
+                            if required_item == normalized_item_name:
                                 target_region = target_data.get("evoRegion")
 
                                 if target_region:

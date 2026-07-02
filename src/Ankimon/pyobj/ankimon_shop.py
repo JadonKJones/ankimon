@@ -468,7 +468,7 @@ class PokemonShopManager:
         random.seed(seed)
         return random.sample(tm_pool, self.number_of_daily_items)
 
-    def get_tm_pool(self) -> list[str]:
+    def get_tm_pool(self) -> list[dict]:
         # Cached: pokemon_tm_learnset.json is immutable at runtime, and this
         # is on the hot path of the Items window's data fetch.
         cached = getattr(self, "_tm_pool_cache", None)
