@@ -1,7 +1,6 @@
 import json
 import importlib
 import sys
-import types
 
 _orig_modules = {
     name: sys.modules.get(name)

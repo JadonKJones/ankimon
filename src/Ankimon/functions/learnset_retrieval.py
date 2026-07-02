@@ -110,7 +110,8 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
     """
     Return all moves a Pokémon can know at *pokemon_level* in a single *generation*.
     Falls back to earlier generations if no moves are found.
-    Handles Mega/Gigantamax forms by falling back to base form learnset.
+    Resolves PokéAPI/Smogon name mismatches and handles Mega/Gigantamax/special
+    forms by falling back to the base form learnset.
     """
     learnsets = _load_learnset_cache()
 
@@ -170,12 +171,9 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
         # Use pokedex to find the base form via species_id
         try:
             from .pokedex_functions import (
-                _load_pokedex_cache,
                 search_pokedex_by_id,
                 search_pokedex,
             )
-
-            pokedex_data = _load_pokedex_cache()
 
             # Use search_pokedex to handle normalized names and fallbacks
             species_id = search_pokedex(norm_name, "species_id")
