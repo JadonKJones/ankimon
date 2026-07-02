@@ -227,7 +227,6 @@ class Reviewer_Manager:
         self._last_state = current_state
 
         image_format = "gif" if self.settings.get("gui.reviewer_image_gif") else "png"
-        mime_type = f"image/{image_format}"
 
         addon_package = self._resolve_addon_package()
 
