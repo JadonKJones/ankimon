@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 from typing import Union
@@ -12,6 +13,7 @@ from aqt.qt import (
     QMainWindow,
     QScrollArea,
     QButtonGroup,
+    QComboBox,
     QMessageBox,
     QPixmap,
     QPainter,
@@ -205,7 +207,12 @@ class SettingsWindow(QMainWindow):
         return {}
 
     def _create_setting(self, key, layout):
-        value = self.config[key]
+        # A friendly name that is not yet mapped to a config key (e.g. its
+        # setting_name.json entry has not landed) resolves to None — skip it
+        # gracefully rather than raising.
+        if key is None:
+            return [], None, None
+        value = self.config.get(key)
         friendly_name = self.friendly_names[key]
         description = self.descriptions.get(key, "No description available.")
 
@@ -220,6 +227,38 @@ class SettingsWindow(QMainWindow):
         layout.addWidget(description_label)
         created_widgets.extend([label, description_label])
 
+        if key == "misc.active_region":
+            region_options = [
+                (None, "No Region"),
+                ("kanto", "Kanto (Gen 1)"),
+                ("johto", "Johto (Gen 2)"),
+                ("hoenn", "Hoenn (Gen 3)"),
+                ("sinnoh", "Sinnoh (Gen 4)"),
+                ("unova", "Unova (Gen 5)"),
+                ("kalos", "Kalos (Gen 6)"),
+                ("alola", "Alola (Gen 7)"),
+                ("galar", "Galar (Gen 8)"),
+                ("hisui", "Hisui (Gen 8)"),
+                ("paldea", "Paldea (Gen 9)"),
+            ]
+            combo = QComboBox()
+            for val, region_label in region_options:
+                combo.addItem(region_label, userData=val)
+            # Set current selection from config (may be None or a region
+            # string). Deliberately NOT connected to currentIndexChanged:
+            # self.config is the live Settings dict, so a live write would
+            # leak the selection even when the user never saves. on_save reads
+            # the widget via currentData() instead.
+            current = self.config.get(key)
+            for i, (val, _) in enumerate(region_options):
+                if val == current:
+                    combo.setCurrentIndex(i)
+                    break
+            self.input_widgets[key] = combo
+            layout.addWidget(combo)
+            created_widgets.append(combo)
+            return created_widgets, friendly_name, description
+
         if isinstance(value, bool):
             radio_container = QWidget()
             h_layout = QHBoxLayout(radio_container)
@@ -231,6 +270,8 @@ class SettingsWindow(QMainWindow):
             button_group = QButtonGroup(self)
             button_group.addButton(true_radio, 1)
             button_group.addButton(false_radio, 0)
+            if key.startswith("misc.gen"):
+                button_group.buttonClicked.connect(lambda: self._on_gen_toggled())
             h_layout.addWidget(true_radio)
             h_layout.addWidget(false_radio)
             layout.addWidget(radio_container)
@@ -316,9 +357,17 @@ class SettingsWindow(QMainWindow):
             "Battle": {
                 "settings": [
                     "Automatic Battle",
+                    "Always Catch Wishlist",
+                    "Always Catch: Legendary",
+                    "Always Catch: Mythical",
+                    "Always Catch: Ultra Beast",
+                    "Always Catch: Starter",
+                    "Always Catch: Mega Evolution",
+                    "Always Catch: Gigantamax",
+                    "Always Catch: Regional Form",
                     "Cards per Round",
                     "Show Main Pokémon in Reviewer",
-                    "Hide HUD on Reviewer Startup", 
+                    "Hide HUD on Reviewer Startup",
                     "Show Pokémon Buttons",
                     "Pop-Up on Defeat",
                     "Show Text Message Box in Reviewer",
@@ -333,6 +382,7 @@ class SettingsWindow(QMainWindow):
                         "settings": [
                             "Key for Defeat",
                             "Key for Catching",
+                            "Key for Team Cycling",
                             "Key for Opening/Closing Ankimon",
                             "Allow Choosing Moves",
                         ]
@@ -366,9 +416,17 @@ class SettingsWindow(QMainWindow):
                     "Volume",
                 ]
             },
-            "Study": {"settings": ["Goal of Daily Average Cards", "Card Max Time", "Cash Reward Per Interval", "Cards Per Cash Reward"]},
+            "Study": {
+                "settings": [
+                    "Goal of Daily Average Cards",
+                    "Card Max Time",
+                    "Cash Reward Per Interval",
+                    "Cards Per Cash Reward",
+                ]
+            },
             "Generations": {
                 "settings": [
+                    "Active Region",
                     "Generation 1",
                     "Generation 2",
                     "Generation 3",
@@ -446,8 +504,79 @@ class SettingsWindow(QMainWindow):
     def show_window(self):
         self._apply_stylesheet()
         self.config = self.load_config()
+        self._refresh_widgets()
         self.show()
         self.raise_()
+
+    def _refresh_widgets(self):
+        """Update all input widgets with the current values from self.config."""
+        for key, widget in self.input_widgets.items():
+            if key not in self.config:
+                continue
+            value = self.config[key]
+            if isinstance(widget, QLineEdit):
+                widget.setText(str(value))
+            elif isinstance(widget, QButtonGroup):
+                # Buttons are registered with id 1 = Enabled, 0 = Disabled.
+                button = widget.button(1 if bool(value) else 0)
+                if button is not None:
+                    button.setChecked(True)
+            elif isinstance(widget, QComboBox):
+                for i in range(widget.count()):
+                    if widget.itemData(i) == value:
+                        widget.setCurrentIndex(i)
+                        break
+
+        # Gate the region options on the generation toggles only after ALL
+        # widgets reflect self.config (the gating reads the gen widgets).
+        region_combo = self.input_widgets.get("misc.active_region")
+        if region_combo is not None:
+            self._refresh_region_dropdown(region_combo)
+
+    def _gen_enabled_in_ui(self, gen_key):
+        """Current (possibly unsaved) state of a generation toggle, read from
+        its widget; falls back to the stored config when no widget exists."""
+        widget = self.input_widgets.get(gen_key)
+        if isinstance(widget, QButtonGroup):
+            return widget.checkedId() == 1
+        return bool(self.config.get(gen_key, True))
+
+    def _on_gen_toggled(self):
+        # Refresh the region dropdown to reflect the (unsaved) generation
+        # toggles. Deliberately does NOT write the toggles into self.config:
+        # that dict is the live Settings config, so mutating it here would
+        # leak unsaved UI state (on_save reads the widgets when saving).
+        region_combo = self.input_widgets.get("misc.active_region")
+        if region_combo is not None:
+            self._refresh_region_dropdown(region_combo)
+
+    def _refresh_region_dropdown(self, combo):
+        region_to_gen = {
+            "kanto": "misc.gen1",
+            "johto": "misc.gen2",
+            "hoenn": "misc.gen3",
+            "sinnoh": "misc.gen4",
+            "unova": "misc.gen5",
+            "kalos": "misc.gen6",
+            "alola": "misc.gen7",
+            "galar": "misc.gen8",
+            "hisui": "misc.gen8",
+            "paldea": "misc.gen9",
+        }
+        model = combo.model()
+        current_region = combo.itemData(combo.currentIndex())
+
+        should_reset = False
+        for i in range(combo.count()):
+            val = combo.itemData(i)
+            if val in region_to_gen:
+                is_gen_enabled = self._gen_enabled_in_ui(region_to_gen[val])
+                model.item(i).setEnabled(is_gen_enabled)
+                if not is_gen_enabled and val == current_region:
+                    should_reset = True
+
+        if should_reset:
+            combo.setCurrentIndex(0)  # Reset to "No Region"
 
     def _on_search_changed(self, text):
         search_term = text.lower().strip()
@@ -493,7 +622,7 @@ class SettingsWindow(QMainWindow):
     def on_save(self) -> Union[int, str]:
         # Refresh self.config with latest values before modifying
         self.config = self.load_config()
-        
+
         # Update self.config from the current state of all UI widgets
         for key, widget in self.input_widgets.items():
             original_value = self.original_config.get(key)
@@ -535,6 +664,8 @@ class SettingsWindow(QMainWindow):
                     self.config[key] = str(new_text)
             elif isinstance(widget, QButtonGroup):
                 self.config[key] = widget.checkedId() == 1
+            elif isinstance(widget, QComboBox):
+                self.config[key] = widget.currentData()
         # --- Enforce bounds for cash rewards ---
         has_adjustments = False
         adjustment_msg = ""
@@ -547,7 +678,9 @@ class SettingsWindow(QMainWindow):
                 if new_val != orig_val:
                     self.config["trainer.cash_reward_interval"] = new_val
                     has_adjustments = True
-                    adjustment_msg += f"- Reward Interval: Adjusted to {new_val} (Range: 5-100)\n"
+                    adjustment_msg += (
+                        f"- Reward Interval: Adjusted to {new_val} (Range: 5-100)\n"
+                    )
             except (ValueError, TypeError):
                 self.config["trainer.cash_reward_interval"] = 10
 
@@ -557,7 +690,7 @@ class SettingsWindow(QMainWindow):
                 orig_amount = int(self.config["trainer.cash_reward_amount"])
                 # Hard bounds
                 new_amount = max(10, min(400, orig_amount))
-                
+
                 # Cheat Threshold
                 interval = int(self.config.get("trainer.cash_reward_interval", 10))
                 daily_average = int(self.config.get("battle.daily_average", 100))
@@ -571,8 +704,10 @@ class SettingsWindow(QMainWindow):
                     adjustment_msg += f"- Reward Amount: Capped at {new_amount}¥ to maintain the maximum daily economy limit.\n"
                 elif new_amount != orig_amount:
                     has_adjustments = True
-                    adjustment_msg += f"- Reward Amount: Adjusted to {new_amount}¥ (Range: 10-400)\n"
-                
+                    adjustment_msg += (
+                        f"- Reward Amount: Adjusted to {new_amount}¥ (Range: 10-400)\n"
+                    )
+
                 self.config["trainer.cash_reward_amount"] = new_amount
             except (ValueError, TypeError):
                 self.config["trainer.cash_reward_amount"] = 100
@@ -580,23 +715,32 @@ class SettingsWindow(QMainWindow):
         if has_adjustments:
             # Update UI widgets to reflect capped values
             for key in ["trainer.cash_reward_interval", "trainer.cash_reward_amount"]:
-                if key in self.input_widgets and isinstance(self.input_widgets[key], QLineEdit):
+                if key in self.input_widgets and isinstance(
+                    self.input_widgets[key], QLineEdit
+                ):
                     self.input_widgets[key].setText(str(self.config[key]))
 
-            QMessageBox.warning(self, "Settings Adjusted", 
-                              f"Some values were adjusted to stay within fair play bounds:\n\n{adjustment_msg}")
+            QMessageBox.warning(
+                self,
+                "Settings Adjusted",
+                f"Some values were adjusted to stay within fair play bounds:\n\n{adjustment_msg}",
+            )
 
         # Check if all generations are disabled
         gen_keys = [f"misc.gen{i}" for i in range(1, 10)]
         all_gens_disabled = all(self.config.get(key) is False for key in gen_keys)
 
         if all_gens_disabled:
-            showWarning("You must enable at least one Pokémon generation. Reverting generations to previous settings.")
+            showWarning(
+                "You must enable at least one Pokémon generation. Reverting generations to previous settings."
+            )
             for key in gen_keys:
                 # Revert logic
                 self.config[key] = self.original_config.get(key, True)
                 # Update UI widgets
-                if key in self.input_widgets and isinstance(self.input_widgets[key], QButtonGroup):
+                if key in self.input_widgets and isinstance(
+                    self.input_widgets[key], QButtonGroup
+                ):
                     group = self.input_widgets[key]
                     for button in group.buttons():
                         if button.text() == "Enabled" and self.config[key]:
@@ -606,6 +750,28 @@ class SettingsWindow(QMainWindow):
 
         # Now that self.config is up-to-date, call the save callback
         self.save_config_callback(self.config)
+
+        # Refresh the reviewer UI so hotkey changes (incl. team-cycle) take
+        # effect without a restart. Reviewer builds that support team cycling
+        # take a 4th argument; detect that by signature arity rather than by
+        # calling and catching TypeError — an *internal* TypeError would also
+        # trigger such a fallback, re-running the setup and double-wrapping
+        # Reviewer._shortcutKeys.
+        try:
+            from ..reviewer_ui import setup_reviewer_ui
+
+            catch_key = self.config.get("controls.catch_key", "6")
+            defeat_key = self.config.get("controls.defeat_key", "5")
+            pokemon_buttons = self.config.get("controls.pokemon_buttons", True)
+            team_cycle_key = self.config.get("controls.team_cycle_key", "9")
+            if len(inspect.signature(setup_reviewer_ui).parameters) >= 4:
+                setup_reviewer_ui(
+                    catch_key, defeat_key, pokemon_buttons, team_cycle_key
+                )
+            else:
+                setup_reviewer_ui(catch_key, defeat_key, pokemon_buttons)
+        except Exception as e:
+            print(f"Ankimon: Failed to refresh hotkeys: {e}")
 
         # The rest is for showing the confirmation message
         excluded_patterns = {
