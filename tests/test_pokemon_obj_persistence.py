@@ -330,6 +330,57 @@ def test_generation_regional_forme_when_available():
 
 
 # --------------------------------------------------------------------------- #
+# String-id robustness (ids from legacy / migrated JSON records may be str)    #
+# --------------------------------------------------------------------------- #
+
+
+def test_display_name_int_casts_string_id():
+    services, _AnkimonDB, PokemonObject = _load_seam_and_pokemon_obj()
+    services.reset()
+
+    def _diff_lang(pid, lang):
+        # Mirror the real lookup: it compares the id against 10000, which
+        # raises TypeError for a str id — display_name must int-cast first.
+        if pid >= 10000:
+            return "Some Form"
+        return "Pikachu"
+
+    _install_pokedex_stub(
+        get_pokemon_diff_lang_name=_diff_lang,
+        get_pretty_name_for_name=lambda name: "UntranslatedFallback",
+    )
+    pkm = _make_pokemon(PokemonObject, name="pikachu", nickname="", id="25")
+    # A string id must reach the translated lookup, not crash into the fallback.
+    assert pkm.display_name == "Pikachu"
+
+
+def test_pokedex_id_fallback_returns_int_for_garbage_id():
+    services, _AnkimonDB, PokemonObject = _load_seam_and_pokemon_obj()
+    services.reset()
+    _install_pokedex_stub(
+        search_pokedex_by_id=lambda i: "Pokémon not found",
+        search_pokedex=lambda name, var: None,
+        safe_int=lambda v, default=0: int(v) if str(v).isdigit() else default,
+    )
+    # Numeric string: normal path int-casts and returns the species id.
+    assert _make_pokemon(PokemonObject, id="25").pokedex_id == 25
+    # Unparseable id: the except-fallback must still honour the -> int contract.
+    assert _make_pokemon(PokemonObject, id="not-a-number").pokedex_id == 1
+
+
+def test_generation_emergency_fallback_int_casts_string_id():
+    services, _AnkimonDB, PokemonObject = _load_seam_and_pokemon_obj()
+    services.reset()
+    # Empty stub module: the property's imports fail -> emergency ID-range path.
+    _install_pokedex_stub()
+    # A numeric-string id must be int-cast inside the fallback, not crash it.
+    assert _make_pokemon(PokemonObject, id="100").generation == 1
+    assert _make_pokemon(PokemonObject, id="905").generation == 8
+    # An unparseable id degrades to the gen-1 default instead of raising.
+    assert _make_pokemon(PokemonObject, id="fossil").generation == 1
+
+
+# --------------------------------------------------------------------------- #
 # save_fossil_pokemon: tier="Fossil" restored + safe_int HP                     #
 # --------------------------------------------------------------------------- #
 

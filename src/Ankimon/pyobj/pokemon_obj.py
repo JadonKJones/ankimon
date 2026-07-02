@@ -120,7 +120,10 @@ class PokemonObject:
             if settings is not None:
                 lang = int(settings.get("misc.language", 9))
 
-            pretty_name = get_pokemon_diff_lang_name(self.id, lang)
+            # int-cast like the sibling properties: ids read from legacy /
+            # migrated JSON records may be strings, and a str id would raise
+            # inside get_pokemon_diff_lang_name's `>= 10000` comparison.
+            pretty_name = get_pokemon_diff_lang_name(int(self.id), lang)
             if pretty_name == "No Translation in this language":
                 pretty_name = get_pretty_name_for_name(self.name)
 
@@ -175,7 +178,11 @@ class PokemonObject:
                         return sid
             return actual_id
         except Exception:
-            return getattr(self, "id", 1)
+            # Keep the declared `-> int` contract even for garbage ids.
+            try:
+                return int(getattr(self, "id", 1))
+            except (TypeError, ValueError):
+                return 1
 
     @property
     def generation(self) -> int:
@@ -220,7 +227,11 @@ class PokemonObject:
             return 1
         except Exception:
             # Emergency fallback based on common ID ranges if imports fail.
-            sid = getattr(self, "id", 1)
+            # int-cast defensively: a str id would crash the fallback itself.
+            try:
+                sid = int(getattr(self, "id", 1))
+            except (TypeError, ValueError):
+                sid = 1
             if sid <= 151:
                 return 1
             if sid <= 251:
