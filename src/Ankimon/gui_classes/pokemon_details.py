@@ -1333,7 +1333,7 @@ def remember_attack_details_window(
 
 
 def forget_attack_details_window(
-    individual_id: int,
+    individual_id: str,
     attack_set: list[str],
     logger: "ShowInfoLogger",
     refresh_callback=None,
@@ -1342,7 +1342,7 @@ def forget_attack_details_window(
     Creates a window that will allow the user to erase moves from a Pokemon.
 
     Args:
-        individual_id (int): The Pokemon's identifier.
+        individual_id (str): The Pokemon's unique identifier (uuid).
         attack_set (list[str]): The Pokemon's move set.
         logger: Logger object that can log info and display windows containing messages.
         refresh_callback: Optional callable invoked after a move is forgotten.
@@ -1451,7 +1451,7 @@ def remember_attack(
 
 
 def forget_attack(
-    individual_id: int,
+    individual_id: str,
     attacks: list[str],
     attack_to_forget: str,
     logger: ShowInfoLogger,
