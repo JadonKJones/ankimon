@@ -191,6 +191,51 @@ def test_non_mega_name_does_not_trigger_form_lookup(fake_logger, monkeypatch):
     assert result == base_path
 
 
+def test_mega_substring_names_do_not_trigger_form_lookup(fake_logger, monkeypatch):
+    # Base names merely containing "mega" (Meganium, Yanmega) are not Mega
+    # forms; the token-based check must skip the pokedex entirely.
+    def _boom(_name):
+        raise AssertionError("pokedex lookup must not run for names containing 'mega'")
+
+    monkeypatch.setattr(sf, "_get_pokemon_id_from_pokedex", _boom)
+
+    for name, dex_id in [("Meganium", 154), ("Yanmega", 469)]:
+        base_path = sf._path_format(
+            back=False, id=dex_id, gif=False, shiny=False, female=False
+        )
+        monkeypatch.setattr("os.path.exists", lambda p, _bp=base_path: p == _bp)
+
+        result = sf.get_sprite_path(
+            "front", "png", dex_id, shiny=False, gender="M", pokemon_name=name
+        )
+
+        assert result == base_path
+
+
+def test_gmax_and_gigantamax_spellings_trigger_form_lookup(
+    fake_logger, fake_pokedex, monkeypatch
+):
+    # Hyphenated "-Gmax" and the full "Gigantamax" spelling must still be
+    # recognized by the token-based (non-substring) form check.
+    looked_up = []
+
+    def _recorder(name):
+        looked_up.append(name)
+        return None
+
+    monkeypatch.setattr(sf, "_get_pokemon_id_from_pokedex", _recorder)
+    monkeypatch.setattr("os.path.exists", lambda p: True)
+
+    sf.get_sprite_path(
+        "front", "png", 3, shiny=False, gender="M", pokemon_name="Venusaur-Gmax"
+    )
+    sf.get_sprite_path(
+        "front", "png", 6, shiny=False, gender="M", pokemon_name="Charizard-Gigantamax"
+    )
+
+    assert looked_up == ["Venusaur-Gmax", "Charizard-Gigantamax"]
+
+
 def test_get_relative_sprite_path_web_relative(fake_logger, monkeypatch):
     # get_sprite_path returns an absolute path under user_files/sprites/ -> the
     # relative helper rebases it to the web-root-relative "../user_files/sprites/...".
@@ -203,9 +248,10 @@ def test_get_relative_sprite_path_web_relative(fake_logger, monkeypatch):
 
 
 def test_get_relative_sprite_path_default_on_error(fake_logger, monkeypatch):
-    # If get_sprite_path returns a path without the marker (or raises), the helper
-    # returns the documented default.
+    # If get_sprite_path returns a path without the marker (or raises), the
+    # helper returns the web-relative substitute image (deliberate improvement
+    # over exp's "0.png", which never exists — sprite ids start at 1).
     monkeypatch.setattr(sf, "get_sprite_path", lambda *a, **k: "/no/marker/here.png")
     assert sf.get_relative_sprite_path(25, shiny=False) == (
-        "../user_files/sprites/front_default/0.png"
+        "../user_files/sprites/front_default/substitute.png"
     )
