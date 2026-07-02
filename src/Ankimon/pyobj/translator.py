@@ -85,10 +85,15 @@ class Translator:
             )
 
     def change_language(self, language):
-        """Reloads the translation file for a new language."""
-        short_language = LANG_NUMBERS.get(int(language), "en")
-        self.filepath = LANG_PATHS.get(short_language, lang_path_en)
+        """Reloads the translation file for a new language.
+
+        Any error — an unparsable ``language`` id or a failed file reload —
+        is swallowed (printed, not raised), leaving the previous language
+        intact, so a bad setting can never crash the caller.
+        """
         try:
+            short_language = LANG_NUMBERS.get(int(language), "en")
+            self.filepath = LANG_PATHS.get(short_language, lang_path_en)
             with open(self.filepath, "r", encoding="utf-8") as f:
                 self.translations = json.load(f)
         except Exception as e:

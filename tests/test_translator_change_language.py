@@ -6,8 +6,9 @@ BRRRR_Experimental onto main's ``pyobj/translator.py``:
 * ``change_language(n)`` re-points ``self.filepath`` to the ``LANG_PATHS`` entry
   for ``LANG_NUMBERS[int(n)]`` and reloads ``self.translations`` from that file.
 * An unknown language id falls back to English (``lang_path_en``).
-* A load error is swallowed (printed, not raised) so a bad language setting can
-  never crash the caller.
+* Any error — an unparsable id (non-numeric / ``None``) or a load failure — is
+  swallowed (printed, not raised) and the previous language is kept, so a bad
+  language setting can never crash the caller.
 
 ``translator.py`` is aqt-free (pure file I/O + ``json.load``), so it runs in the
 Qt-free Tier-1 env. It is loaded here under a *private* module namespace
@@ -102,3 +103,27 @@ def test_change_language_swallows_load_error(monkeypatch, capsys):
     t.change_language(6)
     out = capsys.readouterr().out
     assert "Error reloading language" in out
+
+
+def test_change_language_swallows_non_numeric_input(capsys):
+    t = Translator(9)
+    before_filepath = t.filepath
+    before_translations = t.translations
+
+    # Must not raise; the previous language must stay intact.
+    t.change_language("not-a-number")
+    assert t.filepath == before_filepath
+    assert t.translations is before_translations
+    assert "Error reloading language" in capsys.readouterr().out
+
+
+def test_change_language_swallows_none_input(capsys):
+    t = Translator(9)
+    before_filepath = t.filepath
+    before_translations = t.translations
+
+    # Must not raise; the previous language must stay intact.
+    t.change_language(None)
+    assert t.filepath == before_filepath
+    assert t.translations is before_translations
+    assert "Error reloading language" in capsys.readouterr().out
