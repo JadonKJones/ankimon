@@ -118,15 +118,23 @@ fe, settings = _load_friendship_evolution()
 # ``Ankimon.singletons`` with a ``MagicMock`` at import time. Without restoring
 # our stub, those lazy imports would resolve to the mock and break the clock.
 _SINGLETONS_STUB = sys.modules["Ankimon.singletons"]
+# The module under test now resolves ``pokedex_functions`` lazily (for the
+# pokedex.json form-aware level/minimumDefeated lookups), so — like the
+# singletons stub — the real pokedex_functions we loaded above must be
+# re-asserted before every test; other suite modules replace this sys.modules
+# entry with a MagicMock, which would otherwise break the pokedex.json lookups.
+_POKEDEX_FUNCTIONS_STUB = sys.modules["Ankimon.functions.pokedex_functions"]
 
 
 @pytest.fixture(autouse=True)
 def _reset_settings():
     """Restore our singletons stub and default settings before every test."""
     sys.modules["Ankimon.singletons"] = _SINGLETONS_STUB
+    sys.modules["Ankimon.functions.pokedex_functions"] = _POKEDEX_FUNCTIONS_STUB
     # #492 moved the code from singletons.settings_obj to the services registry, so
     # point services.settings at the same fake (the module reads it lazily per call).
     from Ankimon.services import services
+
     services.settings = settings
     settings.values.update(
         {
@@ -656,3 +664,74 @@ def test_current_time_label_bad_offset_does_not_crash():
     label = fe.current_time_label(datetime(2024, 1, 1, 9, 0))
     assert "Day" in label
     assert "UTC" not in label
+
+
+# --------------------------------------------------------------------------- #
+# Friendship evolution via the real pokedex.json / CSV data (added forms)
+# --------------------------------------------------------------------------- #
+def test_pichu_evolution_readiness():
+    # Pichu (172) -> Pikachu (25) is a pure-friendship evolution in the CSV
+    # (minimum_happiness, no minimum_level); at high friendship it is ready.
+    pokemon = {"id": 172, "friendship": 400, "everstone": False, "level": 5}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evolvable"] is True
+    assert result["ready"] is True
+    assert result["evo_name"] == "Pikachu"
+
+
+# --------------------------------------------------------------------------- #
+# minimumDefeated level evolutions (Pawmo -> Pawmot) via pokedex.json
+# --------------------------------------------------------------------------- #
+def test_pawmo_minimum_defeated_readiness():
+    # Pawmo (922) -> Pawmot (923) requires 100 defeated enemies (pokedex.json
+    # evoCondition=minimumDefeated / evoDefeated=100). Below 100: not ready with
+    # a "needs to defeat" hint; at/above 100: ready.
+    pokemon_not_ready = {
+        "id": 922,
+        "level": 25,
+        "friendship": 50,
+        "pokemon_defeated": 50,
+        "everstone": False,
+    }
+    res = fe.evolution_readiness(pokemon_not_ready)
+    assert res["evolvable"] is True
+    assert res["method"] == "level"
+    assert res["ready"] is False
+    assert "Needs to defeat 100 enemies to evolve" in res["status_text"]
+
+    pokemon_ready = {
+        "id": 922,
+        "level": 25,
+        "friendship": 50,
+        "pokemon_defeated": 100,
+        "everstone": False,
+    }
+    res_ready = fe.evolution_readiness(pokemon_ready)
+    assert res_ready["evolvable"] is True
+    assert res_ready["ready"] is True
+    assert res_ready["evo_name"] == "Pawmot"
+    assert "Ready to evolve into Pawmot!" in res_ready["status_text"]
+
+
+def test_check_friendship_evolution_auto_prompts_pawmo():
+    # The victory-time checker queries the DB for the defeat count (via the
+    # services.db seam); when it reaches the minimumDefeated milestone it
+    # auto-prompts the evolution just like a friendship one.
+    from Ankimon.services import services
+
+    fake_db = mock.MagicMock()
+    fake_db.get_pokemon = mock.MagicMock(return_value={"pokemon_defeated": 100})
+    services.db = fake_db
+    try:
+        evo_window = _FakeEvoWindow()
+        res = fe.check_friendship_evolution_for_pokemon(
+            individual_id="some_id",
+            pokemon_id=922,
+            evo_window=evo_window,
+            friendship=50,
+            evolution_rejected=False,
+        )
+        assert res == 923  # Pawmot
+        assert evo_window.calls == [("some_id", 922, 923)]
+    finally:
+        services.db = None

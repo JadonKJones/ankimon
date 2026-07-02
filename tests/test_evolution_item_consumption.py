@@ -1,0 +1,269 @@
+"""Tests for stone consumption + nickname carry in ``EvoWindow.evolve_pokemon``.
+
+``pyobj/evolution_window.py`` imports Qt at module top, so this module stubs
+``aqt`` / ``aqt.qt`` / ``PyQt6`` (with a real ``QWidget`` stand-in so ``EvoWindow``
+can subclass it) and every heavy dependency, then loads the real
+``evolution_window`` module and drives ``evolve_pokemon`` directly. DB access is
+routed through the ``services.db`` seam on main (exp reached ``mw.ankimon_db``),
+so the tests inject the mock DB via ``services.db``.
+
+Covers:
+* item-triggered evolutions consume one stone (``update_item_quantity(name, -1)``);
+* the nickname is rewritten to the pretty evolved name only when it was never
+  customised (empty / still matching the pre-evolution species), and a custom
+  nickname is preserved.
+"""
+
+import importlib.util
+import sys
+import types
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+_src = Path(__file__).parent.parent / "src"
+
+
+class MockQWidget:
+    """Minimal ``QWidget`` stand-in so ``EvoWindow(QWidget)`` can be defined."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def setStyleSheet(self, *args):
+        pass
+
+    def setMaximumWidth(self, *args):
+        pass
+
+    def setMaximumHeight(self, *args):
+        pass
+
+    def layout(self):
+        return MagicMock()
+
+    def setLayout(self, *args):
+        pass
+
+    def close(self):
+        pass
+
+    def show(self):
+        pass
+
+
+def setup_mocks():
+    # Packages with __path__ so the module's relative imports resolve.
+    for _pkg in ("Ankimon", "Ankimon.functions", "Ankimon.pyobj"):
+        if _pkg not in sys.modules or isinstance(sys.modules[_pkg], MagicMock):
+            _mod = types.ModuleType(_pkg)
+            _mod.__path__ = [str(_src / _pkg.replace(".", "/"))]
+            _mod.__package__ = _pkg
+            sys.modules[_pkg] = _mod
+
+    # External + heavy submodules stubbed (NOT Ankimon.services — the real,
+    # aqt-free registry is loaded so services.db can be injected).
+    for name in [
+        "aqt",
+        "aqt.utils",
+        "aqt.gui_hooks",
+        "aqt.operations",
+        "aqt.reviewer",
+        "aqt.webview",
+        "aqt.main",
+        "aqt.theme",
+        "PyQt6",
+        "PyQt6.QtWidgets",
+        "PyQt6.QtGui",
+        "PyQt6.QtCore",
+        "anki",
+        "anki.hooks",
+        "anki.collection",
+        "Ankimon.singletons",
+        "Ankimon.pyobj.error_handler",
+        "Ankimon.pyobj.attack_dialog",
+        "Ankimon.pyobj.settings",
+        "Ankimon.pyobj.pokemon_obj",
+        "Ankimon.pyobj.InfoLogger",
+        "Ankimon.pyobj.translator",
+        "Ankimon.pyobj.test_window",
+        "Ankimon.pyobj.reviewer_obj",
+        "Ankimon.resources",
+        "Ankimon.business",
+        "Ankimon.utils",
+        "Ankimon.functions.pokemon_functions",
+        "Ankimon.functions.battle_functions",
+        "Ankimon.functions.update_main_pokemon",
+        "Ankimon.functions.badges_functions",
+    ]:
+        sys.modules[name] = MagicMock()
+
+    # aqt.qt needs a real QWidget/QDialog so EvoWindow(QWidget) is a valid class.
+    aqt_qt = MagicMock()
+    aqt_qt.QWidget = MockQWidget
+    aqt_qt.QDialog = MockQWidget
+    sys.modules["aqt.qt"] = aqt_qt
+
+
+def _force_load(name, filepath):
+    spec = importlib.util.spec_from_file_location(name, filepath)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _load_evo_window():
+    """Load the real evolution_window + a real (mockable) pokedex_functions."""
+    setup_mocks()
+    pokedex_funcs = _force_load(
+        "Ankimon.functions.pokedex_functions",
+        _src / "Ankimon" / "functions" / "pokedex_functions.py",
+    )
+    evo_mod = _force_load(
+        "Ankimon.pyobj.evolution_window",
+        _src / "Ankimon" / "pyobj" / "evolution_window.py",
+    )
+    return evo_mod, pokedex_funcs
+
+
+def _make_evo_window(evo_mod):
+    class LocalMockEvoWindow(evo_mod.EvoWindow):
+        def __init__(self):
+            self.logger = MagicMock()
+            self.translator = MagicMock()
+            self.reviewer_obj = MagicMock()
+            self.test_window = MagicMock()
+            self.achievements = {}
+
+    win = LocalMockEvoWindow()
+    win.display_evo_complete = MagicMock()
+    return win
+
+
+def _apply_common_patches():
+    """Start patches for the pure helpers evolve_pokemon calls; return handles."""
+    p = "Ankimon.pyobj.evolution_window."
+    handles = {
+        "search": patch(p + "search_pokedex").start(),
+        "moves": patch(p + "get_random_moves_for_pokemon").start(),
+        "hp": patch(p + "calculate_hp").start(),
+        "growth": patch(p + "get_growth_rate").start(),
+        "base_exp": patch(p + "get_base_experience").start(),
+        "cp": patch(p + "calculate_cp_from_dict").start(),
+        "update_main": patch(p + "update_main_pokemon").start(),
+        "badge": patch(p + "check_for_badge").start(),
+        "is_alive": patch(p + "is_alive", return_value=False).start(),
+    }
+    handles["moves"].return_value = []
+    handles["hp"].return_value = 100
+    handles["growth"].return_value = "medium"
+    handles["base_exp"].return_value = 100
+    handles["cp"].return_value = 500
+    handles["update_main"].return_value = (None, None)
+    handles["badge"].return_value = True
+    return handles
+
+
+def test_evolve_pokemon_consumes_stone():
+    evo_mod, _ = _load_evo_window()
+    mock_db = MagicMock()
+    evo_mod.services.db = mock_db  # route the DB seam at the injected mock
+
+    handles = _apply_common_patches()
+    try:
+        handles["search"].side_effect = lambda name, key: (
+            ["Fire"] if key == "types" else {"hp": 50} if key == "baseStats" else {}
+        )
+        mock_db.get_pokemon.return_value = {
+            "id": 133,
+            "name": "Eevee",
+            "level": 20,
+            "attacks": [],
+            "iv": {},
+            "ev": {},
+            "xp": 100,
+        }
+
+        win = _make_evo_window(evo_mod)
+        win.evolve_pokemon(
+            individual_id="some-uuid",
+            prevo_id=133,
+            prevo_name="eevee",
+            evo_id=136,
+            evo_name="flareon",
+            main_pokemon=None,
+            item_name="fire-stone",
+        )
+
+        mock_db.update_item_quantity.assert_called_once_with("fire-stone", -1)
+    finally:
+        patch.stopall()
+
+
+def test_evolve_pokemon_nickname_update():
+    evo_mod, pokedex_funcs = _load_evo_window()
+    mock_db = MagicMock()
+    evo_mod.services.db = mock_db
+
+    handles = _apply_common_patches()
+    try:
+        handles["search"].side_effect = lambda name, key: (
+            ["Psychic"] if key == "types" else {"hp": 40} if key == "baseStats" else {}
+        )
+
+        def get_pretty_name_mock(sid):
+            if int(sid) == 439:
+                return "Mime Jr."
+            if int(sid) == 122:
+                return "Mr. Mime"
+            return "Unknown"
+
+        pokedex_funcs.get_pretty_name_for_id = get_pretty_name_mock
+
+        win = _make_evo_window(evo_mod)
+
+        # Case 1: default nickname (matches pretty/CSV prevo name) -> pretty evo.
+        pokemon_data = {
+            "id": 439,
+            "name": "Mime Jr.",
+            "nickname": "Mime Jr.",
+            "level": 32,
+            "attacks": ["Mimic"],
+            "iv": {},
+            "ev": {},
+            "xp": 100,
+        }
+        mock_db.get_pokemon.return_value = pokemon_data
+        win.evolve_pokemon(
+            individual_id="some-uuid",
+            prevo_id=439,
+            prevo_name="mime-jr",
+            evo_id=122,
+            evo_name="mr-mime",
+            main_pokemon=None,
+        )
+        assert pokemon_data["nickname"] == "Mr. Mime"
+
+        # Case 2: custom nickname preserved.
+        pokemon_data_custom = {
+            "id": 439,
+            "name": "Mime Jr.",
+            "nickname": "Sparky",
+            "level": 32,
+            "attacks": ["Mimic"],
+            "iv": {},
+            "ev": {},
+            "xp": 100,
+        }
+        mock_db.get_pokemon.return_value = pokemon_data_custom
+        win.evolve_pokemon(
+            individual_id="some-uuid",
+            prevo_id=439,
+            prevo_name="mime-jr",
+            evo_id=122,
+            evo_name="mr-mime",
+            main_pokemon=None,
+        )
+        assert pokemon_data_custom["nickname"] == "Sparky"
+    finally:
+        patch.stopall()
