@@ -62,6 +62,14 @@ _STUB_MOVES = {
         "pp": 20,
         "shortDesc": "Never misses.",
     },
+    "mystery": {  # every key present but None: populate_moves must stay None-safe
+        "type": None,
+        "category": None,
+        "basePower": None,
+        "accuracy": None,
+        "pp": None,
+        "shortDesc": None,
+    },
 }
 
 
@@ -267,3 +275,93 @@ def test_icon_item_sorts_by_lowercased_tooltip(move_picker):
     # case-insensitive: "electric" < "normal"
     assert (electric < normal) is True
     assert (normal < electric) is False
+
+
+def test_sort_items_tolerate_non_item_operands(move_picker):
+    """Comparing against None / non-items must not raise AttributeError.
+
+    Both ``__lt__`` overrides defer to the base class, whose rich-compare
+    returns ``NotImplemented`` for foreign operands, so Python's operator
+    machinery raises its standard ``TypeError`` instead of an
+    ``AttributeError`` escaping mid-sort.
+    """
+    numeric = move_picker.NumericTableWidgetItem("40")
+    assert numeric.__lt__(None) is NotImplemented
+    assert numeric.__lt__(object()) is NotImplemented
+
+    icon_item = move_picker.SortableIconTableWidgetItem("")
+    icon_item.setToolTip("Electric")
+    assert icon_item.__lt__(None) is NotImplemented
+    assert icon_item.__lt__(object()) is NotImplemented
+
+
+def test_numeric_item_triple_dash_sorts_as_zero(move_picker):
+    numeric = move_picker.NumericTableWidgetItem
+    # "---" collapses to 0 *numerically* (it must be replaced before its own
+    # prefix "--"): it is neither less nor greater than "0".
+    assert (numeric("---") < numeric("0")) is False
+    assert (numeric("0") < numeric("---")) is False
+    assert (numeric("100") < numeric("---")) is False
+
+
+def test_stat_columns_display_contract(move_picker):
+    dialog = move_picker.MovePickerDialog(
+        "Pikachu", all_moves=["tackle", "growl"], current_moves=[]
+    )
+    rows = _rows_by_userrole(dialog)
+    growl, tackle = rows["growl"], rows["tackle"]
+    assert dialog.table.item(growl, 3).text() == "--"  # basePower 0
+    assert dialog.table.item(growl, 4).text() == "---"  # accuracy True (sure-hit)
+    assert dialog.table.item(tackle, 3).text() == "40"
+    assert dialog.table.item(tackle, 4).text() == "100"
+    assert dialog.table.item(tackle, 5).text() == "35"
+
+
+def test_populate_survives_none_valued_move_fields(move_picker):
+    """A move whose keys exist but hold None renders placeholders, not a crash."""
+    dialog = move_picker.MovePickerDialog(
+        "Porygon", all_moves=["mystery"], current_moves=[]
+    )
+    row = _rows_by_userrole(dialog)["mystery"]
+    assert dialog.table.item(row, 1).toolTip() == "Normal"  # type default
+    assert dialog.table.item(row, 2).toolTip() == "Status"  # category default
+    assert dialog.table.item(row, 3).text() == "--"  # basePower None
+    assert dialog.table.item(row, 4).text() == "100"  # accuracy None
+    assert dialog.table.item(row, 5).text() == "5"  # pp None
+    assert dialog.table.item(row, 6).text() == ""  # shortDesc None
+
+
+def test_get_selected_move_survives_missing_name_item(move_picker):
+    dialog = move_picker.MovePickerDialog(
+        "Pikachu", all_moves=["tackle"], current_moves=[]
+    )
+    dialog.table.selectRow(0)
+    assert dialog.get_selected_move() == "tackle"
+    dialog.table.takeItem(0, 0)  # name cell cleared out from under the selection
+    assert dialog.get_selected_move() is None
+
+
+def test_icon_delegate_paints_without_widget(move_picker):
+    """``option.widget`` is None under offscreen/custom rendering; paint must
+    fall back to ``QApplication.style()`` instead of crashing."""
+    from PyQt6.QtGui import QIcon, QPainter, QPixmap
+    from PyQt6.QtWidgets import QStyleOptionViewItem, QTableWidget, QTableWidgetItem
+
+    table = QTableWidget(1, 1)
+    icon_pixmap = QPixmap(10, 10)
+    icon_pixmap.fill()
+    cell = QTableWidgetItem("")
+    cell.setIcon(QIcon(icon_pixmap))
+    table.setItem(0, 0, cell)
+    index = table.model().index(0, 0)
+
+    option = QStyleOptionViewItem()  # default-constructed: no widget attached
+    assert option.widget is None
+
+    target = QPixmap(60, 40)
+    target.fill()
+    painter = QPainter(target)
+    try:
+        move_picker.IconDelegate().paint(painter, option, index)
+    finally:
+        painter.end()

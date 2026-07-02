@@ -1,5 +1,5 @@
-import json
 from PyQt6.QtWidgets import (
+    QApplication,
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
@@ -11,11 +11,9 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QAbstractItemView,
     QStyledItemDelegate,
-    QStyleOptionViewItem,
-    QFrame,
 )
 from PyQt6.QtCore import Qt, QSize, QRect
-from PyQt6.QtGui import QIcon, QPainter, QColor, QFont, QLinearGradient
+from PyQt6.QtGui import QIcon, QColor, QFont
 
 from ..functions.pokedex_functions import find_details_move
 from ..functions.gui_functions import type_icon_path, move_category_path
@@ -23,19 +21,23 @@ from ..utils import format_move_name
 
 
 class NumericTableWidgetItem(QTableWidgetItem):
+    """Table item whose placeholder tokens ("--"/"---"/"None") sort as 0."""
+
     def __lt__(self, other):
         try:
+            # "---" must be replaced before "--" (its own prefix), or it
+            # degrades to "0-" and silently falls back to string comparison.
             t1 = (
                 self.text()
-                .replace("--", "0")
                 .replace("---", "0")
+                .replace("--", "0")
                 .replace("None", "0")
                 .strip()
             )
             t2 = (
                 other.text()
-                .replace("--", "0")
                 .replace("---", "0")
+                .replace("--", "0")
                 .replace("None", "0")
                 .strip()
             )
@@ -44,7 +46,9 @@ class NumericTableWidgetItem(QTableWidgetItem):
             if not t2:
                 t2 = "0"
             return float(t1) < float(t2)
-        except ValueError:
+        except (ValueError, AttributeError):
+            # Non-numeric text, or an operand without ``text()`` (e.g. None):
+            # defer to the base-class comparison.
             return super().__lt__(other)
 
 
@@ -52,14 +56,22 @@ class SortableIconTableWidgetItem(QTableWidgetItem):
     """Custom item for sorting columns that only display icons, by using their tooltip text."""
 
     def __lt__(self, other):
-        return self.toolTip().lower() < other.toolTip().lower()
+        try:
+            return self.toolTip().lower() < other.toolTip().lower()
+        except AttributeError:
+            # Operand without ``toolTip()`` (e.g. None): defer to the base class.
+            return super().__lt__(other)
 
 
 class IconDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
-        option.widget.style().drawControl(
-            option.widget.style().ControlElement.CE_ItemViewItem, option, painter
-        )
+        # ``option.widget`` can be None (e.g. offscreen or custom rendering).
+        widget = option.widget
+        style = widget.style() if widget is not None else QApplication.style()
+        if style is not None:
+            style.drawControl(
+                style.ControlElement.CE_ItemViewItem, option, painter, widget
+            )
         icon = index.data(Qt.ItemDataRole.DecorationRole)
         if icon:
             icon_size = option.decorationSize
@@ -308,8 +320,8 @@ class MovePickerDialog(QDialog):
                 name_item.setFont(QFont("", -1, QFont.Weight.Black))
                 name_item.setText(f"{name_text}  ●")
 
-            # Type Icon
-            m_type = move.get("type", "Normal")
+            # Type Icon (``or`` also covers a key present with a None value)
+            m_type = move.get("type") or "Normal"
             type_item = SortableIconTableWidgetItem("")
             t_icon_path = type_icon_path(m_type.lower())
             if t_icon_path.exists():
@@ -320,7 +332,7 @@ class MovePickerDialog(QDialog):
             self.table.setItem(row_idx, 1, type_item)
 
             # Category Icon
-            cat = move.get("category", "Status")
+            cat = move.get("category") or "Status"
             cat_item = SortableIconTableWidgetItem("")
             c_icon_path = move_category_path(cat)
             if c_icon_path.exists():
@@ -328,26 +340,34 @@ class MovePickerDialog(QDialog):
             cat_item.setToolTip(cat)
             self.table.setItem(row_idx, 2, cat_item)
 
-            # BP
-            bp = str(move.get("basePower", "0"))
-            bp_item = NumericTableWidgetItem(bp if bp != "0" else "--")
+            # BP ("--" placeholder when absent or zero, e.g. status moves)
+            bp = move.get("basePower")
+            bp_item = NumericTableWidgetItem("--" if bp in (None, 0, "0") else str(bp))
             bp_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row_idx, 3, bp_item)
 
-            # Accuracy
+            # Accuracy (Showdown data uses ``true`` for moves that bypass
+            # accuracy checks; bool must be tested before int — bool is an
+            # int subclass)
             acc = move.get("accuracy")
-            acc_str = str(acc) if isinstance(acc, int) else "100"
-            acc_item = NumericTableWidgetItem(acc_str if acc_str != "True" else "---")
+            if isinstance(acc, bool):
+                acc_str = "---"
+            elif isinstance(acc, int):
+                acc_str = str(acc)
+            else:
+                acc_str = "100"
+            acc_item = NumericTableWidgetItem(acc_str)
             acc_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row_idx, 4, acc_item)
 
             # PP
-            pp_item = NumericTableWidgetItem(str(move.get("pp", "5")))
+            pp = move.get("pp")
+            pp_item = NumericTableWidgetItem(str(pp) if pp is not None else "5")
             pp_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setItem(row_idx, 5, pp_item)
 
             # Description
-            desc_item = QTableWidgetItem(move.get("shortDesc", ""))
+            desc_item = QTableWidgetItem(move.get("shortDesc") or "")
             self.table.setItem(row_idx, 6, desc_item)
 
             if is_known:
@@ -369,4 +389,5 @@ class MovePickerDialog(QDialog):
         if not selected_rows:
             return None
         row = selected_rows[0].row()
-        return self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        item = self.table.item(row, 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
