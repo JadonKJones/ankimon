@@ -57,8 +57,13 @@ trainer_card = core_state.trainer_card
 ankimon_tracker_obj = core_state.ankimon_tracker_obj
 achievements = core_state.achievements
 
-# Bind initial production collection
-services.populate(col=getattr(mw, "col", None))
+# Bind initial production collection and UI presenter
+from .gui_presenter import QtPresenter
+services.populate(
+    col=getattr(mw, "col", None),
+    ui=QtPresenter(),
+)
+
 
 # --- LAZY WINDOWS & DIALOGS ---
 settings_window = None

@@ -323,8 +323,11 @@ def on_review_card(*args):
             pass
 
         reviewer = Container()
-        reviewer_window = services.reviewer
-        reviewer.web = reviewer_window.web if reviewer_window else None
+        try:
+            from aqt import mw
+            reviewer.web = mw.reviewer.web if mw and getattr(mw, "reviewer", None) else None
+        except Exception:
+            reviewer.web = None
         reviewer_obj.update_life_bar(reviewer, 0, 0)
         win = services.test_window
         if is_alive(win):

@@ -19,6 +19,12 @@ def main() -> int:
     s = start_real_session()
     sv = s.services
 
+    # Trigger lazy window getters so they instantiate for the check
+    from Ankimon.singletons import get_test_window, get_evo_window, get_pokemon_pc
+    get_test_window()
+    get_evo_window()
+    get_pokemon_pc()
+
     def describe(obj):
         return f"{type(obj).__module__}.{type(obj).__name__}"
 

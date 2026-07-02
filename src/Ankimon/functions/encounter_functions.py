@@ -1262,14 +1262,18 @@ def new_pokemon(
                 pass
 
     if update_hud and reviewer_obj is not None:
-        reviewer_window = services.reviewer
-        if reviewer_window is not None and getattr(reviewer_window, "web", None) is not None:
+        try:
+            from aqt import mw
+            reviewer_web = mw.reviewer.web if mw and getattr(mw, "reviewer", None) else None
+        except Exception:
+            reviewer_web = None
 
+        if reviewer_web is not None:
             class Container(object):
                 pass
 
             reviewer = Container()
-            reviewer.web = reviewer_window.web
+            reviewer.web = reviewer_web
             reviewer_obj.update_life_bar(reviewer, 0, 0)
 
     try:
