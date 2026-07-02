@@ -301,8 +301,13 @@ def calculate_mastery_index_ep(total_reviews, daily_average, trainer_level):
     return max(0.0, min(ep, 100.0))
 
 
-def load_pity_trackers() -> dict:
-    """Load the per-tier dry-spell counters persisted via the user_data table."""
+def load_pity_trackers(db=None) -> dict:
+    """Load the per-tier dry-spell counters persisted via the user_data table.
+
+    ``db`` defaults to :data:`services.db`. The encounter-rate simulator (F23)
+    injects an explicit provider so it can read the live pity counters
+    read-only without mutating the global service registry.
+    """
     default_pity = {
         "Ultra": 0,
         "Gmax": 0,
@@ -312,7 +317,8 @@ def load_pity_trackers() -> dict:
         "Mythical": 0,
     }
     try:
-        db = services.db
+        if db is None:
+            db = services.db
         if db is not None:
             stored = db.get_user_data("ankimon_pity_trackers")
             if isinstance(stored, dict):
@@ -334,12 +340,25 @@ def save_pity_trackers(trackers: dict):
         print(f"[Ankimon] Warning: Error saving pity trackers: {e}")
 
 
-def _modify_percentages_overhaul(total_reviews, daily_average, trainer_level):
+def _modify_percentages_overhaul(
+    total_reviews, daily_average, trainer_level, *, main_level=None, ep=None, db=None
+):
     """
     Overhaul calculation for encounter percentages based on the Mastery Index (EP),
     Exponential Rarity Scaling, and Independent Pity systems.
+
+    The ``main_level``/``ep``/``db`` arguments are simulation-injection hooks used
+    by the encounter-rate simulator (F23). They all default to the live behaviour
+    so ordinary callers are unaffected:
+
+    * ``ep`` — a pre-computed Mastery Index (0-100). When ``None`` it is derived
+      from live pokedex/team state via :func:`calculate_mastery_index_ep`.
+    * ``main_level`` — main-Pokémon level for the tier gates. When ``None`` the
+      live ``main_pokemon`` global is used.
+    * ``db`` — read-only provider for the pity lookup; defaults to services.db.
     """
-    ep = calculate_mastery_index_ep(total_reviews, daily_average, trainer_level)
+    if ep is None:
+        ep = calculate_mastery_index_ep(total_reviews, daily_average, trainer_level)
 
     # Generate base weights
     weights = {}
@@ -347,19 +366,22 @@ def _modify_percentages_overhaul(total_reviews, daily_average, trainer_level):
         weights[tier] = base * ((max_val / base) ** (ep / 100.0))
 
     # Apply level thresholds
-    level_val = (
-        main_pokemon.level
-        if main_pokemon
-        and hasattr(main_pokemon, "level")
-        and main_pokemon.level is not None
-        else 1
-    )
+    if main_level is not None:
+        level_val = main_level
+    else:
+        level_val = (
+            main_pokemon.level
+            if main_pokemon
+            and hasattr(main_pokemon, "level")
+            and main_pokemon.level is not None
+            else 1
+        )
     for tier, limit in OVERHAUL_LEVEL_THRESHOLDS.items():
         if level_val < limit:
             weights[tier] = 0.0
 
-    # Apply pity multipliers
-    pity_trackers = load_pity_trackers()
+    # Apply pity multipliers (read-only; simulation never persists trackers)
+    pity_trackers = load_pity_trackers(db=db)
     for tier in OVERHAUL_PITY_THRESHOLDS:
         p_i = pity_trackers.get(tier, 0)
         t_i = OVERHAUL_PITY_THRESHOLDS[tier]
@@ -379,18 +401,45 @@ def _modify_percentages_overhaul(total_reviews, daily_average, trainer_level):
 def modify_percentages(total_reviews, daily_average, trainer_level):
     """
     Modify Pokémon encounter percentages based on total reviews, trainer level, and main Pokémon level.
+
+    Thin dispatcher: routes to the overhaul or legacy calculation based on the
+    active system flag. The simulator (F23) calls the ``_modify_percentages_*``
+    helpers directly with injected state, so it never has to flip this module's
+    ``USE_OVERHAUL_ENCOUNTER_SYSTEM`` global.
     """
     if USE_OVERHAUL_ENCOUNTER_SYSTEM:
         return _modify_percentages_overhaul(total_reviews, daily_average, trainer_level)
+    return _modify_percentages_legacy(total_reviews, daily_average, trainer_level)
 
+
+def _modify_percentages_legacy(
+    total_reviews, daily_average, trainer_level, *, main_level=None
+):
+    """
+    Legacy calculation for encounter percentages (review-ratio buckets +
+    trainer-level boost + main-Pokémon-level tier gates).
+
+    ``main_level`` is a simulation-injection hook (F23); when ``None`` the live
+    ``main_pokemon`` global is used and the single-slot performance cache is
+    active. When a level is injected the cache is bypassed entirely so the
+    simulator can never read or poison the live gameplay cache.
+    """
     # None-safe: the module global is bound by core.bind_runtime_globals()
     # after composition; fall back to level 1 while unbound (mirrors the
     # guard in _modify_percentages_overhaul).
-    main_pokemon_level = main_pokemon.level if main_pokemon is not None else 1
+    if main_level is not None:
+        main_pokemon_level = main_level
+    else:
+        main_pokemon_level = main_pokemon.level if main_pokemon is not None else 1
+
+    # The simulator injects state; its inputs are not part of the cache key, so
+    # skip the cache read/write while simulating to keep the live cache honest.
+    simulating = main_level is not None
 
     # Performance Guard: Skip recalculation if inputs haven't changed
     if (
-        _percentages_cache["percentages"] is not None
+        not simulating
+        and _percentages_cache["percentages"] is not None
         and _percentages_cache["total_reviews"] == total_reviews
         and _percentages_cache["trainer_level"] == trainer_level
         and _percentages_cache["main_pokemon_level"] == main_pokemon_level
@@ -482,11 +531,12 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
     for tier in percentages:
         percentages[tier] = (percentages[tier] / total) * 100 if total > 0 else 0
 
-    # Cache and return
-    _percentages_cache["percentages"] = percentages
-    _percentages_cache["total_reviews"] = total_reviews
-    _percentages_cache["trainer_level"] = trainer_level
-    _percentages_cache["main_pokemon_level"] = main_pokemon_level
+    # Cache and return (skip while simulating so the live cache stays clean)
+    if not simulating:
+        _percentages_cache["percentages"] = percentages
+        _percentages_cache["total_reviews"] = total_reviews
+        _percentages_cache["trainer_level"] = trainer_level
+        _percentages_cache["main_pokemon_level"] = main_pokemon_level
 
     return percentages
 
