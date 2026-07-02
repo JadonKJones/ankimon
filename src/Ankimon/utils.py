@@ -434,7 +434,7 @@ def daily_item_list():
 # Function to give an item to the player
 def give_item(item_name: str, item_type: Optional[str] = None):
     """Gives an item to the user."""
-    db = mw.ankimon_db
+    db = services.db
     
     # Get current item or create new
     existing = db.get_item(item_name)
@@ -502,14 +502,15 @@ def get_item_id(item_name, file_path=csv_file_items_cost):
                     return int(id)
     except (OSError, KeyError) as e:
         show_warning_with_traceback(
-            parent=mw, exception=e, message="Error reading item data:"
+            exception=e, message="Error reading item data:"
         )
         return 4
     except Exception as e:
         show_warning_with_traceback(
-            parent=mw, exception=e, message=f"Unexpected error: {e}"
+            exception=e, message=f"Unexpected error: {e}"
         )
         return 4
+
 
 
 # Function to return a random fossil
@@ -709,7 +710,7 @@ def save_error_code(error_code, logger=None):
 
 
 def get_main_pokemon_data():
-    main_pokemon_data = mw.ankimon_db.get_main_pokemon()
+    main_pokemon_data = services.db.get_main_pokemon() if services.db else None
     
     if not main_pokemon_data:
         return None

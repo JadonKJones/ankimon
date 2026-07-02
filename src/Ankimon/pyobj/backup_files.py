@@ -31,16 +31,20 @@ def create_backup_folder(folder_path):
             dest_path = os.path.join(folder_path, os.path.basename(file))
             if str(file).endswith('.db'):
                 import sqlite3
+                src_conn = None
+                dest_conn = None
                 try:
                     src_conn = sqlite3.connect(file)
                     dest_conn = sqlite3.connect(dest_path)
-                    with dest_conn:
-                        src_conn.backup(dest_conn)
-                    dest_conn.close()
-                    src_conn.close()
+                    src_conn.backup(dest_conn)
                     continue
                 except Exception:
                     pass
+                finally:
+                    if dest_conn is not None:
+                        dest_conn.close()
+                    if src_conn is not None:
+                        src_conn.close()
             shutil.copy(file, folder_path)
 
 def rotate_backups():

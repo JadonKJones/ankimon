@@ -117,16 +117,20 @@ class BackupManager:
                     dest_path = backup_dir / filename
                     if source_path.suffix == '.db':
                         import sqlite3
+                        src_conn = None
+                        dest_conn = None
                         try:
                             src_conn = sqlite3.connect(source_path)
                             dest_conn = sqlite3.connect(dest_path)
-                            with dest_conn:
-                                src_conn.backup(dest_conn)
-                            dest_conn.close()
-                            src_conn.close()
+                            src_conn.backup(dest_conn)
                             continue
                         except Exception:
                             pass
+                        finally:
+                            if dest_conn is not None:
+                                dest_conn.close()
+                            if src_conn is not None:
+                                src_conn.close()
                     shutil.copy2(source_path, dest_path)
 
             summary = self._generate_summary(backup_dir)

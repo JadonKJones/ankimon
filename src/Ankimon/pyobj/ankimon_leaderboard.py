@@ -108,10 +108,10 @@ def sync_data_to_leaderboard(data):
                         )
                     except requests.exceptions.RequestException as e:
                         if services.logger:
-                            services.logger.log("warning", f"Missing credentials for Ankimon leaderboard. Request exception: {e}")
+                            services.logger.log("warning", f"Failed to sync data to leaderboard. Request exception: {e}")
                     except Exception as e:
                         if services.logger:
-                            services.logger.log("warning", f"Missing credentials for Ankimon leaderboard. Exception: {e}")
+                            services.logger.log("warning", f"Failed to sync data to leaderboard. Exception: {e}")
 
                 import threading
                 thread = threading.Thread(target=make_request, daemon=True)
@@ -119,7 +119,7 @@ def sync_data_to_leaderboard(data):
 
         except Exception as e:
             if services.logger:
-                services.logger.log("warning", f"Missing credentials for Ankimon leaderboard. Exception: {e}")
+                services.logger.log("warning", f"Failed to sync data to leaderboard. Exception: {e}")
 
 
 

@@ -1420,8 +1420,12 @@ def save_main_pokemon_progress(
                                 logger.log_and_showinfo("info", f"{msg}")
                     elif new_attack not in attacks:
                         from .. import utils
-                        from PyQt6.QtWidgets import QApplication
-                        if getattr(utils, "in_bulk_resolve", False) or QApplication.instance() is None:
+                        try:
+                            from PyQt6.QtWidgets import QApplication
+                            is_headless = QApplication.instance() is None
+                        except (ImportError, ModuleNotFoundError):
+                            is_headless = True
+                        if getattr(utils, "in_bulk_resolve", False) or is_headless:
                             if services.logger:
                                 try: services.logger.log("info", f"[Bulk/Headless] Discarded learning new move {new_attack} on {main_pokemon.name}.")
                                 except: pass

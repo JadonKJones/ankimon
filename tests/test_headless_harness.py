@@ -108,8 +108,30 @@ def test_auto_battle_mode_cycles():
     assert "error" not in result
 
 
+def test_economy_runs_without_errors():
+    result = _subrun(
+        "from harness.scenarios import economy\n"
+        "print(%r + json.dumps(economy.run(verbose=False)))" % _MARKER
+    )
+    assert result["cash_before"] >= 1000
+    assert len(result["buy"]) >= 1
+
+
+def test_longrun_runs_without_errors():
+    result = _subrun(
+        "from harness.scenarios import longrun\n"
+        "print(%r + json.dumps(longrun.run(n=2000, verbose=False)))" % _MARKER
+    )
+    assert result["answers"] == 2000
+    assert result["events"].get("error", 0) == 0
+
+
+
 if __name__ == "__main__":
     test_play_session_runs_without_errors()
     test_state_snapshot_and_single_answer()
     test_auto_battle_mode_cycles()
+    test_economy_runs_without_errors()
+    test_longrun_runs_without_errors()
     print("headless harness tests: OK")
+
