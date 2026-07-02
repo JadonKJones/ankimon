@@ -38,7 +38,11 @@ def CatchPokemonHook(collected_pokemon_ids):
             achievements,
         )
         new_pokemon(
-            enemy_pokemon, test_window, ankimon_tracker_obj, reviewer_obj
+            enemy_pokemon,
+            test_window,
+            ankimon_tracker_obj,
+            reviewer_obj,
+            update_hud=True,
         )
     for hook in catch_pokemon_hooks:
         hook()
@@ -50,7 +54,11 @@ def DefeatPokemonHook():
             main_pokemon, enemy_pokemon, evo_window, logger, achievements, trainer_card
         )
         new_pokemon(
-            enemy_pokemon, test_window, ankimon_tracker_obj, reviewer_obj
+            enemy_pokemon,
+            test_window,
+            ankimon_tracker_obj,
+            reviewer_obj,
+            update_hud=True,
         )
     for hook in defeat_pokemon_hooks:
         hook()

@@ -38,7 +38,13 @@ def catch_shortcut_function():
             _collected_pokemon_ids,
             achievements,
         )
-        new_pokemon(enemy_pokemon, test_window, ankimon_tracker_obj, reviewer_obj)
+        new_pokemon(
+            enemy_pokemon,
+            test_window,
+            ankimon_tracker_obj,
+            reviewer_obj,
+            update_hud=True,
+        )
     else:
         tooltip("You only catch a pokemon once it's fainted!")
 
@@ -48,12 +54,20 @@ def defeat_shortcut_function():
         kill_pokemon(
             main_pokemon, enemy_pokemon, evo_window, logger, achievements, trainer_card
         )
-        new_pokemon(enemy_pokemon, test_window, ankimon_tracker_obj, reviewer_obj)
+        new_pokemon(
+            enemy_pokemon,
+            test_window,
+            ankimon_tracker_obj,
+            reviewer_obj,
+            update_hud=True,
+        )
     else:
         tooltip("Wild pokemon has to be fainted to defeat it!")
 
 
-def setup_reviewer_ui(catch_shortcut: str, defeat_shortcut: str, reviewer_buttons: bool):
+def setup_reviewer_ui(
+    catch_shortcut: str, defeat_shortcut: str, reviewer_buttons: bool
+):
     catch_key = str(catch_shortcut).lower()
     defeat_key = str(defeat_shortcut).lower()
 
