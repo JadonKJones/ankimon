@@ -356,7 +356,10 @@ def load_pokemon_team() -> list[dict[str, Any]]:
 
         # Final fallback: return every Pokémon from mypokemon.json.
         with open(mypokemon_path, "r", encoding="utf-8") as fh:
-            return json.load(fh)[:_MAX_TEAM_SIZE]
+            all_pokemon = json.load(fh)
+        if isinstance(all_pokemon, list):
+            return [p for p in all_pokemon if isinstance(p, dict)][:_MAX_TEAM_SIZE]
+        return []
     except (OSError, json.JSONDecodeError, TypeError):
         # I/O / parse / non-list-slice errors during the final fallback.
         return []
