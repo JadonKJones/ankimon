@@ -291,8 +291,15 @@ def PokemonCollectionDetailsSplit(
         _stats_dict = {}
         for key in ("hp", "atk", "def", "spa", "spd", "spe"):
             if key in detail_stats:
+                # Persisted records may predate full IV/EV dicts — default
+                # missing entries to 0 rather than raising KeyError.
                 _stats_dict[key] = PokemonObject.calc_stat(
-                    key, detail_stats[key], level, iv[key], ev[key], nature
+                    key,
+                    detail_stats[key],
+                    level,
+                    (iv or {}).get(key, 0),
+                    (ev or {}).get(key, 0),
+                    nature,
                 )
         _stats_dict["xp"] = detail_stats.get("xp", 0)
         _stats_dict["friendship"] = friendship
@@ -554,7 +561,8 @@ def PokemonCollectionDetailsSplit(
         if readiness["ready"] and trigger_evo_callback and show_evolution_ui:
             translator = services.translator or Translator(language)
             evolve_text = translator.translate(
-                "evolve_now_button", evo_name=readiness["evo_name"]
+                "evolve_now_button",
+                evo_name=readiness["evo_name"] or "the next form",
             )
             evolve_now_button = QPushButton(evolve_text.upper())
             evolve_now_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -830,14 +838,17 @@ def PokemonDetailsStats(
     # 1. Query the max level in the player's collection to dynamically scale
     #    the visual baseline.
     max_level = 100
-    try:
-        cursor = services.db.execute("SELECT MAX(level) FROM captured_pokemon")
-        row = cursor.fetchone()
-        if row and row[0] is not None:
-            max_level = int(row[0])
-    except Exception:
-        # Headless/registry-less callers keep the default baseline.
-        pass
+    # services.db is None for headless/registry-less callers (same idiom as
+    # pyobj/settings.py); they keep the default baseline.
+    if services.db is not None:
+        try:
+            cursor = services.db.execute("SELECT MAX(level) FROM captured_pokemon")
+            row = cursor.fetchone()
+            if row and row[0] is not None:
+                max_level = int(row[0])
+        except Exception:
+            # A broken/locked DB keeps the default baseline too.
+            pass
 
     # 2. Get the maximum stat of the currently selected Pokémon (handles manual
     #    DB/JSON stat edits).
@@ -894,10 +905,12 @@ def PokemonDetailsStats(
         if old_stats and stat in old_stats:
             old_val = old_stats[stat]
             if stat == "xp":
-                experience = int(find_experience_for_level(growth_rate, level, True))
-                old_val_mapped = int(
-                    (int(old_val) / int(experience)) * max_width_stat_item
+                # find_experience_for_level returns 0 for unknown growth rates
+                # / missing CSV rows — clamp to 1 to avoid ZeroDivisionError.
+                experience = max(
+                    1, int(find_experience_for_level(growth_rate, level, True))
                 )
+                old_val_mapped = int((int(old_val) / experience) * max_width_stat_item)
             elif stat == "friendship":
                 try:
                     old_friendship = int(old_val)
@@ -920,8 +933,11 @@ def PokemonDetailsStats(
             old_val_mapped = 0
 
         if stat == "xp":
-            experience = int(find_experience_for_level(growth_rate, level, True))
-            new_val_mapped = int((int(value) / int(experience)) * max_width_stat_item)
+            # Same zero-experience clamp as the old_stats mapping above.
+            experience = max(
+                1, int(find_experience_for_level(growth_rate, level, True))
+            )
+            new_val_mapped = int((int(value) / experience) * max_width_stat_item)
         elif stat == "friendship":
             # Bar reads 100% exactly at the evolution threshold (bar_max).
             new_val_mapped = min(

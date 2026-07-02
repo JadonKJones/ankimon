@@ -443,6 +443,20 @@ def test_split_returns_components_and_freshly_computed_stats(details):
     }
 
 
+def test_stats_dict_tolerates_missing_iv_ev_keys(details):
+    # Persisted records may predate full IV/EV dicts: missing keys default to 0
+    # instead of raising KeyError (which the error-handler stub would surface
+    # as an AssertionError).
+    _, _, _, stats = details.PokemonCollectionDetailsSplit(
+        **_details_kwargs(
+            iv={"hp": 31, "atk": 20},  # def/spa/spd/spe missing
+            ev={},  # fully absent
+        )
+    )
+    # calc_stat stub returns base+level, so every core stat is still computed.
+    assert stats["hp"] == 47 and stats["spe"] == 102
+
+
 def test_header_shows_dex_prefix_and_suppresses_redundant_nickname(details):
     header, _, _, _ = details.PokemonCollectionDetailsSplit(**_details_kwargs())
     texts = _labels(header)
@@ -533,6 +547,18 @@ def test_callback_path_renders_button_and_invokes_callback(details):
     assert calls == ["level"]
 
 
+def test_callback_path_falls_back_when_evo_name_missing(details):
+    # A missing evo_name must not reach the translator as None — it falls back
+    # to "the next form", matching the base (singleton) path.
+    _make_ready(details, method="level")
+    details._test_readiness["evo_name"] = None
+    header, _, _, _ = details.PokemonCollectionDetailsSplit(
+        **_details_kwargs(trigger_evo_callback=lambda method: None)
+    )
+    button = next(b for b in _buttons(header) if b.objectName() == "evolveNowButton")
+    assert "THE NEXT FORM" in button.text()
+
+
 # ---------------------------------------------------------------------------
 # Stat bars
 # ---------------------------------------------------------------------------
@@ -601,6 +627,23 @@ def test_stats_layout_uses_db_max_level_when_available(details):
         old_stats={"hp": 50},
     )
     # One row per known stat (hp, xp), each with two labels (name + value).
+    assert len(_stat_row_labels(layout)) == 4
+
+
+def test_stats_layout_survives_zero_experience_for_level(details):
+    # find_experience_for_level returns 0 for unknown growth rates / missing
+    # CSV rows; the XP bar mapping (both the old_stats slide source and the
+    # new value) must clamp instead of dividing by zero.
+    details.find_experience_for_level = lambda growth_rate, level, capped: 0
+    layout = details.PokemonDetailsStats(
+        {"hp": 100, "xp": 120},
+        "unknown-growth-rate",
+        1,
+        False,
+        9,
+        old_stats={"xp": 60, "hp": 50},
+    )
+    # Both rows (hp, xp) built without a ZeroDivisionError.
     assert len(_stat_row_labels(layout)) == 4
 
 
