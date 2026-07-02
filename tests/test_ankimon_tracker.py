@@ -138,7 +138,8 @@ def test_get_total_reviews_database_failure_fallback_english(tracker_module):
 
 
 def test_get_total_reviews_database_failure_fallback_localized(tracker_module):
-    """The fallback grabs the first integer, so it works on localized strings."""
+    """The fallback grabs the first numeric token, so it works on localized
+    strings."""
     tracker = _make_tracker(tracker_module)
 
     mock_col = MagicMock()
@@ -150,6 +151,43 @@ def test_get_total_reviews_database_failure_fallback_localized(tracker_module):
     reviews = tracker.get_total_reviews()
 
     assert reviews == 27
+
+
+@pytest.mark.parametrize(
+    ("studied_text", "expected"),
+    [
+        # Comma thousands separator (English-style grouping).
+        ("Studied 1,234 cards in 12.5 minutes today.", 1234),
+        # Period thousands separator (German-style; the decimal is a comma).
+        ("Heute 1.234 Karten in 12,5 Minuten gelernt.", 1234),
+        # Plain-space grouping.
+        ("Studied 1 234 cards in 12.5 minutes today.", 1234),
+        # No-break space (U+00A0), classic French grouping.
+        ("1\u00a0234 cartes étudiées en 12,5 minutes aujourd'hui.", 1234),
+        # Narrow no-break space (U+202F), modern CLDR French grouping.
+        ("1\u202f234 cartes étudiées en 12,5 minutes aujourd'hui.", 1234),
+        # Multiple groups.
+        ("Studied 1,234,567 cards in 999.9 minutes today.", 1234567),
+        # An ungrouped count must not swallow the following word or the
+        # decimal minutes that appear later in the string.
+        ("Studied 30 cards in 1.5 minutes today.", 30),
+    ],
+)
+def test_get_total_reviews_fallback_thousands_separators(
+    tracker_module, studied_text, expected
+):
+    """The fallback parses grouped thousands separators (comma, period, space,
+    NBSP, narrow NBSP) as one number instead of stopping at the first digit
+    run — ``"1,234"`` must yield 1234, not 1."""
+    tracker = _make_tracker(tracker_module)
+
+    mock_col = MagicMock()
+    mock_col.sched.day_cutoff = 1716800000
+    mock_col.db.scalar.side_effect = Exception("Database is locked")
+    mock_col.studied_today.return_value = studied_text
+    tracker_module.services.col = mock_col
+
+    assert tracker.get_total_reviews() == expected
 
 
 def test_get_total_reviews_no_collection(tracker_module):

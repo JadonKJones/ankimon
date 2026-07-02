@@ -117,13 +117,21 @@ class AnkimonTracker:
             )
         except Exception:
             # Fall back to parsing the localized "studied today" string if the
-            # database query fails (e.g. a stub/mock collection). Grabbing the
-            # first integer keeps this language-agnostic too.
+            # database query fails (e.g. a stub/mock collection). The review
+            # count is the first number in every locale's phrasing (decimals
+            # like "1.5 minutes" only appear later), but locales group large
+            # counts with thousands separators ("1,234" / "1.234" / "1 234" /
+            # no-break spaces), so match the whole first numeric token and
+            # strip the separators before converting.
             try:
                 text = col.studied_today()
-                nums = re.findall(r"\d+", text)
-                if nums:
-                    return int(nums[0])
+                # Separators: space, no-break space (U+00A0), narrow
+                # no-break space (U+202F), period and comma, grouping
+                # digits in threes.
+                sep = r"[ \u00a0\u202f.,]"
+                match = re.search(rf"\d+(?:{sep}\d{{3}})*", text)
+                if match:
+                    return int(re.sub(sep, "", match.group(0)))
             except Exception:
                 pass
         return 0
