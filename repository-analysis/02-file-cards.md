@@ -150,3 +150,33 @@
 - **Major Symbols:** `SettingsWindow`.
 - **Role:** Legacy Configuration GUI
 - **Confidence Level:** High
+
+## Headless Harness & Service Registry Stack
+
+### `services.py`
+- **Primary Responsibility:** The Service Registry acting as a dependency container. It acts as the central decoupling boundary by providing global access to core components without static global references.
+- **Why it matters:** Eliminates direct coupling of managers and engines to a active Qt GUI or Anki runtime, enabling fake mocks to be dynamically injected for testing.
+- **Major Symbols:** `services` (the registry instance), `ServiceProxy`.
+- **Role:** Dependency Container / Decoupling Registry
+- **Confidence Level:** High
+
+### `core.py`
+- **Primary Responsibility:** The aqt-free composition root that constructs the core game objects and registers them in the `services` registry.
+- **Why it matters:** Ensures the exact same orchestration code is shared by both production GUI boot and headless test execution to prevent runtime configuration drift.
+- **Major Symbols:** `build_core`, `bind_runtime_globals`.
+- **Role:** Composition Root / Initialization Orchestrator
+- **Confidence Level:** High
+
+### `events.py`
+- **Primary Responsibility:** Emits and routes structured events to decoupling event listeners, acting as the async communication medium across core modules.
+- **Why it matters:** Decouples core game simulation hooks from direct GUI redraw handlers.
+- **Major Symbols:** `events`, `EventEmitter`.
+- **Role:** Event Bus / Decoupling Hub
+- **Confidence Level:** High
+
+### `harness/`
+- **Primary Responsibility:** Dev-only directories containing the headless simulation runner (`check.py`, `driver.py`), test mock environments, and verification scenarios.
+- **Why it matters:** Allows running card reviews, battles, menu fuzzer loops, and save-state verification safely and programmatically without spawning Anki or clicking the mouse.
+- **Role:** Headless Simulation Runner / Diagnostic Suite
+- **Confidence Level:** High
+

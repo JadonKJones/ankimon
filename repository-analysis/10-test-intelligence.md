@@ -60,3 +60,23 @@ When implementing new features or adding new regional variant pools:
 1. **Never perform dynamic I/O tests:** Ensure tests use memory structures rather than loading physical JSON files repeatedly.
 2. **Update the Simulation Suite:** Add a corresponding check in `test_encounter_simulation.py` to assert that the new species, variants, or settings caps behave as expected.
 3. **Verify Prerequisite DAGs:** Run prerequisite checking tests to guarantee that new gating rules do not create infinite recursion loops.
+
+---
+
+## Harness Testing Tiers
+To isolate and verify the gameplay engine, the testing framework utilizes a layered harness system:
+
+### Tier 1: Qt-Free Headless Verification
+- **Purpose:** Verifies core logic (encounters, DB migrations, battle rounds, persistence, and business formulas) under pure Python.
+- **Implementation:** Runs fast fakes (`HeadlessPresenter`) and mocks in memory against temporary SQLite folders, completely stripping away GUI frameworks.
+- **Check runner:** `python harness/check.py`
+
+### Tier 2: Offscreen GUI Simulation
+- **Purpose:** Exercises the full PyQt6 GUI layer (dialog transitions, window setups, and layouts) headlessly.
+- **Implementation:** Utilizes an offscreen platform engine (`QT_QPA_PLATFORM=offscreen`) to instantiate the application context and spin up widgets on a headless server.
+- **Check runner:** `pytest tests/`
+
+### Headless Safety Verification
+- **Purpose:** Guarantees that future additions or edits do not accidentally introduce hard import dependencies on `aqt` or `PyQt6` inside state engines.
+- **Implementation:** `tests/test_headless_harness.py` runs tests inside isolated subprocesses with `sys.modules` monkeypatched to explicitly raise `ImportError` on any attempt to load `aqt`, `PyQt6`, or GUI graphics packages. This ensures the headless harness remains executable in pure console environments (like server CI pipelines).
+

@@ -62,6 +62,11 @@ This document is a concise, operational summary designed to bring the next codin
   - **Encounter sequence is fully deterministic and invariant.** All three paths (`mode="all" commit=False`, `mode="all" commit=True`, `mode="next"`) seed encounters using `_compute_encounter_idx()`, which reads `mobile_resolved_encounters_count` from the `metadata` table in a single query. The same pending queue always produces the same enemy sequence regardless of team composition, active/inactive companions, or resolution mode.
   - `_get_team_max_level()` reads ALL companion levels (active and inactive) via a single batch `IN` query. This `stable_max_level` is used for encounter generation so activating/deactivating companions never shifts the encounter count or species pool.
 
+### 11. Import-Time Decoupling (Headless Harness Safety)
+- **Status:** Fully Integrated. Core game simulation modules and state managers are completely decoupled from `aqt` and `PyQt6` GUI imports.
+- **Rule:** **Core logic, helper routines, database utilities, and math modules must never import aqt or PyQt6 at the top level.** All GUI widget instantiations, popup dialogues, and layout configurations must be imported lazily inside the methods that require them. This ensures that the headless simulation harness can safely load modules outside of Anki runtime without raising `ImportError` or spawning thread segfaults.
+- **Presenter Pattern:** GUI actions (such as dialogue confirmations, warning windows, or HUD status updates) should be wrapped in presenter interfaces routed through the `services` registry (e.g. `services.ui`), allowing the headless runner to override them with silent fakes.
+
 ---
 
 ## Verification Commands
@@ -71,10 +76,16 @@ Before submitting pull requests or ending development iterations:
    $env:QT_QPA_PLATFORM="offscreen"
    python -m pytest tests/ -v
    ```
-   Currently: **225 tests** (full mobile sync, auto-resolve, and manual replay suites).
+   Currently: **247 tests** (full mobile sync, auto-resolve, manual replay, and headless import safety suites).
 2. **Run offline simulation suites:**
    ```powershell
    python scratch/encounter_weighting_simulations/test_encounter_simulation.py
    ```
    Ensures that all 11 encounter pools, region weights, and prerequisite validations function flawlessly.
+3. **Verify headless harness checks:**
+   ```powershell
+   python harness/check.py
+   ```
+   Ensures all 9 Tier-1 harness checks (Qt-free / Anki-free simulation) remain green.
+
 

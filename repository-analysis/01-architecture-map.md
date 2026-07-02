@@ -138,7 +138,13 @@ To reduce review card execution latency and UI transitions to practically zero, 
 
 ---
 
-## Module Boundaries
+## Module Boundaries & Decoupling Stack
+To achieve a clean separation of concerns and support offscreen testing, the codebase uses a structured decoupling boundary:
+- **`services.py` Registry:** Acts as the central composition container. Core logic modules and UI systems look up their dependencies (e.g. database connections, active main pokemon, loggers) through `services` rather than importing hardcoded global singletons or referencing `aqt.mw` directly.
+- **UI Presenter Port:** Presenter interfaces (e.g., `services.ui` presenter) abstract GUI alerts, updates, and dialog triggers. 
+  - **`QtPresenter`:** In production, coordinates dialogue popups, the evolution window animation triggers, and PC Box UI updates.
+  - **`HeadlessPresenter` (and mock fakes):** In headless execution, intercepts these triggers silently, allowing tests to run assertion scripts without UI blocks.
+
 - **Root Workspace:** Orchestration, constant definitions (`const.py`, `resources.py`), and Anki-specific setup (`__init__.py`, `hooks.py`, `menu_buttons.py`).
 - **`pyobj/`:** Stateful UI objects and controllers. Includes `pc_box.py`, `settings_window.py`, and `database_manager.py`.
 - **`functions/`:** Clean procedural utility scripts. Includes `encounter_functions.py` (weighting logic), `encounter_data.py` (constants), and cached lookups.
@@ -150,3 +156,5 @@ To reduce review card execution latency and UI transitions to practically zero, 
 - **`__init__.py` Hook Wrappers:** Modifications to Anki reviewer methods must use original references stored in `_shortcutKeys`, `_linkHandler`, and `_bottomHTML` to prevent wrapper accumulation when reload scripts are called.
 - **SQLite Database Transactions:** Swapping databases requires atomic, synchronous locks to prevent multi-threaded conflicts.
 - **Static Encounter Keys:** The Pokedex JSON and SQLite databases use lowercased keys for Mega and Gmax variants (e.g. `mewtwomegay` instead of `Mewtwomegay`). Bypassing lowercasing will cause search lookup failures.
+- **Headless Import Violations:** Importing `aqt` or `PyQt6` inside state managers or core logic modules at the top level violates the offscreen runner's import-isolation, causing test suites to fail.
+

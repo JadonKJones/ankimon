@@ -9,9 +9,11 @@ This document traces the most important execution and behavior paths in the Anki
 - **Start File/Symbol:** `__init__.py` -> `start_asynchronous_startup()`.
 - **Intermediate Steps:**
   1. Bootstraps basic file paths and directory configurations via `ensure_ankimon_infrastructure()`.
-  2. Anchors reload-safe singletons on `mw` (`logger`, `translator`, `settings_obj`, `mw.ankimon_db` SQLite manager).
-  3. Spawns an asynchronous background worker thread using `aqt.operations.QueryOp`.
-  4. **Background Operations (`run_startup_background_checks()`):**
+  2. Anchors reload-safe singletons on `mw` via `singletons.py`, which delegates the dynamic assembly of game state (Settings, DB, Translator, Tracker, Main/Enemy Pokemon, and Achievements) to `core.build_core()`.
+  3. `core.build_core()` registers these models in the dependency container registry (`services.py`) and preloads static pokedex/learnset caches in memory to completely block card review disk I/O.
+  4. Calls `bind_runtime_globals()` to walk the core logical packages (e.g. `battle_loop`, `encounter_functions`) and dynamically link their bare global variables to the registered instances in `services`.
+  5. Spawns an asynchronous background worker thread using `aqt.operations.QueryOp`.
+  6. **Background Operations (`run_startup_background_checks()`):**
      - Runs auto-backups (`run_backup()`).
      - Verifies database migration status cleanly.
      - Loads collected Pokémon IDs.
@@ -19,7 +21,7 @@ This document traces the most important execution and behavior paths in the Anki
      - Checks if sprites/badges asset directories exist.
      - Generates the initial wild enemy in the background (`generate_random_pokemon()`).
      - Rewrites and aggregates item count metrics (`count_items_and_rewrite()`).
-  5. **GUI Thread Callbacks (`run_startup_ui_callbacks()`):**
+  7. **GUI Thread Callbacks (`run_startup_ui_callbacks()`):**
      - Triggers backup error tracebacks or migration dialog popups if flagged in the background.
      - Displays sprite downloader agreements if folders are missing.
      - Safely loads and synchronizes the background-generated enemy's stats/HP into `enemy_pokemon` on the main GUI thread.
@@ -32,6 +34,23 @@ This document traces the most important execution and behavior paths in the Anki
 - **Persistence Involved:** Thread-safe SQLite read-only operations during background execution; GUI thread commits on callbacks.
 - **Integrations Involved:** Sequential wrapping and injection into Anki's reviewer hook system.
 - **Why it matters:** Drastically optimizes boot speed, resolving the legacy 10-second blocking startup penalty.
+- **Confidence Level:** High
+
+---
+
+## 1b. Headless Harness Double-Boot Path
+- **Trigger:** Dev launches harness command (e.g. `python harness/check.py` or unit tests).
+- **Start File/Symbol:** `harness/driver.py` or `tests/conftest.py`.
+- **Intermediate Steps:**
+  1. Instantiates a custom headless environment block, blocking or mocking the GUI `aqt`/`PyQt6` modules.
+  2. Bypasses `singletons.py` and calls `core.build_core()` directly.
+  3. Hydrates an in-memory SQLite database and injects mock trainer metadata.
+  4. Wires mock presenters (`HeadlessPresenter`) and fake services into the `services` registry.
+  5. Invokes `bind_runtime_globals()` to link the core modules to the mock instances in `services`.
+- **Endpoint/Effect:** The entire game loop (card reviews, battle outcomes, catch computations, evolution checks) is executed in pure Python with zero GUI windows or Anki runtime dependencies.
+- **State Changes Involved:** Custom mock states loaded; no `mw` references created.
+- **Persistence Involved:** Pure isolated testing databases (e.g., temporary directories or in-memory connections).
+- **Why it matters:** Enables immediate verification of battle logic, pool weights, and save files in CI pipelines or local tests without manual clicking.
 - **Confidence Level:** High
 
 ---

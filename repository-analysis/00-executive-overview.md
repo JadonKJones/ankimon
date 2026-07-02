@@ -13,14 +13,19 @@ Directly evidenced by:
 The primary entrypoint for the Anki add-on system is `__init__.py`. When Anki loads the add-on, this file is executed.
 1. It imports dependencies and Anki core modules (`aqt`, `anki`).
 2. It generates startup files (`generate_startup_files`).
-3. It initializes core singletons via `singletons.py` (e.g., `logger`, `settings_obj`, `main_pokemon`, `ankimon_tracker_obj`).
-4. It sets up web exports and UI hooks (`gui_hooks.reviewer_did_show_question`, `gui_hooks.reviewer_did_answer_card`).
-5. It checks for the existence of required sprites and data files, triggering downloads if missing (`download_sprites.py`).
-6. It hooks into Anki's profile loading (`profileLoaded`) and review events (`reviewer_did_answer_card`), which drives the battle progression.
+3. It triggers `singletons.py` to bootstrap the application. Rather than configuring everything inline, `singletons.py` delegates core game state construction to the decoupled `core.build_core()` method inside `core.py`.
+4. `core.build_core()` constructs the core gameplay models and components, loading static pokedex and level caches in memory, and populates them into the global registry (`services.py`).
+5. `singletons.py` then exposes these core models to the legacy window singletons, followed by calling `bind_runtime_globals()` to dynamically map numerical production package IDs at runtime to their corresponding registry fields inside the core logic modules.
+6. **Double-Boot Flow:** 
+   - **Production (GUI) Boot:** Anchors state to the `mw` singleton, registers Anki reviewer keyboard shortcuts/hooks, and opens rich Qt windows (like the `AnkimonItemsWeb` shell and dialogs) backed by `QtPresenter`.
+   - **Headless (Harness) Boot:** The developer simulation runner (`harness/driver.py`) calls `build_core()` directly and injects a `HeadlessPresenter` alongside fakes/mocks, allowing testing without importing `aqt` or loading any Qt window objects.
+7. It sets up web exports and UI hooks (`gui_hooks.reviewer_did_show_question`, `gui_hooks.reviewer_did_answer_card`).
+8. It checks for the existence of required sprites and data files, triggering downloads if missing (`download_sprites.py`).
+9. It hooks into Anki's profile loading (`profileLoaded`) and review events (`reviewer_did_answer_card`), which drives the battle progression.
 
 Directly evidenced by:
 - `__init__.py`'s setup code at the module level.
-- `singletons.py` instantiating central objects like `Settings`, `PokemonObject`, and `AnkimonTracker`.
+- `singletons.py` delegating to `core.build_core()` and calling `bind_runtime_globals()`.
 
 ## Major subsystems
 1. **Add-on Orchestration:** `__init__.py` hooks into Anki, manages initialization, and wires up the review lifecycle to the battle engine.
