@@ -69,6 +69,7 @@ def git_pull_ff_only(status_cb=None) -> tuple[bool, str]:
     the tree is dirty or the branch has diverged — so it never creates merge
     conflicts. Returns ``(success, message)``.
     """
+
     def log(msg):
         if status_cb:
             status_cb(msg)
@@ -88,11 +89,15 @@ def git_pull_ff_only(status_cb=None) -> tuple[bool, str]:
     def _git(*args, timeout=180):
         return subprocess.run(
             ["git", "-C", str(root), *args],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
 
     try:
-        branch = (_git("rev-parse", "--abbrev-ref", "HEAD", timeout=30).stdout or "").strip() or "HEAD"
+        branch = (
+            _git("rev-parse", "--abbrev-ref", "HEAD", timeout=30).stdout or ""
+        ).strip() or "HEAD"
         log(f"Fast-forwarding '{branch}' (git pull --ff-only)...")
         pull = _git("pull", "--ff-only")
         if pull.returncode != 0:
@@ -144,7 +149,9 @@ def _is_supported_version(name: str) -> bool:
     return v is not None and v >= MIN_UPDATER_VERSION
 
 
-def _make_request(url: str, accept: str = "application/vnd.github.v3+json") -> urllib.request.Request:
+def _make_request(
+    url: str, accept: str = "application/vnd.github.v3+json"
+) -> urllib.request.Request:
     req = urllib.request.Request(url)
     req.add_header("Accept", accept)
     req.add_header("User-Agent", USER_AGENT)
@@ -185,16 +192,29 @@ def _should_preserve(rel_path: str, gitignore_patterns: list[str]) -> bool:
     if rel_path == "user_files" or rel_path.startswith("user_files/"):
         return True
 
+    # Unconditionally preserve local metadata, guides and changelogs
+    always_preserve_roots = ["HelpInfos.html", "updateinfos.md", "meta.json"]
+    if rel_path in always_preserve_roots:
+        return True
+
     for pattern in gitignore_patterns:
         pattern = pattern.rstrip("/")
         if rel_path == pattern or rel_path.startswith(pattern + "/"):
             return True
         elif "*" in pattern:
             import fnmatch
-            if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(os.path.basename(rel_path), pattern):
+
+            if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(
+                os.path.basename(rel_path), pattern
+            ):
                 return True
 
-    always_preserve = ["user_files/sprites/", "user_files/ankimon.db"]
+    always_preserve = [
+        "user_files/sprites/",
+        "user_files/ankimon.db",
+        "user_files/ankimonDEV.db",
+        "user_files/update_state.json",
+    ]
     for p in always_preserve:
         p = p.rstrip("/")
         if rel_path == p or rel_path.startswith(p + "/"):
@@ -218,7 +238,11 @@ def fetch_releases() -> list[dict]:
     if not data:
         return []
     return [
-        {"name": r["tag_name"], "body": r.get("body", ""), "zipball_url": r["zipball_url"]}
+        {
+            "name": r["tag_name"],
+            "body": r.get("body", ""),
+            "zipball_url": r["zipball_url"],
+        }
         for r in data
         if _is_supported_version(r["tag_name"])
     ]
@@ -235,7 +259,120 @@ def fetch_open_prs() -> list[dict]:
     data = _api_get("pulls?state=open&per_page=50")
     if not data:
         return []
-    return [{"number": pr["number"], "title": pr["title"], "head_ref": pr["head"]["ref"], "head_sha": pr["head"]["sha"]} for pr in data]
+    return [
+        {
+            "number": pr["number"],
+            "title": pr["title"],
+            "head_ref": pr["head"]["ref"],
+            "head_sha": pr["head"]["sha"],
+        }
+        for pr in data
+    ]
+
+
+def fetch_branch_sha(branch: str) -> Optional[str]:
+    data = _api_get(f"branches/{branch}")
+    if isinstance(data, dict) and isinstance(data.get("commit"), dict):
+        return data["commit"].get("sha")
+    return None
+
+
+def fetch_commit_date(sha: str) -> Optional[str]:
+    if not sha or len(sha) < 7 or not all(c in "0123456789abcdefABCDEF" for c in sha):
+        return None
+    data = _api_get(f"commits/{sha}")
+    commit = data.get("commit") if isinstance(data, dict) else None
+    if isinstance(commit, dict):
+        committer = commit.get("committer") or {}
+        author = commit.get("author") or {}
+        return committer.get("date") or author.get("date")
+    return None
+
+
+def fetch_branch_commits(branch: str, local_sha: Optional[str] = None) -> list[dict]:
+    def entry(c: dict) -> dict:
+        # Commit messages can be empty — splitlines() on "" yields [].
+        lines = (c["commit"]["message"] or "").splitlines()
+        return {"sha": c["sha"][:7], "message": lines[0] if lines else ""}
+
+    try:
+        if (
+            isinstance(local_sha, str)
+            and len(local_sha) >= 7
+            and all(c in "0123456789abcdefABCDEF" for c in local_sha)
+        ):
+            # Try to use the compare API
+            data = _api_get(f"compare/{local_sha}...{branch}")
+            if isinstance(data, dict) and isinstance(data.get("commits"), list):
+                return [entry(c) for c in reversed(data["commits"])]
+
+        # Fallback: get the last 5 commits of the branch
+        data = _api_get(f"commits?sha={branch}&per_page=5")
+        if isinstance(data, list):
+            return [entry(c) for c in data]
+    except Exception:
+        pass
+    return []
+
+
+def get_update_state_path() -> Path:
+    return addon_dir / "user_files" / "update_state.json"
+
+
+def save_update_state(
+    source_type: str,
+    source_name: str,
+    commit_sha: str,
+    skip_until: Optional[float] = None,
+):
+    try:
+        import time
+
+        path = get_update_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        state = {
+            "source_type": source_type,
+            "source_name": source_name,
+            "commit_sha": commit_sha,
+            "installed_at": time.time(),
+        }
+        if skip_until is not None:
+            state["skip_until"] = skip_until
+        elif path.exists():
+            try:
+                old_state = json.loads(path.read_text(encoding="utf-8"))
+                if "skip_until" in old_state:
+                    state["skip_until"] = old_state["skip_until"]
+            except Exception:
+                pass
+        path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"Ankimon Updater: Failed to save update state: {e}")
+
+
+def set_update_skip_until(skip_until: float):
+    try:
+        state = read_update_state() or {}
+        state["skip_until"] = skip_until
+        path = get_update_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"Ankimon Updater: Failed to set skip_until: {e}")
+
+
+def read_update_state() -> Optional[dict]:
+    try:
+        path = get_update_state_path()
+        if path.exists():
+            # update_state.json lives in user_files/ and is user-editable, so
+            # anything a text editor can produce must come back as None here.
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return None
 
 
 def _download_zip_to_temp(url: str, progress_cb=None) -> Optional[str]:
@@ -243,12 +380,12 @@ def _download_zip_to_temp(url: str, progress_cb=None) -> Optional[str]:
     try:
         with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp:
             total = int(resp.headers.get("Content-Length", 0))
-            
+
             # Create a named temporary file that persists after closing the object
             # but is cleaned up by our manual logic later.
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
             tmp_path = tmp.name
-            
+
             try:
                 downloaded = 0
                 chunk_size = 128 * 1024  # 128KB chunks
@@ -285,15 +422,25 @@ def _get_gitignore_patterns() -> list[str]:
     patterns = _fetch_gitignore_patterns()
     if not patterns:
         patterns = [
-            "user_files/mypokemon.json", "user_files/mainpokemon.json",
-            "user_files/badges.json", "user_files/items.json",
-            "user_files/data.json", "user_files/team.json",
-            "user_files/config.obf", "user_files/pokemon_history.json",
-            "user_files/rate_this.json", "user_files/backups",
-            "user_files/todays_shop.json", "user_files/meta.json",
-            "user_files/download_complete.flag", "user_files/ankimon.db",
-            "user_files/json/*", "user_files/sprites/",
-            "meta.json", "*.pyc", "*.log",
+            "user_files/mypokemon.json",
+            "user_files/mainpokemon.json",
+            "user_files/badges.json",
+            "user_files/items.json",
+            "user_files/data.json",
+            "user_files/team.json",
+            "user_files/config.obf",
+            "user_files/pokemon_history.json",
+            "user_files/rate_this.json",
+            "user_files/backups",
+            "user_files/todays_shop.json",
+            "user_files/meta.json",
+            "user_files/download_complete.flag",
+            "user_files/ankimon.db",
+            "user_files/json/*",
+            "user_files/sprites/",
+            "meta.json",
+            "*.pyc",
+            "*.log",
         ]
     return patterns
 
@@ -327,7 +474,7 @@ def _extract_ref_from_prefix(src_prefix: str) -> str:
     root_dir = parts[0]
     # Remove repo name prefix if present
     if root_dir.startswith("ankimon-"):
-        ref = root_dir[len("ankimon-"):]
+        ref = root_dir[len("ankimon-") :]
         return ref if ref else "main"
     elif "ankimon-" in root_dir:
         # e.g. h0tp-ftw-ankimon-a1b2c3d -> a1b2c3d
@@ -356,7 +503,7 @@ def _download_and_extract_submodule(sha: str, dest_dir: Path, status_cb=None):
 
     url = f"https://github.com/ArdentRoe/poke-engine/archive/{sha}.zip"
     log("Downloading poke_engine submodule package...")
-    
+
     zip_path = _download_zip_to_temp(url)
     if not zip_path:
         raise Exception("Failed to download poke_engine submodule zip archive.")
@@ -370,19 +517,19 @@ def _download_and_extract_submodule(sha: str, dest_dir: Path, status_cb=None):
                 raise Exception("poke_engine submodule archive is empty.")
             # The root directory in zip is e.g. "poke-engine-{sha}"
             root_prefix = names[0].split("/")[0] + "/"
-            
+
             for name in names:
                 if not name.startswith(root_prefix) or name == root_prefix:
                     continue
-                rel_path = name[len(root_prefix):]
+                rel_path = name[len(root_prefix) :]
                 if not rel_path or rel_path.endswith("/"):
                     continue
-                
+
                 dest_file = temp_extract_dir / rel_path
                 dest_file.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(name) as source, dest_file.open("wb") as target:
                     shutil.copyfileobj(source, target)
-        
+
         # Atomic swap: Delete old dest_dir if it exists, rename temp_extract_dir to dest_dir
         if dest_dir.exists():
             shutil.rmtree(dest_dir)
@@ -402,7 +549,13 @@ def _download_and_extract_submodule(sha: str, dest_dir: Path, status_cb=None):
                 pass
 
 
-def apply_update(zip_path: str, status_cb=None) -> tuple[bool, str]:
+def apply_update(
+    zip_path: str,
+    source_type: Optional[str] = None,
+    source_name: Optional[str] = None,
+    commit_sha: Optional[str] = None,
+    status_cb=None,
+) -> tuple[bool, str]:
     def log(msg):
         if status_cb:
             status_cb(msg)
@@ -445,7 +598,7 @@ def apply_update(zip_path: str, status_cb=None) -> tuple[bool, str]:
             for name in names:
                 if not name.startswith(src_prefix) or name == src_prefix:
                     continue
-                rel_path = name[len(src_prefix):]
+                rel_path = name[len(src_prefix) :]
                 if not rel_path or rel_path.endswith("/"):
                     continue
                 if _should_preserve(rel_path, gitignore_patterns):
@@ -496,16 +649,30 @@ def apply_update(zip_path: str, status_cb=None) -> tuple[bool, str]:
                     continue
                 dest = addon_dir / rel_path
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(zip_name) as source, dest.open("wb") as target:
-                    shutil.copyfileobj(source, target)
-                installed += 1
+                try:
+                    with zf.open(zip_name) as source, dest.open("wb") as target:
+                        shutil.copyfileobj(source, target)
+                    installed += 1
+                except PermissionError as pe:
+                    if dest.exists():
+                        log(
+                            f"Warning: Skipping locked file {rel_path} (already exists)"
+                        )
+                    else:
+                        raise pe
 
             # --- Download and install matching poke_engine submodule version ---
             ref = _extract_ref_from_prefix(src_prefix)
             log(f"Resolving poke_engine submodule for ref '{ref}'...")
             sub_sha = _fetch_submodule_sha(ref) or DEFAULT_SUBMODULE_SHA
-            
-            _download_and_extract_submodule(sub_sha, addon_dir / "poke_engine", status_cb)
+
+            _download_and_extract_submodule(
+                sub_sha, addon_dir / "poke_engine", status_cb
+            )
+
+            # --- Save update state if provided ---
+            if source_type and source_name:
+                save_update_state(source_type, source_name, commit_sha or "")
 
             cleanup()
             log(f"Update complete. Installed {installed} files.")

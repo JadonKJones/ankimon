@@ -22,6 +22,7 @@ from aqt.gui_hooks import webview_will_set_content
 from aqt.webview import WebContent
 
 from .resources import ensure_ankimon_infrastructure, user_path, addon_dir
+
 ensure_ankimon_infrastructure(addon_dir, user_path)
 
 from .singletons import (
@@ -77,6 +78,7 @@ from .gui_classes import overview_team
 
 # --- Startup: backup, migration, assets, first enemy ---
 from .startup import run_startup_sequence
+
 database_complete, collected_pokemon_ids, backup_manager = run_startup_sequence()
 
 # --- Web exports for reviewer UI ---
@@ -84,18 +86,19 @@ mw.addonManager.setWebExports(
     __name__, r"(web|user_files)/.*\.(css|js|jpg|gif|html|ttf|png|mp3)"
 )
 
+
 def on_webview_will_set_content(web_content: WebContent, context) -> None:
     if not isinstance(context, aqt.reviewer.Reviewer):
         return
     ankimon_package = mw.addonManager.addonFromModule(__name__)
-    web_content.js.append(
-        f"/_addons/{ankimon_package}/web/ankimon_hud_portal.js"
-    )
+    web_content.js.append(f"/_addons/{ankimon_package}/web/ankimon_hud_portal.js")
+
 
 webview_will_set_content.append(on_webview_will_set_content)
 
 # --- Card timer and answer hooks ---
 from .card_hooks import register_card_hooks
+
 register_card_hooks()
 
 setupHooks(None, ankimon_tracker_obj)
@@ -105,11 +108,20 @@ online_connectivity = test_online_connectivity()
 no_more_news = settings_obj.get("misc.YouShallNotPass_Ankimon_News")
 ssh = settings_obj.get("misc.ssh")
 
-from .changelog import check_and_show_changelog, open_help_window
+from .changelog import (
+    check_and_show_changelog,
+    open_help_window,
+    schedule_branch_update_check,
+)
+
 check_and_show_changelog(online_connectivity, ssh, no_more_news)
+# Branch self-updater (F26): poll for new BRRRR_Experimental commits once the
+# profile is open (gui_hooks seam), never as a module-level side effect.
+schedule_branch_update_check(online_connectivity, ssh)
 
 # --- Battle loop ---
 from .battle_loop import on_review_card, init_battle_state
+
 init_battle_state(collected_pokemon_ids)
 gui_hooks.reviewer_did_answer_card.append(on_review_card)
 
@@ -156,6 +168,7 @@ from .hook_registry import (
 )
 
 from .profile_hooks import register_profile_hooks
+
 register_profile_hooks(
     online_connectivity,
     backup_manager,
@@ -167,6 +180,7 @@ register_profile_hooks(
 )
 
 from .reviewer_ui import setup_reviewer_ui, set_collected_ids
+
 set_collected_ids(collected_pokemon_ids)
 setup_reviewer_ui(
     settings_obj.get("controls.catch_key"),
@@ -175,4 +189,5 @@ setup_reviewer_ui(
 )
 
 from .discord_integration import setup_discord_hooks
+
 setup_discord_hooks()
