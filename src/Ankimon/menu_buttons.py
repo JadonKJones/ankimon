@@ -65,7 +65,11 @@ else:
     try:
         mw.translator = Translator(language=int(mw.settings_obj.get("misc.language")))
     except Exception:
-        pass
+        # If the configured language fails to load (missing/corrupt setting or
+        # translation file), fall back to English (9) so mw.translator is always
+        # set — otherwise the next line raises AttributeError and the whole menu
+        # fails to build.
+        mw.translator = Translator(language=9)
     mw.pokemenu = QMenu('&' + mw.translator.translate("ankimon_button_title"), mw)
 game_menu = mw.pokemenu.addMenu(mw.translator.translate("ankimon_game_button_title"))
 profile_menu = mw.pokemenu.addMenu(mw.translator.translate("ankimon_profile_button_title"))

@@ -95,17 +95,25 @@ class TrainerCard:
         Used after a database switch (swap_ankimon_account) so the cached
         level/xp/cash/sprite/league/team fields reflect the now-active account.
         """
-        self.trainer_name = self.settings_obj.get("trainer.name")
-        self.level = int(self.settings_obj.get("trainer.level"))
-        self.xp = int(self.settings_obj.get("trainer.xp"))
-        self.total_xp = int(self.settings_obj.get("trainer.total_xp", 0))
-        self.cash = int(self.settings_obj.get("trainer.cash"))
-        self.image_path = (
-            f"{trainer_sprites_path}"
-            + "/"
-            + self.settings_obj.get("trainer.sprite")
-            + ".png"
-        )
+        # settings_obj can be uninitialised during a partial populate / reset;
+        # fall back to safe defaults (and default each key) rather than raising
+        # an AttributeError / int(None) TypeError.
+        settings = self.settings_obj
+        if settings is None:
+            self.trainer_name = "Trainer"
+            self.level = 1
+            self.xp = 0
+            self.total_xp = 0
+            self.cash = 0
+            sprite = "default"
+        else:
+            self.trainer_name = settings.get("trainer.name", "Trainer")
+            self.level = int(settings.get("trainer.level", 1))
+            self.xp = int(settings.get("trainer.xp", 0))
+            self.total_xp = int(settings.get("trainer.total_xp", 0))
+            self.cash = int(settings.get("trainer.cash", 0))
+            sprite = settings.get("trainer.sprite", "default")
+        self.image_path = f"{trainer_sprites_path}/{sprite}.png"
         self.league = find_trainer_rank(
             int(self.highest_pokemon_level()), int(self.level)
         )

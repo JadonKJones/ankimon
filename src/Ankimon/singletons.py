@@ -393,10 +393,18 @@ def swap_ankimon_account():
     from .functions.update_main_pokemon import update_main_pokemon
     from .functions.encounter_functions import new_pokemon, clear_encounter_cache
 
-    current_name = services.db.db_path.name
-    new_name = "ankimonDEV.db" if current_name == "ankimon.db" else "ankimon.db"
-
     try:
+        # services.db (or its db_path) can be None during init / in headless
+        # environments; read the active name inside the try so a missing DB
+        # fails gracefully into the tooltip rather than raising an uncaught
+        # AttributeError before the handler below can report it.
+        if services.db is None or services.db.db_path is None:
+            tooltip("Ankimon database is not initialized.")
+            return
+
+        current_name = services.db.db_path.name
+        new_name = "ankimonDEV.db" if current_name == "ankimon.db" else "ankimon.db"
+
         # Switch the DB connection.
         services.db.switch_database(new_name)
 
