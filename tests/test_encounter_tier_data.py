@@ -10,6 +10,10 @@ The module is loaded directly from its file (not via ``import Ankimon.resources`
 so the test runs in the Qt-free Tier-1 environment: ``Ankimon/__init__.py`` imports
 ``aqt`` which is absent there, whereas ``resources.py`` itself only needs stdlib
 (``pathlib``/``os``/``json``).
+
+A cross-file drift guard against ``functions/encounter_data.py`` (whose lists
+drive wild-encounter generation) is included at the bottom; it self-skips until
+the F22 encounter overhaul replaces that file — see its docstring.
 """
 
 import importlib.util
@@ -101,3 +105,81 @@ def test_f38_ids_are_not_duplicated(resources):
                 membership.setdefault(dex_id, []).append(tier)
     dupes = {k: v for k, v in membership.items() if len(v) > 1}
     assert not dupes, f"F38 IDs listed in multiple tiers: {dupes}"
+
+
+# --- Cross-file drift guard: resources.POKEMON_TIERS vs functions/encounter_data --
+
+
+def _load_encounter_data():
+    """Load ``src/Ankimon/functions/encounter_data.py`` in isolation.
+
+    Like ``resources.py`` it is loaded straight from its file: the module is
+    pure data (no imports at all), so this stays Qt-free and does not trigger
+    ``Ankimon/__init__``'s ``aqt`` import.
+    """
+    encounter_data_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "Ankimon"
+        / "functions"
+        / "encounter_data.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "ankimon_encounter_data_f38_probe", encounter_data_path
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_encounter_data_agrees_with_pokemon_tiers_on_f38_ids():
+    """Wild-encounter lists must agree with ``POKEMON_TIERS`` on F38's IDs.
+
+    Wild encounters are generated from the ``LEGENDARY``/``MYTHICAL`` lists in
+    ``functions/encounter_data.py`` (via ``get_random_pokemon_in_tier``), while
+    tier classification (badges/achievements on capture) reads
+    ``resources.POKEMON_TIERS`` — the two files must agree on the F38 IDs or
+    tier-based logic diverges.
+
+    The base ``encounter_data.py`` predates the F22 encounter overhaul: it
+    contains none of the F38 alternate-form IDs and still lists Pecharunt under
+    ``LEGENDARY`` (a discrepancy that predates this PR). F22 — a Wave-2 unit,
+    not yet ported — replaces that file with exp's version, which already
+    matches this PR (all form IDs present; Pecharunt in ``MYTHICAL``). Until
+    then this check self-skips; the moment any F38 form ID appears in
+    ``encounter_data.py`` it arms and enforces full consistency, so a partial
+    F22 port fails loudly instead of drifting silently.
+
+    Scope note: consistency is asserted only between ``LEGENDARY`` and
+    ``MYTHICAL``. Exp's ``encounter_data.py`` intentionally also lists some of
+    these IDs elsewhere (e.g. 10191 in ``UNAVAILABLE``, all of them as
+    ``PREREQUISITES`` keys) — those memberships are F22 semantics, not drift.
+    """
+    encounter_data = _load_encounter_data()
+    legendary = set(encounter_data.LEGENDARY)
+    mythical = set(encounter_data.MYTHICAL)
+    form_ids = LEGENDARY_NEW_FORMS | MYTHICAL_NEW_FORMS
+    if not form_ids & (legendary | mythical):
+        pytest.skip(
+            "functions/encounter_data.py predates the F22 encounter overhaul "
+            "(no F38 form IDs present yet); this consistency guard arms "
+            "automatically once F22 lands"
+        )
+    missing_legendary = sorted(LEGENDARY_NEW_FORMS - legendary)
+    assert not missing_legendary, (
+        f"encounter_data.LEGENDARY is missing form IDs: {missing_legendary}"
+    )
+    missing_mythical = sorted(MYTHICAL_NEW_FORMS - mythical)
+    assert not missing_mythical, (
+        f"encounter_data.MYTHICAL is missing form IDs: {missing_mythical}"
+    )
+    cross_listed = sorted(
+        (LEGENDARY_NEW_FORMS & mythical) | (MYTHICAL_NEW_FORMS & legendary)
+    )
+    assert not cross_listed, (
+        f"form IDs listed in the wrong encounter_data tier: {cross_listed}"
+    )
+    assert PECHARUNT in mythical, "Pecharunt must be MYTHICAL in encounter_data"
+    assert PECHARUNT not in legendary, (
+        "Pecharunt must not remain in encounter_data.LEGENDARY once F22 lands"
+    )
