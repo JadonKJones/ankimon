@@ -23,6 +23,7 @@ from aqt.qt import (
 )
 from aqt.theme import theme_manager
 
+from ..services import services
 from ..functions.pokedex_functions import find_details_move
 
 from ..utils import give_item, daily_item_list, get_item_price, get_item_description
@@ -381,7 +382,7 @@ class PokemonShopManager:
         # Check inventory for owned status
         owned_quantity = 0
         try:
-            db_item = mw.ankimon_db.get_item(item["name"])
+            db_item = services.db.get_item(item["name"])
             if db_item:
                 owned_quantity = db_item.get("quantity", 0)
         except Exception:
@@ -444,7 +445,7 @@ class PokemonShopManager:
 
     def get_daily_items(self):
         """Generate daily items based on the current date."""
-        db = mw.ankimon_db
+        db = services.db
         shop_data = db.get_user_data("todays_shop")
         if shop_data:
             if shop_data.get("items") and shop_data.get("date") == datetime.now().strftime("%Y-%m-%d"):
@@ -456,7 +457,7 @@ class PokemonShopManager:
 
     def get_daily_tms(self):
         """Works like get_daily_items, but for TMs"""
-        db = mw.ankimon_db
+        db = services.db
         shop_data = db.get_user_data("todays_shop")
         if shop_data:
             if shop_data.get("technical_machines") and shop_data.get("date") == datetime.now().strftime("%Y-%m-%d"):
@@ -467,7 +468,13 @@ class PokemonShopManager:
         random.seed(seed)
         return random.sample(tm_pool, self.number_of_daily_items)
 
-    def get_tm_pool(self) -> list[str]:
+    def get_tm_pool(self) -> list[dict]:
+        # Cached: pokemon_tm_learnset.json is immutable at runtime, and this
+        # is on the hot path of the Items window's data fetch.
+        cached = getattr(self, "_tm_pool_cache", None)
+        if cached is not None:
+            return cached
+
         with open(pokemon_tm_learnset_path, "r") as f:
             pokemon_tm_learnset = json.load(f)
 
@@ -489,6 +496,7 @@ class PokemonShopManager:
         # Ensure deterministic order
         all_tms.sort(key=lambda tm: tm["name"])
 
+        self._tm_pool_cache = all_tms
         return all_tms
 
     def buy_item(self, item, item_type: Union[str, None] = None):
@@ -595,7 +603,7 @@ class PokemonShopManager:
             "technical_machines": self.todays_daily_tms,
             "date": datetime.now().strftime("%Y-%m-%d"),
         }
-        mw.ankimon_db.set_user_data("todays_shop", data)
+        services.db.set_user_data("todays_shop", data)
 
         # Now refresh the window - it will load from the updated JSON file
         self.toggle_window()
