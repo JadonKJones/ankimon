@@ -106,7 +106,9 @@ def check_branch_update(online_connectivity: bool, ssh: bool):
     _log_info(
         f"check_branch_update: skip_until={skip_until}, current_time={time.time()}"
     )
-    if skip_until and time.time() < skip_until:
+    # update_state.json is user-editable: a null/non-numeric skip_until must not
+    # crash the comparison (keep in sync with UpdateDialog._populate_brrr_ui).
+    if isinstance(skip_until, (int, float)) and time.time() < skip_until:
         _log_info("check_branch_update exited early: skip_until active")
         return
 

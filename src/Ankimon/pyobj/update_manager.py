@@ -272,7 +272,7 @@ def fetch_open_prs() -> list[dict]:
 
 def fetch_branch_sha(branch: str) -> Optional[str]:
     data = _api_get(f"branches/{branch}")
-    if data and "commit" in data:
+    if isinstance(data, dict) and isinstance(data.get("commit"), dict):
         return data["commit"].get("sha")
     return None
 
@@ -281,41 +281,35 @@ def fetch_commit_date(sha: str) -> Optional[str]:
     if not sha or len(sha) < 7 or not all(c in "0123456789abcdefABCDEF" for c in sha):
         return None
     data = _api_get(f"commits/{sha}")
-    if data and isinstance(data, dict) and "commit" in data:
-        committer = data["commit"].get("committer") or {}
-        author = data["commit"].get("author") or {}
+    commit = data.get("commit") if isinstance(data, dict) else None
+    if isinstance(commit, dict):
+        committer = commit.get("committer") or {}
+        author = commit.get("author") or {}
         return committer.get("date") or author.get("date")
     return None
 
 
 def fetch_branch_commits(branch: str, local_sha: Optional[str] = None) -> list[dict]:
+    def entry(c: dict) -> dict:
+        # Commit messages can be empty — splitlines() on "" yields [].
+        lines = (c["commit"]["message"] or "").splitlines()
+        return {"sha": c["sha"][:7], "message": lines[0] if lines else ""}
+
     try:
         if (
-            local_sha
-            and not local_sha.startswith("old_mocked")
+            isinstance(local_sha, str)
             and len(local_sha) >= 7
             and all(c in "0123456789abcdefABCDEF" for c in local_sha)
         ):
             # Try to use the compare API
-            url = f"compare/{local_sha}...{branch}"
-            data = _api_get(url)
-            if data and "commits" in data:
-                commits = data["commits"]
-                return [
-                    {
-                        "sha": c["sha"][:7],
-                        "message": c["commit"]["message"].splitlines()[0],
-                    }
-                    for c in reversed(commits)
-                ]
+            data = _api_get(f"compare/{local_sha}...{branch}")
+            if isinstance(data, dict) and isinstance(data.get("commits"), list):
+                return [entry(c) for c in reversed(data["commits"])]
 
         # Fallback: get the last 5 commits of the branch
         data = _api_get(f"commits?sha={branch}&per_page=5")
-        if data and isinstance(data, list):
-            return [
-                {"sha": c["sha"][:7], "message": c["commit"]["message"].splitlines()[0]}
-                for c in data
-            ]
+        if isinstance(data, list):
+            return [entry(c) for c in data]
     except Exception:
         pass
     return []
@@ -371,7 +365,11 @@ def read_update_state() -> Optional[dict]:
     try:
         path = get_update_state_path()
         if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
+            # update_state.json lives in user_files/ and is user-editable, so
+            # anything a text editor can produce must come back as None here.
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
     except Exception:
         pass
     return None

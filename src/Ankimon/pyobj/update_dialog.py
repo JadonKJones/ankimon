@@ -32,7 +32,6 @@ from .update_manager import (
     _download_pr_zip,
     read_update_state,
     fetch_branch_sha,
-    fetch_commit_date,
 )
 from ..resources import addon_ver, IS_EXPERIMENTAL_BUILD
 
@@ -346,8 +345,9 @@ class UpdateDialog(QDialog):
         import time
         import html
 
-        # 1. Local Commit SHA
-        local_sha = state.get("commit_sha", "unknown")
+        # 1. Local Commit SHA ("or" also covers a null/empty value persisted in
+        # the user-editable update_state.json, where .get() defaults would not)
+        local_sha = state.get("commit_sha") or "unknown"
         local_sha_short = local_sha[:7] if len(local_sha) >= 7 else local_sha
         self.brrr_installed_commit_label.setText(
             f"Installed Commit:  <b>{local_sha_short}</b>"
@@ -366,6 +366,8 @@ class UpdateDialog(QDialog):
 
         # 3. Last Updated On
         installed_at = state.get("installed_at")
+        if not isinstance(installed_at, (int, float)):
+            installed_at = None
         if not installed_at:
             try:
                 from .update_manager import get_update_state_path
@@ -388,10 +390,12 @@ class UpdateDialog(QDialog):
                 "Last Update Installed:  <b>Never (Perform update to record)</b>"
             )
 
-        # 4. Snooze Checkbox
-        skip_until = state.get("skip_until", 0)
+        # 4. Snooze Checkbox (tolerate a null/non-numeric skip_until in the
+        # user-editable state file; keep in sync with changelog.check_branch_update)
+        skip_until = state.get("skip_until")
+        is_snoozed = isinstance(skip_until, (int, float)) and skip_until > time.time()
         self.brrr_snooze_checkbox.blockSignals(True)
-        self.brrr_snooze_checkbox.setChecked(skip_until > time.time())
+        self.brrr_snooze_checkbox.setChecked(is_snoozed)
         self.brrr_snooze_checkbox.blockSignals(False)
 
         # 5. Status & Update Button
@@ -921,7 +925,6 @@ class BranchUpdatePromptDialog(QDialog):
         is_dark = theme_manager.night_mode
         bg = "#2b2b2b" if is_dark else "#ffffff"
         text = "#e0e0e0" if is_dark else "#212121"
-        muted = "#888888" if is_dark else "#757575"
         border = "#444444" if is_dark else "#e0e0e0"
         btn_bg = "#3d3d3d" if is_dark else "#eeeeee"
         btn_hover = "#505050" if is_dark else "#e0e0e0"

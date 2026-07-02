@@ -226,6 +226,104 @@ def test_check_branch_update_skipped(mock_read_state, mock_query_op):
     mock_query_op.assert_not_called()
 
 
+def test_read_update_state_rejects_non_dict_json(tmp_path):
+    """update_state.json is user-editable: valid JSON that isn't an object
+    (list/string/number/null) must read back as None, not leak through to
+    callers that immediately call .get() on the result."""
+    state_file = tmp_path / "update_state.json"
+
+    with patch.object(update_manager, "get_update_state_path", return_value=state_file):
+        for content in ('["not", "a", "dict"]', '"just a string"', "42", "null"):
+            state_file.write_text(content, encoding="utf-8")
+            assert update_manager.read_update_state() is None
+
+        # Corrupt (non-JSON) content degrades to None too.
+        state_file.write_text("{not json", encoding="utf-8")
+        assert update_manager.read_update_state() is None
+
+
+@patch("Ankimon.changelog.QueryOp")
+@patch("Ankimon.pyobj.update_manager.read_update_state")
+def test_check_branch_update_tolerates_bad_skip_until(mock_read_state, mock_query_op):
+    """A null or non-numeric skip_until in the user-editable state file must not
+    raise a TypeError against time.time(); the poll simply proceeds."""
+    for bad_skip in (None, "not-a-number"):
+        mock_query_op.reset_mock()
+        mock_read_state.return_value = {
+            "source_type": "branch",
+            "source_name": "BRRRR_Experimental",
+            "commit_sha": "abc1234",
+            "skip_until": bad_skip,
+        }
+        changelog.check_branch_update(True, True)
+        mock_query_op.assert_called_once()
+
+
+@patch("Ankimon.changelog.QueryOp")
+@patch("Ankimon.pyobj.update_manager.read_update_state")
+@patch("Ankimon.pyobj.update_manager.fetch_branch_sha")
+@patch("Ankimon.pyobj.update_manager.fetch_branch_commits")
+def test_check_branch_update_null_commit_sha(
+    mock_fetch_commits, mock_fetch_sha, mock_read_state, mock_query_op
+):
+    """A null commit_sha in the state file still polls; the background op passes
+    None through to fetch_branch_commits (which then uses the fallback API)."""
+    mock_read_state.return_value = {
+        "source_type": "branch",
+        "source_name": "BRRRR_Experimental",
+        "commit_sha": None,
+    }
+    mock_fetch_sha.return_value = "remote_sha_456"
+    mock_fetch_commits.return_value = []
+
+    changelog.check_branch_update(True, True)
+
+    mock_query_op.assert_called_once()
+    bg_func = mock_query_op.call_args[1].get("op") or mock_query_op.call_args[0][1]
+    res_sha, res_commits = bg_func(None)
+
+    assert res_sha == "remote_sha_456"
+    assert res_commits == []
+    mock_fetch_commits.assert_called_once_with("BRRRR_Experimental", None)
+
+
+@patch("Ankimon.pyobj.update_manager._api_get")
+def test_fetch_branch_commits_non_string_local_sha_uses_fallback(mock_api_get):
+    """A non-string local_sha (hostile state file) must not raise; the helper
+    skips the compare API and uses the plain commits endpoint."""
+    mock_api_get.return_value = [
+        {"sha": "111111122222", "commit": {"message": "A commit"}},
+    ]
+    commits = update_manager.fetch_branch_commits("BRRRR_Experimental", 1234567890)
+    assert commits == [{"sha": "1111111", "message": "A commit"}]
+    mock_api_get.assert_called_once_with("commits?sha=BRRRR_Experimental&per_page=5")
+
+
+@patch("Ankimon.pyobj.update_manager._api_get")
+def test_fetch_branch_commits_empty_message(mock_api_get):
+    """An empty commit message must not IndexError the whole feed; the other
+    commits are still returned."""
+    mock_api_get.return_value = [
+        {"sha": "111111122222", "commit": {"message": ""}},
+        {"sha": "333333344444", "commit": {"message": "Real message\nDetails"}},
+    ]
+    commits = update_manager.fetch_branch_commits("BRRRR_Experimental")
+    assert commits == [
+        {"sha": "1111111", "message": ""},
+        {"sha": "3333333", "message": "Real message"},
+    ]
+
+
+@patch("Ankimon.pyobj.update_manager._api_get")
+def test_fetch_helpers_tolerate_malformed_api_shapes(mock_api_get):
+    """fetch_branch_sha / fetch_commit_date return None (not raise) when the
+    API helper yields None or an unexpected JSON shape."""
+    for bad in (None, [], "err", {"commit": None}, {"commit": "not-a-dict"}):
+        mock_api_get.return_value = bad
+        assert update_manager.fetch_branch_sha("BRRRR_Experimental") is None
+        assert update_manager.fetch_commit_date("a1b2c3d4e5f6") is None
+
+
 @patch("Ankimon.changelog.check_branch_update")
 def test_schedule_branch_update_check_uses_profile_open_hook(mock_check):
     """The boot wiring registers on gui_hooks.profile_did_open and only polls
