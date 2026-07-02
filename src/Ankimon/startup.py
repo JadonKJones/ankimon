@@ -213,12 +213,22 @@ def _migrate_auto_catch_settings():
     key, so this is a no-op everywhere else. The tombstone (``None``, which
     the DB scalar layer round-trips as the string ``"None"``) marks the
     migration done, keeping it one-shot across boots.
+
+    The stored toggle is normally a real ``bool`` (the config DB layer
+    round-trips booleans through ``json``), but a legacy/string value would
+    survive as ``"True"``/``"False"`` via that layer's ``str()`` fallback —
+    and ``bool("False")`` is truthy. Normalize any string form explicitly so
+    a disabled toggle never migrates as enabled.
     """
     old_value = settings_obj.config.get("battle.automatic_catch_special")
     if old_value is None or old_value == "None":
         return
+    if isinstance(old_value, bool):
+        enabled = old_value
+    else:
+        enabled = str(old_value).strip().lower() in ("true", "1")
     for key in _AUTO_CATCH_KEYS:
-        settings_obj.set(key, bool(old_value))
+        settings_obj.set(key, enabled)
     settings_obj.set("battle.automatic_catch_special", None)
 
 

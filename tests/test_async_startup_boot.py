@@ -510,6 +510,32 @@ def test_auto_catch_migration_noop_without_legacy_key(startup_env):
         assert env.settings.config[key] is True
 
 
+def test_auto_catch_migration_coerces_string_toggle(startup_env):
+    # A legacy value that survives the config DB layer's str() fallback comes
+    # back as the string "True"/"False" — bool("False") is truthy, so the
+    # migration must normalize the string form, not fold it verbatim.
+    env = startup_env
+    for legacy, expected in (
+        ("False", False),
+        ("True", True),
+        ("1", True),
+        ("0", False),
+    ):
+        env.settings.config.clear()
+        env.settings.config["battle.automatic_catch_special"] = legacy
+        for key in AUTO_CATCH_KEYS:
+            env.settings.config[key] = not expected
+
+        env.mod.run_startup_background_checks()
+
+        for key in AUTO_CATCH_KEYS:
+            assert env.settings.config[key] is expected, (legacy, key)
+        # Every migrated key is a real bool, never the raw string.
+        for key in AUTO_CATCH_KEYS:
+            assert isinstance(env.settings.config[key], bool), (legacy, key)
+        assert env.settings.config["battle.automatic_catch_special"] is None
+
+
 # ---------------------------------------------------------------------------
 # Part B: __init__.py boot ordering + reload-safe review hook (NR-21)
 # ---------------------------------------------------------------------------
