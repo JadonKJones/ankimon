@@ -284,3 +284,29 @@ class TestLearnsetMismatches:
         assert "spikes" not in speed_moves
         assert "superpower" not in speed_moves
         assert "cosmicpower" not in speed_moves
+
+    def test_deoxys_suffix_cleaned_form_applies_exclusions(self):
+        # "deoxys-normal" (PokéAPI name) resolves to "deoxys" via Fallback 1
+        # suffix cleaning; the normal-form exclusions must key on the resolved
+        # name, not on the stale "deoxysnormal" normalization.
+        moves = _get_learnset_moves("deoxys-normal", 100, 9)
+        assert "cosmicpower" in moves
+        assert "recover" in moves
+        assert "teleport" in moves
+        assert "spikes" not in moves
+        assert "superpower" not in moves
+        assert "extremespeed" not in moves
+        assert "zapcannon" not in moves
+
+    def test_deoxys_reverse_lookup_applies_exclusions(self):
+        # An unmapped form suffix skips Fallback 1 (not in the suffix table)
+        # and resolves via Fallback 2's pokedex reverse lookup ("deoxys-unknown"
+        # -> actual_id 386 -> canonical key "deoxys"); exclusions must key on
+        # the resolved canonical name as well.
+        moves = _get_learnset_moves("deoxys-unknown", 100, 9)
+        assert "cosmicpower" in moves
+        assert "recover" in moves
+        assert "teleport" in moves
+        assert "spikes" not in moves
+        assert "superpower" not in moves
+        assert "extremespeed" not in moves

@@ -135,6 +135,10 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
             .replace(".", "")
         )
         pokemon_learnset = learnsets.get(cleaned_norm, {}).get("learnset", {})
+        if pokemon_learnset:
+            # Adopt the resolved key so form-specific exclusions and later
+            # fallbacks operate on the name that actually matched.
+            norm_name = cleaned_norm
 
     # Fallback 2: reverse lookup canonical key using pokedex ID index
     if not pokemon_learnset:
@@ -152,6 +156,9 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
                     pokemon_learnset = learnsets.get(canonical_key, {}).get(
                         "learnset", {}
                     )
+                    if pokemon_learnset:
+                        # Adopt the canonical key for the same reason as above.
+                        norm_name = canonical_key
         except Exception:
             pass
 
