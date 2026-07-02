@@ -108,8 +108,58 @@ def test_auto_battle_mode_cycles():
     assert "error" not in result
 
 
+def test_battle_loop_survives_dead_windows():
+    """F24: on_review_card's is_alive guards must skip a deleted (dead) window
+    instead of raising 'wrapped C/C++ object of type X has been deleted'.
+
+    We swap the live test_window/evo_window for a stand-in whose every attribute
+    access (including the ``objectName`` liveness probe) raises RuntimeError —
+    exactly what a Qt widget does once its C++ half is destroyed. The battle loop
+    must keep running: real battle/faint/encounter events, zero error events.
+    Auto-catch mode (1) is used so the faint path never routes through the
+    evo_window level-up branch, isolating this to the battle_loop guards."""
+    result = _subrun(
+        "from collections import Counter\n"
+        "from harness.driver import Driver\n"
+        # Deterministic RNG in the child: enemy faints are stochastic
+        # (~1-2 per 60 'good' answers), so an unseeded run can produce zero
+        # faints and flake the gate. seed(0) is verified to exercise the
+        # faint-guard path with zero error events.
+        "import random\n"
+        "random.seed(0)\n"
+        "class _DeadWindow:\n"
+        "    # Simulates a Qt window whose underlying C++ object was deleted.\n"
+        "    def objectName(self):\n"
+        "        raise RuntimeError('wrapped C/C++ object of type TestWindow has been deleted')\n"
+        "    def __getattr__(self, name):\n"
+        "        raise RuntimeError('wrapped C/C++ object of type TestWindow has been deleted')\n"
+        "d = Driver(settings_overrides={'battle.cards_per_round': 1, 'battle.automatic_battle': 1})\n"
+        "d.services.test_window = _DeadWindow()\n"
+        "d.services.evo_window = _DeadWindow()\n"
+        "events = []\n"
+        "for _ in range(60):\n"
+        "    events += d.answer('good')\n"
+        "kinds = Counter(e['type'] for e in events)\n"
+        "errs = [e for e in events if e['type'] == 'error']\n"
+        "print(%r + json.dumps({\n"
+        "    'has_battle': kinds.get('battle', 0) > 0,\n"
+        "    'has_faint': kinds.get('faint', 0) > 0,\n"
+        "    'has_encounter': kinds.get('encounter', 0) > 0,\n"
+        "    'errors': kinds.get('error', 0),\n"
+        "    'first_error': (errs[0].get('exception') if errs else None),\n"
+        "}))" % _MARKER
+    )
+    assert result["has_battle"], "no battle turns with dead windows"
+    assert result["has_faint"], "enemy never fainted (faint guard path not exercised)"
+    assert result["has_encounter"], "auto-catch never spawned a new encounter"
+    assert result["errors"] == 0, (
+        "dead-window touch raised instead of being guarded: %s" % result["first_error"]
+    )
+
+
 if __name__ == "__main__":
     test_play_session_runs_without_errors()
     test_state_snapshot_and_single_answer()
     test_auto_battle_mode_cycles()
+    test_battle_loop_survives_dead_windows()
     print("headless harness tests: OK")
