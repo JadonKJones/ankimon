@@ -77,7 +77,14 @@ def restore_package_stubs():
             try:
                 res_spec.loader.exec_module(resources)
             except Exception:
-                pass
+                # Never leave a partially-initialized module in sys.modules —
+                # it would poison every subsequent import.  Put back whatever
+                # was there before (or drop the entry) and surface the error.
+                if current_res is not None:
+                    sys.modules["Ankimon.resources"] = current_res
+                else:
+                    sys.modules.pop("Ankimon.resources", None)
+                raise
 
         # Also restore Ankimon.utils if it is a MagicMock
         current_utils = sys.modules.get("Ankimon.utils")
@@ -92,7 +99,14 @@ def restore_package_stubs():
             try:
                 utils_spec.loader.exec_module(utils_mod)
             except Exception:
-                pass
+                # Never leave a partially-initialized module in sys.modules —
+                # it would poison every subsequent import.  Put back whatever
+                # was there before (or drop the entry) and surface the error.
+                if current_utils is not None:
+                    sys.modules["Ankimon.utils"] = current_utils
+                else:
+                    sys.modules.pop("Ankimon.utils", None)
+                raise
 
         # NOTE (main re-fit): exp additionally re-executed the real
         # ``Ankimon.singletons`` module here.  On main, singletons.py is the
