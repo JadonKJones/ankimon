@@ -259,16 +259,6 @@ def show_warning_with_traceback(
     ``parent`` defaults to None; under Anki the dialog parents itself to ``mw``.
     Headless, there is no dialog — the structured event is the record.
     """
-    try:
-        from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtCore import QThread
-        app = QApplication.instance()
-        is_main = not app or (QThread.currentThread() == app.thread())
-        if not is_main:
-            return
-    except Exception:
-        pass
-
     if not exception:
         raise ValueError("An exception must be provided.")
 
@@ -283,6 +273,17 @@ def show_warning_with_traceback(
     try:
         from ..events import events
         events.emit("error", message=message, exception=str(exception), traceback=tb_text)
+    except Exception:
+        pass
+
+    # Thread guard: do not access/create GUI objects from background threads
+    try:
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import QThread
+        app = QApplication.instance()
+        is_main = not app or (QThread.currentThread() == app.thread())
+        if not is_main:
+            return
     except Exception:
         pass
 

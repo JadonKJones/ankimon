@@ -114,7 +114,20 @@ class BackupManager:
             for filename in files_to_copy:
                 source_path = self.user_files_path / filename
                 if source_path.exists():
-                    shutil.copy2(source_path, backup_dir / filename)
+                    dest_path = backup_dir / filename
+                    if source_path.suffix == '.db':
+                        import sqlite3
+                        try:
+                            src_conn = sqlite3.connect(source_path)
+                            dest_conn = sqlite3.connect(dest_path)
+                            with dest_conn:
+                                src_conn.backup(dest_conn)
+                            dest_conn.close()
+                            src_conn.close()
+                            continue
+                        except Exception:
+                            pass
+                    shutil.copy2(source_path, dest_path)
 
             summary = self._generate_summary(backup_dir)
             summary['manual'] = manual

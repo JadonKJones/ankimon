@@ -14,6 +14,9 @@ from ..singletons import logger
 from aqt import mw
 
 def rate_this_addon():
+    if not mw or not getattr(mw, "ankimon_db", None):
+        return
+
     # Only check database
     db_rate_this = mw.ankimon_db.get_user_data("rate_this")
     
@@ -21,7 +24,7 @@ def rate_this_addon():
         return
 
     # If we get here, user hasn't rated yet
-    rate_window = QDialog()
+    rate_window = QDialog(mw)
     rate_window.setWindowTitle("Please Rate this Addon!")
 
     layout = QVBoxLayout(rate_window)
@@ -38,7 +41,7 @@ def rate_this_addon():
         QDesktopServices.openUrl(QUrl(support_url))
 
     def thankyou_message():
-        thankyou_window = QDialog()
+        thankyou_window = QDialog(mw)
         thankyou_window.setWindowTitle("Thank you !")
         thx_layout = QVBoxLayout(thankyou_window)
         thx_label = QLabel(thankyou_message_text)

@@ -450,7 +450,10 @@ def swap_ankimon_account():
         mw.settings_obj.load_config()
 
         # Update main pokemon in-place
-        update_main_pokemon(mw.main_pokemon)
+        new_main_pokemon, mainpokemon_empty = update_main_pokemon(mw.main_pokemon)
+        mw.main_pokemon = new_main_pokemon
+        services.populate(main_pokemon=new_main_pokemon)
+        bind_runtime_globals()
 
         # Refresh trainer card data
         mw.trainer_card.refresh()

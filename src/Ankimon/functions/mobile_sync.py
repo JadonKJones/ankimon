@@ -1875,28 +1875,95 @@ def _resolve_internal(mode="all", companion_id="", limit=None, db=None, settings
     
     use_transaction = (mode == "all")
     if use_transaction:
-        conn._disable_commit = True
         from .. import utils
         utils.in_bulk_resolve = True
 
     try:
         if use_transaction:
-            with conn:
-                result = run_mobile_battles(
-                    reviews=None,
-                    commit=True,
-                    db=db,
-                    settings_obj=settings_obj,
-                    tracker=tracker,
-                    trainer_card=trainer_card,
-                    main_pokemon=main_pokemon,
-                    companion_override_id=companion_id,
-                    logger=logger,
-                    day_cutoff=day_cutoff,
-                    limit=limit,
-                    mode=mode,
-                    progress_callback=progress_callback
-                )
+            total_resolved = 0
+            total_xp_gained = 0
+            total_catches = 0
+            total_cash_gained = 0
+            total_trainer_xp_gained = 0
+            total_reviews_processed = 0
+            accumulated_caught_list = []
+            
+            accumulated_result = {
+                "success": True,
+                "resolved": 0,
+                "xp_gained": 0,
+                "catches": 0,
+                "cash_gained": 0,
+                "trainer_xp_gained": 0,
+                "caught_list": [],
+                "reviews_processed": 0
+            }
+            remaining_limit = limit
+            
+            while True:
+                batch_limit = 5
+                if remaining_limit is not None:
+                    batch_limit = min(5, remaining_limit)
+                    if batch_limit <= 0:
+                        break
+
+                conn._disable_commit = True
+                try:
+                    with conn:
+                        batch_result = run_mobile_battles(
+                            reviews=None,
+                            commit=True,
+                            db=db,
+                            settings_obj=settings_obj,
+                            tracker=tracker,
+                            trainer_card=trainer_card,
+                            main_pokemon=main_pokemon,
+                            companion_override_id=companion_id,
+                            logger=logger,
+                            day_cutoff=day_cutoff,
+                            limit=batch_limit,
+                            mode=mode,
+                            progress_callback=progress_callback
+                        )
+                finally:
+                    conn._disable_commit = False
+
+                if not batch_result.get("success", False):
+                    accumulated_result = batch_result
+                    break
+                
+                resolved_in_batch = batch_result.get("resolved", 0)
+                total_resolved += resolved_in_batch
+                total_xp_gained += batch_result.get("xp_gained", 0)
+                total_catches += batch_result.get("catches", 0)
+                total_cash_gained += batch_result.get("cash_gained", 0)
+                total_trainer_xp_gained += batch_result.get("trainer_xp_gained", 0)
+                total_reviews_processed += batch_result.get("reviews_processed", 0)
+                
+                batch_caught_list = batch_result.get("caught_list")
+                if batch_caught_list:
+                    accumulated_caught_list.extend(batch_caught_list)
+                
+                accumulated_result.update({
+                    "resolved": total_resolved,
+                    "xp_gained": total_xp_gained,
+                    "catches": total_catches,
+                    "cash_gained": total_cash_gained,
+                    "trainer_xp_gained": total_trainer_xp_gained,
+                    "caught_list": accumulated_caught_list,
+                    "reviews_processed": total_reviews_processed,
+                    "success": True
+                })
+                
+                reviews_processed_in_batch = batch_result.get("reviews_processed", 0)
+                if remaining_limit is not None:
+                    remaining_limit -= reviews_processed_in_batch
+
+                if reviews_processed_in_batch == 0 or batch_result.get("done"):
+                    accumulated_result["done"] = True
+                    break
+
+            result = accumulated_result
         else:
             result = run_mobile_battles(
                 reviews=None,
@@ -1916,12 +1983,6 @@ def _resolve_internal(mode="all", companion_id="", limit=None, db=None, settings
         return result
     finally:
         if use_transaction:
-            conn._disable_commit = False
-            # Reset the bulk-resolve flag. If this is dropped, in_bulk_resolve
-            # stays True for the rest of the session and silently suppresses
-            # level-up tooltips, evolution prompts and learn-move dialogs in
-            # normal desktop play (encounter_functions / pokedex_functions gate
-            # those on `not in_bulk_resolve`).
             from .. import utils
             utils.in_bulk_resolve = False
 

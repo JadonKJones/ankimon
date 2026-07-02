@@ -28,6 +28,19 @@ def create_backup_folder(folder_path):
     # Copy the files into the new backup folder
     for file in files_to_backup:
         if os.path.exists(file):
+            dest_path = os.path.join(folder_path, os.path.basename(file))
+            if str(file).endswith('.db'):
+                import sqlite3
+                try:
+                    src_conn = sqlite3.connect(file)
+                    dest_conn = sqlite3.connect(dest_path)
+                    with dest_conn:
+                        src_conn.backup(dest_conn)
+                    dest_conn.close()
+                    src_conn.close()
+                    continue
+                except Exception:
+                    pass
             shutil.copy(file, folder_path)
 
 def rotate_backups():

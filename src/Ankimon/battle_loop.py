@@ -160,12 +160,9 @@ def on_review_card(*args):
                 and enemy_pokemon.hp > 0
             ):
                 if settings_obj.get("controls.allow_to_choose_moves") == True:
-                    from aqt.qt import QDialog
-                    from .classes.choose_move_dialog import MoveSelectionDialog
-                    dialog = MoveSelectionDialog(main_pokemon.attacks)
-                    if dialog.exec() == QDialog.DialogCode.Accepted:
-                        if dialog.selected_move:
-                            user_attack = dialog.selected_move
+                    chosen = services.ui.choose_move(main_pokemon.attacks)
+                    if chosen:
+                        user_attack = chosen
 
                 if category == "Status":
                     color = "#F7DC6F"

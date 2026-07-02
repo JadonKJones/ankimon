@@ -43,10 +43,13 @@ import time
 from typing import Any, Callable, List, Optional
 
 
+import threading
+
 class _EventBus:
     """In-memory, append-only event buffer. One shared instance: ``events``."""
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._enabled: bool = False
         self._buffer: List[dict] = []
         self._sink: Optional[Callable[[dict], None]] = None
@@ -57,16 +60,19 @@ class _EventBus:
     def enable(self, sink: Optional[Callable[[dict], None]] = None) -> None:
         """Start capturing events. ``sink``, if given, is called with each
         event dict as it is emitted (e.g. to append a line to a JSONL file)."""
-        self._enabled = True
-        self._sink = sink
+        with self._lock:
+            self._enabled = True
+            self._sink = sink
 
     def disable(self) -> None:
         """Stop capturing and detach any sink (back to zero-overhead state)."""
-        self._enabled = False
-        self._sink = None
+        with self._lock:
+            self._enabled = False
+            self._sink = None
 
     def is_enabled(self) -> bool:
-        return self._enabled
+        with self._lock:
+            return self._enabled
 
     # --- producing ---------------------------------------------------------
 
@@ -77,16 +83,18 @@ class _EventBus:
         consumer can order and time them. ``fields`` should be JSON-serialisable
         so the stream can be written to JSONL / sent over the REPL verbatim.
         """
-        if not self._enabled:
-            return
-        self._seq += 1
-        evt = {"seq": self._seq, "ts": time.time(), "type": type}
-        evt.update(fields)
-        self._buffer.append(evt)
-        if self._sink is not None:
+        with self._lock:
+            if not self._enabled:
+                return
+            self._seq += 1
+            evt = {"seq": self._seq, "ts": time.time(), "type": type}
+            evt.update(fields)
+            self._buffer.append(evt)
+            sink = self._sink
+        if sink is not None:
             # A misbehaving sink must never break the game loop.
             try:
-                self._sink(evt)
+                sink(evt)
             except Exception:
                 pass
 
@@ -94,22 +102,26 @@ class _EventBus:
 
     def drain(self) -> List[dict]:
         """Return all buffered events and clear the buffer."""
-        out = self._buffer
-        self._buffer = []
-        return out
+        with self._lock:
+            out = self._buffer
+            self._buffer = []
+            return out
 
     def peek(self) -> List[dict]:
         """Return a copy of the buffered events without clearing them."""
-        return list(self._buffer)
+        with self._lock:
+            return list(self._buffer)
 
     def clear(self) -> None:
         """Drop buffered events but keep the sequence counter."""
-        self._buffer.clear()
+        with self._lock:
+            self._buffer.clear()
 
     def reset(self) -> None:
         """Drop buffered events and reset the sequence counter (test isolation)."""
-        self._buffer.clear()
-        self._seq = 0
+        with self._lock:
+            self._buffer.clear()
+            self._seq = 0
 
 
 # The single shared event bus. Import this, not the class.
