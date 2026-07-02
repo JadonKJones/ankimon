@@ -7,9 +7,9 @@ evolution via :class:`EvoWindow`. Friendship evolutions live in
 positive ``minimum_happiness`` and an optional ``time_of_day``; the legacy
 level-up code skips them because their ``minimum_level`` is blank.
 
-``settings_obj`` is imported lazily inside each function, not at module top level:
-``singletons`` imports ``pc_box`` (which imports this module) before binding
-``settings_obj``, so a top-level import would crash at addon load.
+Settings are read through the service registry (``services.settings``), fetched
+per call rather than cached at import time so a registry that is populated after
+this module loads is always seen.
 """
 
 from __future__ import annotations
