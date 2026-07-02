@@ -167,7 +167,11 @@ def run_startup_ui_callbacks(results):
 
     # Rate dialog
     if results["database_complete"] and results["needs_rating"]:
-        rate_this_addon()
+        try:
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(1000, rate_this_addon)
+        except Exception:
+            pass
 
     # Reset tracker counter
     ankimon_tracker_obj.pokemon_encounter = 0

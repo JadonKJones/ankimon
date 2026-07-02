@@ -241,9 +241,13 @@ def show_warning_with_traceback(
     except Exception:
         pass
 
-    # Do not show GUI dialog if running headless or under pytest
+    # Do not show GUI dialog if running headless, under pytest, or from a background thread
     from PyQt6.QtWidgets import QApplication
-    if QApplication.instance() is None or os.getenv("QT_QPA_PLATFORM") == "offscreen" or os.getenv("PYTEST_CURRENT_TEST") is not None:
+    from PyQt6.QtCore import QThread
+    
+    app = QApplication.instance()
+    is_main = not app or (QThread.currentThread() == app.thread())
+    if not is_main or app is None or os.getenv("QT_QPA_PLATFORM") == "offscreen" or os.getenv("PYTEST_CURRENT_TEST") is not None:
         return
 
     # Load error images

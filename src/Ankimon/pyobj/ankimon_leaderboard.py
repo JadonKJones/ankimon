@@ -10,6 +10,7 @@ except (ImportError, ModuleNotFoundError):
     mw = None
 
 from ..resources import user_path_credentials, mypokemon_path
+from ..services import services
 import requests
 
 #ANKIMON_LEADERBOARD_API_URL = "https://ankimon.com/api/leaderboard"  # Replace with the actual API URL
@@ -65,27 +66,28 @@ class ApiKeyDialog(QDialog):
         try:
             # Save the new credentials to the database
             for key, value in credentials.items():
-                mw.ankimon_db.set_user_data(key, value)
+                services.db.set_user_data(key, value)
             showInfo("Credentials saved successfully!")
         except Exception as e:
             showInfo(f"Error saving credentials: {e}")
 
 def sync_data_to_leaderboard(data):
-        if not _HAVE_QT or mw is None or mw.settings_obj is None:
+        if services.settings is None or services.db is None:
             return
 
         # First check if leaderboard is enabled in config
-        if not mw.settings_obj.get("misc.leaderboard"):
+        if not services.settings.get("misc.leaderboard"):
             return
 
         try:
             # Load credentials from the database
-            username = mw.ankimon_db.get_user_data("username")
-            api_key = mw.ankimon_db.get_user_data("api_key")
+            username = services.db.get_user_data("username")
+            api_key = services.db.get_user_data("api_key")
 
             # Validate credentials
-            if (not username or not api_key) and mw.ankimon_db.is_migrated():
-                showInfo("Error: Missing credentials for Ankimon leaderboard. Please set up leaderboard from Ankimon menu or turn off in Settings.")
+            if (not username or not api_key) and services.db.is_migrated():
+                if services.logger:
+                    services.logger.log("warning", "Missing credentials for Ankimon leaderboard.")
                 return
 
 
@@ -97,26 +99,27 @@ def sync_data_to_leaderboard(data):
                     "stats": data
                 }
 
-                # Send a POST request to the leaderboard API
-                response = requests.post(
-                    ANKIMON_LEADERBOARD_API_URL,
-                    json=request_data
-                )
+                def make_request():
+                    try:
+                        requests.post(
+                            ANKIMON_LEADERBOARD_API_URL,
+                            json=request_data,
+                            timeout=10
+                        )
+                    except requests.exceptions.RequestException as e:
+                        if services.logger:
+                            services.logger.log("warning", f"Missing credentials for Ankimon leaderboard. Request exception: {e}")
+                    except Exception as e:
+                        if services.logger:
+                            services.logger.log("warning", f"Missing credentials for Ankimon leaderboard. Exception: {e}")
 
-                #showInfo(response.text)  # Show the response text for debugging
+                import threading
+                thread = threading.Thread(target=make_request, daemon=True)
+                thread.start()
 
-                # Check if the request was successful
-                #if response.status_code == 200:
-                #    mw.logger.log("log","Data synced successfully to leaderboard!")
-                #else:
-                #    mw.logger.log("log",f"Failed to sync data to leaderboard. Status code: {response.status_code}")
-            #else:
-                #mw.logger.log("Credentials are missing (username or api_key)")
-
-        except requests.exceptions.RequestException as e:
-            showInfo(f"Error: Missing credentials for Ankimon leaderboard. Please set up leaderboard from Ankimon menu or turn off in Settings.\n\n {e}")
         except Exception as e:
-            showInfo(f"Error: Missing credentials for Ankimon leaderboard. Please set up leaderboard from Ankimon menu or turn off in Settings.\n\n {e}")
+            if services.logger:
+                services.logger.log("warning", f"Missing credentials for Ankimon leaderboard. Exception: {e}")
 
 
 

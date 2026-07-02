@@ -14,7 +14,7 @@ def create_backup_folder(folder_path):
     """Creates a backup folder and places a timestamped text file inside."""
     if hasattr(mw, "ankimon_db") and mw.ankimon_db:
         try:
-            mw.ankimon_db.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            mw.ankimon_db.execute("PRAGMA wal_checkpoint(PASSIVE);")
         except Exception:
             pass
 

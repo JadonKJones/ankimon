@@ -116,6 +116,7 @@ class AnkimonDB:
                 conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
                 conn.row_factory = sqlite3.Row  # Access columns by name
                 try:
+                    conn.execute("PRAGMA busy_timeout=5000;")
                     conn.execute("PRAGMA journal_mode=WAL;")
                     conn.execute("PRAGMA synchronous=NORMAL;")
                     conn.execute("PRAGMA temp_store=MEMORY;")
@@ -132,6 +133,7 @@ class AnkimonDB:
             conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             conn.row_factory = sqlite3.Row  # Access columns by name
             try:
+                conn.execute("PRAGMA busy_timeout=5000;")
                 # Check current journal mode to avoid redundant disk writes on connection open
                 cursor = conn.execute("PRAGMA journal_mode;")
                 current_mode = cursor.fetchone()[0]

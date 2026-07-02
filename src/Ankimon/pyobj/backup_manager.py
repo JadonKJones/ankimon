@@ -99,7 +99,7 @@ class BackupManager:
             # Checkpoint the active database first to flush all WAL changes to disk!
             if hasattr(mw, "ankimon_db") and mw.ankimon_db:
                 try:
-                    mw.ankimon_db.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                    mw.ankimon_db.execute("PRAGMA wal_checkpoint(PASSIVE);")
                     self.logger.log("info", "Checkpoint database before backup.")
                 except Exception as e:
                     self.logger.log("error", f"Failed to checkpoint database before backup: {e}")

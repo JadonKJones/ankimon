@@ -532,11 +532,11 @@ def count_items_and_rewrite():
     Legacy: Previously read from items.json, now uses database.
     """
     try:
-        db = mw.ankimon_db
+        db = services.db
         
         # Get all items from database - they're already unique by item_name
         # so no need to aggregate, the database handles this automatically
-        items = db.get_all_items()
+        items = db.get_all_items() if db else []
         
         if items:
             print(f"Database contains {len(items)} unique items.")

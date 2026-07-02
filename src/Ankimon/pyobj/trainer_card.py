@@ -81,7 +81,7 @@ class TrainerCard:
             from .ankimon_leaderboard import sync_data_to_leaderboard
             sync_data_to_leaderboard(data)
         except Exception as e:
-            self.logger.log_and_showinfo(
+            self.logger.log(
                 "error", f"Error in syncing data to leaderboard {e}"
             )
 
