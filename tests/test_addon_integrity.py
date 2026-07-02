@@ -286,13 +286,22 @@ def test_ankimon_submodule_integrity(qapp):
             sys.modules[mod_name] = MagicMock()
 
     errors = []
+    checked = 0
 
     for mod_name in MODULES_TO_CHECK:
+        # Exact-match skips, plus prefix skips for anything living *under* a
+        # skipped package.  The bare "Ankimon" entry must be exact-match only:
+        # every module in MODULES_TO_CHECK starts with "Ankimon.", so
+        # prefix-matching it would silently skip the entire list and make the
+        # test vacuous.
         if mod_name in SKIP_MODULES or any(
-            mod_name.startswith(skip + ".") for skip in SKIP_MODULES
+            mod_name.startswith(skip + ".")
+            for skip in SKIP_MODULES
+            if skip != "Ankimon"
         ):
             continue
 
+        checked += 1
         try:
             importlib.import_module(mod_name)
         except Exception:
@@ -301,9 +310,17 @@ def test_ankimon_submodule_integrity(qapp):
                 errors.append(f"[{mod_name}]\n{tb}")
 
     if errors:
+        divider = "\n" + "-" * 60 + "\n"
         pytest.fail(
-            f"Integrity check failed with {len(errors)} error(s):\n\n"
-            + "\n"
-            + ("-" * 60)
-            + "\n".join(errors)
+            f"Integrity check failed with {len(errors)} error(s):"
+            + divider
+            + divider.join(errors)
         )
+
+    # Vacuity guard: the skip filter must never regress into excluding the
+    # whole list (prefix-matching the bare "Ankimon" entry once did exactly
+    # that, silently turning this test into a no-op).
+    assert checked >= len(MODULES_TO_CHECK) - len(SKIP_MODULES), (
+        f"skip filter excluded too much: only {checked} of "
+        f"{len(MODULES_TO_CHECK)} modules were import-checked"
+    )
