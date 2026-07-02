@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 from typing import Union
@@ -243,17 +244,16 @@ class SettingsWindow(QMainWindow):
             combo = QComboBox()
             for val, region_label in region_options:
                 combo.addItem(region_label, userData=val)
-            # Set current selection from config (may be None or a region string).
+            # Set current selection from config (may be None or a region
+            # string). Deliberately NOT connected to currentIndexChanged:
+            # self.config is the live Settings dict, so a live write would
+            # leak the selection even when the user never saves. on_save reads
+            # the widget via currentData() instead.
             current = self.config.get(key)
             for i, (val, _) in enumerate(region_options):
                 if val == current:
                     combo.setCurrentIndex(i)
                     break
-            combo.currentIndexChanged.connect(
-                lambda idx, k=key, opts=region_options: self.config.update(
-                    {k: opts[idx][0]}
-                )
-            )
             self.input_widgets[key] = combo
             layout.addWidget(combo)
             created_widgets.append(combo)
@@ -517,32 +517,37 @@ class SettingsWindow(QMainWindow):
             if isinstance(widget, QLineEdit):
                 widget.setText(str(value))
             elif isinstance(widget, QButtonGroup):
-                for button in widget.buttons():
-                    # Check if this button matches the boolean value.
-                    is_enabled_btn = button.text() == "Enabled"
-                    if is_enabled_btn == bool(value):
-                        button.setChecked(True)
-                        break
+                # Buttons are registered with id 1 = Enabled, 0 = Disabled.
+                button = widget.button(1 if bool(value) else 0)
+                if button is not None:
+                    button.setChecked(True)
             elif isinstance(widget, QComboBox):
-                current = self.config.get(key)
                 for i in range(widget.count()):
-                    if widget.itemData(i) == current:
+                    if widget.itemData(i) == value:
                         widget.setCurrentIndex(i)
                         break
 
-                # Smart disabling of region options based on generation settings.
-                if key == "misc.active_region":
-                    self._refresh_region_dropdown(widget)
+        # Gate the region options on the generation toggles only after ALL
+        # widgets reflect self.config (the gating reads the gen widgets).
+        region_combo = self.input_widgets.get("misc.active_region")
+        if region_combo is not None:
+            self._refresh_region_dropdown(region_combo)
+
+    def _gen_enabled_in_ui(self, gen_key):
+        """Current (possibly unsaved) state of a generation toggle, read from
+        its widget; falls back to the stored config when no widget exists."""
+        widget = self.input_widgets.get(gen_key)
+        if isinstance(widget, QButtonGroup):
+            return widget.checkedId() == 1
+        return bool(self.config.get(gen_key, True))
 
     def _on_gen_toggled(self):
-        # Sync config with the current UI state for generations.
-        for k, w in self.input_widgets.items():
-            if k.startswith("misc.gen") and isinstance(w, QButtonGroup):
-                self.config[k] = w.checkedButton().text() == "Enabled"
-
-        # Refresh the region dropdown to reflect enabled generations.
+        # Refresh the region dropdown to reflect the (unsaved) generation
+        # toggles. Deliberately does NOT write the toggles into self.config:
+        # that dict is the live Settings config, so mutating it here would
+        # leak unsaved UI state (on_save reads the widgets when saving).
         region_combo = self.input_widgets.get("misc.active_region")
-        if region_combo:
+        if region_combo is not None:
             self._refresh_region_dropdown(region_combo)
 
     def _refresh_region_dropdown(self, combo):
@@ -565,14 +570,10 @@ class SettingsWindow(QMainWindow):
         for i in range(combo.count()):
             val = combo.itemData(i)
             if val in region_to_gen:
-                gen_key = region_to_gen[val]
-                is_gen_enabled = self.config.get(gen_key, True)
-                if not is_gen_enabled:
-                    model.item(i).setEnabled(False)
-                    if val == current_region:
-                        should_reset = True
-                else:
-                    model.item(i).setEnabled(True)
+                is_gen_enabled = self._gen_enabled_in_ui(region_to_gen[val])
+                model.item(i).setEnabled(is_gen_enabled)
+                if not is_gen_enabled and val == current_region:
+                    should_reset = True
 
         if should_reset:
             combo.setCurrentIndex(0)  # Reset to "No Region"
@@ -751,9 +752,11 @@ class SettingsWindow(QMainWindow):
         self.save_config_callback(self.config)
 
         # Refresh the reviewer UI so hotkey changes (incl. team-cycle) take
-        # effect without a restart. The team-cycle argument is only consumed by
-        # reviewer builds that support it; fall back to the 3-argument form
-        # otherwise so this stays compatible with the base signature.
+        # effect without a restart. Reviewer builds that support team cycling
+        # take a 4th argument; detect that by signature arity rather than by
+        # calling and catching TypeError — an *internal* TypeError would also
+        # trigger such a fallback, re-running the setup and double-wrapping
+        # Reviewer._shortcutKeys.
         try:
             from ..reviewer_ui import setup_reviewer_ui
 
@@ -761,11 +764,11 @@ class SettingsWindow(QMainWindow):
             defeat_key = self.config.get("controls.defeat_key", "5")
             pokemon_buttons = self.config.get("controls.pokemon_buttons", True)
             team_cycle_key = self.config.get("controls.team_cycle_key", "9")
-            try:
+            if len(inspect.signature(setup_reviewer_ui).parameters) >= 4:
                 setup_reviewer_ui(
                     catch_key, defeat_key, pokemon_buttons, team_cycle_key
                 )
-            except TypeError:
+            else:
                 setup_reviewer_ui(catch_key, defeat_key, pokemon_buttons)
         except Exception as e:
             print(f"Ankimon: Failed to refresh hotkeys: {e}")
