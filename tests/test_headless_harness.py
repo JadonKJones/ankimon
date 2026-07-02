@@ -121,6 +121,12 @@ def test_battle_loop_survives_dead_windows():
     result = _subrun(
         "from collections import Counter\n"
         "from harness.driver import Driver\n"
+        # Deterministic RNG in the child: enemy faints are stochastic
+        # (~1-2 per 60 'good' answers), so an unseeded run can produce zero
+        # faints and flake the gate. seed(0) is verified to exercise the
+        # faint-guard path with zero error events.
+        "import random\n"
+        "random.seed(0)\n"
         "class _DeadWindow:\n"
         "    # Simulates a Qt window whose underlying C++ object was deleted.\n"
         "    def objectName(self):\n"
