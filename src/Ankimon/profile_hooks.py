@@ -1,14 +1,38 @@
 from anki.hooks import addHook
 from aqt import gui_hooks, mw
 
+from .services import services
 from .singletons import settings_obj, logger
 from .utils import test_online_connectivity
 from .pyobj.ankimon_sync import setup_ankimon_sync_hooks, check_and_sync_pokemon_data
 from .pyobj.tip_of_the_day import show_tip_of_the_day
 from .pyobj.pokemon_trade import check_and_award_monthly_pokemon
 from .pyobj.error_handler import show_warning_with_traceback
+from .functions.pokedex_functions import clear_pokedex_caches
+from .functions.learnset_retrieval import clear_learnset_cache
+from .functions.encounter_functions import clear_encounter_cache
 
 sync_dialog = None
+
+# Cache-clear-on-close (F20): the pokedex / learnset / encounter in-memory
+# caches live for the whole Python process, so without this a profile switch
+# would carry the previous profile's cached tables into the next one. Dropping
+# them when the profile closes makes each profile start cleanly from disk.
+# The registration record lives on the services registry (F31 pattern) rather
+# than a module-level flag: it survives a re-execution of this module (an
+# add-on reload), so re-registering swaps the handler in place instead of
+# stacking a second copy onto gui_hooks.profile_will_close.
+_CLOSE_HANDLER_RECORD = "_profile_close_cache_clear_handler"
+
+
+def _on_profile_close():
+    """Clear all performance caches when the Anki session/profile ends."""
+    try:
+        clear_pokedex_caches()
+        clear_learnset_cache()
+        clear_encounter_cache()
+    except Exception as e:
+        logger.log("error", f"Error clearing caches on profile close: {e}")
 
 
 def _on_profile_did_open(online_connectivity):
@@ -89,3 +113,13 @@ def register_profile_hooks(
     addHook("profileLoaded", on_profile_loaded)
     gui_hooks.profile_did_open.append(_on_profile_did_open(online_connectivity))
     gui_hooks.profile_will_close.append(backup_manager.on_anki_close)
+
+    # Cache-clear-on-close, registered idempotently (F31 registry-anchored
+    # guard): drop the previously-recorded handler before appending, so a second
+    # boot / add-on reload swaps it in place of stacking a duplicate. gui_hooks'
+    # remove() tolerates an already-absent callback.
+    previous_close_handler = getattr(services, _CLOSE_HANDLER_RECORD, None)
+    if previous_close_handler is not None:
+        gui_hooks.profile_will_close.remove(previous_close_handler)
+    gui_hooks.profile_will_close.append(_on_profile_close)
+    setattr(services, _CLOSE_HANDLER_RECORD, _on_profile_close)
