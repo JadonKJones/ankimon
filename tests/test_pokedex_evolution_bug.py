@@ -317,3 +317,165 @@ def test_get_growth_rate_unknown_and_nonnumeric_fall_back_to_medium():
     assert _PF.get_growth_rate(9_999_999) == "medium"
     assert _PF.get_growth_rate("not-a-number") == "medium"
     assert _PF.get_growth_rate(None) == "medium"
+
+
+# --------------------------------------------------------------------------- #
+# Robustness regressions for the Gemini review (PR #554) on pokedex_functions.
+# --------------------------------------------------------------------------- #
+class _SettingsStub:
+    """Minimal settings seam whose ``get`` always returns a fixed value."""
+
+    def __init__(self, value):
+        self._value = value
+
+    def get(self, key, default=None):
+        return self._value
+
+
+def _install_synthetic_pokedex(monkeypatch, cache):
+    """Point the module caches at a controlled synthetic pokedex and rebuild
+    the id index from it (deterministic; no enrichment)."""
+    _PF.clear_pokedex_caches()
+    monkeypatch.setattr(_PF, "_pokedex_cache", cache, raising=False)
+    monkeypatch.setattr(_PF, "_pokedex_id_index", None, raising=False)
+
+
+def test_get_active_region_non_string_is_none(monkeypatch):
+    """A non-string settings scalar (int/None/list) must normalize to None
+    without raising ``AttributeError`` on ``.strip()`` (Gemini :752)."""
+    monkeypatch.setattr(_PF.services, "settings", _SettingsStub(5), raising=False)
+    assert _PF._get_active_region() is None
+
+    monkeypatch.setattr(
+        _PF.services, "settings", _SettingsStub(["Kanto"]), raising=False
+    )
+    assert _PF._get_active_region() is None
+
+    monkeypatch.setattr(_PF.services, "settings", None, raising=False)
+    assert _PF._get_active_region() is None
+
+
+def test_get_active_region_string_values(monkeypatch):
+    """Sentinels normalize to None; a real region is trimmed and returned."""
+    monkeypatch.setattr(
+        _PF.services, "settings", _SettingsStub("No Region"), raising=False
+    )
+    assert _PF._get_active_region() is None
+
+    monkeypatch.setattr(_PF.services, "settings", _SettingsStub("   "), raising=False)
+    assert _PF._get_active_region() is None
+
+    monkeypatch.setattr(
+        _PF.services, "settings", _SettingsStub("  Alola  "), raising=False
+    )
+    assert _PF._get_active_region() == "Alola"
+
+
+def test_return_identifier_for_item_id_real_and_none():
+    """King's Rock (id 198) resolves to its apostrophe-free items.csv identifier,
+    and a None/invalid id never matches a malformed row (Gemini :765)."""
+    assert _PF.return_identifier_for_item_id(198) == "kings-rock"
+    assert _PF.return_identifier_for_item_id(None) is None
+    assert _PF.return_identifier_for_item_id("not-a-number") is None
+
+
+def test_check_evolution_by_item_apostrophe_item(monkeypatch):
+    """A useItem evolution whose ``evoItem`` carries an apostrophe (e.g.
+    "King's Rock") matches the apostrophe-free items.csv identifier
+    ("kings-rock") after normalization (Gemini :819)."""
+    monkeypatch.setattr(_PF.services, "settings", None, raising=False)
+    _install_synthetic_pokedex(
+        monkeypatch,
+        {
+            "apostrophemon": {
+                "species_id": 90001,
+                "actual_id": 90001,
+                "evos": ["ApostropheKing"],
+            },
+            "apostropheking": {
+                "species_id": 90002,
+                "actual_id": 90002,
+                "evoType": "useItem",
+                "evoItem": "King's Rock",
+            },
+        },
+    )
+    # item id 198 == "King's Rock", identifier "kings-rock" in the real items.csv.
+    assert _PF.check_evolution_by_item(90001, 198) == 90002
+    # A wrong item id must not trigger the evolution.
+    assert _PF.check_evolution_by_item(90001, 84) is None
+
+
+def test_load_pokedex_id_index_base_owns_species_id(monkeypatch):
+    """A base form always owns its species_id (never shadowed by a mega), and
+    rows with missing ids never collapse onto key 0 (Gemini :144)."""
+    _install_synthetic_pokedex(
+        monkeypatch,
+        {
+            # Mega precedes the base in iteration order.
+            "basemega": {
+                "species_id": 700,
+                "actual_id": 10700,
+                "baseSpecies": "Basemon",
+            },
+            "basemon": {"species_id": 700, "actual_id": 700},
+            "noid": {"species_id": None, "actual_id": None},
+        },
+    )
+    idx = _PF._load_pokedex_id_index()
+    assert idx.get(700) == "basemon"
+    assert idx.get(10700) == "basemega"
+    assert 0 not in idx
+
+
+def test_move_based_evolution_none_move_safe(monkeypatch):
+    """A ``levelMove`` evolution must not crash when the moveset contains
+    non-string entries (None/int), and a matching move still triggers it
+    (Gemini :1059)."""
+    monkeypatch.setattr(_PF.services, "settings", None, raising=False)
+    _install_synthetic_pokedex(
+        monkeypatch,
+        {
+            "movemon": {
+                "species_id": 90101,
+                "actual_id": 90101,
+                "evos": ["MoveKing"],
+            },
+            # No evoLevel -> the move requirement genuinely gates (mirrors the
+            # real Mr. Mime / Tangrowth levelMove rows).
+            "moveking": {
+                "species_id": 90102,
+                "actual_id": 90102,
+                "evoType": "levelMove",
+                "evoMove": "Psyshield Bash",
+            },
+        },
+    )
+
+    class _EvoWin:
+        def __init__(self):
+            self.called = None
+
+        def ask_pokemon_evo(self, individual_id, pokemon_id, evo_id):
+            self.called = (individual_id, pokemon_id, evo_id)
+
+    class _DB:
+        def __init__(self, attacks):
+            self._attacks = attacks
+
+        def get_pokemon(self, individual_id):
+            return {"attacks": self._attacks}
+
+    # Matching move present alongside a None + int -> evolves, no crash.
+    monkeypatch.setattr(
+        _PF.services, "db", _DB([None, "Psyshield Bash", 123]), raising=False
+    )
+    win = _EvoWin()
+    assert _PF.check_evolution_for_pokemon("iid-1", 90101, 20, win) == 90102
+    assert win.called == ("iid-1", 90101, 90102)
+
+    # Only non-matching entries (incl. None) -> no evolution, still no crash.
+    monkeypatch.setattr(_PF.services, "db", _DB([None, "Tackle", 7]), raising=False)
+    win2 = _EvoWin()
+    assert _PF.check_evolution_for_pokemon("iid-2", 90101, 20, win2) is None
+    assert win2.called is None
