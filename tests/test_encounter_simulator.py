@@ -275,6 +275,35 @@ def test_injected_pity_boosts_that_tier(sim_env):
     assert abs(sum(boosted["overhaul"].values()) - 100.0) < 1e-6
 
 
+# --- The live overhaul path reads pity from the injected db (DI, not global) -
+
+
+def test_live_overhaul_uses_injected_db(sim_env):
+    """The *live* overhaul rates must read pity from the injected ``db`` provider
+    too — not from the global ``services.db``. Otherwise the DI provider only
+    reaches the simulated path and the live path silently leaks to global state,
+    which is exactly the global-state coupling the F23 DI refit exists to remove.
+
+    ``ef.main_pokemon.level == 50`` (the fixture) drives the live path's tier
+    gates, so Ultra (threshold 30) is unlocked and its pity boost is visible.
+    ``services.db`` is left at the fixture's empty-pity db, so a rate change can
+    only come from the ``db`` passed to ``calculate_rates``.
+    """
+    slider_state = {
+        "trainer_level": 25,
+        "dex_completion": 50.0,
+        "reviews_done": 120,
+        "daily_goal": 100,
+        "avg_cp": 1500,
+        "main_level": 45,
+    }
+    baseline = _calc(slider_state, _FakeDB(pity={}))
+    boosted = _calc(slider_state, _FakeDB(pity={"Ultra": 300}))
+
+    assert boosted["live_overhaul"]["Ultra"] > baseline["live_overhaul"]["Ultra"]
+    assert abs(sum(boosted["live_overhaul"].values()) - 100.0) < 1e-6
+
+
 # --- Simulated legacy honours level gates + Starter clamp -------------------
 
 

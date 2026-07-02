@@ -272,7 +272,7 @@ class EncounterSimulatorDialog(QDialog):
             trainer_card.level if trainer_card and hasattr(trainer_card, "level") else 1
         )
         live_overhaul_rates = ef._modify_percentages_overhaul(
-            live_reviews, live_goal, live_trainer_lvl
+            live_reviews, live_goal, live_trainer_lvl, db=db
         )
         live_legacy_rates = ef._modify_percentages_legacy(
             live_reviews, live_goal, live_trainer_lvl
