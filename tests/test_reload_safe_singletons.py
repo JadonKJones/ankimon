@@ -13,8 +13,10 @@ without Qt:
   returns the same instance, and a window whose underlying C++ object died
   (``is_alive`` False) is transparently re-created.
 * Every name the base consumers import from ``singletons`` still resolves.
-* ``register_card_hooks()`` is idempotent: a second call must not append the
-  reviewer hooks again.
+* ``register_card_hooks()`` is idempotent: its registration record lives on
+  the services registry, so neither a second call nor a re-execution of the
+  module (an add-on reload: new function objects, surviving registry) can
+  stack a second set of reviewer hooks.
 
 House pattern: mock aqt + the window-class modules in ``sys.modules``, then
 exec the real module file under its dotted name (tests/conftest.py provides the
@@ -116,6 +118,17 @@ def _stub_module(name, **attrs):
     return mod
 
 
+def _fresh_services(monkeypatch):
+    """Exec a fresh, REAL services registry (isolated from other tests)."""
+    services_spec = importlib.util.spec_from_file_location(
+        "Ankimon.services", _src / "Ankimon" / "services.py"
+    )
+    services_mod = importlib.util.module_from_spec(services_spec)
+    monkeypatch.setitem(sys.modules, "Ankimon.services", services_mod)
+    services_spec.loader.exec_module(services_mod)
+    return services_mod.services
+
+
 @pytest.fixture
 def env(monkeypatch):
     """Fresh aqt stub + fresh services registry + stubbed window modules."""
@@ -148,13 +161,7 @@ def env(monkeypatch):
     )
 
     # Fresh, REAL services registry per test (isolated from other tests).
-    services_spec = importlib.util.spec_from_file_location(
-        "Ankimon.services", _src / "Ankimon" / "services.py"
-    )
-    services_mod = importlib.util.module_from_spec(services_spec)
-    monkeypatch.setitem(sys.modules, "Ankimon.services", services_mod)
-    services_spec.loader.exec_module(services_mod)
-    services = services_mod.services
+    services = _fresh_services(monkeypatch)
 
     # core stub: mimics the real build_core (populates services, returns the
     # namespace) and records every call so the tests can count boots/binds.
@@ -350,13 +357,29 @@ def test_unknown_attribute_raises(env):
         mod.definitely_not_a_window
 
 
-def test_register_card_hooks_is_idempotent(monkeypatch):
-    hooks = SimpleNamespace(
+def _fresh_hooks():
+    """gui_hooks stub: plain lists, so an unmatched remove() would fail loudly."""
+    return SimpleNamespace(
         reviewer_did_show_question=[],
         reviewer_did_show_answer=[],
         reviewer_will_answer_card=[],
         reviewer_did_answer_card=[],
     )
+
+
+def _hook_counts(hooks):
+    return (
+        len(hooks.reviewer_did_show_question),
+        len(hooks.reviewer_did_show_answer),
+        len(hooks.reviewer_will_answer_card),
+        len(hooks.reviewer_did_answer_card),
+    )
+
+
+def _exec_card_hooks(monkeypatch, hooks):
+    """Exec the real card_hooks.py against a gui_hooks stub. Each call returns
+    a FRESH module object (fresh handler functions) — exactly what an add-on
+    reload produces — while ``Ankimon.services`` is left to the caller."""
     aqt_stub = _stub_module(
         "aqt", gui_hooks=hooks, mw=SimpleNamespace(), utils=SimpleNamespace()
     )
@@ -374,21 +397,47 @@ def test_register_card_hooks_is_idempotent(monkeypatch):
     card_hooks = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, "Ankimon.card_hooks", card_hooks)
     spec.loader.exec_module(card_hooks)
+    return card_hooks
+
+
+def test_register_card_hooks_is_idempotent(monkeypatch):
+    # Fresh registry = fresh registration record (order-independent tests).
+    _fresh_services(monkeypatch)
+    hooks = _fresh_hooks()
+    card_hooks = _exec_card_hooks(monkeypatch, hooks)
 
     card_hooks.register_card_hooks()
-    counts_after_first = (
-        len(hooks.reviewer_did_show_question),
-        len(hooks.reviewer_did_show_answer),
-        len(hooks.reviewer_will_answer_card),
-        len(hooks.reviewer_did_answer_card),
-    )
+    counts_after_first = _hook_counts(hooks)
     # on_show_question + on_reviewer_did_show_question share the question hook.
     assert counts_after_first == (2, 1, 1, 1)
 
     card_hooks.register_card_hooks()
-    assert (
-        len(hooks.reviewer_did_show_question),
-        len(hooks.reviewer_did_show_answer),
-        len(hooks.reviewer_will_answer_card),
-        len(hooks.reviewer_did_answer_card),
-    ) == counts_after_first, "second registration must be a no-op"
+    assert _hook_counts(hooks) == counts_after_first, (
+        "second registration must not stack handlers"
+    )
+
+
+def test_register_card_hooks_survives_module_reexec(monkeypatch):
+    """The F31 failure this guards: re-executing card_hooks (an add-on reload)
+    creates NEW handler function objects, so a module-level flag would reset
+    and remove()-by-identity would miss the old handlers. The registry-stored
+    record must swap the handlers instead of stacking a second set."""
+    _fresh_services(monkeypatch)
+    hooks = _fresh_hooks()
+
+    mod1 = _exec_card_hooks(monkeypatch, hooks)
+    mod1.register_card_hooks()
+    assert _hook_counts(hooks) == (2, 1, 1, 1)
+
+    # Reload: fresh module + functions, same gui_hooks, surviving registry.
+    mod2 = _exec_card_hooks(monkeypatch, hooks)
+    assert mod2.answerCard_after is not mod1.answerCard_after
+    mod2.register_card_hooks()
+
+    assert _hook_counts(hooks) == (2, 1, 1, 1), "reload must not stack handlers"
+    # The live handlers are the reloaded module's, not the stale first set.
+    assert hooks.reviewer_did_answer_card == [mod2.answerCard_after]
+    assert hooks.reviewer_did_show_question == [
+        mod2.on_show_question,
+        mod2.on_reviewer_did_show_question,
+    ]
