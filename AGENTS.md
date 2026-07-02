@@ -30,6 +30,15 @@ src/Ankimon/              # The Anki addon (symlinked to addons21/ for dev)
   functions/              # Game logic functions (encounters, battles, badges, etc.)
   pyobj/                  # Qt dialog classes (settings, shop, PC box, evolution, etc.)
   gui_classes/            # More UI classes (pokemon details, team view, etc.)
+  classes/                # Additional domain classes
+  web/                    # Shared web assets (HTML/CSS/JS for QWebEngine views)
+  webshell/               # Reusable web-shell host (WebShellHost) + live-update bridge
+  ankimon_items_web/      # Items/Shop/Bag web-shell screen + backends
+  ankimon_profile_web/    # Profile web-shell screen
+  ankimon_mobile_web/     # Mobile companion web view (battle replay / history)
+  ankidex/                # Ankidex (Pokedex) web UI
+  achievements/           # Achievement system
+  encounter_simulator/    # Encounter-rate simulation web tool (dev/tuning)
   poke_engine/            # Battle simulation engine (from ArdentRoe/poke-engine)
   user_files/             # User data directory (gitignored — DB, sprites, saves)
     sprites/              # Pokemon sprites (gitignored, downloaded on first run)
@@ -87,6 +96,37 @@ headless (this is what the harness drives):
 **When adding logic:** read shared state from `services`; route any new dialog/popup
 through `services.ui`; emit an event for any notable outcome; keep `aqt`/`PyQt6` out of
 core modules' top-level imports (guard or lazy-import) so they stay headless-importable.
+
+### Web shell & feature surfaces
+
+Several screens now render as QWebEngine web views hosted by a shared shell:
+
+- **Web shell** — `webshell/host.py` `WebShellHost` (a `QDialog`) is a reusable frame:
+  a nav dropdown over a `QStackedWidget`. It was extracted from exp's monolithic
+  `AnkimonItemsWeb`, which hard-wired every screen into one class. Screens (Items/Shop/
+  Bag, Settings, Profile, Team, Ankidex, Mobile) call `host.mount(screen_id, view,
+  bridges=...)` to appear; each web view gets its own `QWebChannel` exposing the shared
+  `LiveUpdateBridge` (registered as `live`) plus any screen-specific bridge objects.
+  Push a stat change to every mounted screen with `host.notify_stats_changed(payload)`.
+  `menu_buttons._open_shell_at("ankidex"|"mobile"|"profile"|"settings"|"team")` opens the
+  shell at a screen. Nothing in the boot path imports QtWebEngine — only the leaf that
+  opens the shell does.
+- **Ankidex** (`ankidex/`) — the web Pokedex (successor to the older "Pokedex V2"). Keep
+  terminology consistent with the UI: **Capture Requirements** (not "Prerequisites"),
+  **Registry Progress** (not "Completion Status"), **Unseen Species** (not "Locked").
+- **Mobile sync** (`ankimon_mobile_web/` + `pyobj/ankimon_sync.py`) — syncs Pokemon data
+  across devices via Anki's media sync and replays mobile-recorded battles on desktop.
+- **Encounter overhaul** (`functions/encounter_functions.py`) — the EP / Mastery-Index
+  encounter economy: 8 tiers, regional forms, Mega/Gmax, and 6 independent pity trackers.
+  Design reference: `docs/encounter_overhaul_spec.md`. Mega/Gmax/alternate-form IDs
+  ≥ 10000 must be resolved to their base species via `check_id_ok()` before gen-toggle or
+  dex checks.
+- **Branch self-updater** (`changelog.py` `schedule_branch_update_check`) — polls for new
+  commits on the tracked branch once the profile is open, gated on boot-time connectivity.
+  Porting reference: `docs/updater_porting_guide.md`.
+
+These surfaces still follow the seam: read shared state from `services`, route dialogs
+through `services.ui`, and keep QtWebEngine imports out of the headless core.
 
 ### Data Storage
 
@@ -227,6 +267,12 @@ python -m harness.scenarios.screenshots     # PNGs of the real battle window + P
 - `poke_engine/` contains the battle simulation engine. Only `functions/ankimon_hooks_to_poke_engine.py` bridges it to ankimon — the engine itself has zero ankimon imports.
 - Sprites are gitignored and downloaded on first run. Source of truth: `h0tp-ftw/ankimon-sprites` repo.
 - The `user_files/` directory is for runtime data. Never commit files there.
+- No synchronous disk I/O in the review path. Static data (pokedex/learnsets/sprites) is parsed once at startup — use the cached lookups (`search_pokedex_by_id`, `_get_learnset_moves`), never `json.load(open(...))` mid-review.
+- Background `QueryOp` workers must never touch Qt widgets — return plain data and do all UI work in the main-thread success callback.
+- Mega/Gmax/alternate-form IDs ≥ 10000 must be resolved to a base species via `check_id_ok()` for gen-toggle and dex checks.
+- Encounter prerequisite chains must form a strict DAG — a cycle recurses infinitely and hangs Anki.
+- Lowercase name keys (and strip hyphens where applicable) before DB saves / cache lookups — capitalized-name JSON lookups fail silently.
+- Web views: avoid `backdrop-filter: blur()` — it causes Windows DWM compositor flicker under QWebEngine.
 
 ### Test Integrity Ignore List
 
