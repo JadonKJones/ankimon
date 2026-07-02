@@ -150,7 +150,7 @@ def read_update_state() -> Optional[dict]:
 ```
 
 #### [MODIFY] Database and State Preservation Guards
-Update `_should_preserve` to ensure user database databases, custom sprites, and the update state metadata are not deleted during update extraction:
+Update `_should_preserve` to ensure user databases, custom sprites, and the update state metadata are not deleted during update extraction:
 
 ```python
 def _should_preserve(rel_path: str, gitignore_patterns: list[str]) -> bool:
@@ -231,7 +231,7 @@ def check_branch_update(online_connectivity: bool, ssh: bool):
     # 1. Skip checks if tracking a release/tag, or if currently snoozed
     if source_type != "branch" or not branch_name:
         return
-    if skip_until > time.time():
+    if isinstance(skip_until, (int, float)) and skip_until > time.time():
         return
 
     # 2. Background check thread
@@ -264,7 +264,7 @@ def check_branch_update(online_connectivity: bool, ssh: bool):
                 messages = []
                 def status_update(m):
                     messages.append(m)
-                    mw.taskman.run_on_main(lambda: setattr(prog_dialog.status_label, "text", m))
+                    mw.taskman.run_on_main(lambda: prog_dialog.status_label.setText(m))
 
                 # Download branch code
                 zip_path = _download_branch_zip(branch_name, progress_cb=prog_dialog._on_progress)

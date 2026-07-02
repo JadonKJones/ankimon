@@ -103,7 +103,7 @@ If the selected encounter tier matches a Rare Tier, **only that tier's pity coun
 
 ---
 
-## 5. Legay vs. Overhaul: Scenario Comparisons
+## 5. Legacy vs. Overhaul: Scenario Comparisons
 
 Here is how the calculations diverge across three typical stages of player progression.
 
