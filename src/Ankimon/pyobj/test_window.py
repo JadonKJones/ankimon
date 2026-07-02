@@ -881,10 +881,16 @@ class TestWindow(QWidget):
             f"{self.translator.translate('catch_or_free', enemy_pokemon_name=lang_name.capitalize())}"
         )
 
-        # Display the Pokémon image
-        pkmnimage_file = (
-            f"{int(search_pokedex(self.enemy_pokemon.name.lower(), 'species_id'))}.png"
-        )
+        # Display the Pokémon image. ``search_pokedex`` returns ``[]`` when the
+        # name has no match (or on any lookup error), so guard the ``int()`` —
+        # falling back to the species id, then to the substitute sprite.
+        species_id = search_pokedex(self.enemy_pokemon.name.lower(), "species_id")
+        if isinstance(species_id, list) or species_id is None:
+            species_id = self.enemy_pokemon.id
+        try:
+            pkmnimage_file = f"{int(species_id)}.png"
+        except (ValueError, TypeError):
+            pkmnimage_file = "substitute.png"
         pkmnimage_path = frontdefault / pkmnimage_file
 
         pkmnimage_label = QLabel()
@@ -981,6 +987,10 @@ class TestWindow(QWidget):
 
     def display_first_encounter(self):
         self.ankimon_tracker_obj.pokemon_encounter = 0
+        # Clear the debounce timestamp so a fresh encounter's first battle
+        # render is never dropped as a same-view repeat of the PREVIOUS
+        # encounter's last render (which could land inside the 50 ms window).
+        self._last_display_time = 0
         new_label = self.pokemon_display_first_encounter()
         self.main_label.setPixmap(new_label.pixmap())
         self.button_widget.hide()

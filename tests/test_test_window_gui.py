@@ -349,6 +349,48 @@ def test_same_view_repeat_is_debounced(make_window, monkeypatch):
     assert death_renders == []
 
 
+def test_new_encounter_clears_debounce_carryover(make_window, monkeypatch):
+    """A fresh encounter's first battle render must never be debounced away.
+
+    Encounter A stamps ``_last_display_time`` on its last battle render; if a
+    new encounter B begins inside the 50 ms window, its ``display_first_encounter``
+    must reset the timestamp so B's first ``display_battle`` still renders.
+    """
+    win = make_window()
+    clock = _FakeClock()
+    monkeypatch.setattr(sys.modules[_MODULE_NAME], "time", clock)
+
+    # Encounter A: render battle, stamping the debounce timestamp at "now".
+    win.display_first_encounter()
+    win.display_battle()
+    assert win.current_view == "battle"
+
+    # Encounter B begins in the SAME tick (well inside the 50 ms window).
+    win.display_first_encounter()
+
+    renders = []
+    monkeypatch.setattr(
+        win, "pokemon_display_battle", lambda: renders.append(1) or win.main_label
+    )
+    win.display_battle()
+    # Without the reset this render is dropped (renders == []).
+    assert renders == [1]
+    assert win.current_view == "battle"
+
+
+def test_death_screen_survives_missing_pokedex_species_id(make_window, monkeypatch):
+    """``search_pokedex`` returns ``[]`` on an unknown name; the death screen
+    must not crash with ``int([])`` — it falls back to the species id."""
+    win = make_window(enemy=_FakePokemon("nonexistentmon", 6))
+    monkeypatch.setattr(
+        sys.modules[_MODULE_NAME], "search_pokedex", lambda name, var: []
+    )
+    # Should render without raising TypeError.
+    win.display_pokemon_death()
+    assert win.current_view == "death"
+    assert not win.main_label.pixmap().isNull()
+
+
 def test_death_buttons_route_through_hook_registry_seam(make_window, monkeypatch):
     win = make_window()
 
