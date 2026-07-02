@@ -30,7 +30,6 @@ from .functions.battle_functions import (
 from .functions.drawing_utils import tooltipWithColour
 from .utils import safe_get_random_move, play_effect_sound, play_sound, is_alive
 from .functions.ankimon_hooks_to_poke_engine import simulate_battle_with_poke_engine
-from .classes.choose_move_dialog import MoveSelectionDialog
 from .pyobj.error_handler import show_warning_with_traceback
 
 
@@ -162,6 +161,7 @@ def on_review_card(*args):
             ):
                 if settings_obj.get("controls.allow_to_choose_moves") == True:
                     from aqt.qt import QDialog
+                    from .classes.choose_move_dialog import MoveSelectionDialog
                     dialog = MoveSelectionDialog(main_pokemon.attacks)
                     if dialog.exec() == QDialog.DialogCode.Accepted:
                         if dialog.selected_move:

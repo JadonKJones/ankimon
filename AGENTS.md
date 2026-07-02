@@ -317,6 +317,8 @@ Specialized skills are available in `.agents/skills/`. Agents should check for r
 | **improve-codebase-architecture** | Finding refactoring opportunities, improving testability |
 | **openrouter-agent** | Delegating heavy token-expensive tasks to cheaper LLMs |
 | **skill-creator** | Creating, modifying, or benchmarking agent skills |
+| **ankimon-harness** | Testing, profiling, fuzzing, reproducing bugs in the game with no Anki and no clicking |
+| **validate-pr** | Validating, reviewing, testing, or signing off on a PR or branch |
 
 ---
 

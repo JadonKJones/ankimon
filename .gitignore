@@ -41,3 +41,11 @@ src/Ankimon/user_files/sprites/
 src/Ankimon/user_files/update_state.json
 tests/encounter_weighting_simulations/simulation_report.txt
 tests/encounter_weighting_simulations/simulation_results.json
+
+# Harness rules
+venv/
+.tier2/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml

@@ -1,3 +1,13 @@
+try:
+    from PyQt6.QtCore import QTimer
+except Exception:
+    class _NoOpSignal:
+        def connect(self, *args, **kwargs): pass
+    class QTimer:
+        def __init__(self, *args, **kwargs): self.timeout = _NoOpSignal()
+        def start(self, *args, **kwargs): pass
+        def stop(self, *args, **kwargs): pass
+
 from .pokemon_obj import PokemonObject
 from datetime import datetime
 from .error_handler import show_warning_with_traceback
@@ -39,7 +49,6 @@ class AnkimonTracker:
         self.current_mode = "idle"
 
         # Session and card timers
-        from PyQt6.QtCore import QTimer
         self.session_timer = QTimer()
         self.session_timer.timeout.connect(self.update_session_timer)
         self.card_timer = QTimer()
