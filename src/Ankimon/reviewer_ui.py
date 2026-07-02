@@ -89,9 +89,16 @@ def cycle_team_pokemon():
             tooltip("Not enough team members to cycle (need at least 2)")
             return
 
-        # Bounds check for safety
-        if _team_cycle_index >= len(team_ids):
-            _team_cycle_index = 0
+        # Sync the cycle index to the active pokemon's slot so a swap made
+        # outside this hotkey (Team Select / PC) still advances to the member
+        # *after* the current one. Fall back to the running index (with a bounds
+        # check) when the active pokemon is not among the cycled team slots.
+        active_id = getattr(main_pokemon, "individual_id", None)
+        try:
+            _team_cycle_index = team_ids.index(active_id)
+        except ValueError:
+            if _team_cycle_index >= len(team_ids):
+                _team_cycle_index = 0
 
         _team_cycle_index = (_team_cycle_index + 1) % len(team_ids)
         next_id = team_ids[_team_cycle_index]
@@ -112,7 +119,15 @@ def cycle_team_pokemon():
                 pokemon_name = search_pokedex_by_id(pokemon_data.get("id", 1))
                 pokemon_data["name"] = pokemon_name
 
-            pokemon_data["base_stats"] = search_pokedex(pokemon_name, "baseStats")
+            # search_pokedex returns [] (not None) when the name is unknown.
+            # base_stats must be a dict with an "hp" key, or update_stats ->
+            # calculate_max_hp would raise on base_stats["hp"] AFTER partially
+            # mutating main_pokemon. Guard before touching main_pokemon.
+            base_stats = search_pokedex(pokemon_name, "baseStats")
+            if not isinstance(base_stats, dict) or "hp" not in base_stats:
+                tooltip(f"Error: base stats not found for {pokemon_name}")
+                return
+            pokemon_data["base_stats"] = base_stats
 
             main_pokemon.update_stats(**pokemon_data)
             main_pokemon.max_hp = main_pokemon.calculate_max_hp()
@@ -245,7 +260,15 @@ def setup_reviewer_ui(
     _current_keys["team_cycle"] = _resolve_team_cycle_key(team_cycle_shortcut)
 
     if not _original_shortcutkeys_wrapped:
-        if not hasattr(Reviewer, "_ankimon_orig_shortcutKeys"):
+        # Reload-teardown contract: capture the pristine method once, and always
+        # wrap the pristine version — never an already-wrapped copy. A module
+        # re-exec (add-on reload) resets _original_shortcutkeys_wrapped while the
+        # Reviewer class persists with the previous boot's wrapper installed, so
+        # restore the pristine first; otherwise wrap() below would stack a second
+        # layer and every Ankimon shortcut would fire twice.
+        if hasattr(Reviewer, "_ankimon_orig_shortcutKeys"):
+            Reviewer._shortcutKeys = Reviewer._ankimon_orig_shortcutKeys
+        else:
             Reviewer._ankimon_orig_shortcutKeys = Reviewer._shortcutKeys
 
         def _shortcutKeys_wrap(self, _old):
@@ -297,10 +320,17 @@ def setup_reviewer_ui(
                 ),
             )
 
-        # Store the pristine methods once (reload-teardown contract).
-        if not hasattr(Reviewer, "_ankimon_orig_linkHandler"):
+        # Reload-teardown contract (same as _shortcutKeys above): capture the
+        # pristine methods once and always wrap the pristine version. On a module
+        # re-exec the Reviewer class keeps the previous wrappers, so restore the
+        # originals before re-wrapping to avoid stacking a second layer.
+        if hasattr(Reviewer, "_ankimon_orig_linkHandler"):
+            Reviewer._linkHandler = Reviewer._ankimon_orig_linkHandler
+        else:
             Reviewer._ankimon_orig_linkHandler = Reviewer._linkHandler
-        if not hasattr(Reviewer, "_ankimon_orig_bottomHTML"):
+        if hasattr(Reviewer, "_ankimon_orig_bottomHTML"):
+            Reviewer._bottomHTML = Reviewer._ankimon_orig_bottomHTML
+        else:
             Reviewer._ankimon_orig_bottomHTML = Reviewer._bottomHTML
 
         Reviewer._linkHandler = wrap(Reviewer._linkHandler, _linkHandler_wrap, "around")

@@ -375,6 +375,34 @@ def test_setup_reviewer_ui_three_and_four_args_idempotent():
     assert ui._current_keys["team_cycle"] == "9"
 
 
+def test_setup_reviewer_ui_reload_does_not_double_wrap():
+    # An add-on reload re-execs reviewer_ui (module guard flags reset to False)
+    # while the Reviewer *class* persists in memory with the first boot's wrappers
+    # still installed. The pristine method must be restored before re-wrapping, or
+    # every Ankimon shortcut would be appended twice (fires twice per keypress).
+    fake_services = types.SimpleNamespace(db=None, settings=FakeSettings())
+    dummy = _DummyReviewerFactory.make()
+    orig_sk = dummy._shortcutKeys
+    counter = []
+
+    ui = _load_reviewer_ui(fake_services, dummy_reviewer=dummy, wrap_counter=counter)
+    ui.is_dev_mode = lambda: False
+    ui.setup_reviewer_ui("6", "5", True, "9")
+
+    # Second boot: same persistent Reviewer class, fresh module namespace.
+    ui2 = _load_reviewer_ui(fake_services, dummy_reviewer=dummy, wrap_counter=counter)
+    ui2.is_dev_mode = lambda: False
+    ui2.setup_reviewer_ui("6", "5", True, "9")
+
+    # Pristine method preserved across reloads (reload-teardown contract).
+    assert dummy._ankimon_orig_shortcutKeys is orig_sk
+    # The live _shortcutKeys wraps the pristine ONCE: each Ankimon shortcut is
+    # appended exactly once. A stacked (double) wrap would list every key twice.
+    keys = dummy._shortcutKeys(dummy())
+    ankimon_keys = sorted(k for k, _ in keys if k in ("6", "5", "9"))
+    assert ankimon_keys == ["5", "6", "9"]
+
+
 def test_cycle_team_pokemon_reads_services_db_and_refreshes_hud():
     db = FakeDB(
         team=[{"individual_id": "a"}, {"individual_id": "b"}],
@@ -384,15 +412,82 @@ def test_cycle_team_pokemon_reads_services_db_and_refreshes_hud():
         db=db, settings=FakeSettings({"controls.team_cycle_count": 3})
     )
     ui = _load_reviewer_ui(fake_services)
+    # base_stats guard needs a valid dict back from the (mocked) pokedex lookup.
+    sys.modules["Ankimon.functions.pokedex_functions"].search_pokedex.return_value = {
+        "hp": 45,
+        "atk": 49,
+        "def": 49,
+        "spa": 65,
+        "spd": 65,
+        "spe": 90,
+    }
     ui.main_pokemon = MagicMock()
+    ui.main_pokemon.individual_id = "a"  # active pokemon is team slot 0
     ui.reviewer_obj = MagicMock()
 
     ui.cycle_team_pokemon()
 
     assert db.get_team_calls == 1
-    # index cycles 0 -> 1, so the second team member is loaded.
+    # active pokemon is slot 0, so cycling advances to slot 1 ('b').
     assert db.get_pokemon_args == ["b"]
     ui.reviewer_obj.refresh_hud.assert_called_once()
+
+
+def test_cycle_team_pokemon_syncs_index_to_active_pokemon():
+    # Regression for the team-cycle index desync: if the active pokemon is
+    # swapped in outside this hotkey (Team Select / PC), cycling must advance to
+    # the member AFTER the active one, not blindly increment a stale index.
+    db = FakeDB(
+        team=[
+            {"individual_id": "a"},
+            {"individual_id": "b"},
+            {"individual_id": "c"},
+        ],
+        pokemon={"id": 25, "name": "Pikachu", "level": 5},
+    )
+    fake_services = types.SimpleNamespace(
+        db=db, settings=FakeSettings({"controls.team_cycle_count": 3})
+    )
+    ui = _load_reviewer_ui(fake_services)
+    sys.modules["Ankimon.functions.pokedex_functions"].search_pokedex.return_value = {
+        "hp": 45,
+        "atk": 49,
+        "def": 49,
+        "spa": 65,
+        "spd": 65,
+        "spe": 90,
+    }
+    ui.reviewer_obj = MagicMock()
+    ui.main_pokemon = MagicMock()
+    ui.main_pokemon.individual_id = "b"  # active pokemon is slot 1
+    ui._team_cycle_index = 0  # stale running index (would wrongly go to 'b')
+
+    ui.cycle_team_pokemon()
+
+    # Synced to slot 1 ('b'), then advanced -> slot 2 ('c').
+    assert db.get_pokemon_args == ["c"]
+
+
+def test_cycle_team_pokemon_missing_base_stats_aborts_without_mutation():
+    # search_pokedex returns [] (not None) for an unknown name; the guard must
+    # abort before update_stats so main_pokemon is never partially mutated.
+    db = FakeDB(
+        team=[{"individual_id": "a"}, {"individual_id": "b"}],
+        pokemon={"id": 25, "name": "Pikachu", "level": 5},
+    )
+    fake_services = types.SimpleNamespace(
+        db=db, settings=FakeSettings({"controls.team_cycle_count": 3})
+    )
+    ui = _load_reviewer_ui(fake_services)
+    sys.modules["Ankimon.functions.pokedex_functions"].search_pokedex.return_value = []
+    ui.main_pokemon = MagicMock()
+    ui.main_pokemon.individual_id = "a"
+    ui.reviewer_obj = MagicMock()
+
+    ui.cycle_team_pokemon()
+
+    ui.main_pokemon.update_stats.assert_not_called()
+    ui.reviewer_obj.refresh_hud.assert_not_called()
 
 
 def test_cycle_team_pokemon_disabled_when_count_le_one():
