@@ -10,10 +10,6 @@ from aqt import mw  # The main window object
 from aqt.utils import qconnect
 
 
-from .gui_classes.choose_trainer_sprite_graphical import TrainerSpriteGraphicalDialog
-
-from .pyobj.trainer_card_window import TrainerCardGUI
-from .gui_classes.pokemon_team_window import PokemonTeamDialog
 from .gui_classes.check_files import FileCheckerApp
 from .pyobj.download_sprites import show_agreement_and_download_dialog
 from .pyobj.ankimon_leaderboard import show_api_key_dialog
@@ -39,11 +35,42 @@ from .gui_entities import (
     Version_Dialog,
 )
 
+# is_dev_mode lands with the thread-reload-and-misc-utils unit; until then fall
+# back to a disabled dev mode so the developer-only menu entries stay hidden.
+try:
+    from .utils import is_dev_mode
+except ImportError:  # pragma: no cover - dev helper not landed yet
+
+    def is_dev_mode():
+        return False
+
+
 debug = True
 
-# Initialize the menu
-mw.translator = Translator(language=int(mw.settings_obj.get("misc.language")))
-mw.pokemenu = QMenu('&' + mw.translator.translate("ankimon_button_title"), mw)
+# Initialize the menu. Under a headless MockWindow (integrity / import smoke) mw
+# is a lightweight stand-in, so build a DummyMock menu — importing this module
+# then never needs a real Translator or QMenu. The real (production) path below
+# is unchanged.
+if "mock" in mw.__class__.__name__.lower():
+    class DummyMock:
+        def __getattr__(self, name):
+            return DummyMock()
+
+        def __call__(self, *args, **kwargs):
+            return DummyMock()
+
+    mw.translator = DummyMock()
+    mw.pokemenu = DummyMock()
+else:
+    try:
+        mw.translator = Translator(language=int(mw.settings_obj.get("misc.language")))
+    except Exception:
+        # If the configured language fails to load (missing/corrupt setting or
+        # translation file), fall back to English (9) so mw.translator is always
+        # set — otherwise the next line raises AttributeError and the whole menu
+        # fails to build.
+        mw.translator = Translator(language=9)
+    mw.pokemenu = QMenu('&' + mw.translator.translate("ankimon_button_title"), mw)
 game_menu = mw.pokemenu.addMenu(mw.translator.translate("ankimon_game_button_title"))
 profile_menu = mw.pokemenu.addMenu(mw.translator.translate("ankimon_profile_button_title"))
 collection_menu = mw.pokemenu.addMenu(mw.translator.translate("ankimon_collection_button_title"))
@@ -84,7 +111,36 @@ def create_menu_actions(
     pokemon_pc: PokemonPC,
     backup_manager: BackupManager,
 ):
+    from .singletons import get_items_window
+
     actions = []
+
+    def _open_shell_at(screen, view=None, action=None):
+        # Every web-shell screen (Items/Shop, Ankidex, Profile, Team, Settings,
+        # Mobile) lives in the one unified shell window, resolved through the
+        # singletons factory (never raw mw). `view` (Items only) forces the Mart
+        # vs Bag filter; `action` (Profile only) is a one-shot UI hint — 'sprite'
+        # opens the picker, 'badges' scrolls to the badge case. Both are consumed
+        # by the next push. Only touch the profile action when actually opening
+        # Profile, so opening another screen can't clobber a queued action (or
+        # leave a stale one behind).
+        w = get_items_window()
+        if view is not None:
+            w.pending_view = view
+        if screen == "profile":
+            w._pending_profile_action = action
+        if w.isMinimized():
+            w.showNormal()
+        if w.current_screen != screen:
+            w.load_screen(screen)
+        elif (view is not None or action) and screen in w.ready_screens and w.isVisible():
+            # Already on this fully-loaded screen — re-push so the requested
+            # view/action applies immediately. Hidden/loading screens get it via
+            # the showEvent / loadFinished push.
+            w.push_screen_data()
+        w.show()
+        w.raise_()
+        w.activateWindow()
 
     if database_complete:
         # Pokémon PC
@@ -100,25 +156,19 @@ def create_menu_actions(
         ankimon_window_action.setShortcut(QKeySequence(f"{ankimon_key}"))
         qconnect(ankimon_window_action.triggered, test_window.open_dynamic_window)
 
-        # Itembag
+        # Item Bag — unified web shell, Items screen on the owned (Bag) view.
         itembag_action = QAction(mw.translator.translate("itembag_button"), mw)
         itembag_action.setMenuRole(QAction.MenuRole.NoRole)
-        itembag_action.triggered.connect(item_window.show_window)
+        itembag_action.triggered.connect(lambda: _open_shell_at("items", "owned"))
         collection_menu.addAction(itembag_action)
 
-        # Achievements
-        def show_achievements_window():
-            from .pyobj.achievements_dialog import AchievementsDialog
-            if not hasattr(mw, "_achievements_dialog") or mw._achievements_dialog is None:
-                mw._achievements_dialog = AchievementsDialog(addon_dir, trainer_card)
-            mw._achievements_dialog.setWindowModality(Qt.WindowModality.NonModal)
-            mw._achievements_dialog.show()
-            mw._achievements_dialog.raise_()
-            mw._achievements_dialog.activateWindow()
-
+        # Achievements — badge case section of the web Profile shell (the native
+        # AchievementsDialog is superseded by the Profile screen).
         achievement_bag_action = QAction(mw.translator.translate("achievements_button"), mw)
         achievement_bag_action.setMenuRole(QAction.MenuRole.NoRole)
-        achievement_bag_action.triggered.connect(show_achievements_window)
+        achievement_bag_action.triggered.connect(
+            lambda: _open_shell_at("profile", action="badges")
+        )
         profile_menu.addAction(achievement_bag_action)
 
         # Showdown Teambuilder
@@ -144,10 +194,11 @@ def create_menu_actions(
         qconnect(flex_pokecoll_action.triggered, flex_pokemon_collection)
         export_menu.addAction(flex_pokecoll_action)
 
-        pokedex_action = QAction(mw.translator.translate("open_pokedex_button"), mw)
-        pokedex_action.setMenuRole(QAction.MenuRole.NoRole)
-        qconnect(pokedex_action.triggered, pokedex_window.show)
-        collection_menu.addAction(pokedex_action)
+        # Ankidex (Pokédex V2) — unified web shell, ankidex screen.
+        ankidex_action = QAction("Ankidex", mw)
+        ankidex_action.setMenuRole(QAction.MenuRole.NoRole)
+        qconnect(ankidex_action.triggered, lambda: _open_shell_at("ankidex"))
+        collection_menu.addAction(ankidex_action)
 
     # Backup Manager
     backup_manager_action = QAction("Backup Manager", mw)
@@ -256,11 +307,43 @@ def create_menu_actions(
     version_action.triggered.connect(version_dialog.open)
     help_menu.addAction(version_action)
 
+    # Settings — opens the unified web shell at the Settings screen. The legacy
+    # SettingsWindow singleton stays available as a service for callers that use
+    # it directly, but is no longer launched from the menu.
     config_action = QAction(mw.translator.translate("ankimon_settings_button"), mw)
     config_action.setMenuRole(QAction.MenuRole.NoRole)
-    config_action.triggered.connect(settings_window.show_window)
+    config_action.triggered.connect(lambda: _open_shell_at("settings"))
     # Show the Settings window
     mw.pokemenu.addAction(config_action)
+
+    # --- Developer-only entries (hidden unless is_dev_mode()). ----------------
+    # Switch Account toggles the active database (ankimon.db <-> ankimonDEV.db).
+    from .singletons import swap_ankimon_account
+
+    switch_account_action = QAction("Switch Account (DEV/Normal)", mw)
+    switch_account_action.setMenuRole(QAction.MenuRole.NoRole)
+    switch_account_action.triggered.connect(swap_ankimon_account)
+    mw.pokemenu.addAction(switch_account_action)
+
+    # Encounter Rate Simulator (developer tool).
+    from .pyobj.encounter_simulator_dialog import EncounterSimulatorDialog
+
+    simulator_action = QAction("Encounter Rate Simulator", mw)
+    simulator_action.setMenuRole(QAction.MenuRole.NoRole)
+    simulator_action.triggered.connect(
+        lambda: EncounterSimulatorDialog(addon_dir).show()
+    )
+    help_menu.addAction(simulator_action)
+
+    # Re-evaluate the developer-only entries each time the menu opens, so
+    # toggling Developer Mode takes effect without rebuilding the menu.
+    def update_dev_actions_visibility():
+        is_dev = is_dev_mode()
+        switch_account_action.setVisible(is_dev)
+        simulator_action.setVisible(is_dev)
+
+    mw.pokemenu.aboutToShow.connect(update_dev_actions_visibility)
+    update_dev_actions_visibility()
 
     if debug is True:
         tracker_window_action = QAction(mw.translator.translate("ankimon_tracker_button"), mw)
@@ -277,30 +360,42 @@ def create_menu_actions(
     ankimon_logger_action.triggered.connect(logger.toggle_log_window)
     game_menu.addAction(ankimon_logger_action)
 
-    # Set up a shortcut (Ctrl+L) to open the log window
+    # Trainer Card — opens the web Profile shell (Ctrl+Shift+Q).
     ankimon_trainer_card_action = QAction(mw.translator.translate("trainer_card_button"), mw)
     ankimon_trainer_card_action.setMenuRole(QAction.MenuRole.NoRole)
     ankimon_trainer_card_action.setShortcut(QKeySequence("Ctrl+Shift+Q"))
-    # Create the TrainerCard GUI and show it inside Anki's main window
-    ankimon_trainer_card_action.triggered.connect(lambda: TrainerCardGUI(trainer_card, settings_obj, parent=mw))
+    ankimon_trainer_card_action.triggered.connect(lambda: _open_shell_at("profile"))
     profile_menu.addAction(ankimon_trainer_card_action)
 
-    # Add AnkimonShop Action to toggle the shop
+    # Item Shop / Mart — same unified Items window as Item Bag, opened on the
+    # shop ("In Shop Today") view rather than the bag.
     shop_manager_action = QAction(mw.translator.translate("item_shop_button"), mw)
     shop_manager_action.setMenuRole(QAction.MenuRole.NoRole)
-    shop_manager_action.triggered.connect(shop_manager.toggle_window)
+    shop_manager_action.triggered.connect(lambda: _open_shell_at("items", "in_shop"))
     game_menu.addAction(shop_manager_action)
 
-    # Choose Trainer Sprite Action
+    # Choose Trainer Sprite — web Profile shell, sprite-picker action.
     choose_trainer_sprite_action = QAction(mw.translator.translate("choose_trainer_sprite_button"), mw)
     choose_trainer_sprite_action.setMenuRole(QAction.MenuRole.NoRole)
-    choose_trainer_sprite_action.triggered.connect(lambda: TrainerSpriteGraphicalDialog(settings_obj=settings_obj).exec())
+    choose_trainer_sprite_action.triggered.connect(
+        lambda: _open_shell_at("profile", action="sprite")
+    )
     game_menu.addAction(choose_trainer_sprite_action)
 
+    # Choose Pokémon Team — web Team shell.
     pokemon_team_action = QAction(mw.translator.translate("choose_pokemon_team_button"), mw)
     pokemon_team_action.setMenuRole(QAction.MenuRole.NoRole)
-    pokemon_team_action.triggered.connect(lambda: PokemonTeamDialog(settings_obj, logger, trainer_card))
+    pokemon_team_action.triggered.connect(lambda: _open_shell_at("team"))
     game_menu.addAction(pokemon_team_action)
+
+    # Mobile and Web Reviews — web shell, mobile screen. Assign to the module
+    # global so update_mobile_badge() can reflect the pending count on it.
+    global _mobile_battles_action
+    mobile_battles_action = QAction("Mobile and Web Reviews", mw)
+    mobile_battles_action.setMenuRole(QAction.MenuRole.NoRole)
+    mobile_battles_action.triggered.connect(lambda: _open_shell_at("mobile"))
+    game_menu.addAction(mobile_battles_action)
+    _mobile_battles_action = mobile_battles_action
 
     file_check_action = QAction(mw.translator.translate("ankimon_file_checker_button"), mw)
     file_check_action.setMenuRole(QAction.MenuRole.NoRole)

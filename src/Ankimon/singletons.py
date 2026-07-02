@@ -379,13 +379,112 @@ def get_ankidex_window():
     return _ankidex_window
 
 
+def swap_ankimon_account():
+    """Toggle between ankimon.db and ankimonDEV.db and refresh the game state.
+
+    Developer-only (wired behind ``is_dev_mode()`` in ``menu_buttons``). Seam-refit
+    from the exp original: every ``mw.*`` access routes through the service
+    registry — ``services.db`` / ``services.settings`` / ``services.main_pokemon`` /
+    ``services.tracker`` / ``services.trainer_card`` / ``services.reviewer`` — and
+    the GUI windows through this module's own lazy caches, keeping mw coupling out
+    of singletons (NR-04). ``mw.reviewer`` is a genuine Anki API, so it stays direct.
+    """
+    from aqt.utils import tooltip
+    from .functions.update_main_pokemon import update_main_pokemon
+    from .functions.encounter_functions import new_pokemon, clear_encounter_cache
+
+    try:
+        # services.db (or its db_path) can be None during init / in headless
+        # environments; read the active name inside the try so a missing DB
+        # fails gracefully into the tooltip rather than raising an uncaught
+        # AttributeError before the handler below can report it.
+        if services.db is None or services.db.db_path is None:
+            tooltip("Ankimon database is not initialized.")
+            return
+
+        current_name = services.db.db_path.name
+        new_name = "ankimonDEV.db" if current_name == "ankimon.db" else "ankimon.db"
+
+        # Switch the DB connection.
+        services.db.switch_database(new_name)
+
+        # Reload configuration in place.
+        services.settings.load_config()
+
+        # Update the main Pokémon in place.
+        update_main_pokemon(services.main_pokemon)
+
+        # Refresh trainer-card data from the now-active account.
+        services.trainer_card.refresh()
+
+        # Reset battle/capture counters so no stale data can bleed through.
+        services.tracker.caught = 0
+        services.tracker.general_card_count_for_battle = 0
+
+        # Sync collected IDs to the newly-active account.
+        from .reviewer_ui import set_collected_ids
+        from .battle_loop import init_battle_state
+
+        new_ids = services.db.get_all_pokemon_ids()
+        set_collected_ids(new_ids)
+        init_battle_state(new_ids)
+
+        # Update the mobile-reviews badge with the new database's pending count.
+        try:
+            from .menu_buttons import update_mobile_badge
+
+            update_mobile_badge(services.db.get_pending_mobile_count())
+        except Exception:
+            pass
+
+        # Clear the encounter-percentage cache (depends on trainer level/stats).
+        clear_encounter_cache()
+
+        # Generate a fresh encounter for the new account.
+        new_pokemon(
+            services.enemy_pokemon,
+            services.test_window,
+            services.tracker,
+            services.reviewer,
+        )
+
+        # Refresh any open windows so they reflect the new account. Peek the lazy
+        # caches — never construct a window just to refresh it.
+        pc = services.pokemon_pc
+        if is_alive(pc):
+            # IDs differ between databases, so drop the stale selection.
+            pc._selected_individual_id = None
+            pc.pokemon_details_layout = None
+            pc.refresh_gui()
+
+        item_win = _WINDOW_CACHE.get("item_window")
+        if is_alive(item_win):
+            item_win.renewWidgets()
+
+        if is_alive(_ankidex_window):
+            _ankidex_window.update_ui_data()
+
+        if is_alive(_items_web_window) and _items_web_window.isVisible():
+            _items_web_window.update_ui_data()
+
+        # If a review is in progress, force a HUD refresh (mw.reviewer = Anki).
+        reviewer = getattr(mw, "reviewer", None)
+        if reviewer is not None and services.reviewer is not None:
+            services.reviewer.update_life_bar(reviewer, None, 0)
+
+        tooltip(f"Switched to {new_name}")
+    except Exception as e:
+        tooltip(f"Failed to switch account: {e}")
+        import traceback
+
+        traceback.print_exc()
+
+
 # DEFERRED seam points (do NOT add here in F31):
 # * get_nature_chart() -> gui_entities.NatureTableWidget lands with F36 (the
 #   widget does not exist on this base yet).
 # * notify_stats_changed() (QWebChannel live-update push) belongs to the
 #   webshell host / F10+F49, not to this module (NR-04).
-# * swap_ankimon_account() (dev DB switch) belongs to F36/F27 wiring and must
-#   call services.db.switch_database when it lands.
 
 # Per-name lazy proxies: `from .singletons import test_window` (and plain
 # module attribute access) constructs ONLY the requested window, on first

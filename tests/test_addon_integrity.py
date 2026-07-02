@@ -166,7 +166,6 @@ MODULES_TO_CHECK = [
     "Ankimon.pyobj",
     "Ankimon.pyobj.InfoLogger",
     "Ankimon.pyobj.achievement_window",
-    "Ankimon.pyobj.achievements_dialog",
     "Ankimon.pyobj.ankimon_leaderboard",
     "Ankimon.pyobj.ankimon_shop",
     "Ankimon.pyobj.ankimon_sync",
