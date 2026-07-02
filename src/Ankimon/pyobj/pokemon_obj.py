@@ -105,6 +105,151 @@ class PokemonObject:
         self.is_favorite = is_favorite
         self.captured_date = captured_date
 
+    @property
+    def display_name(self) -> str:
+        """Return the nickname if present and not redundant, else the official pretty name."""
+        try:
+            from ..functions.pokedex_functions import (
+                get_pokemon_diff_lang_name,
+                get_pretty_name_for_name,
+            )
+
+            # Access the language setting via the service seam if available.
+            lang = 9
+            settings = services.settings
+            if settings is not None:
+                lang = int(settings.get("misc.language", 9))
+
+            # int-cast like the sibling properties: ids read from legacy /
+            # migrated JSON records may be strings, and a str id would raise
+            # inside get_pokemon_diff_lang_name's `>= 10000` comparison.
+            pretty_name = get_pokemon_diff_lang_name(int(self.id), lang)
+            if pretty_name == "No Translation in this language":
+                pretty_name = get_pretty_name_for_name(self.name)
+
+            if self.nickname:
+                # Check if the nickname is just a variation of the internal/pretty name.
+                def normalize(s):
+                    return (
+                        str(s)
+                        .lower()
+                        .replace(" ", "")
+                        .replace("-", "")
+                        .replace("'", "")
+                        .replace(".", "")
+                        .replace(":", "")
+                    )
+
+                norm_nick = normalize(self.nickname)
+                if norm_nick != normalize(self.name) and norm_nick != normalize(
+                    pretty_name
+                ):
+                    return self.nickname
+
+            return pretty_name
+        except Exception:
+            try:
+                from ..functions.pokedex_functions import get_pretty_name_for_name
+
+                return (
+                    self.nickname
+                    if self.nickname
+                    else get_pretty_name_for_name(self.name)
+                )
+            except Exception:
+                return self.nickname if self.nickname else self.name.title()
+
+    @property
+    def pokedex_id(self) -> int:
+        """Return the base species Pokédex ID (resolving form ids >= 10000 to their species)."""
+        try:
+            from ..functions.pokedex_functions import (
+                search_pokedex_by_id,
+                search_pokedex,
+                safe_int,
+            )
+
+            actual_id = int(self.id)
+            if actual_id >= 10000:
+                internal_name = search_pokedex_by_id(actual_id)
+                if internal_name and internal_name != "Pokémon not found":
+                    sid = safe_int(search_pokedex(internal_name, "species_id"))
+                    if sid:
+                        return sid
+            return actual_id
+        except Exception:
+            # Keep the declared `-> int` contract even for garbage ids.
+            try:
+                return int(getattr(self, "id", 1))
+            except (TypeError, ValueError):
+                return 1
+
+    @property
+    def generation(self) -> int:
+        """Return the generation in which this Pokémon (or form) was introduced."""
+        try:
+            from ..functions.pokedex_functions import search_pokedex_by_id, search_pokedex
+            from ..const import gen_ids
+            from ..functions import encounter_data
+
+            actual_id = int(self.id)
+
+            # 1. Check for a regional-form intro gen first. REGIONAL_FORME_GEN is
+            # owned by the encounter-overhaul leaf (functions/encounter_data.py);
+            # until that lands this getattr yields {} and regional forms fall
+            # through to their base-species generation below.
+            if actual_id >= 10000:
+                internal_name = search_pokedex_by_id(actual_id)
+                if internal_name and internal_name != "Pokémon not found":
+                    forme = search_pokedex(internal_name, "forme") or ""
+                    intro_gen = getattr(encounter_data, "REGIONAL_FORME_GEN", {}).get(
+                        forme
+                    )
+                    if intro_gen:
+                        return intro_gen
+
+            # 2. Fallback to base-species generation.
+            species_id = self.pokedex_id
+
+            # Sort by max_id to match the lowest possible gen.
+            sorted_gens = sorted(gen_ids.items(), key=lambda x: x[1])
+            for gen_key, max_val in sorted_gens:
+                if species_id <= max_val:
+                    # Parse "gen_1" -> 1
+                    try:
+                        return int(gen_key.split("_")[1])
+                    except Exception:
+                        continue
+
+            # If the ID is beyond known gens, return the last gen.
+            if sorted_gens:
+                return int(sorted_gens[-1][0].split("_")[1])
+            return 1
+        except Exception:
+            # Emergency fallback based on common ID ranges if imports fail.
+            # int-cast defensively: a str id would crash the fallback itself.
+            try:
+                sid = int(getattr(self, "id", 1))
+            except (TypeError, ValueError):
+                sid = 1
+            if sid <= 151:
+                return 1
+            if sid <= 251:
+                return 2
+            if sid <= 386:
+                return 3
+            if sid <= 493:
+                return 4
+            if sid <= 649:
+                return 5
+            if sid <= 721:
+                return 6
+            if sid <= 809:
+                return 7
+            if sid <= 905:
+                return 8
+            return 9
+
     @classmethod
     def calc_stat(
         cls,
@@ -458,6 +603,14 @@ class PokemonObject:
             main_pokemon["held_item"] = held_item
             db.save_main_pokemon(main_pokemon)
 
+        # Sync the in-memory main_pokemon singleton if it is the target.
+        main_pkmn = services.main_pokemon
+        if (
+            main_pkmn is not None
+            and getattr(main_pkmn, "individual_id", None) == self.individual_id
+        ):
+            main_pkmn.held_item = held_item
+
     def remove_held_item(self) -> None:
         """
         Removes the held item from the Pokémon and updates the database.
@@ -482,6 +635,14 @@ class PokemonObject:
         if main_pokemon and main_pokemon.get("individual_id") == self.individual_id:
             main_pokemon["held_item"] = None
             db.save_main_pokemon(main_pokemon)
+
+        # Sync the in-memory main_pokemon singleton if it is the target.
+        main_pkmn = services.main_pokemon
+        if (
+            main_pkmn is not None
+            and getattr(main_pkmn, "individual_id", None) == self.individual_id
+        ):
+            main_pkmn.held_item = None
 
 
 class PokemonEncoder(json.JSONEncoder):
