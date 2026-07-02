@@ -1,3 +1,11 @@
+// Escape HTML metacharacters before interpolating user-controlled strings
+// (Pokemon nicknames) into innerHTML — prevents stored-XSS from malicious names.
+function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+}
+
 function showConfirm(message, onConfirm, onCancel = null) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -170,7 +178,9 @@ function renderHistory(historyList) {
         }
         
         const shinyTag = entry.enemy_shiny ? '✨ ' : '';
-        const vsDetails = `Your <strong>${entry.companion_name || 'Companion'}</strong> (Lv.${entry.companion_level || 5}) vs wild <strong>${shinyTag}${entry.enemy_name || '???'}</strong> (Lv.${entry.enemy_level || 5})`;
+        const companionName = escapeHtml(entry.companion_name || 'Companion');
+        const enemyName = escapeHtml(entry.enemy_name || '???');
+        const vsDetails = `Your <strong>${companionName}</strong> (Lv.${entry.companion_level || 5}) vs wild <strong>${shinyTag}${enemyName}</strong> (Lv.${entry.enemy_level || 5})`;
         
         let rewards = [];
         if (entry.xp_gained > 0) {

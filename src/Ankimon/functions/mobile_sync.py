@@ -1110,6 +1110,20 @@ def _run_mobile_battles_impl(
     temp_tracker = TempTracker(initial_reviews + resolved_count)
     team_clones = load_active_team_clones(db, settings_obj, main_pokemon)
     main_pokemon_clone = team_clones[0] if team_clones else None
+    if not main_pokemon_clone:
+        # No active companion and no main-Pokemon fallback: without a battler the
+        # engine would call simulate_battle_with_poke_engine(None, ...), which
+        # raises and is swallowed into enemy.hp = 0 while companion hp defaults to
+        # 100 (getattr(None, "hp", 100)) -> the player auto-wins/catches every
+        # review for free. Bail out with a benign empty result instead.
+        if commit:
+            return {"success": False, "error": "No active companion or main Pokémon available to battle."}
+        else:
+            return {
+                "xp": 0, "encounters": 0, "caught": [], "defeated": [],
+                "catches_count": 0, "is_truncated": False, "simulated_reviews": 0,
+                "total_reviews": 0, "cash": 0
+            }
     stable_max_level = _get_team_max_level(team_clones, db, settings_obj, main_pokemon)
     
     # Calculate active_max_level (max level of active team clones only)
@@ -1710,6 +1724,11 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
             orig_in_bulk = getattr(utils, "in_bulk_resolve", False)
             utils.in_bulk_resolve = True
 
+            # Serialize against run_mobile_battles (auto-resolve): both mutate the
+            # pending_mobile_battles queue and companion rows, and this body runs
+            # in a QueryOp background thread. Sharing _mobile_sync_lock guarantees
+            # a concurrent auto-resolve can't double-resolve reviews or race writes.
+            _mobile_sync_lock.acquire()
             try:
                 # 1. Catch logic
                 if choice == "catch":
@@ -1806,6 +1825,7 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
 
             finally:
                 utils.in_bulk_resolve = orig_in_bulk
+                _mobile_sync_lock.release()
 
         def on_db_work_done(dummy_res):
             try:

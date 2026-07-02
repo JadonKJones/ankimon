@@ -1,5 +1,13 @@
 // State machine: "loading" → "empty" | "pending"
 
+// Escape HTML metacharacters before interpolating user-controlled strings
+// (Pokemon nicknames) into innerHTML — prevents stored-XSS from malicious names.
+function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+}
+
 function showConfirm(message, onConfirm, onCancel = null) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -396,12 +404,13 @@ function fillPending(data) {
                 toggleMobileCompanion(member.individual_id);
             };
 
+            const memberName = escapeHtml(member.name);
             card.innerHTML = `
                 <div class="team-sprite-wrap">
-                    <img class="team-sprite" src="${member.sprite_path}" alt="${member.name}"
+                    <img class="team-sprite" src="${escapeHtml(member.sprite_path)}" alt="${memberName}"
                          onerror="if (this.src.indexOf('_gif') !== -1) { this.src = this.src.replace('_gif', '').replace('.gif', '.png'); } else { this.onerror=null; this.src='../user_files/sprites/front_default/0.png'; }">
                 </div>
-                <div class="team-name">${member.name}</div>
+                <div class="team-name">${memberName}</div>
                 <div class="team-level">Lv.${member.level}</div>
             `;
             teamGrid.appendChild(card);
