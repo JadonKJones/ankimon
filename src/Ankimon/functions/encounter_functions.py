@@ -383,12 +383,17 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
     if USE_OVERHAUL_ENCOUNTER_SYSTEM:
         return _modify_percentages_overhaul(total_reviews, daily_average, trainer_level)
 
+    # None-safe: the module global is bound by core.bind_runtime_globals()
+    # after composition; fall back to level 1 while unbound (mirrors the
+    # guard in _modify_percentages_overhaul).
+    main_pokemon_level = main_pokemon.level if main_pokemon is not None else 1
+
     # Performance Guard: Skip recalculation if inputs haven't changed
     if (
         _percentages_cache["percentages"] is not None
         and _percentages_cache["total_reviews"] == total_reviews
         and _percentages_cache["trainer_level"] == trainer_level
-        and _percentages_cache["main_pokemon_level"] == main_pokemon.level
+        and _percentages_cache["main_pokemon_level"] == main_pokemon_level
     ):
         return _percentages_cache["percentages"]
 
@@ -435,7 +440,7 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
         percentages["Normal"] -= 3.7
 
     # Restrict access to certain tiers based on main Pokémon level
-    if main_pokemon.level:
+    if main_pokemon_level:
         # Define level thresholds for each tier
         level_thresholds = {
             "Ultra": 30,
@@ -466,7 +471,7 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
                 percentages["Normal"] -= added
 
         for tier in ["Starter", "Ultra", "Legendary", "Mythical", "Mega", "Gmax"]:
-            if tier in percentages and main_pokemon.level < level_thresholds.get(
+            if tier in percentages and main_pokemon_level < level_thresholds.get(
                 tier, float("inf")
             ):
                 percentages[tier] = 0
@@ -481,7 +486,7 @@ def modify_percentages(total_reviews, daily_average, trainer_level):
     _percentages_cache["percentages"] = percentages
     _percentages_cache["total_reviews"] = total_reviews
     _percentages_cache["trainer_level"] = trainer_level
-    _percentages_cache["main_pokemon_level"] = main_pokemon.level
+    _percentages_cache["main_pokemon_level"] = main_pokemon_level
 
     return percentages
 

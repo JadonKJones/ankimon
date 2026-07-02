@@ -338,3 +338,10 @@ def test_meets_prerequisites_fusion_and_normal():
     # Meloetta Pirouette (10018) requires Meloetta (648)
     assert ef._meets_prerequisites(10018, {648}) is True
     assert ef._meets_prerequisites(10018, set()) is False
+
+    # 5. Test ("OR", {...}) prerequisites: any single member suffices
+    # Terapagos (1024) requires Koraidon (1007) OR Miraidon (1008)
+    assert ef._meets_prerequisites(1024, {1007}) is True
+    assert ef._meets_prerequisites(1024, {1008}) is True
+    assert ef._meets_prerequisites(1024, {1007, 1008}) is True
+    assert ef._meets_prerequisites(1024, set()) is False

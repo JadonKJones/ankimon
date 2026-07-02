@@ -509,29 +509,6 @@ def run_all():
             if not (0.04 <= wr <= 0.10):
                 passed1 = False
 
-        # --- TAUROS CHECK ---
-        tauros_base = 128
-        paldea_tauros = [10250, 10251, 10252]
-        t_total = get_count(stats1, tauros_base) + sum(
-            get_count(stats1, tid) for tid in paldea_tauros
-        )
-        if t_total > 0:
-            for tid in paldea_tauros:
-                rate = get_count(stats1, tid) / t_total
-                msgs1.append(f"Tauros {tid}: {rate:.1%} (target ~7%)")
-                if not (0.04 <= rate <= 0.10):
-                    passed1 = False
-
-        # --- WOOPER CHECK ---
-        wooper_base = 194
-        wooper_paldea = 10253
-        w_total = get_count(stats1, wooper_base) + get_count(stats1, wooper_paldea)
-        if w_total > 0:
-            wr = get_count(stats1, wooper_paldea) / w_total
-            msgs1.append(f"Wooper Paldea: {wr:.1%} (target ~7%)")
-            if not (0.04 <= wr <= 0.10):
-                passed1 = False
-
         if should_run(1):
             log_test("SCENARIO 1 — BASELINE", passed1, msgs1)
 

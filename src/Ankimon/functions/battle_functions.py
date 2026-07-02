@@ -225,7 +225,7 @@ def _process_battle_effects(
                 status_key = f"status_{norm_status}_still"
                 status_message = safe_translate(
                     status_key,
-                    pokemon_name=main_pokemon.name.capitalize(),
+                    pokemon_name=main_pokemon.display_name,
                     status_name=main_pokemon.battle_status.replace("_", " ").title(),
                 )
                 persistent_messages.append(status_message)
@@ -241,7 +241,7 @@ def _process_battle_effects(
                 status_key = f"status_{norm_status}_still"
                 status_message = safe_translate(
                     status_key,
-                    pokemon_name=enemy_pokemon.name.capitalize(),
+                    pokemon_name=enemy_pokemon.display_name,
                     status_name=enemy_pokemon.battle_status.replace("_", " ").title(),
                 )
                 persistent_messages.append(status_message)

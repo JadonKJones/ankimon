@@ -1520,7 +1520,9 @@ PREREQUISITES = {
     10191: {892},  # Urshifu Rapid Strike requires Urshifu Single Strike
     # Generation 9
     1025: {1014, 1015, 1016},  # Pecharunt requires Loyal Three
-    1024: {1007, 1008},  # Terapagos requires Koraidon OR Miraidon
+    # ("OR", {...}) = any one collected suffices (_meets_prerequisites);
+    # a plain set would demand BOTH, but encounter.txt specifies "need either".
+    1024: ("OR", {1007, 1008}),  # Terapagos requires Koraidon OR Miraidon
     # Starter Evolutions
     2: {1},
     3: {2},  # Ivysaur requires Bulbasaur, Venusaur requires Ivysaur
