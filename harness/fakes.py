@@ -26,6 +26,14 @@ class _RecordingFake:
 
     _target = "window"
 
+    def objectName(self) -> str:
+        # Liveness probe: production code guards window access with
+        # ``utils.is_alive``, which calls ``objectName()`` to detect a deleted
+        # C++ object. A live fake must answer truthfully *without* recording a
+        # ``ui`` event (the probe is infrastructure, not a game action), so the
+        # observable stream stays clean on every guarded touch.
+        return self._target
+
     def __getattr__(self, name):
         def _record(*args, **kwargs):
             events.emit("ui", target=self._target, method=name)
