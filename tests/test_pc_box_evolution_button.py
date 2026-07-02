@@ -269,6 +269,54 @@ def test_integrate_move_manager_replaces_evolution_button(pc_box, monkeypatch):
     assert add_calls[-1].args[0] == evo_btn_widget
 
 
+def _build_integrate_mocks():
+    """A PokemonPC-shaped mock whose header layout resolves to a row we can watch."""
+    pc = mock.MagicMock()
+    pc.details_widget = None
+    h_widget = mock.MagicMock()
+    pc.header_stack.currentWidget.return_value = h_widget
+    h_layout = mock.MagicMock()
+    h_widget.layout.return_value = h_layout
+    h_layout.count.return_value = 2
+    first_layout_item = mock.MagicMock()
+    first_layout = mock.MagicMock()
+    first_layout_item.layout.return_value = first_layout
+    h_layout.itemAt.return_value = first_layout_item
+    top_r_item = mock.MagicMock()
+    top_r_widget = mock.MagicMock()
+    top_r_item.widget.return_value = top_r_widget
+    first_layout.itemAt.return_value = top_r_item
+    top_r_layout = mock.MagicMock()
+    top_r_widget.layout.return_value = top_r_layout
+    top_r_layout.count.return_value = 0
+    top_r_layout.itemAt.side_effect = lambda idx: None
+    return pc
+
+
+def test_integrate_move_manager_retires_previous_widget(pc_box, monkeypatch):
+    """A stale MoveManagerWidget is deleteLater'd before a new one is built.
+
+    The manager is parented to the persistent ``details_widget``, not the swapped
+    header stack, so without an explicit retire it would accumulate as an orphaned
+    child on every ``show_pokemon_details`` call (memory/widget leak).
+    """
+    fake_move_manager = mock.MagicMock(name="MoveManagerWidget-new")
+    monkeypatch.setattr(
+        pc_box, "MoveManagerWidget", mock.MagicMock(return_value=fake_move_manager)
+    )
+
+    pc = _build_integrate_mocks()
+    stale = mock.MagicMock(name="MoveManagerWidget-old")  # is_alive(stale) is truthy
+    pc.move_manager = stale
+
+    pokemon = {"individual_id": "uuid-A", "id": 25, "name": "Pikachu"}
+    pc_box.PokemonPC._integrate_move_manager(pc, pokemon)
+
+    # The previous manager was retired exactly once and replaced by the new one.
+    stale.deleteLater.assert_called_once_with()
+    assert pc.move_manager is fake_move_manager
+
+
 def test_move_manager_reads_moves_via_services_db(pc_box):
     """MoveManagerWidget builds 4 slots + TM button, sourcing data from services.db."""
     stored = {

@@ -443,7 +443,9 @@ class MoveManagerWidget(QWidget):
     def on_tm_clicked(self):
         # 1. Get species/base name for TM lookup
         internal_name = search_pokedex_by_id(self.pkmn_id)
-        if not internal_name:
+        # search_pokedex_by_id returns the sentinel "Pokémon not found" (a truthy
+        # string), not None/"", when the id is missing — guard against it explicitly.
+        if not internal_name or internal_name == "Pokémon not found":
             self.logger.log_and_showinfo(
                 "error", f"Could not find Pokémon data for ID: {self.pkmn_id}"
             )
@@ -1533,10 +1535,11 @@ class PokemonPC(QDialog):
         self._refresh_slot_selection()
 
     def _update_count_label(self):
+        if not hasattr(self, "count_label") or not is_alive(self.count_label):
+            return
         shown = len(self._filtered_pokemon) if hasattr(self, "_filtered_pokemon") else 0
         total = self._total_pokemon_count
-        if hasattr(self, "count_label"):
-            self.count_label.setText(f"Showing {shown:,} / {total:,} Pokémon")
+        self.count_label.setText(f"Showing {shown:,} / {total:,} Pokémon")
 
     def _refresh_slot_selection(self):
         for i in range(self.pokemon_grid.count()):
@@ -1704,7 +1707,9 @@ class PokemonPC(QDialog):
 
         # Build current filter state for cache check
         current_state = {
-            "db": services.db.db_path.name,
+            "db": services.db.db_path.name
+            if services.db and getattr(services.db, "db_path", None)
+            else "",
             "search": self.search_edit.text() if self.search_edit else "",
             "type": self.type_combo.currentText() if self.type_combo else "All types",
             "gen": self.generation_combo.currentText()
@@ -2178,6 +2183,13 @@ class PokemonPC(QDialog):
                         services.db.save_pokemon(data)
                         self.show_pokemon_details(pokemon)
 
+                    # Retire the previous manager before building a new one.
+                    # It is parented to the persistent details_widget (not the
+                    # swapped header stack), so without this it would linger as
+                    # an orphaned child and accumulate over the session.
+                    if hasattr(self, "move_manager") and is_alive(self.move_manager):
+                        self.move_manager.deleteLater()
+
                     # Initialize FIRST (this might be slightly heavy)
                     new_move_manager = MoveManagerWidget(
                         individual_id=pokemon["individual_id"],
@@ -2257,21 +2269,6 @@ class PokemonPC(QDialog):
                             label.setStyleSheet("color: #f87171; font-weight: bold;")
         except Exception as e:
             self.logger.log("error", f"Error applying nature indicators: {e}")
-
-    def _update_count_label(self):
-        if not hasattr(self, "count_label") or not is_alive(self.count_label):
-            return
-
-        shown = len(self._filtered_pokemon) if hasattr(self, "_filtered_pokemon") else 0
-
-        # Get total count
-        try:
-            cursor = services.db.execute("SELECT COUNT(*) FROM captured_pokemon")
-            total = cursor.fetchone()[0]
-        except Exception:
-            total = shown
-
-        self.count_label.setText(f"Showing {shown} / {total} Pokémon")
 
     def on_stats_tab_changed(self, index: int):
         """Callback to remember which tab (Stats/IV/EV) is selected."""
