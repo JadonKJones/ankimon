@@ -329,10 +329,37 @@ def get_pokemon_pc():
     return win
 
 
+# The unified Ankimon web shell (F11/F13/F18): Items/Shop, Settings, Profile and
+# Team all live in this one QDialog (one window, one dropdown navigator). Lazy +
+# reload-safe like the other window factories, but not registry-backed — it is a
+# pure GUI window, so it lives in its own module-level cache with an is_alive()
+# liveness check (a shell whose C++ object was deleted is rebuilt, not handed out
+# dead). Seam-correct: constructed from the services-resolved core objects above,
+# never from mw.* (F31 keeps mw coupling out of this module, NR-04).
+_items_web_window = None
+
+
+def get_items_window():
+    global _items_web_window
+    if is_alive(_items_web_window):
+        return _items_web_window
+    from .ankimon_items_web.shop_obj import AnkimonItemsWeb
+
+    _items_web_window = AnkimonItemsWeb(
+        addon_dir,
+        shop_manager=shop_manager,
+        item_window=get_item_window(),
+        ankimon_tracker=ankimon_tracker_obj,
+        trainer_card=trainer_card,
+        settings_obj=settings_obj,
+        logger=logger,
+    )
+    return _items_web_window
+
+
 # DEFERRED seam points (do NOT add here in F31):
-# * get_items_window() -> ankimon_items_web / web-shell Items screen and
-#   get_ankidex_window() -> ankidex/ SPA land with F36 (their modules do not
-#   exist on this base yet); mount via webshell host per MERGE_ARCH_MAP §4.
+# * get_ankidex_window() -> ankidex/ SPA lands with a later unit (its module
+#   does not exist on this base yet); mount via webshell host per §4.
 # * get_nature_chart() -> gui_entities.NatureTableWidget lands with F36 (the
 #   widget does not exist on this base yet).
 # * notify_stats_changed() (QWebChannel live-update push) belongs to the
