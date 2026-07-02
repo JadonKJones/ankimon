@@ -122,20 +122,24 @@ def _load_pokedex_id_index():
             pokedex_data = _load_pokedex_cache()
             _pokedex_id_index = {}
 
-            # Pass 1: map every specific form by its actual_id.
+            # Pass 1: map every specific form by its actual_id. Missing/invalid
+            # ids resolve to None (default=None) so they are skipped rather than
+            # collapsing onto key 0.
             for entry_name, attributes in pokedex_data.items():
-                actual_id = safe_int(attributes.get("actual_id"))
+                actual_id = safe_int(attributes.get("actual_id"), default=None)
                 if actual_id is not None:
                     _pokedex_id_index[actual_id] = entry_name
 
             # Pass 2: map base species_ids. A base form (actual_id == species_id
             # or no actual_id, and no "baseSpecies") must ALWAYS own its species_id
             # mapping so that form variants (megas/regionals carrying a baseSpecies
-            # and a 10xxx actual_id) never shadow the base species entry.
+            # and a 10xxx actual_id) never shadow the base species entry. Parsing
+            # with default=None keeps the ``actual_id is None`` base-form test
+            # meaningful for rows that omit actual_id.
             for entry_name, attributes in pokedex_data.items():
-                species_id = safe_int(attributes.get("species_id"))
+                species_id = safe_int(attributes.get("species_id"), default=None)
                 if species_id is not None:
-                    actual_id = safe_int(attributes.get("actual_id"))
+                    actual_id = safe_int(attributes.get("actual_id"), default=None)
                     has_base_species = attributes.get("baseSpecies") is not None
                     is_base_form = (
                         actual_id is None or actual_id == species_id
@@ -743,22 +747,30 @@ def _get_active_region():
         if settings_obj is None:
             return None
         region = settings_obj.get("misc.active_region")
+        # The scalar settings layer may hand back a non-string (int/None/list);
+        # only strings carry a region name, everything else normalizes to None.
+        if isinstance(region, str):
+            region = region.strip()
+            if region in ("", "No Region"):
+                return None
+            return region
     except Exception:
-        return None
-    if region:
-        region = region.strip()
-    if region in (None, "", "No Region"):
-        return None
-    return region
+        pass
+    return None
 
 
 def return_identifier_for_item_id(item_id):
     """Return the string identifier of an item given its numeric id (items.csv)."""
+    # Guard None/invalid before coercion so a bad item_id can never accidentally
+    # match a row whose own id is missing/invalid (both would coerce to 0).
+    target_id = safe_int(item_id, default=None)
+    if target_id is None:
+        return None
     try:
         with open(csv_file_items_cost, mode="r", encoding="utf-8") as file:
             reader = csv.DictReader(file)
             for row in reader:
-                if safe_int(row.get("id")) == safe_int(item_id):
+                if safe_int(row.get("id"), default=None) == target_id:
                     return row.get("identifier")
     except Exception:
         pass
@@ -811,12 +823,25 @@ def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
                         ) or pokedex_data.get(target_evo_name.lower())
 
                         if target_data and target_data.get("evoType") == "useItem":
+                            # Normalize both sides by stripping spaces, hyphens and
+                            # apostrophes so pokedex.json display names (e.g.
+                            # "King's Rock") match items.csv identifiers (e.g.
+                            # "kings-rock"), which drop the apostrophe.
                             required_item = (
                                 (target_data.get("evoItem") or "")
                                 .lower()
-                                .replace(" ", "-")
+                                .replace(" ", "")
+                                .replace("-", "")
+                                .replace("'", "")
                             )
-                            if required_item == item_name:
+                            normalized_item_name = (
+                                (item_name or "")
+                                .lower()
+                                .replace(" ", "")
+                                .replace("-", "")
+                                .replace("'", "")
+                            )
+                            if required_item == normalized_item_name:
                                 target_region = target_data.get("evoRegion")
 
                                 if target_region:
@@ -1051,7 +1076,8 @@ def check_evolution_for_pokemon(
                             if pkmn_data and "attacks" in pkmn_data:
                                 p_attacks = pkmn_data["attacks"]
                                 if required_move and any(
-                                    a.lower().replace(" ", "").replace("-", "")
+                                    isinstance(a, str)
+                                    and a.lower().replace(" ", "").replace("-", "")
                                     == required_move.lower()
                                     .replace(" ", "")
                                     .replace("-", "")
