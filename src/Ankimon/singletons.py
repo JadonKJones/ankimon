@@ -1,5 +1,5 @@
 """
-singletons.py — the production composition root (Anki / Qt).
+singletons.py — the production composition root (Anki / Qt), reload-safe.
 
 Originally this module both *built* every Ankimon object and *held* it as a
 module global. It has since been split:
@@ -10,46 +10,77 @@ module global. It has since been split:
   everything — core objects, GUI windows, and the Qt UI presenter — in the
   service registry (:mod:`Ankimon.services`).
 
-It also keeps the historical module-level names (``settings_obj``, ``logger``,
-``test_window``, …) and the ``mw.<service>`` shims so the not-yet-migrated
-importers and ``__init__.py`` keep working unchanged.
+Reload safety (F31): construction is idempotent and lazy.
+
+* The **core** is get-or-create through the services registry: when a previous
+  composition root already populated ``services`` (an add-on reload, a double
+  boot, or the harness), the live registry objects are reused instead of being
+  rebuilt — so a second boot cannot duplicate the DB connection, the tracker,
+  or the ``Reviewer_Manager`` (whose constructor registers ``gui_hooks``).
+* The **windows** are no longer constructed at import time. Each window is
+  built on first access — via its ``get_*_window()`` factory or via plain
+  ``from .singletons import <name>`` (which lands in the module-level
+  ``__getattr__`` below) — and cached, with :func:`Ankimon.utils.is_alive`
+  liveness checks so a window whose underlying C++ object was deleted is
+  transparently re-created instead of handed out dead.
+
+The historical module-level names (``settings_obj``, ``logger``,
+``test_window``, …) and the ``mw.<service>`` shims are kept, so the
+not-yet-migrated importers and ``__init__.py`` keep working unchanged: the
+window names now resolve through ``__getattr__`` to the same live instances.
 
 The agent harness is the *other* root: it calls the same ``build_core()`` but
 wires recording fakes + the headless presenter instead of the Qt windows below.
 
-Author: Axil (original); split into core/gui 2026-06.
+Author: Axil (original); split into core/gui 2026-06; reload-safe 2026-07.
 """
+
+from types import SimpleNamespace
 
 from aqt import mw
 
-# GUI window/widget classes (all import Qt).
-from .pyobj.settings_window import SettingsWindow
-from .pyobj.test_window import TestWindow
-from .pyobj.achievement_window import AchievementWindow
-from .pyobj.ankimon_tracker_window import AnkimonTrackerWindow
 from .pyobj.ankimon_shop import PokemonShopManager
-from .pokedex.pokedex_obj import Pokedex
 from .pyobj.reviewer_obj import Reviewer_Manager
-from .pyobj.evolution_window import EvoWindow
-from .pyobj.starter_window import StarterWindow
-from .pyobj.item_window import ItemWindow
-from .pyobj.pc_box import PokemonPC
-from .gui_entities import (
-    License,
-    Credits,
-    TableWidget,
-    IDTableWidget,
-    Pokedex_Widget,
-    Version_Dialog,
-)
 from .resources import addon_dir
 from .services import services
 from .core import build_core, bind_runtime_globals
 from .gui_presenter import QtPresenter
+from .utils import is_alive
 
-# --- Core (aqt-free) composition. Populates services.{db,logger,settings,
-#     translator,tracker,main_pokemon,enemy_pokemon,trainer_card,achievements}. ---
-_core = build_core()
+# --- Core (aqt-free) composition: get-or-create (reload-safe). ---------------
+# First boot: build_core() constructs everything and populates services.
+# Reload / double boot (the services module survived): reuse the live registry
+# objects instead of constructing duplicates.
+
+
+def _core_is_populated() -> bool:
+    """True when a previous composition root already built the core."""
+    return (
+        services.db is not None
+        and services.logger is not None
+        and services.settings is not None
+    )
+
+
+def _core_from_registry() -> SimpleNamespace:
+    """Mirror the live registry objects into the shape build_core() returns."""
+    return SimpleNamespace(
+        logger=services.logger,
+        ankimon_db=services.db,
+        settings_obj=services.settings,
+        translator=services.translator,
+        main_pokemon=services.main_pokemon,
+        # Only known at first construction (update_main_pokemon() reports it);
+        # nothing imports it, so a reused root does not recompute it.
+        mainpokemon_empty=None,
+        enemy_pokemon=services.enemy_pokemon,
+        trainer_card=services.trainer_card,
+        ankimon_tracker_obj=services.tracker,
+        achievements=services.achievements,
+    )
+
+
+_core = _core_from_registry() if _core_is_populated() else build_core()
 logger = _core.logger
 ankimon_db = _core.ankimon_db
 settings_obj = _core.settings_obj
@@ -71,29 +102,10 @@ mw.logger = logger
 mw.translator = translator
 mw.settings_obj = settings_obj
 
-# --- GUI windows (Qt), built on top of the core objects above. ---
-settings_window = SettingsWindow(
-    config=settings_obj.config,  # Use settings_obj.config instead of settings_obj.settings.config
-    set_config_callback=settings_obj.set,
-    save_config_callback=settings_obj.save_config,
-    load_config_callback=settings_obj.load_config,
-)
-mw.settings_ankimon = settings_window
+# --- Window-less managers (eager, get-or-create where the registry knows them). ---
 
-# Create an instance of the MainWindow
-test_window = TestWindow(
-    main_pokemon=main_pokemon,
-    enemy_pokemon=enemy_pokemon,
-    settings_obj=settings_obj,
-    ankimon_tracker_obj=ankimon_tracker_obj,
-    translator=translator,
-    parent=mw,
-    logger=logger,
-)
-
-achievement_bag = AchievementWindow()
-
-# Initialize the Pokémon Shop Manager
+# The Pokémon Shop Manager. Not registry-backed (yet): cheap, side-effect-free
+# construction, so rebuilding it on a reload is harmless.
 shop_manager = PokemonShopManager(
     logger=logger,
     settings_obj=settings_obj,
@@ -101,62 +113,272 @@ shop_manager = PokemonShopManager(
     get_callback=settings_obj.get,
 )
 
-ankimon_tracker_window = AnkimonTrackerWindow(tracker=ankimon_tracker_obj)
-pokedex_window = Pokedex(addon_dir, ankimon_tracker=ankimon_tracker_obj)
-reviewer_obj = Reviewer_Manager(
-    settings_obj=settings_obj,
-    main_pokemon=main_pokemon,
-    enemy_pokemon=enemy_pokemon,
-    ankimon_tracker=ankimon_tracker_obj,
-)
+# Reviewer manager. Get-or-create: its constructor appends to gui_hooks, so a
+# reload that re-ran it unconditionally would double-register those hooks.
+reviewer_obj = services.reviewer
+if reviewer_obj is None:
+    reviewer_obj = Reviewer_Manager(
+        settings_obj=settings_obj,
+        main_pokemon=main_pokemon,
+        enemy_pokemon=enemy_pokemon,
+        ankimon_tracker=ankimon_tracker_obj,
+    )
+    services.populate(reviewer=reviewer_obj)
 
-eff_chart = TableWidget()
-pokedex = Pokedex_Widget()
-gen_id_chart = IDTableWidget()
-license = License()
-credits = Credits()
-version_dialog = Version_Dialog()
+# --- GUI windows: lazy, idempotent factories (F31). ---------------------------
+#
+# No window is constructed at import time. The seam-registered windows
+# (test_window / evo_window / pokemon_pc) are cached in the services registry
+# itself; every other window lives in _WINDOW_CACHE. After registering a seam
+# window its factory re-runs core.bind_runtime_globals() so the core logic
+# modules' bare globals (battle_loop.test_window, …) pick up the live instance.
 
-evo_window = EvoWindow(
-    logger,
-    settings_obj,
-    main_pokemon,
-    translator,
-    reviewer_obj,
-    test_window,
-    achievements,
-)
-starter_window = StarterWindow(logger, settings_obj)
-item_window = ItemWindow(  # Create an instance of the MainWindow
-    logger=logger,
-    settings_obj=settings_obj,
-    main_pokemon=main_pokemon,
-    enemy_pokemon=enemy_pokemon,
-    achievements=achievements,
-    starter_window=starter_window,
-    evo_window=evo_window,
-)
+_WINDOW_CACHE = {}
 
-pokemon_pc = PokemonPC(
-    logger=logger,
-    translator=translator,
-    reviewer_obj=reviewer_obj,
-    test_window=test_window,
-    settings=settings_obj,
-    main_pokemon=main_pokemon,
-)
 
-# --- Register the GUI windows + the Qt UI presenter in the registry, so the
-#     core logic (battle_loop / encounter_functions) reaches them via services. ---
-services.populate(
-    ui=QtPresenter(),
-    test_window=test_window,
-    evo_window=evo_window,
-    pokemon_pc=pokemon_pc,
-    reviewer=reviewer_obj,
-)
+def _cached(name, factory):
+    """Get-or-create a non-registry window: reuse while alive, else rebuild."""
+    win = _WINDOW_CACHE.get(name)
+    if is_alive(win):
+        return win
+    win = factory()
+    _WINDOW_CACHE[name] = win
+    return win
+
+
+def get_settings_window():
+    def _build():
+        from .pyobj.settings_window import SettingsWindow
+
+        win = SettingsWindow(
+            config=settings_obj.config,  # Use settings_obj.config instead of settings_obj.settings.config
+            set_config_callback=settings_obj.set,
+            save_config_callback=settings_obj.save_config,
+            load_config_callback=settings_obj.load_config,
+        )
+        # Back-compat shim (pre-F31 this was written at import time).
+        mw.settings_ankimon = win
+        return win
+
+    return _cached("settings_window", _build)
+
+
+def get_test_window():
+    win = services.test_window
+    if is_alive(win):
+        return win
+    from .pyobj.test_window import TestWindow
+
+    win = TestWindow(
+        main_pokemon=main_pokemon,
+        enemy_pokemon=enemy_pokemon,
+        settings_obj=settings_obj,
+        ankimon_tracker_obj=ankimon_tracker_obj,
+        translator=translator,
+        parent=mw,
+        logger=logger,
+    )
+    services.populate(test_window=win)
+    bind_runtime_globals()
+    return win
+
+
+def get_achievement_bag():
+    def _build():
+        from .pyobj.achievement_window import AchievementWindow
+
+        return AchievementWindow()
+
+    return _cached("achievement_bag", _build)
+
+
+def get_ankimon_tracker_window():
+    def _build():
+        from .pyobj.ankimon_tracker_window import AnkimonTrackerWindow
+
+        return AnkimonTrackerWindow(tracker=ankimon_tracker_obj)
+
+    return _cached("ankimon_tracker_window", _build)
+
+
+def get_pokedex_window():
+    def _build():
+        from .pokedex.pokedex_obj import Pokedex
+
+        return Pokedex(addon_dir, ankimon_tracker=ankimon_tracker_obj)
+
+    return _cached("pokedex_window", _build)
+
+
+def get_eff_chart():
+    def _build():
+        from .gui_entities import TableWidget
+
+        return TableWidget()
+
+    return _cached("eff_chart", _build)
+
+
+def get_pokedex_widget():
+    def _build():
+        from .gui_entities import Pokedex_Widget
+
+        return Pokedex_Widget()
+
+    return _cached("pokedex", _build)
+
+
+def get_gen_id_chart():
+    def _build():
+        from .gui_entities import IDTableWidget
+
+        return IDTableWidget()
+
+    return _cached("gen_id_chart", _build)
+
+
+def get_license():
+    def _build():
+        from .gui_entities import License
+
+        return License()
+
+    return _cached("license", _build)
+
+
+def get_credits():
+    def _build():
+        from .gui_entities import Credits
+
+        return Credits()
+
+    return _cached("credits", _build)
+
+
+def get_version_dialog():
+    def _build():
+        from .gui_entities import Version_Dialog
+
+        return Version_Dialog()
+
+    return _cached("version_dialog", _build)
+
+
+def get_evo_window():
+    win = services.evo_window
+    if is_alive(win):
+        return win
+    from .pyobj.evolution_window import EvoWindow
+
+    win = EvoWindow(
+        logger,
+        settings_obj,
+        main_pokemon,
+        translator,
+        reviewer_obj,
+        get_test_window(),
+        achievements,
+    )
+    services.populate(evo_window=win)
+    bind_runtime_globals()
+    return win
+
+
+def get_starter_window():
+    def _build():
+        from .pyobj.starter_window import StarterWindow
+
+        return StarterWindow(logger, settings_obj)
+
+    return _cached("starter_window", _build)
+
+
+def get_item_window():
+    def _build():
+        from .pyobj.item_window import ItemWindow
+
+        return ItemWindow(  # Create an instance of the MainWindow
+            logger=logger,
+            settings_obj=settings_obj,
+            main_pokemon=main_pokemon,
+            enemy_pokemon=enemy_pokemon,
+            achievements=achievements,
+            starter_window=get_starter_window(),
+            evo_window=get_evo_window(),
+        )
+
+    return _cached("item_window", _build)
+
+
+def get_pokemon_pc():
+    win = services.pokemon_pc
+    if is_alive(win):
+        return win
+    from .pyobj.pc_box import PokemonPC
+
+    win = PokemonPC(
+        logger=logger,
+        translator=translator,
+        reviewer_obj=reviewer_obj,
+        test_window=get_test_window(),
+        settings=settings_obj,
+        main_pokemon=main_pokemon,
+    )
+    services.populate(pokemon_pc=win)
+    bind_runtime_globals()
+    return win
+
+
+# DEFERRED seam points (do NOT add here in F31):
+# * get_items_window() -> ankimon_items_web / web-shell Items screen and
+#   get_ankidex_window() -> ankidex/ SPA land with F36 (their modules do not
+#   exist on this base yet); mount via webshell host per MERGE_ARCH_MAP §4.
+# * get_nature_chart() -> gui_entities.NatureTableWidget lands with F36 (the
+#   widget does not exist on this base yet).
+# * notify_stats_changed() (QWebChannel live-update push) belongs to the
+#   webshell host / F10+F49, not to this module (NR-04).
+# * swap_ankimon_account() (dev DB switch) belongs to F36/F27 wiring and must
+#   call services.db.switch_database when it lands.
+
+# Per-name lazy proxies: `from .singletons import test_window` (and plain
+# module attribute access) constructs ONLY the requested window, on first
+# access. None of these names is a real module global, so this __getattr__ is
+# their only resolution path.
+_LAZY_WINDOWS = {
+    "settings_window": get_settings_window,
+    "test_window": get_test_window,
+    "achievement_bag": get_achievement_bag,
+    "ankimon_tracker_window": get_ankimon_tracker_window,
+    "pokedex_window": get_pokedex_window,
+    "eff_chart": get_eff_chart,
+    "pokedex": get_pokedex_widget,
+    "gen_id_chart": get_gen_id_chart,
+    "license": get_license,
+    "credits": get_credits,
+    "version_dialog": get_version_dialog,
+    "evo_window": get_evo_window,
+    "starter_window": get_starter_window,
+    "item_window": get_item_window,
+    "pokemon_pc": get_pokemon_pc,
+}
+
+
+def __getattr__(name):
+    factory = _LAZY_WINDOWS.get(name)
+    if factory is not None:
+        return factory()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# --- Qt UI presenter + runtime-global binding. --------------------------------
+# Idempotent: only swap in a QtPresenter when the registry does not already
+# hold one, so a reload keeps the existing presenter instance.
+if not isinstance(services.ui, QtPresenter):
+    services.populate(ui=QtPresenter())
 
 # Bind the core logic modules' bare globals (main_pokemon, settings_obj,
-# test_window, …) to the now-fully-populated registry. Must run after the
-# services.populate above so the GUI window bindings are non-None.
+# test_window, …) to the now-populated registry. The window bindings
+# (test_window / evo_window / pokemon_pc) may still be None here — each lazy
+# factory re-runs bind_runtime_globals() after registering its window, so the
+# bindings are live before any gameplay code can run.
 bind_runtime_globals()
