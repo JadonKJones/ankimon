@@ -768,7 +768,7 @@ function renderReplayBattle(result) {
         // 1. Player Attack
         playerCard.classList.add('attack-dash');
         if (narrateEl) {
-            narrateEl.innerHTML = `<strong>${result.companion_name}</strong> used <strong>${turn.user_attack}</strong>!`;
+            narrateEl.innerHTML = `<strong>${escapeHtml(result.companion_name)}</strong> used <strong>${escapeHtml(turn.user_attack)}</strong>!`;
         }
 
         const tPlayer = setTimeout(() => {
@@ -952,12 +952,13 @@ function renderReplayTeamSelector(activeCompanionId) {
                 card.classList.add('inactive');
             }
 
+            const memberName = escapeHtml(member.name);
             card.innerHTML = `
                 <div class="replay-member-sprite-wrap">
-                    <img class="replay-member-sprite" src="${member.sprite_path}" alt="${member.name}"
+                    <img class="replay-member-sprite" src="${escapeHtml(member.sprite_path)}" alt="${memberName}"
                          onerror="if (this.src.indexOf('_gif') !== -1) { this.src = this.src.replace('_gif', '').replace('.gif', '.png'); } else { this.onerror=null; this.src='../user_files/sprites/front_default/0.png'; }">
                 </div>
-                <div class="replay-member-name">${member.name}</div>
+                <div class="replay-member-name">${memberName}</div>
             `;
 
             card.onclick = function() {
