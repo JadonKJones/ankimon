@@ -11,7 +11,12 @@ observable contract of that plumbing so a regression is caught:
     the DEFAULT_CONFIG value (the fallback new keys such as misc.active_region
     rely on);
   * ``load_config`` treats a stored ``None`` as "unset" and reseeds it from
-    DEFAULT_CONFIG;
+    DEFAULT_CONFIG — but only when the schema default itself is not None, so
+    a None-default key (misc.active_region) cannot flag the config modified
+    (and rewrite it to the DB) on every load;
+  * loading twice writes nothing on the second load (no startup churn), and a
+    persisted None for misc.active_region survives the real DB's str() scalar
+    encoding (which stores it as the string "None") as a real ``None``;
   * ``controls.team_cycle_count`` is int-coerced on load;
   * ``save_config`` preserves the identity of the ``self.config`` dict
     (clear/update in place) so external holders keep observing updates;
@@ -91,6 +96,7 @@ class _FakeDB:
     def __init__(self, cfg):
         self._cfg = dict(cfg)
         self.saved = None
+        self.save_count = 0
 
     def has_config(self):
         return bool(self._cfg)
@@ -101,6 +107,7 @@ class _FakeDB:
     def save_all_config(self, cfg):
         self.saved = dict(cfg)
         self._cfg = dict(cfg)
+        self.save_count += 1
         return True
 
     def set_config_value(self, key, value):
@@ -239,6 +246,49 @@ def test_load_config_reseeds_none_value_from_default(isolated_env):
     settings = env["settings_mod"].Settings()
     # A persisted None for gen9 is reseeded from DEFAULT_CONFIG (False).
     assert settings.config["misc.gen9"] is False
+
+
+def test_load_config_second_load_writes_nothing(isolated_env):
+    """Loading an already-seeded config must not rewrite it: a None-default
+    key (misc.active_region) must not re-trigger the modified->save path on
+    every load (startup churn)."""
+    env = isolated_env
+    db = _FakeDB({})
+    env["services"].db = db
+    settings = env["settings_mod"].Settings()  # first load seeds the defaults
+    assert db.save_count == 1
+    assert settings.config["misc.active_region"] is None
+    settings.load_config()
+    assert db.save_count == 1, "second load must not write the config again"
+    assert settings.config["misc.active_region"] is None
+
+
+def test_load_config_idempotent_against_real_db_none_encoding(isolated_env):
+    """Same churn guarantee against the real AnkimonDB, whose scalar encoding
+    stores Python None as the string "None": the value must come back as a
+    real None and the second load must not save."""
+    env = isolated_env
+    settings, db = _settings_with_real_db(env)  # __init__ seeded + saved once
+    save_calls = []
+    original_save = db.save_all_config
+    db.save_all_config = lambda cfg: save_calls.append(1) or original_save(cfg)
+    settings.load_config()
+    assert save_calls == [], "second load must not write the config again"
+    assert settings.config["misc.active_region"] is None
+    assert settings.get("misc.active_region") is None
+
+
+def test_active_region_none_survives_db_roundtrip(isolated_env):
+    """An explicit None (user picked "No Region") survives persistence: the
+    DB hands back the string "None", which load_config normalizes to None."""
+    env = isolated_env
+    settings, _ = _settings_with_real_db(env)
+    settings.set("misc.active_region", "kanto")
+    settings.set("misc.active_region", None)
+    env["services"].db = env["db_mod"].AnkimonDB()  # simulate a restart
+    reloaded = env["settings_mod"].Settings()
+    assert reloaded.config["misc.active_region"] is None
+    assert reloaded.get("misc.active_region") is None
 
 
 def test_team_cycle_count_str_coerced_to_int(isolated_env):

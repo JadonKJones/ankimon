@@ -155,12 +155,25 @@ class Settings:
                     )
                     config = {}
 
-        # Ensure all default settings are present. A stored value of ``None`` is
-        # treated as "unset" and falls back to the DEFAULT_CONFIG value — the
-        # schema plumbing that keys such as misc.active_region depend on.
+        # Normalize a DB scalar-encoding artifact: the config table stores
+        # plain scalars via str(), so a persisted Python None comes back as
+        # the string "None". Restore a real None for keys whose schema default
+        # is None (misc.active_region) so "unset" survives a save/load
+        # round-trip instead of becoming a truthy string.
+        for key, default in DEFAULT_CONFIG.items():
+            if default is None and config.get(key) == "None":
+                config[key] = None
+
+        # Ensure all default settings are present. A stored value of ``None``
+        # is treated as "unset" and reseeded from the DEFAULT_CONFIG value —
+        # except for keys whose schema default is itself None: reseeding those
+        # would flag the config as modified (and rewrite it to the DB) on
+        # every single load.
         modified = False
         for key in DEFAULT_CONFIG:
-            if key not in config or config[key] is None:
+            if key not in config or (
+                config[key] is None and DEFAULT_CONFIG[key] is not None
+            ):
                 modified = True
                 config[key] = DEFAULT_CONFIG[key]
 
