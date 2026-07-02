@@ -25,27 +25,16 @@ from .resources import ensure_ankimon_infrastructure, user_path, addon_dir
 
 ensure_ankimon_infrastructure(addon_dir, user_path)
 
+# Only the cheap, aqt-free core objects are imported here. The GUI windows
+# (test_window, item_window, …) are F31 lazy factories: importing their names
+# constructs them, so those imports are deferred into the async-boot success
+# callback below and the boot never builds a window before Anki is up.
 from .singletons import (
     settings_obj,
-    settings_window,
     logger,
     translator,
-    reviewer_obj,
     ankimon_tracker_obj,
-    test_window,
-    achievement_bag,
     shop_manager,
-    ankimon_tracker_window,
-    pokedex_window,
-    eff_chart,
-    gen_id_chart,
-    license,
-    credits,
-    evo_window,
-    starter_window,
-    item_window,
-    version_dialog,
-    pokemon_pc,
     trainer_card,
 )
 from .functions.url_functions import (
@@ -64,6 +53,9 @@ from .utils import test_online_connectivity
 from .menu_buttons import create_menu_actions
 from .hooks import setupHooks
 from .pyobj.error_handler import show_warning_with_traceback
+from .pyobj.backup_manager import BackupManager
+from .services import services
+from .events import events
 
 # singletons.py already populated the service registry and mirrored these onto
 # mw (see services.py), so the previous mw.settings_ankimon/logger/settings_obj
@@ -74,12 +66,17 @@ from .pyobj.error_handler import show_warning_with_traceback
 # once menu_buttons stops building its own translator.
 mw.translator = translator
 
+# Importing overview_team registers its deck-browser/overview hooks exactly
+# once, at module scope, gated by the gui.team_deck_view setting.
 from .gui_classes import overview_team
 
-# --- Startup: backup, migration, assets, first enemy ---
-from .startup import run_startup_sequence
-
-database_complete, collected_pokemon_ids, backup_manager = run_startup_sequence()
+# --- Startup readiness flag (F32 async boot) ---
+# Expressed on the services registry (not mw): reviews that arrive before the
+# background boot finishes are dropped by the gated hook below, exactly like
+# exp's mw.ankimon_startup_finished gate. Consumers read
+# getattr(services, "startup_finished", False).
+_STARTUP_FINISHED_ATTR = "startup_finished"
+setattr(services, _STARTUP_FINISHED_ATTR, False)
 
 # --- Web exports for reviewer UI ---
 mw.addonManager.setWebExports(
@@ -122,44 +119,43 @@ schedule_branch_update_check(online_connectivity, ssh)
 # --- Battle loop ---
 from .battle_loop import on_review_card, init_battle_state
 
-init_battle_state(collected_pokemon_ids)
-gui_hooks.reviewer_did_answer_card.append(on_review_card)
 
-# --- Menu ---
-create_menu_actions(
-    database_complete,
-    online_connectivity,
-    item_window,
-    test_window,
-    achievement_bag,
-    open_team_builder,
-    export_to_pkmn_showdown,
-    export_all_pkmn_showdown,
-    flex_pokemon_collection,
-    eff_chart,
-    gen_id_chart,
-    credits,
-    license,
-    open_help_window,
-    report_bug,
-    rate_addon_url,
-    version_dialog,
-    trainer_card,
-    ankimon_tracker_window,
-    logger,
-    settings_window,
-    shop_manager,
-    pokedex_window,
-    settings_obj.get("controls.key_for_opening_closing_ankimon"),
-    join_discord_url,
-    open_leaderboard_url,
-    settings_obj,
-    addon_dir,
-    pokemon_pc,
-    backup_manager,
-)
+def _on_review_card_gated(*args, **kwargs):
+    """Forward reviews to the battle loop only once the async boot finished.
 
-# --- Hook registry, profile hooks, reviewer UI, discord ---
+    Until the background startup completes (first enemy generated, collected
+    IDs loaded) a review cannot be battled; dropping it mirrors exp's
+    startup-finished gate, re-expressed on the services registry.
+    """
+    if not getattr(services, _STARTUP_FINISHED_ATTR, False):
+        return None
+    return on_review_card(*args, **kwargs)
+
+
+# Reload safety (NR-21, same pattern as card_hooks.register_card_hooks): the
+# (hook, handler) record lives on the services registry — which survives a
+# re-execution of this module — so a second boot removes the previous
+# handler before appending, instead of stacking a duplicate.
+_REVIEW_HOOK_RECORD = "_review_card_handlers"
+
+for _hook, _handler in getattr(services, _REVIEW_HOOK_RECORD, ()):
+    _hook.remove(_handler)
+_review_handlers = ((gui_hooks.reviewer_did_answer_card, _on_review_card_gated),)
+for _hook, _handler in _review_handlers:
+    _hook.append(_handler)
+setattr(services, _REVIEW_HOOK_RECORD, _review_handlers)
+
+# --- Shared boot state -------------------------------------------------------
+# Both are created eagerly (cheap) so the profile hooks can be registered at
+# module scope — profileLoaded / profile_did_open can fire before the
+# background boot completes, and a hook registered too late never runs. The
+# collected-ID set is shared by identity: the async success callback fills it
+# in place, so profile hooks, battle state and reviewer UI all observe the
+# same live set.
+backup_manager = BackupManager(logger, settings_obj)
+collected_pokemon_ids = set()
+
+# --- Hook registry + profile hooks ---
 from .hook_registry import (
     CatchPokemonHook,
     DefeatPokemonHook,
@@ -179,15 +175,117 @@ register_profile_hooks(
     collected_pokemon_ids,
 )
 
-from .reviewer_ui import setup_reviewer_ui, set_collected_ids
 
-set_collected_ids(collected_pokemon_ids)
-setup_reviewer_ui(
-    settings_obj.get("controls.catch_key"),
-    settings_obj.get("controls.defeat_key"),
-    settings_obj.get("controls.pokemon_buttons"),
-)
+# --- Asynchronous startup (F32) ----------------------------------------------
+def start_asynchronous_startup():
+    """Run the heavy boot work off the GUI thread via Anki's QueryOp.
 
+    ``run_startup_background_checks`` (aqt-free disk/DB/CPU work) executes on
+    a background thread; ``on_startup_complete`` marshals its results back to
+    the main thread for the Qt half of the boot.
+    """
+    from aqt.operations import QueryOp
+    from .startup import run_startup_background_checks, run_startup_ui_callbacks
+
+    def on_startup_complete(results):
+        # 1. Qt half of the startup sequence (migration dialog, sprite
+        #    downloader, first-enemy stat application, starter window, rate
+        #    prompt).
+        database_complete = run_startup_ui_callbacks(results)
+
+        # 2. Fill the shared collected-ID set in place (identity preserved
+        #    for the module-level consumers registered above).
+        collected_pokemon_ids.update(results["collected_pokemon_ids"])
+        init_battle_state(collected_pokemon_ids)
+
+        # 3. Reviewer UI: collected IDs + shortcut/button wiring. Imported
+        #    here (not at module scope) because reviewer_ui pulls lazy F31
+        #    window names at ITS import time.
+        from .reviewer_ui import setup_reviewer_ui, set_collected_ids
+
+        set_collected_ids(collected_pokemon_ids)
+
+        # 4. Menu. The window names are F31 lazy factories: first access
+        #    constructs them — on the main thread, after the boot work.
+        from .singletons import (
+            settings_window,
+            test_window,
+            achievement_bag,
+            ankimon_tracker_window,
+            pokedex_window,
+            eff_chart,
+            gen_id_chart,
+            license,
+            credits,
+            item_window,
+            version_dialog,
+            pokemon_pc,
+        )
+
+        create_menu_actions(
+            database_complete,
+            online_connectivity,
+            item_window,
+            test_window,
+            achievement_bag,
+            open_team_builder,
+            export_to_pkmn_showdown,
+            export_all_pkmn_showdown,
+            flex_pokemon_collection,
+            eff_chart,
+            gen_id_chart,
+            credits,
+            license,
+            open_help_window,
+            report_bug,
+            rate_addon_url,
+            version_dialog,
+            trainer_card,
+            ankimon_tracker_window,
+            logger,
+            settings_window,
+            shop_manager,
+            pokedex_window,
+            settings_obj.get("controls.key_for_opening_closing_ankimon"),
+            join_discord_url,
+            open_leaderboard_url,
+            settings_obj,
+            addon_dir,
+            pokemon_pc,
+            backup_manager,
+        )
+
+        # 5. Reviewer shortcuts/buttons (base signature; F34 adds its
+        #    team-cycle argument as a defaulted kwarg on its own).
+        setup_reviewer_ui(
+            settings_obj.get("controls.catch_key"),
+            settings_obj.get("controls.defeat_key"),
+            settings_obj.get("controls.pokemon_buttons"),
+        )
+
+        # 6. Boot finished: open the review gate and signal observers.
+        setattr(services, _STARTUP_FINISHED_ATTR, True)
+        events.emit("startup_finished")
+
+        # 7. If the user is already reviewing, redraw the bottom bar so the
+        #    freshly wrapped _bottomHTML (catch/defeat buttons) shows up.
+        if getattr(mw, "state", None) == "review" and getattr(mw, "reviewer", None):
+            try:
+                mw.reviewer.bottom.draw()
+            except Exception:
+                pass
+
+    QueryOp(
+        parent=mw,
+        op=lambda _col: run_startup_background_checks(backup_manager),
+        success=on_startup_complete,
+    ).without_collection().run_in_background()
+
+
+# --- Discord integration ---
 from .discord_integration import setup_discord_hooks
 
 setup_discord_hooks()
+
+# Start the background boot last, once every module-scope hook is registered.
+start_asynchronous_startup()
