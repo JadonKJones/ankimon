@@ -1,15 +1,39 @@
 import markdown
 import json
 from PyQt6.QtGui import QMovie, QIcon
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QTextEdit, QCheckBox, QPushButton, QMessageBox, QWidget, QScrollArea, QGridLayout, QTextBrowser
+from PyQt6.QtWidgets import (
+    QLabel,
+    QVBoxLayout,
+    QTextEdit,
+    QCheckBox,
+    QPushButton,
+    QMessageBox,
+    QWidget,
+    QScrollArea,
+    QGridLayout,
+    QTextBrowser,
+)
 from aqt import mw
 from aqt.qt import QDialog, qconnect
 from aqt.utils import showWarning, showInfo, tooltip
 from PyQt6.QtCore import Qt
 
-from .resources import icon_path, addon_dir, eff_chart_html_path, table_gen_id_html_path, mypokemon_path
+from .resources import (
+    icon_path,
+    addon_dir,
+    eff_chart_html_path,
+    table_gen_id_html_path,
+    nature_chart_html_path,
+    mypokemon_path,
+)
 from .texts import terms_text, pokedex_html_template
-from .utils import read_local_file, read_github_file, compare_files, write_local_file, read_html_file
+from .utils import (
+    read_local_file,
+    read_github_file,
+    compare_files,
+    write_local_file,
+    read_html_file,
+)
 from .pyobj.error_handler import show_warning_with_traceback
 
 
@@ -27,8 +51,10 @@ class MovieSplashLabel(QLabel):
     def hideEvent(self, event):
         self.movie.stop()
 
+
 class UpdateNotificationWindow(QDialog):
     """Custom Dialog class with enhanced features."""
+
     def __init__(self, content, is_markdown=False):
         super().__init__()
         self.setWindowTitle("Ankimon Notifications")
@@ -37,12 +63,17 @@ class UpdateNotificationWindow(QDialog):
         layout = QVBoxLayout()
         self.text_browser = QTextBrowser()
         self.text_browser.setOpenExternalLinks(True)  # Enable clickable links
-        self.text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        self.text_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.text_browser.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+        )
+        self.text_browser.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
 
         # If content is markdown, convert to HTML
         if is_markdown:
             import markdown
+
             html_content = markdown.markdown(content)
         else:
             html_content = content
@@ -55,6 +86,7 @@ class UpdateNotificationWindow(QDialog):
     def open(self):
         self.exec()
 
+
 class AgreementDialog(QDialog):
     def __init__(self):
         super().__init__()
@@ -62,13 +94,15 @@ class AgreementDialog(QDialog):
         # Setup the dialog layout
         layout = QVBoxLayout()
         # Add a label with the warning message
-        title = QLabel("""Please agree to the terms before downloading the information:""")
+        title = QLabel(
+            """Please agree to the terms before downloading the information:"""
+        )
         subtitle = QLabel("""Terms and Conditions Clause""")
         terms = QLabel(terms_text)
         layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addWidget(terms)
-         # Ensure the terms QLabel is readable and scrolls if necessary
+        # Ensure the terms QLabel is readable and scrolls if necessary
         terms.setWordWrap(True)
         terms.setAlignment(Qt.AlignmentFlag.AlignLeft)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -88,10 +122,14 @@ class AgreementDialog(QDialog):
         if self.checkbox.isChecked():
             self.accept()  # Close the dialog and return success
         else:
-            QMessageBox.warning(self, "Agreement Required", "You must agree to the terms to proceed.")
+            QMessageBox.warning(
+                self, "Agreement Required", "You must agree to the terms to proceed."
+            )
+
 
 class Version_Dialog(QDialog):
     """Custom Dialog class"""
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Ankimon Notifications")
@@ -99,30 +137,40 @@ class Version_Dialog(QDialog):
         layout = QVBoxLayout()
         self.text_browser = QTextBrowser()
         self.text_browser.setOpenExternalLinks(True)  # Enable clickable links
-        self.text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        self.text_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.local_file_path = addon_dir / "updateinfos.md"
-        self.local_content = read_local_file(self.local_file_path)
-        self.html_content = markdown.markdown(self.local_content)
-        self.text_browser.setHtml(self.html_content)
+        self.text_browser.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+        )
+        self.text_browser.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         layout.addWidget(self.text_browser)
         self.setWindowIcon(QIcon(str(icon_path)))
         self.setLayout(layout)
+        self.loaded = False
 
     def open(self):
+        if not self.loaded:
+            self.local_file_path = addon_dir / "updateinfos.md"
+            self.local_content = read_local_file(self.local_file_path) or ""
+            self.html_content = markdown.markdown(self.local_content)
+            self.text_browser.setHtml(self.html_content)
+            self.loaded = True
         self.exec()
+
 
 class License(QWidget):
     def __init__(self):
         super().__init__()
-        self.initUI()
+        self.initialized = False
 
     def initUI(self):
         self.setWindowTitle("AnkiMon License")
 
         # Create a label and set HTML content
         label = QLabel()
-        html_content = self.read_html_file(f"{addon_dir}/license.html")  # Replace with the path to your HTML file
+        html_content = self.read_html_file(
+            f"{addon_dir}/license.html"
+        )  # Replace with the path to your HTML file
         # Create a QScrollArea to enable scrolling
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -136,7 +184,7 @@ class License(QWidget):
         label.setText(html_content)  # 'html_table' contains the HTML table string
         label.setWordWrap(True)
 
-        #layout = QVBoxLayout()
+        # layout = QVBoxLayout()
         scroll_layout.addWidget(label)
         # Set the widget for the scroll area
         scroll_area.setWidget(container)
@@ -151,24 +199,32 @@ class License(QWidget):
         window_layout = QVBoxLayout()
         window_layout.addWidget(scroll_area)
         self.setLayout(window_layout)
+        self.initialized = True
+
     def read_html_file(self, file_path):
         """Reads an HTML file and returns its content as a string."""
-        with open(file_path, 'r', encoding='utf-8') as file:
+        with open(file_path, "r", encoding="utf-8") as file:
             return file.read()
+
     def show_window(self):
+        if not self.initialized:
+            self.initUI()
         self.show()
+
 
 class Credits(QWidget):
     def __init__(self):
         super().__init__()
-        self.initUI()
+        self.initialized = False
 
     def initUI(self):
         self.setWindowTitle("AnkiMon License")
 
         # Create a label and set HTML content
         label = QLabel()
-        html_content = self.read_html_file(f"{addon_dir}/credits.html")  # Replace with the path to your HTML file
+        html_content = self.read_html_file(
+            f"{addon_dir}/credits.html"
+        )  # Replace with the path to your HTML file
         # Create a QScrollArea to enable scrolling
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
@@ -182,7 +238,7 @@ class Credits(QWidget):
         label.setText(html_content)  # 'html_table' contains the HTML table string
         label.setWordWrap(True)
 
-        #layout = QVBoxLayout()
+        # layout = QVBoxLayout()
         scroll_layout.addWidget(label)
         # Set the widget for the scroll area
         scroll_area.setWidget(container)
@@ -197,12 +253,18 @@ class Credits(QWidget):
         window_layout = QVBoxLayout()
         window_layout.addWidget(scroll_area)
         self.setLayout(window_layout)
+        self.initialized = True
+
     def read_html_file(self, file_path):
         """Reads an HTML file and returns its content as a string."""
-        with open(file_path, 'r', encoding='utf-8') as file:
+        with open(file_path, "r", encoding="utf-8") as file:
             return file.read()
+
     def show_window(self):
+        if not self.initialized:
+            self.initUI()
         self.show()
+
 
 class HelpWindow(QDialog):
     def __init__(self, online_connectivity):
@@ -218,7 +280,9 @@ class HelpWindow(QDialog):
                 local_content = read_local_file(help_local_file_path)
                 # Read content from GitHub
                 github_content = read_github_file(help_github_url)
-                if local_content is not None and compare_files(local_content, github_content):
+                if local_content is not None and compare_files(
+                    local_content, github_content
+                ):
                     html_content = github_content
                 else:
                     # Download new content from GitHub
@@ -234,7 +298,11 @@ class HelpWindow(QDialog):
                 local_content = read_local_file(help_local_file_path)
                 html_content = local_content
         except Exception as e:
-            show_warning_with_traceback(parent=mw, exception=e, message="Failed to retrieve Ankimon HelpGuide from GitHub.")
+            show_warning_with_traceback(
+                parent=mw,
+                exception=e,
+                message="Failed to retrieve Ankimon HelpGuide from GitHub.",
+            )
             local_content = read_local_file(help_local_file_path)
             html_content = local_content
         self.setWindowTitle("Ankimon HelpGuide")
@@ -244,54 +312,143 @@ class HelpWindow(QDialog):
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
         self.text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-        self.text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.text_edit.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self.text_edit.setHtml(html_content)
         layout.addWidget(self.text_edit)
         self.setWindowIcon(QIcon(str(icon_path)))
         self.setLayout(layout)
 
+
 class TableWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.initUI()
+        self.initialized = False
 
     def initUI(self):
         self.setWindowTitle("Pokémon Type Effectiveness Table")
+        self.setGeometry(100, 100, 800, 600)
 
         # Create a label and set HTML content
         label = QLabel()
-        html_content = read_html_file(f"{eff_chart_html_path}")  # Replace with the path to your HTML file
-        label.setText(html_content)  # 'html_table' contains the HTML table string
+        html_content = read_html_file(f"{eff_chart_html_path}")
+        label.setText(html_content)
         label.setWordWrap(True)
+        label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        label.setStyleSheet("background-color: rgb(44,44,44); padding: 10px;")
 
-        # Layout
+        # Create a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("background-color: rgb(44,44,44); border: none;")
+
+        # Container widget for the label
+        container = QWidget()
+        container_layout = QVBoxLayout()
+        container_layout.addWidget(label)
+        container.setLayout(container_layout)
+
+        scroll_area.setWidget(container)
+
+        # Main layout
         layout = QVBoxLayout()
-        layout.addWidget(label)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(scroll_area)
         self.setLayout(layout)
+        self.initialized = True
 
     def show_eff_chart(self):
+        if not self.initialized:
+            self.initUI()
         self.show()
+
 
 class IDTableWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.initUI()
+        self.initialized = False
 
     def initUI(self):
         self.setWindowTitle("Pokémon - Generations and ID")
+        self.setGeometry(100, 100, 800, 600)
+
         # Create a label and set HTML content
         label = QLabel()
-        html_content = read_html_file(f"{table_gen_id_html_path}")  # Replace with the path to your HTML file
-        label.setText(html_content)  # 'html_table' contains the HTML table string
+        html_content = read_html_file(f"{table_gen_id_html_path}")
+        label.setText(html_content)
         label.setWordWrap(True)
-        label.setStyleSheet("background-color: rgb(44,44,44);")
-        # Layout
+        label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        label.setStyleSheet("background-color: rgb(44,44,44); padding: 10px;")
+
+        # Create a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("background-color: rgb(44,44,44); border: none;")
+
+        # Container widget for the label
+        container = QWidget()
+        container_layout = QVBoxLayout()
+        container_layout.addWidget(label)
+        container.setLayout(container_layout)
+
+        scroll_area.setWidget(container)
+
+        # Main layout
         layout = QVBoxLayout()
-        layout.addWidget(label)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(scroll_area)
         self.setLayout(layout)
+        self.initialized = True
 
     def show_gen_chart(self):
+        if not self.initialized:
+            self.initUI()
         self.show()
+
+
+class NatureTableWidget(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.initialized = False
+
+    def initUI(self):
+        self.setWindowTitle("Pokémon Nature Chart")
+        self.setGeometry(100, 100, 650, 500)
+
+        # Create a label and set HTML content
+        label = QLabel()
+        html_content = read_html_file(f"{nature_chart_html_path}")
+        label.setText(html_content)
+        label.setWordWrap(True)
+        label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        label.setStyleSheet("background-color: rgb(44,44,44); padding: 10px;")
+
+        # Create a scroll area
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("background-color: rgb(44,44,44); border: none;")
+
+        # Container widget for the label
+        container = QWidget()
+        container_layout = QVBoxLayout()
+        container_layout.addWidget(label)
+        container.setLayout(container_layout)
+
+        scroll_area.setWidget(container)
+
+        # Main layout
+        layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(scroll_area)
+        self.setLayout(layout)
+        self.initialized = True
+
+    def show_nature_chart(self):
+        if not self.initialized:
+            self.initUI()
+        self.show()
+
 
 class Pokedex_Widget(QWidget):
     def __init__(self):
@@ -312,12 +469,17 @@ class Pokedex_Widget(QWidget):
         # (self.available_pokedex_ids is fetched in read_poke_coll)
 
         # Now we generate the HTML rows for each Pokémon in the range 1-898, graying out those not in the JSON file
-        table_rows = [self.generate_table_row(i, i not in self.available_pokedex_ids) for i in range(1, 899)]
+        table_rows = [
+            self.generate_table_row(i, i not in self.available_pokedex_ids)
+            for i in range(1, 899)
+        ]
 
         # Combine the HTML template with the generated rows
-        html_content = pokedex_html_template.replace('<!-- Table Rows Will Go Here -->', ''.join(table_rows))
+        html_content = pokedex_html_template.replace(
+            "<!-- Table Rows Will Go Here -->", "".join(table_rows)
+        )
 
-        #html_content = self.read_html_file(f"{pokedex_html_path}")  # Replace with the path to your HTML file
+        # html_content = self.read_html_file(f"{pokedex_html_path}")  # Replace with the path to your HTML file
         label.setText(html_content)  # 'html_table' contains the HTML table string
         label.setWordWrap(True)
 
@@ -328,7 +490,7 @@ class Pokedex_Widget(QWidget):
 
     # Helper function to generate table rows
     def generate_table_row(self, pokedex_number, is_gray):
-        name = f"Pokemon #{pokedex_number}" # Placeholder, actual name should be fetched from a database or API
+        name = f"Pokemon #{pokedex_number}"  # Placeholder, actual name should be fetched from a database or API
         image_class = "pokemon-gray" if is_gray else ""
         return f'''
         <tr>
@@ -341,6 +503,7 @@ class Pokedex_Widget(QWidget):
     def show_pokedex(self):
         self.read_poke_coll()
         self.show()
+
 
 class CheckFiles(QDialog):
     def __init__(self):
