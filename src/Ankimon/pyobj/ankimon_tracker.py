@@ -86,6 +86,7 @@ class AnkimonTracker:
             0  # count for general card count for battle
         )
         self.caught = 0  # check if pokemon is caught
+        self.faint_processed = False  # guard against duplicate faint processing
 
         # Start the session timer when the object is initialized
         self.start_session_timer()
@@ -97,22 +98,43 @@ class AnkimonTracker:
             # count is always current (services.col may be unset at addon load).
             try:
                 from aqt import mw
+
                 col = mw.col
             except Exception:
                 col = None
         if col is None:
             return 0
         try:
-            studied = col.studied_today()
-            match = re.search(r'Studied\s+[^\d]*(\d+)(?=[^\n]*card)', studied)
+            # Query Anki's database directly for review logs since today's
+            # scheduler cutoff. This is language-agnostic, robust, and honours
+            # custom day boundaries. ``day_cutoff`` is tomorrow's rollover, so
+            # subtract 24h (86400s) to reach the start of today; revlog ids are
+            # epoch milliseconds. (Subtracting the day fixes the runaway
+            # cash-reward bug from counting against tomorrow's boundary.)
+            cutoff = col.sched.day_cutoff
+            return col.db.scalar(
+                "SELECT count() FROM revlog WHERE id > ?", (cutoff - 86400) * 1000
+            )
         except Exception:
-            # e.g. a stub/mock collection whose studied_today() isn't a string.
-            return 0
-        if match is None:
-            # Empty-study session or localized Anki whose "Studied N cards"
-            # text doesn't match the English regex.
-            return 0
-        return int(match.group(1))
+            # Fall back to parsing the localized "studied today" string if the
+            # database query fails (e.g. a stub/mock collection). The review
+            # count is the first number in every locale's phrasing (decimals
+            # like "1.5 minutes" only appear later), but locales group large
+            # counts with thousands separators ("1,234" / "1.234" / "1 234" /
+            # no-break spaces), so match the whole first numeric token and
+            # strip the separators before converting.
+            try:
+                text = col.studied_today()
+                # Separators: space, no-break space (U+00A0), narrow
+                # no-break space (U+202F), period and comma, grouping
+                # digits in threes.
+                sep = r"[ \u00a0\u202f.,]"
+                match = re.search(rf"\d+(?:{sep}\d{{3}})*", text)
+                if match:
+                    return int(re.sub(sep, "", match.group(0)))
+            except Exception:
+                pass
+        return 0
 
     def set_main_pokemon(self, pokemon):
         """Set the main Pokémon being used."""
