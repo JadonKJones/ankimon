@@ -357,9 +357,29 @@ def get_items_window():
     return _items_web_window
 
 
+# The standalone Ankidex (Pokédex V2) SPA window (F16): its own QDialog +
+# QWebEngineView, opened via this factory (and reused by the web shell's inline
+# Ankidex screen through get_ankidex_window().get_ankidex_data()). Lazy +
+# reload-safe like the other window factories, and — like the web shell above —
+# not registry-backed (a pure GUI window), so it lives in its own module-level
+# cache with an is_alive() liveness check (a dialog whose C++ object was deleted
+# is rebuilt, not handed out dead). Seam-correct: constructed from the
+# services-resolved tracker, never from mw.* (its data getter reads
+# services.db / services.settings), keeping mw coupling out of this module (NR-04).
+_ankidex_window = None
+
+
+def get_ankidex_window():
+    global _ankidex_window
+    if is_alive(_ankidex_window):
+        return _ankidex_window
+    from .ankidex.ankidex_obj import Ankidex
+
+    _ankidex_window = Ankidex(addon_dir, ankimon_tracker=ankimon_tracker_obj)
+    return _ankidex_window
+
+
 # DEFERRED seam points (do NOT add here in F31):
-# * get_ankidex_window() -> ankidex/ SPA lands with a later unit (its module
-#   does not exist on this base yet); mount via webshell host per §4.
 # * get_nature_chart() -> gui_entities.NatureTableWidget lands with F36 (the
 #   widget does not exist on this base yet).
 # * notify_stats_changed() (QWebChannel live-update push) belongs to the
