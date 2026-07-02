@@ -1,4 +1,5 @@
 import json
+import time
 
 from aqt import mw
 
@@ -32,7 +33,11 @@ from ..utils import random_item, load_custom_font
 
 from ..functions.drawing_utils import draw_gender_symbols, draw_stat_boosts
 
-from ..functions.pokedex_functions import get_pokemon_diff_lang_name, search_pokedex
+from ..functions.pokedex_functions import (
+    get_pokemon_diff_lang_name,
+    get_pretty_name_for_name,
+    search_pokedex,
+)
 
 from ..functions.pokemon_functions import find_experience_for_level
 
@@ -98,41 +103,53 @@ class TestWindow(QWidget):
 
         self.default_path = f"{pkmnimgfolder}/front_default/substitute.png"
 
+        self.current_view = None
+        self.main_label = None
+        self.kill_button = None
+        self.catch_button = None
+        self.nickname_input = None
+        self._last_display_time = 0
+
         self.init_ui()
         # self.update()
 
     def init_ui(self):
-        layout = QVBoxLayout()
+        # Use a single persistent layout
+        if self.layout() is None:
+            self.setLayout(QVBoxLayout())
 
-        # Main window layout
-        layout = QVBoxLayout()
+        layout = self.layout()
+        self.clear_layout(layout)
 
-        image_file = "ankimon_logo.png"
-        image_path = str(addon_dir) + "/" + image_file
+        # Main label that will persist and show everything (Logo, Battle, Death)
+        self.main_label = QLabel()
+        self.main_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.main_label)
 
-        image_label = QLabel()
-        pixmap = QPixmap()
-        pixmap.load(str(image_path))
+        # Optional buttons for death screen (hidden by default)
+        self.button_widget = QWidget()
+        self.button_layout = QHBoxLayout()
+        self.kill_button = QPushButton()
+        self.catch_button = QPushButton()
+        self.nickname_input = QLineEdit()
+        self.button_layout.addWidget(self.kill_button)
+        self.button_layout.addWidget(self.catch_button)
+        self.button_layout.addWidget(self.nickname_input)
+        self.button_widget.setLayout(self.button_layout)
+        layout.addWidget(self.button_widget)
+        self.button_widget.hide()
 
-        if pixmap.isNull():
-            showWarning("Failed to load Ankimon Logo image")
-        else:
-            image_label.setPixmap(pixmap)
+        # Initial Logo
+        image_path = addon_dir / "ankimon_logo.png"
+        pixmap = QPixmap(str(image_path))
+        if not pixmap.isNull():
+            scaled_pixmap = pixmap.scaled(400, 400, Qt.AspectRatioMode.KeepAspectRatio)
+            self.main_label.setPixmap(scaled_pixmap)
 
-        scaled_pixmap = pixmap.scaled(400, 400, Qt.AspectRatioMode.KeepAspectRatio)
-        image_label.setPixmap(scaled_pixmap)
-
-        layout.addWidget(image_label)
-
-        self.first_start = True
-
-        self.setLayout(layout)
-
-        # Set window
+        self.setStyleSheet("background-color: rgb(44,44,44);")
         self._reset_window_title()
-        self.setWindowIcon(QIcon(str(icon_path)))  # Add a Pokeball icon
-
-        # Display the Pokémon image
+        self.setWindowIcon(QIcon(str(icon_path)))
+        self.setFixedSize(556, 300)
 
     def open_dynamic_window(self):
         # Create and show the dynamic window
@@ -216,6 +233,45 @@ class TestWindow(QWidget):
         painter.drawText(326, 216, f"{cp_lbl} {main_cp:,}")
         painter.drawText(326, 230, f"{bp_lbl} {main_bp:,}")
 
+    def _get_display_name(self, pokemon):
+        """Helper to safely get localized or pretty name for normal and special forms."""
+        if hasattr(pokemon, "name") and any(
+            f in pokemon.name.lower() for f in ["mega", "gmax"]
+        ):
+            return get_pretty_name_for_name(pokemon.name)
+        return get_pokemon_diff_lang_name(
+            int(pokemon.id), int(self.settings_obj.get("misc.language"))
+        )
+
+    def _same_view_debounced(self, view):
+        """True when a duplicate render of ``view`` arrives inside the debounce window.
+
+        Exp debounced every display call against one shared timestamp; on main
+        the battle loop legitimately calls ``display_battle()`` right before
+        ``handle_enemy_faint`` shows the death screen, so the guard is keyed to
+        the CURRENT view: only an immediate repeat of the same view is dropped
+        (anti-flicker for duplicate hooks, especially during add-on reloads).
+        """
+        now = time.time()
+        if self.current_view == view and now - self._last_display_time < 0.05:
+            return True
+        self._last_display_time = now
+        return False
+
+    def _trigger_catch_pokemon(self):
+        """Catch via the hook_registry seam (same path profile_hooks wires to mw)."""
+        # Lazy import: hook_registry/reviewer_ui pull in singletons, which would
+        # be circular (and Anki-bound) at module-import time.
+        from .. import hook_registry, reviewer_ui
+
+        hook_registry.CatchPokemonHook(reviewer_ui._collected_pokemon_ids)
+
+    def _trigger_defeat_pokemon(self):
+        """Defeat via the hook_registry seam (same path profile_hooks wires to mw)."""
+        from .. import hook_registry
+
+        hook_registry.DefeatPokemonHook()
+
     def pokemon_display_first_encounter(self):
         # Main window layout
         layout = QVBoxLayout()
@@ -227,12 +283,10 @@ class TestWindow(QWidget):
         self.ankimon_tracker_obj.caught = 0
 
         # Capitalize the first letter of the Pokémon's name
-        lang_name = get_pokemon_diff_lang_name(
-            int(self.enemy_pokemon.id), int(self.settings_obj.get("misc.language"))
-        )
+        lang_name = self._get_display_name(self.enemy_pokemon)
 
         # calculate wild pokemon max hp
-        message_box_text = f"{mw.translator.translate('wild_pokemon_appeared', enemy_pokemon_name=lang_name.capitalize())}"
+        message_box_text = f"{self.translator.translate('wild_pokemon_appeared', enemy_pokemon_name=lang_name.capitalize())}"
 
         bckgimage_path = battlescene_path / self.ankimon_tracker_obj.battlescene_file
 
@@ -358,13 +412,8 @@ class TestWindow(QWidget):
         painter.setFont(custom_font)
         painter.setPen(QColor(31, 31, 39))  # Text color
 
-        enemy_name = get_pokemon_diff_lang_name(
-            int(self.enemy_pokemon.id), int(self.settings_obj.get("misc.language"))
-        )
-
-        main_name = get_pokemon_diff_lang_name(
-            int(self.main_pokemon.id), int(self.settings_obj.get("misc.language"))
-        )
+        enemy_name = self._get_display_name(self.enemy_pokemon)
+        main_name = self._get_display_name(self.main_pokemon)
 
         if self.enemy_pokemon.shiny:
             enemy_name += " 🌠 "
@@ -449,8 +498,8 @@ class TestWindow(QWidget):
         return painter
 
     def pokemon_display_battle(self):
-        self.ankimon_tracker_obj.pokemon_encounter += 1
-
+        # No pokemon_encounter increment here — the battle loop owns the
+        # per-round counter; incrementing per render double-counted rounds.
         bckgimage_path = battlescene_path / self.ankimon_tracker_obj.battlescene_file
 
         if self.ankimon_tracker_obj.pokemon_encounter > 1:
@@ -571,19 +620,14 @@ class TestWindow(QWidget):
         painter.setFont(custom_font)
         painter.setPen(QColor(31, 31, 39))  # Text color
 
-        enemy_name = get_pokemon_diff_lang_name(
-            int(self.enemy_pokemon.id), int(self.settings_obj.get("misc.language"))
-        )
-
-        main_name = get_pokemon_diff_lang_name(
-            int(self.main_pokemon.id), int(self.settings_obj.get("misc.language"))
-        )
+        enemy_name = self._get_display_name(self.enemy_pokemon)
+        main_name = self._get_display_name(self.main_pokemon)
 
         if self.enemy_pokemon.shiny:
-            enemy_name += f" 🌠"  # Green sparkle
+            enemy_name += " 🌠"  # Green sparkle
 
         if self.main_pokemon.shiny:
-            main_name += f" 🌠"  # Green sparkles
+            main_name += " 🌠"  # Green sparkles
 
         painter.drawText(48, 67, enemy_name)
         painter.drawText(326, 200, main_name)
@@ -831,9 +875,7 @@ class TestWindow(QWidget):
         type = self.enemy_pokemon.type
 
         # Create the dialog
-        lang_name = get_pokemon_diff_lang_name(
-            int(id), int(self.settings_obj.get("misc.language"))
-        )
+        lang_name = self._get_display_name(self.enemy_pokemon)
 
         self.setWindowTitle(
             f"{self.translator.translate('catch_or_free', enemy_pokemon_name=lang_name.capitalize())}"
@@ -913,7 +955,8 @@ class TestWindow(QWidget):
         catch_button.setStyleSheet("background-color: rgb(44,44,44);")
         # catch_button.setFixedWidth(150)
         qconnect(
-            catch_button.clicked, lambda: self._reset_window_title(mw.catchpokemon)
+            catch_button.clicked,
+            lambda: self._reset_window_title(self._trigger_catch_pokemon),
         )
 
         kill_button = QPushButton(self.translator.translate("defeat_button"))
@@ -924,7 +967,8 @@ class TestWindow(QWidget):
         kill_button.setStyleSheet("background-color: rgb(44,44,44);")
         # kill_button.setFixedWidth(150)
         qconnect(
-            kill_button.clicked, lambda: self._reset_window_title(mw.defeatpokemon)
+            kill_button.clicked,
+            lambda: self._reset_window_title(self._trigger_defeat_pokemon),
         )
 
         # Set the merged image as the pixmap for the QLabel
@@ -936,42 +980,23 @@ class TestWindow(QWidget):
         return pkmnimage_label, kill_button, catch_button, nickname_input
 
     def display_first_encounter(self):
-        # pokemon encounter image
-        self.clear_layout(self.layout())
-        # self.setFixedWidth(556)
-        # self.setFixedHeight(371)
-
-        layout = self.layout()
-
-        battle_widget = self.pokemon_display_first_encounter()
-        # battle_widget.setScaledContents(True) #scalable ankimon window
-
-        layout.addWidget(battle_widget)
-
+        self.ankimon_tracker_obj.pokemon_encounter = 0
+        new_label = self.pokemon_display_first_encounter()
+        self.main_label.setPixmap(new_label.pixmap())
+        self.button_widget.hide()
         self.setStyleSheet("background-color: rgb(44,44,44);")
-        self.setLayout(layout)
-
-        self.setMaximumWidth(556)
-        self.setMaximumHeight(300)
+        self.current_view = "battle"
 
     def display_battle(self):
-        # pokemon encounter image
-        self.clear_layout(self.layout())
-        # self.setFixedWidth(556)
-        # self.setFixedHeight(371)
+        # Debounce: prevent flicker from duplicate hooks (especially during reloads)
+        if self._same_view_debounced("battle"):
+            return
 
-        layout = self.layout()
-
-        battle_widget = self.pokemon_display_battle()
-        # battle_widget.setScaledContents(True) #scalable ankimon window
-
-        layout.addWidget(battle_widget)
-
-        self.setStyleSheet("background-color: rgb(44,44,44);")
-        self.setLayout(layout)
-
-        self.setMaximumWidth(556)
-        self.setMaximumHeight(300)
+        # Update the existing label without clearing the layout
+        new_label = self.pokemon_display_battle()
+        self.main_label.setPixmap(new_label.pixmap())
+        self.button_widget.hide()
+        self.current_view = "battle"
 
     def rate_display_item(self, item):
         Receive_Window = QDialog(mw)
@@ -1004,33 +1029,38 @@ class TestWindow(QWidget):
         Receive_Window.show()
 
     def display_pokemon_death(self):
-        # pokemon encounter image
-        self.clear_layout(self.layout())
+        # Debounce duplicate death renders (same guard as display_battle)
+        if self._same_view_debounced("death"):
+            return
 
-        layout = self.layout()
+        img_label, kill_btn, catch_btn, nick_input = self.pokemon_display_dead_pokemon()
 
-        pkmnimage_label, kill_button, catch_button, nickname_input = (
-            self.pokemon_display_dead_pokemon()
+        # Update the image
+        self.main_label.setPixmap(img_label.pixmap())
+
+        # Sync the persistent buttons (update text/placeholder)
+        self.kill_button.setText(kill_btn.text())
+        self.catch_button.setText(catch_btn.text())
+        self.nickname_input.setPlaceholderText(nick_input.placeholderText())
+
+        # Re-connect buttons safely
+        try:
+            self.kill_button.clicked.disconnect()
+            self.catch_button.clicked.disconnect()
+        except TypeError:
+            pass  # nothing was connected yet
+        qconnect(
+            self.kill_button.clicked,
+            lambda: self._reset_window_title(self._trigger_defeat_pokemon),
+        )
+        qconnect(
+            self.catch_button.clicked,
+            lambda: self._reset_window_title(self._trigger_catch_pokemon),
         )
 
-        layout.addWidget(pkmnimage_label)
-
-        button_widget = QWidget()
-        button_layout = QHBoxLayout()
-
-        button_layout.addWidget(kill_button)
-        button_layout.addWidget(catch_button)
-        button_layout.addWidget(nickname_input)
-
-        button_widget.setLayout(button_layout)
-
-        layout.addWidget(button_widget)
-
+        self.button_widget.show()
         self.setStyleSheet("background-color: rgb(177,147,209);")
-        self.setLayout(layout)
-
-        self.setMaximumWidth(500)
-        self.setMaximumHeight(300)
+        self.current_view = "death"
 
     def clear_layout(self, layout):
         while layout.count():
