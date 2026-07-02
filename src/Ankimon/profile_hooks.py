@@ -37,6 +37,45 @@ def _on_profile_close():
 
 def _on_profile_did_open(online_connectivity):
     def handler():
+        # Mobile-review sync bootstrap (F20 deferred half): initialise the revlog
+        # watermark on first run, clear the desktop session set for a fresh
+        # inter-sync interval, run a startup detection pass to catch reviews pulled
+        # in by the startup sync, and restore the pending-count badge. Guarded so a
+        # missing DB / collection is a benign no-op.
+        try:
+            db = services.db
+            col = services.col if services.col is not None else mw.col
+            if db is not None and col is not None:
+                from .functions.mobile_sync import clear_desktop_session
+                from .menu_buttons import update_mobile_badge
+
+                watermark = db.get_mobile_watermark()
+                if watermark == 0:
+                    # First-ever run — set watermark to NOW so no retroactive battles
+                    initial_watermark = col.db.scalar("SELECT MAX(id) FROM revlog") or 0
+                    db.set_mobile_watermark(initial_watermark or 0)
+                # Always clear session set on profile open (fresh inter-sync interval)
+                clear_desktop_session()
+
+                # Run detection immediately to catch reviews pulled in by startup sync
+                if settings_obj.get("mobile.enabled", True):
+                    try:
+                        from .functions.mobile_sync import process_mobile_reviews_after_sync
+                        process_mobile_reviews_after_sync(
+                            col=col,
+                            ankimon_db=db,
+                            settings_obj=settings_obj,
+                            logger=logger,
+                        )
+                    except Exception as sync_err:
+                        logger.log("error", f"Failed to run startup mobile reviews sync: {sync_err}")
+
+                # Restore badge — show pending count from previous session
+                pending = db.get_pending_mobile_count()
+                update_mobile_badge(pending)
+        except Exception as e:
+            logger.log("error", f"Failed to initialize mobile watermark: {e}")
+
         try:
             show_tip_of_the_day()
         except Exception as e:

@@ -1,0 +1,175 @@
+"""Tier-1 seam tests for the post-sync mobile detection hook (F29).
+
+Drives ``setup_ankimon_sync_hooks`` -> ``on_sync_did_finish`` end to end with a
+faked Anki/Qt runtime, a real ``AnkimonDB`` behind ``services.db``, and a fake
+collection behind ``services.col``. Verifies the dual-DB detection/queue path,
+watermark advance, and the auto-vs-manual resolution routing (the auto branch
+reaches ``MobileBridge`` via the web-shell seam).
+"""
+
+import os
+import sys
+import types
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+_SRC = Path(__file__).resolve().parent.parent / "src"
+
+for _name in (
+    "aqt", "aqt.qt", "aqt.utils", "aqt.gui_hooks", "aqt.operations",
+    "aqt.theme", "aqt.sound", "aqt.webview", "aqt.main",
+    "anki", "anki.hooks", "anki.collection", "anki.utils",
+    "PyQt6", "PyQt6.QtGui", "PyQt6.QtWidgets", "PyQt6.QtCore",
+    "PyQt6.QtWebChannel", "PyQt6.QtWebEngineWidgets",
+):
+    sys.modules.setdefault(_name, MagicMock())
+
+for _pkg in ("Ankimon", "Ankimon.functions", "Ankimon.pyobj", "Ankimon.ankimon_items_web"):
+    _existing = sys.modules.get(_pkg)
+    if _existing is None or not hasattr(_existing, "__path__"):
+        _mod = types.ModuleType(_pkg)
+        _mod.__path__ = [str(_SRC / _pkg.replace(".", "/"))]
+        _mod.__package__ = _pkg
+        sys.modules[_pkg] = _mod
+
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+_USER_DIR = Path(tempfile.mkdtemp(prefix="ankimon_autoresolve_ut_"))
+os.environ.setdefault("ANKIMON_USER_PATH", str(_USER_DIR))
+
+from Ankimon.services import services  # noqa: E402
+from Ankimon.pyobj.database_manager import AnkimonDB  # noqa: E402
+from Ankimon.pyobj import ankimon_sync as asy  # noqa: E402
+
+
+class _Logger:
+    def log(self, *a, **k): pass
+    def game_log(self, *a, **k): pass
+    def log_and_showinfo(self, *a, **k): pass
+
+
+class _Settings:
+    def __init__(self, d=None):
+        self.d = dict(d or {})
+
+    def get(self, key, default=None):
+        return self.d.get(key, default)
+
+    def set(self, key, value):
+        self.d[key] = value
+
+
+class _FakeCol:
+    """Stand-in for mw.col carrying the revlog rows the detector reads."""
+
+    def __init__(self, review_ids):
+        rows = [(rid, 1000 + rid, 3, 10000, 1) for rid in review_ids]
+        maxid = max(review_ids, default=0)
+
+        class _DB:
+            def all(self, _q, watermark):
+                return [r for r in rows if r[0] > watermark]
+
+            def scalar(self, _q):
+                return maxid
+
+            def list(self, _q, *cids):
+                return []
+
+        self.db = _DB()
+
+
+@pytest.fixture
+def wired(tmp_path, monkeypatch):
+    """AnkimonDB + fake col on the seam, a captured sync-finish hook, stub deps."""
+    db = AnkimonDB(_Logger(), db_path=str(tmp_path / "ankimon.db"))
+    prev_db, prev_col = services.db, services.col
+    services.db = db
+
+    # Route the module-level user_path (dev-db probe) at this test's scratch dir.
+    monkeypatch.setattr(asy, "user_path", tmp_path, raising=False)
+
+    # Stub the sibling leaves the hook lazily imports so the heavy real modules
+    # (menu_buttons pulls in markdown/Qt) stay out of the Qt-free Tier-1 venv.
+    badge = types.ModuleType("Ankimon.menu_buttons")
+    badge.update_mobile_badge = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "Ankimon.menu_buttons", badge)
+
+    mock_bridge = MagicMock()
+    mock_bridge.resolveAll.return_value = {
+        "success": True, "resolved": 3, "xp_gained": 100, "cash_gained": 50,
+        "caught_list": [{"name": "Pikachu"}],
+    }
+    shop_stub = types.ModuleType("Ankimon.ankimon_items_web.shop_obj")
+    shop_stub.MobileBridge = lambda *a, **k: mock_bridge
+    monkeypatch.setitem(sys.modules, "Ankimon.ankimon_items_web.shop_obj", shop_stub)
+
+    tooltip = MagicMock()
+    monkeypatch.setattr(asy, "tooltip", tooltip, raising=False)
+
+    def build(review_ids, resolution_mode="manual", mobile_enabled=True):
+        services.col = _FakeCol(review_ids)
+        settings = _Settings({
+            "misc.ankiweb_sync": True,
+            "mobile.enabled": mobile_enabled,
+            "mobile.resolution_mode": resolution_mode,
+        })
+        # Capture through ankimon_sync's OWN gui_hooks reference: another test
+        # module may have swapped sys.modules["aqt"] for a fresh MagicMock, so a
+        # local ``from aqt import gui_hooks`` could resolve to a different object
+        # than the one setup_ankimon_sync_hooks appends to.
+        asy.gui_hooks.sync_did_finish = MagicMock()
+        asy.setup_ankimon_sync_hooks(settings, _Logger())
+        return asy.gui_hooks.sync_did_finish.append.call_args[0][0]
+
+    try:
+        yield db, build, tooltip, mock_bridge
+    finally:
+        services.db, services.col = prev_db, prev_col
+
+
+def test_manual_mode_queues_and_notifies(wired):
+    db, build, tooltip, mock_bridge = wired
+    hook = build([1, 2, 3, 4, 5], resolution_mode="manual")
+    hook()
+    # Reviews were queued into the real DB and the watermark advanced.
+    assert db.get_pending_mobile_count() == 5
+    assert db.get_mobile_watermark() == 5
+    # Manual mode does not auto-resolve.
+    assert not mock_bridge.resolveAll.called
+    tooltip.assert_called_with(
+        "⚔ Mobile/web reviews synced: 5 in Normal! Open Ankimon → Mobile & Web Reviews to resolve."
+    )
+
+
+def test_auto_mode_resolves_via_bridge(wired):
+    db, build, tooltip, mock_bridge = wired
+    hook = build([1, 2, 3], resolution_mode="auto")
+    hook()
+    assert mock_bridge.resolveAll.called
+    tooltip.assert_called_with(
+        "⚔ Auto-resolved 3 mobile/web reviews! +100 XP, +50¥. Caught: Pikachu."
+    )
+
+
+def test_disabled_skips_detection(wired):
+    db, build, tooltip, mock_bridge = wired
+    hook = build([1, 2, 3], resolution_mode="auto", mobile_enabled=False)
+    hook()
+    assert db.get_pending_mobile_count() == 0
+    assert not mock_bridge.resolveAll.called
+    assert not tooltip.called
+
+
+def test_no_new_reviews_no_notify(wired):
+    db, build, tooltip, mock_bridge = wired
+    # Watermark already at the max revlog id -> nothing new to queue.
+    db.set_mobile_watermark(3)
+    hook = build([1, 2, 3], resolution_mode="manual")
+    hook()
+    assert db.get_pending_mobile_count() == 0
+    assert not tooltip.called

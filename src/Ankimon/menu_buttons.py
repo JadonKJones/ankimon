@@ -318,3 +318,31 @@ def create_menu_actions(
     help_menu.addAction(downloader_action)
 
     mw.form.menubar.addMenu(mw.pokemenu)
+
+
+# The "Mobile and Web Reviews" menu action is created by the later menu rewrite
+# (F36). Until it exists this stays None, and update_mobile_badge() is a safe
+# no-op — so the mobile sync/bootstrap paths can call it unconditionally now.
+_mobile_battles_action = None
+
+
+def update_mobile_badge(count: int) -> None:
+    """Reflect the pending mobile-battle count on the Mobile & Web Reviews entry.
+
+    Guarded no-op: returns immediately off the main thread or before the mobile
+    menu action has been built (F36). Never raises — a badge update must never
+    crash the sync hook or profile bootstrap that calls it.
+    """
+    try:
+        from .utils import is_main_thread
+        if not is_main_thread():
+            return
+        action = globals().get("_mobile_battles_action")
+        if action is None:
+            return
+        if count and count > 0:
+            action.setText(f"({count}) Mobile and Web Reviews")
+        else:
+            action.setText("Mobile and Web Reviews")
+    except Exception:
+        pass  # Never let a badge update crash anything

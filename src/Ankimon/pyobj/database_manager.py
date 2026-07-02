@@ -1170,6 +1170,216 @@ class AnkimonDB:
         row = cursor.fetchone()
         return row is not None and row["value"] == "true"
 
+    # --- Mobile Sync Operations ---
+    # Deferred F25 leaf accessors for the mobile-review sync engine (F14/F29).
+    # The pending_mobile_battles + mobile_battle_history tables already ship in
+    # the base schema (empty/idempotent); these methods are the leaf's read/write
+    # surface and were held back until the mobile engine landed.
+
+    def get_mobile_watermark(self) -> int:
+        """Return stored watermark (ms). Returns 0 if not set (first-ever run)."""
+        row = self.execute(
+            "SELECT value FROM metadata WHERE key = 'mobile_revlog_watermark'"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def set_mobile_watermark(self, watermark_ms: int) -> None:
+        with self._get_connection():
+            self._get_connection().execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('mobile_revlog_watermark', ?)",
+                (str(watermark_ms),)
+            )
+
+    def queue_mobile_battles(self, reviews: list[dict]) -> int:
+        """Insert mobile reviews into pending queue. Returns count inserted (skips duplicates)."""
+        import time
+        now = int(time.time() * 1000)
+        inserted = 0
+        conn = self._get_connection()
+        with conn:
+            for r in reviews:
+                cursor = conn.execute(
+                    """INSERT OR IGNORE INTO pending_mobile_battles
+                       (revlog_id, card_id, ease, review_time, review_type, queued_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (r["id"], r["cid"], r["ease"], r["time"], r["type"], now)
+                )
+                inserted += cursor.rowcount
+        return inserted
+
+    def get_pending_mobile_count(self) -> int:
+        return self.execute(
+            "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 0"
+        ).fetchone()[0]
+
+    def get_next_pending_mobile_batch(self, limit: int = 1) -> list[dict]:
+        """Return next N unresolved battles, oldest-first (lowest revlog_id first)."""
+        rows = self.execute(
+            """SELECT id, revlog_id, card_id, ease, review_time, review_type
+               FROM pending_mobile_battles
+               WHERE resolved = 0
+               ORDER BY revlog_id ASC
+               LIMIT ?""",
+            (limit,)
+        ).fetchall()
+        keys = ["queue_id", "revlog_id", "card_id", "ease", "review_time", "review_type"]
+        return [dict(zip(keys, r)) for r in rows]
+
+    def mark_mobile_battle_resolved(self, queue_id: int) -> None:
+        import time
+        now = int(time.time() * 1000)
+        cursor = self.execute("SELECT revlog_id FROM pending_mobile_battles WHERE id = ?", (queue_id,))
+        row = cursor.fetchone()
+        revlog_id = row[0] if row else None
+
+        with self._get_connection():
+            self._get_connection().execute(
+                "UPDATE pending_mobile_battles SET resolved=1, resolved_at=? WHERE id=?",
+                (now, queue_id)
+            )
+
+        if revlog_id:
+            self.sync_resolutions_to_other_db([revlog_id], now)
+
+    def add_mobile_history_entry(self, entry: Dict[str, Any]) -> bool:
+        """Saves a single mobile battle outcome to history."""
+        return self.add_mobile_history_entries_batch([entry])
+
+    def add_mobile_history_entries_batch(self, entries: List[Dict[str, Any]]) -> bool:
+        """Saves a batch of mobile battle outcomes to history in a single transaction."""
+        if not entries:
+            return True
+
+        def _clean_val(v, default):
+            if v is None:
+                return default
+            return v
+
+        try:
+            conn = self._get_connection()
+            with conn:
+                conn.executemany(
+                    """INSERT INTO mobile_battle_history (
+                        timestamp, enemy_id, enemy_name, enemy_level, enemy_shiny,
+                        companion_name, companion_level, outcome, xp_gained,
+                        trainer_xp_gained, cash_gained
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [
+                        (
+                            _clean_val(entry.get("timestamp"), 0),
+                            _clean_val(entry.get("enemy_id"), 0),
+                            str(_clean_val(entry.get("enemy_name"), "")),
+                            _clean_val(entry.get("enemy_level"), 0),
+                            1 if entry.get("enemy_shiny") else 0,
+                            str(_clean_val(entry.get("companion_name"), "")),
+                            _clean_val(entry.get("companion_level"), 0),
+                            str(_clean_val(entry.get("outcome"), "")),
+                            _clean_val(entry.get("xp_gained"), 0),
+                            _clean_val(entry.get("trainer_xp_gained"), 0),
+                            _clean_val(entry.get("cash_gained"), 0),
+                        )
+                        for entry in entries
+                    ]
+                )
+                conn.execute(
+                    """DELETE FROM mobile_battle_history
+                       WHERE id NOT IN (
+                           SELECT id FROM mobile_battle_history
+                           ORDER BY timestamp DESC, id DESC
+                           LIMIT 500
+                       )"""
+                )
+            return True
+        except Exception as e:
+            self._log("error", f"Failed to batch add mobile history entries: {e}")
+            return False
+
+    def get_mobile_history(self, limit: int = 500) -> List[Dict[str, Any]]:
+        """Retrieves recent mobile battle history entries, newest first."""
+        try:
+            rows = self.execute(
+                """SELECT id, timestamp, enemy_id, enemy_name, enemy_level, enemy_shiny,
+                          companion_name, companion_level, outcome, xp_gained,
+                          trainer_xp_gained, cash_gained
+                   FROM mobile_battle_history
+                   ORDER BY timestamp DESC, id DESC
+                   LIMIT ?""",
+                (limit,)
+            ).fetchall()
+            keys = [
+                "id", "timestamp", "enemy_id", "enemy_name", "enemy_level", "enemy_shiny",
+                "companion_name", "companion_level", "outcome", "xp_gained",
+                "trainer_xp_gained", "cash_gained"
+            ]
+            result = []
+            for r in rows:
+                item = dict(zip(keys, r))
+                item["enemy_shiny"] = bool(item["enemy_shiny"])
+                result.append(item)
+            return result
+        except Exception as e:
+            self._log("error", f"Failed to get mobile history: {e}")
+            return []
+
+    def clear_mobile_history(self) -> bool:
+        """Clears all entries from the mobile battle history."""
+        try:
+            conn = self._get_connection()
+            with conn:
+                conn.execute("DELETE FROM mobile_battle_history")
+            return True
+        except Exception as e:
+            self._log("error", f"Failed to clear mobile history: {e}")
+            return False
+
+    def sync_resolutions_to_other_db(self, revlog_ids: list[int], resolved_at: int) -> None:
+        """
+        If the other database exists (normal vs dev), sync the resolved status of the given
+        revlog_ids to it directly.
+        """
+        if not revlog_ids:
+            return
+
+        current_name = self.db_path.name
+        if current_name == "ankimon.db":
+            other_name = "ankimonDEV.db"
+        elif current_name == "ankimonDEV.db":
+            other_name = "ankimon.db"
+        else:
+            return
+
+        other_path = user_path / other_name
+        if not other_path.is_file():
+            return
+
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(other_path), timeout=5.0)
+            try:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS pending_mobile_battles (
+                        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                        revlog_id     INTEGER UNIQUE NOT NULL,
+                        card_id       INTEGER NOT NULL,
+                        ease          INTEGER NOT NULL,
+                        review_time   INTEGER NOT NULL,
+                        review_type   INTEGER NOT NULL,
+                        queued_at     INTEGER NOT NULL,
+                        resolved      INTEGER NOT NULL DEFAULT 0,
+                        resolved_at   INTEGER
+                    )
+                """)
+                placeholders = ",".join("?" for _ in revlog_ids)
+                conn.execute(
+                    f"UPDATE pending_mobile_battles SET resolved=1, resolved_at=? WHERE revlog_id IN ({placeholders})",
+                    [resolved_at] + list(revlog_ids)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            self._log("error", f"Failed to sync resolutions to {other_name}: {e}")
+
 
 # Singleton instance for use throughout the addon
 _db_instance: Optional[AnkimonDB] = None
