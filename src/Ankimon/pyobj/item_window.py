@@ -43,7 +43,8 @@ from ..functions.pokedex_functions import (
 from ..resources import icon_path, items_path, csv_file_items_cost, poke_evo_path
 from ..functions.badges_functions import check_for_badge, receive_badge
 from ..functions.pokemon_functions import save_fossil_pokemon
-from ..utils import play_effect_sound
+from ..services import services
+from ..utils import play_effect_sound, is_alive
 from .error_handler import show_warning_with_traceback
 
 # At the moment when I write this line, "UserRole" is defined as UserRole 1000 in the Ankimon __init__.py file. IDK what it's about.
@@ -188,6 +189,8 @@ class ItemWindow(QWidget):
         self.resize(initial_width, initial_height)
 
     def renewWidgets(self):
+        if not is_alive(self.contentLayout):
+            return
         # Clear the existing widgets from the content layout
         for i in reversed(range(self.contentLayout.count())):
             widget = self.contentLayout.itemAt(i).widget()
@@ -287,19 +290,25 @@ class ItemWindow(QWidget):
             self.logger.log_and_showinfo("error", "No Pokemon selected.")
             return
         try:
-            db = mw.ankimon_db
+            db = services.db
             target_pokemon_data = db.get_pokemon(individual_id)
 
             if target_pokemon_data:
                 pokemon_obj = PokemonObject.from_dict(target_pokemon_data)
                 pokemon_obj.give_held_item(item_name)
-                                
+
                 # Sync the main_pokemon singleton if it's the target
                 if self.main_pokemon and self.main_pokemon.individual_id == individual_id:
                     self.main_pokemon.held_item = item_name
-                   
+
                 self.logger.log_and_showinfo("info", f"{item_name} was given to {target_pokemon_data.get('name')}.")
                 self.renewWidgets()
+
+                # Refresh open PC Box window. Read services.pokemon_pc directly:
+                # `from ..singletons import pokemon_pc` lands in the lazy __getattr__
+                # factory and would force-construct a PC window the user never opened.
+                if is_alive(services.pokemon_pc):
+                    services.pokemon_pc.refresh_gui()
             else:
                 self.logger.log_and_showinfo("error", "Could not find Pokemon data.")
 
@@ -390,9 +399,60 @@ class ItemWindow(QWidget):
 
         return item_frame_widget
 
+    def dispatch_use(self, item_name: str, item_type: Optional[str] = None) -> dict:
+        """Invoke the right use-action for an item without requiring the bag UI
+        to be visible. Returns {ok, message} for callers that want to surface
+        a result (e.g. the web Items window's toast).
+
+        The branching mirrors ItemLabel above; keep them in sync if rules change.
+        """
+        name = (item_name or "").lower()
+        if item_type == "TM":
+            return {
+                "ok": False,
+                "message": "TMs are taught from the move-learning flow, not used directly.",
+            }
+        try:
+            if name in self.hp_heal_items:
+                if not self.main_pokemon:
+                    return {"ok": False, "message": "No active Pokémon to heal."}
+                hp_heal = self.hp_heal_items[name]
+                self.Check_Heal_Item(
+                    self.main_pokemon.name, hp_heal, name, self.achievements
+                )
+                return {
+                    "ok": True,
+                    "message": f"Healed {self.main_pokemon.name} with {name}.",
+                }
+            if name in self.fossil_pokemon:
+                fossil_id = self.fossil_pokemon[name]
+                fossil_pokemon_name = search_pokedex_by_id(fossil_id)
+                if self.Evolve_Fossil(name, fossil_id, fossil_pokemon_name):
+                    return {"ok": True, "message": f"Revived {fossil_pokemon_name}."}
+                return {
+                    "ok": False,
+                    "message": f"Failed to revive {fossil_pokemon_name}.",
+                }
+            if name in self.pokeball_chances:
+                self.Handle_Pokeball(name)
+                return {"ok": True, "message": f"Threw {name}."}
+            if name in self.evolution_items:
+                self._prompt_and_check_evo_item(name)
+                return {"ok": True, "message": ""}
+            if (
+                name in GiveItemWindow.NOT_YET_IMPLEMENTED_ITEMS
+                or name.endswith("-berry")
+                or name.endswith("-gem")
+            ):
+                return {"ok": False, "message": "This item isn't usable yet."}
+            self._prompt_and_give_held_item(name)
+            return {"ok": True, "message": ""}
+        except Exception as e:
+            return {"ok": False, "message": f"Use failed: {e}"}
+
     def PokemonList(self, comboBox):
         try:
-            db = mw.ankimon_db
+            db = services.db
             pokemon_list = db.execute("SELECT name, individual_id, pokedex_id FROM captured_pokemon").fetchall()
             if pokemon_list:
                 for pokemon in pokemon_list:
@@ -413,7 +473,7 @@ class ItemWindow(QWidget):
             return self._pokemon_choices_cache
         choices = []
         try:
-            db = mw.ankimon_db
+            db = services.db
             rows = db.execute("SELECT name, individual_id, pokedex_id FROM captured_pokemon").fetchall()
             for row in rows:
                 name, individual_id, poke_id = row[0], row[1], row[2]
@@ -452,9 +512,14 @@ class ItemWindow(QWidget):
         individual_id, prevo_id = selected
         self.Check_Evo_Item(individual_id, prevo_id, item_name)
 
-    def Evolve_Fossil(self, item_name: str, fossil_id: int, fossil_poke_name: str):
+    def Evolve_Fossil(
+        self, item_name: str, fossil_id: int, fossil_poke_name: str
+    ) -> bool:
+        """Revive a fossil into its corresponding Pokémon. Returns True on
+        success, False if another item action is already running or revival
+        threw. Existing PyQt button callers ignore the return value."""
         if self._item_action_in_progress:
-            return
+            return False
         self._item_action_in_progress = True
         try:
             if not isinstance(fossil_id, int):
@@ -462,11 +527,21 @@ class ItemWindow(QWidget):
             save_fossil_pokemon(fossil_id)
             self._pokemon_choices_cache = None
             self.delete_item(item_name)
+            # Re-fetch the starter window if its C++ side was deleted (mirrors the
+            # evo_window guard in Check_Evo_Item); a cached-but-dead reference would
+            # raise RuntimeError inside display_fossil_pokemon.
+            if not is_alive(self.starter_window):
+                from ..singletons import get_starter_window
+                self.starter_window = get_starter_window()
             self.starter_window.display_fossil_pokemon(fossil_id, fossil_poke_name)
-            from ..singletons import pokemon_pc
-            pokemon_pc.refresh_pokemon_grid()
+            # Read services.pokemon_pc directly rather than importing pokemon_pc from
+            # singletons, which would force-construct a PC window the user never opened.
+            if is_alive(services.pokemon_pc):
+                services.pokemon_pc.refresh_pokemon_grid()
+            return True
         except Exception as e:
             show_warning_with_traceback(parent=self, exception=e, message=f"Error using fossil item '{item_name}'")
+            return False
         finally:
             self._item_action_in_progress = False
 
@@ -506,7 +581,7 @@ class ItemWindow(QWidget):
 
     def delete_item(self, item_name: str):
         # Update database directly for performance
-        mw.ankimon_db.update_item_quantity(item_name, -1)
+        services.db.update_item_quantity(item_name, -1)
         self.renewWidgets()
 
     def Check_Heal_Item(self, prevo_name: str, heal_points: int, item_name: str, achievements):
@@ -529,6 +604,9 @@ class ItemWindow(QWidget):
             if evo_id:
                 # Perform your action when the item matches the Pokémon's evolution item
                 self.logger.log_and_showinfo("info", "Pokemon Evolution is fitting !")
+                if not is_alive(self.evo_window):
+                    from ..singletons import get_evo_window
+                    self.evo_window = get_evo_window()
                 self.evo_window.ask_pokemon_evo(individual_id, prevo_id, evo_id)
             else:
                 self.logger.log_and_showinfo("info", "This Pokemon does not need this item.")
@@ -567,7 +645,7 @@ class ItemWindow(QWidget):
 
     def write_items_file(self, itembag_list: list[Any]):
         """Writes items to the database. Legacy method kept for compatibility."""
-        db = mw.ankimon_db
+        db = services.db
         for item in itembag_list:
             item_id = item.get("id")
             item_name = item.get("item") or item.get("item_name", "")
@@ -590,7 +668,7 @@ class ItemWindow(QWidget):
         Returns items in the expected format for the UI, using SQL columns for efficiency.
         """
         try:
-            db = mw.ankimon_db
+            db = services.db
             items = db.get_all_items()
             # Convert database format to UI format
             result = []
@@ -648,6 +726,8 @@ class ItemWindow(QWidget):
         return normalized
 
     def clear_layout(self, layout):
+        if not is_alive(layout):
+            return
         while layout.count():
             item = layout.takeAt(0)
             widget = item.widget()
