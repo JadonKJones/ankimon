@@ -49,9 +49,33 @@ class Ankidex(QDialog):
 
     def get_ankidex_data(self):
         """Fetches comprehensive collection data for Ankidex."""
-        self.ankimon_tracker.get_ids_in_collection()
-        owned_pokemon_ids = list(self.ankimon_tracker.owned_pokemon_ids)
         db = services.db
+        settings = services.settings
+        if not db:
+            # Reload-safe: between a profile swap and the next populate() the
+            # registry can be unpopulated (services.db is None). Serve an
+            # empty-but-valid payload so the SPA still renders instead of
+            # raising AttributeError on db.execute(...).
+            return {
+                "owned": [],
+                "shinies": [],
+                "seen": [],
+                "encounterable": [],
+                "prerequisites": {},
+                "stats": {
+                    "caughtCount": 0,
+                    "releasedCount": 0,
+                    "defeatedCount": 0,
+                },
+                "prefs": {
+                    "viewMode": "grid",
+                    "sortMode": "id-asc",
+                    "spriteMode": "static",
+                },
+                "regional_data": {"boosts": {}, "forms": {}},
+                "evolutionNote": "",
+            }
+        self.ankimon_tracker.get_ids_in_collection()
 
         # 1. Shiny Owned
         cursor = db.execute(
@@ -134,42 +158,10 @@ class Ankidex(QDialog):
         # Add encounterable regional form IDs for the active region
         from ..functions.encounter_data import REGIONAL_FORMS
 
-        active_region = services.settings.get("misc.active_region")
+        active_region = settings.get("misc.active_region") if settings else None
         if active_region and active_region in REGIONAL_FORMS:
             encounterable_ids.update(REGIONAL_FORMS[active_region])
 
-        # Add Fossils back (they are in UNAVAILABLE because they aren't wild, but are obtainable)
-        fossils = [
-            138,
-            139,
-            140,
-            141,
-            142,  # Gen 1
-            345,
-            346,
-            347,
-            348,  # Gen 3
-            408,
-            409,
-            410,
-            411,  # Gen 4
-            564,
-            565,
-            566,
-            567,  # Gen 5
-            568,
-            569,
-            570,
-            571,  # Gen 6 (Fixing possible index mismatch in placeholder)
-            696,
-            697,
-            698,
-            699,
-            880,
-            881,
-            882,
-            883,  # Gen 8
-        ]
         # 5. Prerequisites
         prereqs = {}
         for k, v in encounter_data.PREREQUISITES.items():
@@ -194,18 +186,24 @@ class Ankidex(QDialog):
                 "defeatedCount": defeated_total,
             },
             "prefs": {
-                "viewMode": services.settings.get(
+                "viewMode": settings.get(
                     "ankidex.viewMode",
-                    services.settings.get("pokedex_v2.viewMode", "grid"),
-                ),
-                "sortMode": services.settings.get(
+                    settings.get("pokedex_v2.viewMode", "grid"),
+                )
+                if settings
+                else "grid",
+                "sortMode": settings.get(
                     "ankidex.sortMode",
-                    services.settings.get("pokedex_v2.sortMode", "id-asc"),
-                ),
-                "spriteMode": services.settings.get(
+                    settings.get("pokedex_v2.sortMode", "id-asc"),
+                )
+                if settings
+                else "id-asc",
+                "spriteMode": settings.get(
                     "ankidex.spriteMode",
-                    services.settings.get("pokedex_v2.spriteMode", "static"),
-                ),
+                    settings.get("pokedex_v2.spriteMode", "static"),
+                )
+                if settings
+                else "static",
             },
             "regional_data": {
                 "boosts": {
@@ -258,7 +256,7 @@ class Ankidex(QDialog):
 
     def save_preferences(self):
         def on_state_ready(state):
-            if state and isinstance(state, dict):
+            if state and isinstance(state, dict) and services.settings:
                 for key, val in state.items():
                     services.settings.set(f"ankidex.{key}", val)
 
