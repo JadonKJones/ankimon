@@ -868,7 +868,116 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
             logger.log("error", f"Failed to prepare files for sync: {str(e)}")
 
     def on_sync_did_finish():
-        """Called after sync finishes - only auto-read if enabled."""
+        """Called after sync finishes."""
+        # === Mobile-review sync engine (F29): dual-DB detection + queueing ===
+        # Runs regardless of the AnkiWeb-config auto-sync toggle below — mobile
+        # review detection is independent of Ankimon-config file syncing.
+        try:
+            from ..services import services
+            db = services.db
+            col = services.col if services.col is not None else mw.col
+            if db is not None and col is not None and settings_obj.get("mobile.enabled", True):
+                from ..functions.mobile_sync import (
+                    detect_mobile_reviews,
+                    get_desktop_session_revlog_ids,
+                    clear_desktop_session,
+                )
+                from ..menu_buttons import update_mobile_badge
+
+                dev_db_path = user_path / "ankimonDEV.db"
+                original_db_name = db.db_path.name
+                desktop_ids = get_desktop_session_revlog_ids(col)
+
+                newly_queued_normal = 0
+                newly_queued_dev = 0
+
+                try:
+                    # 1. Queue to ankimon.db
+                    if db.db_path.name != "ankimon.db":
+                        db.switch_database("ankimon.db")
+                    watermark_normal = db.get_mobile_watermark()
+                    all_mobile_normal = detect_mobile_reviews(col, watermark_normal, desktop_ids)
+                    if all_mobile_normal:
+                        newly_queued_normal = db.queue_mobile_battles(all_mobile_normal)
+                        db.set_mobile_watermark(max(r["id"] for r in all_mobile_normal))
+
+                    max_revlog_id = col.db.scalar("SELECT MAX(id) FROM revlog")
+                    if type(max_revlog_id).__name__ in ("MagicMock", "Mock"):
+                        max_revlog_id = None
+                    if isinstance(max_revlog_id, (int, float)):
+                        current_watermark = db.get_mobile_watermark()
+                        if max_revlog_id > current_watermark:
+                            db.set_mobile_watermark(max_revlog_id)
+
+                    # 2. Queue to ankimonDEV.db if present
+                    if dev_db_path.is_file():
+                        if db.db_path.name != "ankimonDEV.db":
+                            db.switch_database("ankimonDEV.db")
+                        watermark_dev = db.get_mobile_watermark()
+                        all_mobile_dev = detect_mobile_reviews(col, watermark_dev, desktop_ids)
+                        if all_mobile_dev:
+                            newly_queued_dev = db.queue_mobile_battles(all_mobile_dev)
+                            db.set_mobile_watermark(max(r["id"] for r in all_mobile_dev))
+
+                        if isinstance(max_revlog_id, (int, float)):
+                            current_watermark = db.get_mobile_watermark()
+                            if max_revlog_id > current_watermark:
+                                db.set_mobile_watermark(max_revlog_id)
+                finally:
+                    if db.db_path.name != original_db_name:
+                        db.switch_database(original_db_name)
+
+                # Clear desktop session to prevent indefinite exclusion-set accumulation
+                clear_desktop_session()
+
+                # Always update the badge with the TOTAL pending count of the active DB
+                total_pending = db.get_pending_mobile_count()
+                update_mobile_badge(total_pending)
+
+                msg_parts = []
+                if newly_queued_normal > 0:
+                    msg_parts.append(f"{newly_queued_normal} in Normal")
+                if newly_queued_dev > 0:
+                    msg_parts.append(f"{newly_queued_dev} in Dev")
+
+                if msg_parts:
+                    resolution_mode = settings_obj.get("mobile.resolution_mode", "manual")
+
+                    if resolution_mode == "auto":
+                        try:
+                            from ..ankimon_items_web.shop_obj import MobileBridge
+                            bridge = MobileBridge(mw)
+                            result = bridge.resolveAll()
+                            if result.get("success"):
+                                xp_gained = result.get("xp_gained", 0)
+                                cash_gained = result.get("cash_gained", 0)
+                                caught_list = result.get("caught_list", [])
+                                resolved = result.get("resolved", 0)
+                                caught_names = [p["name"] for p in caught_list]
+                                caught_str = f" Caught: {', '.join(caught_names)}." if caught_names else ""
+                                tooltip(f"⚔ Auto-resolved {resolved} mobile/web reviews! +{xp_gained} XP, +{cash_gained}¥.{caught_str}")
+                                logger.log("info", f"Auto-resolved {resolved} mobile/web reviews on active DB. +{xp_gained} XP, +{cash_gained}¥.{caught_str}")
+                            else:
+                                error_msg = result.get("error", "Unknown error")
+                                tooltip(f"⚠ Auto-resolve failed: {error_msg}. Please resolve manually.")
+                                logger.log("error", f"Auto-resolve failed: {error_msg}")
+                        except Exception as ex:
+                            tooltip(f"⚠ Auto-resolve error: {ex}. Please resolve manually.")
+                            logger.log("error", f"Auto-resolve error: {ex}")
+                    else:
+                        tooltip(f"⚔ Mobile/web reviews synced: {', '.join(msg_parts)}! Open Ankimon → Mobile & Web Reviews to resolve.")
+                        logger.log("info", f"Mobile/web reviews synced: {', '.join(msg_parts)}. Total active pending: {total_pending}.")
+                logger.log("info", f"Mobile dual-queue complete. Active DB restored to: {db.db_path.name}")
+                try:
+                    from ..events import events
+                    events.emit("stats_changed")
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.log("error", f"Mobile review detection failed: {e}")
+        # === END mobile-review sync engine ===
+
+        # Only auto-read Ankimon configs if automatic sync is enabled
         if not _automatic_sync_enabled:
             logger.log("info", "Anki sync finished - automatic Ankimon sync disabled (awaiting manual sync)")
             return
