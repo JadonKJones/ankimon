@@ -11,7 +11,12 @@ BRRRR_Experimental onto main's ``src/Ankimon/lang/*_text.json`` files:
 * ``evolve_now_button`` honours the ``{evo_name}`` placeholder contract in every
   language (this is exactly what ``Translator.translate(key, evo_name=...)``
   does: ``template.format(**kwargs)``);
-* ``en_text.json`` gained the ``nature_chart_button`` menu label.
+* ``en_text.json`` gained the ``nature_chart_button`` menu label -- and no other
+  language file did (they fall back to English via ``Translator``);
+* main's pre-existing guard keys (``pokemon_about_to_evolve_friendship`` and the
+  ``cp_label``/``bp_label``/``combat_power``/``battle_power`` block, both
+  DONE-IN-BASE per GUARDS-TO-REAPPLY) survive in all eleven languages and keep
+  their English reference values.
 
 The setting_name.json / setting_description.json auto-catch / active-region /
 team-cycle keys from the same upstream change are intentionally NOT part of this
@@ -51,6 +56,16 @@ FRIENDSHIP_KEYS = [
     "badge_wait_night",
 ]
 
+# Main guard keys (GUARDS-TO-REAPPLY, DONE-IN-BASE): upstream re-added these,
+# but main already had them; the port must neither drop nor overwrite them.
+TEXT_GUARD_KEYS = [
+    "pokemon_about_to_evolve_friendship",
+    "cp_label",
+    "bp_label",
+    "combat_power",
+    "battle_power",
+]
+
 # English reference values (byte-exact) that every other language falls back to.
 EN_EXPECTED = {
     "nature_chart_button": "Check Nature Chart",
@@ -61,6 +76,14 @@ EN_EXPECTED = {
     "badge_ready": "⇈ Ready to evolve!",
     "badge_wait_day": "☀️ Ready to evolve during the day",
     "badge_wait_night": "🌙 Ready to evolve at night",
+    # Guard values (main's pre-existing English text, must not be overwritten).
+    "pokemon_about_to_evolve_friendship": (
+        "{main_pokemon_name} is ready to evolve into {evo_pokemon_name}!"
+    ),
+    "cp_label": "CP",
+    "bp_label": "BP",
+    "combat_power": "Combat Power",
+    "battle_power": "Battle Power",
 }
 
 
@@ -103,6 +126,25 @@ def test_nature_chart_button_only_in_english_per_upstream():
     # Upstream added nature_chart_button to en_text.json only; the other
     # languages fall back to English via Translator. Pin that contract.
     assert "nature_chart_button" in _load("en_text")
+    for lang in TEXT_LANGS:
+        if lang == "en":
+            continue
+        assert "nature_chart_button" not in _load(f"{lang}_text"), (
+            f"nature_chart_button leaked into {lang}_text.json; upstream keeps "
+            "it English-only (other languages fall back via Translator)"
+        )
+
+
+@pytest.mark.parametrize("lang", TEXT_LANGS)
+def test_main_guard_keys_preserved_in_every_language(lang):
+    # GUARDS-TO-REAPPLY regression: pokemon_about_to_evolve_friendship and the
+    # cp/bp label block were DONE-IN-BASE; the port must not have dropped them.
+    data = _load(f"{lang}_text")
+    for key in TEXT_GUARD_KEYS:
+        assert key in data, f"{lang}_text.json lost guard key '{key}'"
+        assert isinstance(data[key], str) and data[key].strip(), (
+            f"{lang}_text.json has empty value for guard key '{key}'"
+        )
 
 
 def test_setting_guard_keys_preserved():
