@@ -347,23 +347,33 @@ def create_menu_actions(
     simulator_action.triggered.connect(_open_encounter_simulator)
     help_menu.addAction(simulator_action)
 
+    # Ankimon Tracker window + its Ctrl+Shift+K hotkey live in the "Debug"
+    # submenu. These are developer tools, so register them but gate them behind
+    # Developer Mode below (like Switch Account / Simulator above) rather than
+    # exposing them to every user.
+    tracker_window_action = QAction(mw.translator.translate("ankimon_tracker_button"), mw)
+    tracker_window_action.setMenuRole(QAction.MenuRole.NoRole)
+    tracker_window_action.triggered.connect(ankimon_tracker_window.toggle_window)
+    tracker_window_action.setShortcut(QKeySequence("Ctrl+Shift+K"))
+    if debug is True:
+        debug_menu.addAction(tracker_window_action)
+
     # Re-evaluate the developer-only entries each time the menu opens, so
     # toggling Developer Mode takes effect without rebuilding the menu.
     def update_dev_actions_visibility():
         is_dev = is_dev_mode()
         switch_account_action.setVisible(is_dev)
         simulator_action.setVisible(is_dev)
+        # Hide the Debug submenu and disable the tracker hotkey unless Developer
+        # Mode is on. setEnabled(False) is what actually suppresses the
+        # Ctrl+Shift+K shortcut — an invisible-but-enabled QAction can still fire.
+        tracker_window_action.setVisible(is_dev)
+        tracker_window_action.setEnabled(is_dev)
+        if debug is True:
+            debug_menu.menuAction().setVisible(is_dev)
 
     mw.pokemenu.aboutToShow.connect(update_dev_actions_visibility)
     update_dev_actions_visibility()
-
-    if debug is True:
-        tracker_window_action = QAction(mw.translator.translate("ankimon_tracker_button"), mw)
-        tracker_window_action.setMenuRole(QAction.MenuRole.NoRole)
-        tracker_window_action.triggered.connect(ankimon_tracker_window.toggle_window)
-        tracker_window_action.setShortcut(QKeySequence("Ctrl+Shift+K"))
-        # Show the Settings window
-        debug_menu.addAction(tracker_window_action)
 
     # Set up a shortcut (Ctrl+Shift+L) to open the log window
     ankimon_logger_action = QAction(mw.translator.translate("logger_button"), mw)

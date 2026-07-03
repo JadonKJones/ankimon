@@ -315,13 +315,13 @@ def simulate_battle_with_poke_engine(
         user_hp_before = int(state.user.active.hp)
         opponent_hp_before = int(state.opponent.active.hp)
 
-        # --- Debugging: State changes BEFORE applying instructions
+        # Capture the per-key state changes (before/after applying instructions)
+        # so the reviewer HUD can render what happened this turn — returned below
+        # as ``battle_info_changes`` and consumed by battle_loop.
         state_before = copy.deepcopy(mutator.state)
         mutator.apply(instrs)
         state_after = mutator.state
         battle_info_changes = diff_states(state_before, state_after)
-        print_state_changes(battle_info_changes)
-        # --- End Debugging
 
         # Save changes from State to Pokemon objects (enhanced for volatile status)
         main_pokemon.hp = state.user.active.hp
@@ -397,7 +397,6 @@ def simulate_battle_with_poke_engine(
             "state": new_state,
         }
 
-        print(f"{unlucky_life * 100}% chance: {battle_effects}")
         return (
             battle_info,
             new_state,
@@ -523,17 +522,3 @@ def diff_states(state_before, state_after, path="", changes=None):
             diff_states(before_val, after_val, new_path, changes)
 
     return changes
-
-
-def print_state_changes(changes):
-    """
-    Print state changes in a clean format: key: before -> after
-    """
-    if not changes:
-        return
-
-    for change in changes:
-        key = change["key"]
-        before = change["before"]
-        after = change["after"]
-        print(f"{key}: {before} -> {after}")

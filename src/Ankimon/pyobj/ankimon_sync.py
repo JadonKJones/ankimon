@@ -961,8 +961,6 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
                             db.set_mobile_watermark(max(r["id"] for r in all_mobile_normal))
 
                         max_revlog_id = col.db.scalar("SELECT MAX(id) FROM revlog")
-                        if type(max_revlog_id).__name__ in ("MagicMock", "Mock"):
-                            max_revlog_id = None
                         if isinstance(max_revlog_id, (int, float)):
                             current_watermark = db.get_mobile_watermark()
                             if max_revlog_id > current_watermark:

@@ -512,15 +512,11 @@ def count_items_and_rewrite():
     """
     try:
         db = services.db
-        
-        # Get all items from database - they're already unique by item_name
-        # so no need to aggregate, the database handles this automatically
-        items = db.get_all_items()
-        
-        if items:
-            print(f"Database contains {len(items)} unique items.")
-        else:
-            print("No items in database.")
+
+        # Legacy consolidation is now handled by the database (items are already
+        # unique by item_name); this remains a safe read so a broken items table
+        # surfaces via the except below at startup.
+        db.get_all_items()
 
     except Exception as e:
         show_warning_with_traceback(

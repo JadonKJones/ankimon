@@ -86,7 +86,6 @@ class TempTracker:
         return self.total_reviews
 
 def _get_team_max_level(team_clones: list, db, settings_obj, main_pokemon) -> int:
-    import os
     """Get the maximum level of any companion in the team, including inactive ones.
     
     This ensures that activating or deactivating a companion does not shift the
@@ -100,24 +99,25 @@ def _get_team_max_level(team_clones: list, db, settings_obj, main_pokemon) -> in
             
     inactive = settings_obj.get("mobile.inactive_companions", []) if settings_obj else []
     if inactive and db is not None:
-        is_mock = type(db).__name__ in ("MagicMock", "Mock", "NonCallableMagicMock")
-        use_fallback = is_mock or "PYTEST_CURRENT_TEST" in os.environ
-        if not use_fallback:
-            try:
-                placeholders = ",".join("?" for _ in inactive)
-                cursor = db.execute(
-                    f"SELECT data FROM captured_pokemon WHERE individual_id IN ({placeholders})",
-                    inactive
-                )
-                for row in cursor.fetchall():
-                    data = db._deobfuscate(row["data"])
-                    if data:
-                        lvl = data.get("level")
-                        if lvl is not None:
-                            levels.append(int(lvl))
-            except Exception:
-                use_fallback = True
-        
+        # Fast path: fetch every inactive companion in a single query. If the
+        # batched read fails for any reason, fall through to per-id accessor reads
+        # below so a partial failure never drops every level.
+        use_fallback = False
+        try:
+            placeholders = ",".join("?" for _ in inactive)
+            cursor = db.execute(
+                f"SELECT data FROM captured_pokemon WHERE individual_id IN ({placeholders})",
+                inactive
+            )
+            for row in cursor.fetchall():
+                data = db._deobfuscate(row["data"])
+                if data:
+                    lvl = data.get("level")
+                    if lvl is not None:
+                        levels.append(int(lvl))
+        except Exception:
+            use_fallback = True
+
         if use_fallback or not levels:
             for ind_id in inactive:
                 try:
@@ -400,41 +400,22 @@ def load_active_team_clones(ankimon_db, settings_obj, main_pokemon_fallback) -> 
             inactive = set(settings_obj.get("mobile.inactive_companions", [])) if settings_obj else set()
             active_ids = [t.get("individual_id") for t in team_rows if t.get("individual_id") and t.get("individual_id") not in inactive]
             if active_ids:
-                is_mock = type(ankimon_db).__name__ in ("MagicMock", "Mock", "NonCallableMagicMock")
-                if is_mock:
-                    for ind_id in active_ids:
-                        data = ankimon_db.get_pokemon(ind_id)
-                        if data:
-                            try:
-                                pkmn = PokemonObject(**data)
-                                clones.append(pkmn)
-                            except Exception:
-                                pass
-                else:
-                    placeholders = ",".join("?" for _ in active_ids)
-                    cursor = ankimon_db.execute(
-                        f"SELECT data FROM captured_pokemon WHERE individual_id IN ({placeholders})",
-                        active_ids
-                    )
-                    id_to_data = {}
-                    for row in cursor.fetchall():
-                        data = ankimon_db._deobfuscate(row["data"])
-                        if data and "individual_id" in data:
-                            id_to_data[data["individual_id"]] = data
-
-                    for ind_id in active_ids:
-                        data = id_to_data.get(ind_id)
-                        if data:
-                            try:
-                                pkmn = PokemonObject(**data)
-                                clones.append(pkmn)
-                            except Exception as e:
-                                try:
-                                    from ..services import services
-                                    if services.logger:
-                                        services.logger.log("warning", f"load_active_team_clones: skipping {ind_id}: {e}")
-                                except Exception:
-                                    pass
+                # Active teams are small (a handful at most), so load each member
+                # via the DB accessor rather than hand-rolling batched SQL —
+                # get_pokemon performs the same deobfuscation internally.
+                for ind_id in active_ids:
+                    data = ankimon_db.get_pokemon(ind_id)
+                    if not data:
+                        continue
+                    try:
+                        clones.append(PokemonObject(**data))
+                    except Exception as e:
+                        try:
+                            from ..services import services
+                            if services.logger:
+                                services.logger.log("warning", f"load_active_team_clones: skipping {ind_id}: {e}")
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -1976,7 +1957,10 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
                 if logger:
                     logger.log("error", f"on_db_work_done in commit_replay_outcome failed: {e}")
 
-        # 3. Schedule or execute work
+        # 3. Schedule or execute work.
+        # Test seam: under the suite aqt.operations is stubbed with a no-op
+        # MagicMock, so QueryOp would never run do_db_work. Execute synchronously
+        # there; production dispatches it off the main thread via QueryOp.
         import os
         if "PYTEST_CURRENT_TEST" in os.environ:
             do_db_work(None)

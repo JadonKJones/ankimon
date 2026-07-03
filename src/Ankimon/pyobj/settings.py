@@ -217,7 +217,6 @@ class Settings:
         if services.db is not None:
             try:
                 services.db.save_all_config(config)
-                print("Ankimon: Saved config to database")
             except Exception as e:
                 print(f"Ankimon: Failed to save config to database: {e}")
 

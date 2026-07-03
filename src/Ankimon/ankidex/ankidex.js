@@ -80,8 +80,6 @@ const TYPES = [
 
 // Entry point called from Python
 window.initializeAnkidex = async function (data) {
-  console.log("Initializing Ankidex with collection data...");
-
   state.collection.owned = new Set(data.owned);
   state.collection.shinies = new Set(data.shinies);
   state.collection.seen = new Set(data.seen);
@@ -105,7 +103,6 @@ window.initializeAnkidex = async function (data) {
   // the in-flight initialization will render the latest collection when it
   // resumes, so skip re-entering the load/render path.
   if (state.isInitializing) {
-    console.log("Ankidex already initializing, applied collection update.");
     return;
   }
   state.isInitializing = true;
@@ -297,8 +294,6 @@ async function loadSpeciesData() {
 
     const uniqueSpecies = new Set(state.allPokemon.map((p) => p.species_id));
     state.counts.total = uniqueSpecies.size;
-
-    console.log(`Loaded ${state.allPokemon.length} entries.`);
   } catch (err) {
     console.error("Failed to load species data:", err);
   }

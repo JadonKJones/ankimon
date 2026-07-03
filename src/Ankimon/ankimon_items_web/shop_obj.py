@@ -428,6 +428,10 @@ class MobileBridge(QObject):
                     js = f"if (window.updateMobileEstimates) {{ window.updateMobileEstimates({json.dumps(res_est)}); }}"
                     self._w.webview_mobile.page().runJavaScript(js)
 
+                # Test seam: under the suite aqt.operations is stubbed with a
+                # no-op MagicMock, so QueryOp never delivers a result. Run the
+                # simulation synchronously there and return the estimates inline;
+                # production dispatches off-thread and pushes results via JS.
                 if "PYTEST_CURRENT_TEST" in os.environ:
                     sim_res = run_sim(None)
                     estimates = {
@@ -699,6 +703,10 @@ class MobileBridge(QObject):
             main_pokemon = services.main_pokemon
             day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
 
+            # Test seam: under the suite aqt.operations is stubbed with a no-op
+            # MagicMock, so QueryOp never delivers a result. Resolve synchronously
+            # there and return the outcome inline; production dispatches off-thread
+            # and pushes the result to the view via JS.
             if "PYTEST_CURRENT_TEST" in os.environ:
                 res = resolve_next(
                     companion_id=companion_id,

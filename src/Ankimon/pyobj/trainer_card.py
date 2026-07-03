@@ -246,7 +246,6 @@ class TrainerCard:
         )
         self.xp = self.settings_obj.get("trainer.xp")
         self.total_xp = self.settings_obj.get("trainer.total_xp")
-        print(f"Gained {xp_gained} XP from defeating a {tier} Pokémon!")
         self.check_level_up()
 
         # Announce the XP / level / Total-XP change on the shared "stats_changed"
