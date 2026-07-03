@@ -217,6 +217,11 @@ class ItemWindow(QWidget):
                     self.logger.log("error", f"Skipping invalid item '{item}': {e}")
 
     def filter_items(self):
+        # Same stale-cached-window-after-reload guard as renewWidgets(): a search
+        # box / category-dropdown callback can fire against a window whose C++
+        # contentLayout was already deleted, so bail before touching it.
+        if not is_alive(self.contentLayout):
+            return
         search_text = self.search_edit.text().lower()
         category_index = self.category.currentIndex()
         # Clear the existing widgets from the content layout
@@ -427,6 +432,15 @@ class ItemWindow(QWidget):
             if name in self.fossil_pokemon:
                 fossil_id = self.fossil_pokemon[name]
                 fossil_pokemon_name = search_pokedex_by_id(fossil_id)
+                # Evolve_Fossil returns False both on a real revival error AND when
+                # it no-ops because another item action is already running. Check
+                # the busy flag first so a rapid double-use reports "in progress"
+                # instead of a false "Failed to revive".
+                if self._item_action_in_progress:
+                    return {
+                        "ok": False,
+                        "message": "Another item action is already in progress.",
+                    }
                 if self.Evolve_Fossil(name, fossil_id, fossil_pokemon_name):
                     return {"ok": True, "message": f"Revived {fossil_pokemon_name}."}
                 return {
