@@ -593,6 +593,11 @@ class MobileBridge(QObject):
         self._bulk_stopped = False
         self._bulk_refreshed = False
 
+        # Read the scheduler's day cutoff on the main GUI thread — mw.col.sched
+        # must not be touched from the worker thread. Matches resolveAll /
+        # resolveChunk / resolveNext, which all precompute it before dispatching.
+        day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
+
         def bg_resolve():
             try:
                 # Lazy import: absent mobile_sync surfaces as a benign progress
@@ -622,7 +627,7 @@ class MobileBridge(QObject):
                     trainer_card=services.trainer_card,
                     main_pokemon=services.main_pokemon,
                     logger=services.logger,
-                    day_cutoff=mw.col.sched.day_cutoff if (mw and mw.col) else 0,
+                    day_cutoff=day_cutoff,
                     limit=None,
                     progress_callback=progress_cb
                 )
@@ -1138,9 +1143,15 @@ class AnkimonItemsWeb(QDialog):
     # ankimon_items_web/LIVE_UPDATES.md
     # ------------------------------------------------------------------
     def refresh_live_screen(self):
-        """Entry point called by ``singletons.notify_stats_changed()`` after a
-        gameplay event. Refreshes whichever screen is currently showing **iff**
-        it supports live updates.
+        """Refresh whichever screen is currently showing after a gameplay event,
+        **iff** it supports live updates.
+
+        Today the only in-process caller is ``getBulkResolveProgress`` (after a
+        bulk mobile auto-resolve). This is also the intended entry point for a
+        future ``singletons.notify_stats_changed()`` bridge that would fan real
+        catch / XP / cash write-sites here — that bridge is a deferred seam (see
+        ``singletons.py`` and ``LIVE_UPDATES.md``) and is NOT wired yet, so
+        gameplay outside the bulk-resolve path does not live-refresh a shell.
 
         Cheap and safe to call from anywhere on the GUI thread: a no-op unless
         the window is visible, the current screen is fully loaded, and that
@@ -1678,6 +1689,12 @@ class AnkimonItemsWeb(QDialog):
 
     def _invalidate_pokemon_cache(self):
         self._pokemon_choices_cache = None
+        # The Team screen's roster picker keeps its own snapshot (ProfileData.
+        # _roster_cache); a catch / release / evolution that stales the Items
+        # picker stales that one too, so drop both on the same events.
+        pd = getattr(self, "profile_data", None)
+        if pd is not None:
+            pd._roster_cache = None
 
     def get_pokemon_choices(self, item_name=None):
         """Return the player's Pokémon team for the in-shell picker.
@@ -1887,10 +1904,15 @@ class AnkimonItemsWeb(QDialog):
             if self.item_window is not None:
                 self.item_window.renewWidgets()
                 
-            # Also refresh open PC Box window
-            from ..singletons import pokemon_pc, is_alive
-            if is_alive(pokemon_pc):
-                pokemon_pc.refresh_gui()
+            # Also refresh an already-open PC Box window. Peek the registry
+            # (services.pokemon_pc) rather than importing the lazy ``pokemon_pc``
+            # proxy — that proxy would CONSTRUCT a brand-new PC window (and a Test
+            # window) when none is open, so is_alive() would always be True and
+            # we'd force an unwanted build. Mirrors singletons.swap_ankimon_account.
+            from ..singletons import is_alive
+            pc = services.pokemon_pc
+            if is_alive(pc):
+                pc.refresh_gui()
                 
             return {"ok": True, "message": f"Unequipped {item_name.replace('-', ' ').title()} from {pokemon_data.get('name')}."}
         except Exception as e:
@@ -2096,7 +2118,7 @@ class AnkimonItemsWeb(QDialog):
         except ValueError as e:
             return {"ok": False, "message": f"Validation error: {e}"}
 
-        config, adjustments = settings_schema.validate_and_clamp(config)
+        config, adjustments = settings_schema.validate_and_clamp(config, original_config)
 
         try:
             changed = False
