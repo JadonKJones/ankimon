@@ -552,30 +552,6 @@ def clear_encounter_cache():
     }
 
 
-def get_random_pokemon_in_tier(tier):
-    if tier == "Normal":
-        id_data = encounter_data.NORMAL
-    elif tier == "Baby":
-        id_data = encounter_data.BABY
-    elif tier == "Ultra":
-        id_data = encounter_data.ULTRA
-    elif tier == "Legendary":
-        id_data = encounter_data.LEGENDARY
-    elif tier == "Mythical":
-        id_data = encounter_data.MYTHICAL
-    elif tier == "Mega":
-        id_data = encounter_data.MEGA
-    elif tier == "Gmax":
-        id_data = encounter_data.GMAX
-    elif tier == "Starter":
-        # id_data = encounter_data.STARTERS   #Uncomment to activate starters
-        id_data = []
-    else:
-        return 1
-
-    return random.choice(id_data) if id_data else 1
-
-
 def _player_owns_base_form(actual_id: int, collected_ids: set) -> bool:
     """Return True if the player owns the base species of this Mega/Gmax form."""
     name = search_pokedex_by_id(actual_id)
@@ -633,28 +609,6 @@ def get_tier(total_reviews, trainer_level=1, event_modifier=None):
 
     choice = random.choices(tiers, probabilities, k=1)
     return choice[0]
-
-
-def choose_random_pkmn_from_tier():
-    """
-    Runs a tier-selection and a subsequent ID-selection function to pick a random Pokemon from a given randomly picked Tier.
-    The tier is a weighted probability selection, based on total_reviews and trainer_level.
-    Pokemon ID is picked randomly from within that tier.
-
-    Returns:
-        id (int): Pokedex ID for generated Pokemon
-        tier (str): Rarity tier for generated Pokemon (normal/ultra/legendary etc.)
-    """
-    total_reviews = ankimon_tracker_obj.get_total_reviews()
-    trainer_level = trainer_card.level
-    try:
-        tier = get_tier(total_reviews, trainer_level)
-        id = get_random_pokemon_in_tier(tier)
-        services.logger.game_log(f"Selected tier: {tier}, Resulting Pokemon ID: {id}")
-        return id, tier
-    except Exception as e:
-        services.logger.log("error", f"Error in choose_random_pkmn_from_tier: {str(e)}")
-        show_warning_with_traceback(exception=e, message="Error occurred")
 
 
 def check_min_generate_level(name):
@@ -757,30 +711,6 @@ def check_id_ok(id_num: Union[int, list[int]]):
             return gen_config[generation - 1]
 
     return False
-
-
-def get_regional_substitute(species_id: int, region: str = None) -> "int | None":
-    """
-    Returns a regional form actual_id for the given species and region, or None.
-    If region is None, returns any valid regional variant from any region.
-    """
-    eligible = []
-    lookup = _get_regional_form_lookup().get(species_id, {})
-
-    if region:
-        options = lookup.get(region, [])
-        for v in options:
-            if check_id_ok(v):
-                eligible.append(v)
-    else:
-        for reg_variants in lookup.values():
-            for v in reg_variants:
-                if check_id_ok(v):
-                    eligible.append(v)
-
-    if eligible:
-        return random.choice(eligible)
-    return None
 
 
 def get_boosted_gens_for_region(region: str) -> list[int]:
@@ -1501,7 +1431,13 @@ def save_main_pokemon_progress(
         # MAX_FRIENDSHIP; the raw number above it is what keeps growing.
         main_pokemon.friendship += random.randint(5, 9)
         mainpkmndata["friendship"] = main_pokemon.friendship
-        if not evolution_prompted:
+        # Skip the friendship-evolution offer when the evo window is dead/None
+        # (F31 lazy singletons can leave services.evo_window None):
+        # check_friendship_evolution_for_pokemon calls evo_window.ask_pokemon_evo(...)
+        # unguarded, and an AttributeError here would abort save_main_pokemon_progress
+        # before the final ankimon_db.save_main_pokemon(...) below — silently
+        # discarding this defeat's level/xp/EV/friendship persistence.
+        if not evolution_prompted and evo_window is not None:
             friendship_evo_id = check_friendship_evolution_for_pokemon(
                 main_pokemon.individual_id,
                 main_pokemon.id,
@@ -1603,14 +1539,22 @@ def kill_pokemon(
     # Handle XP share logic
     xp_share_individual_id = settings_obj.get("trainer.xp_share")
     if xp_share_individual_id:
-        exp = xp_share_gain_exp(
-            logger,
-            settings_obj,
-            evo_window,
-            main_pokemon.id,
-            exp,
-            xp_share_individual_id,
-        )
+        try:
+            exp = xp_share_gain_exp(
+                logger,
+                settings_obj,
+                evo_window,
+                main_pokemon.id,
+                exp,
+                xp_share_individual_id,
+            )
+        except Exception as e:
+            # xp_share_gain_exp's evolution check calls evo_window.ask_pokemon_evo(...)
+            # unguarded; a dead/None window (F31 lazy singletons) can raise here.
+            # Never let the XP-share side quest abort the main Pokemon's own
+            # progress persistence below — fall back to the standard 50% share.
+            services.logger.log("error", f"XP-share evolution check failed: {e}")
+            exp = int(exp * 0.5)
 
     msg = ""
 
