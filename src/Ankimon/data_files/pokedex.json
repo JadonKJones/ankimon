@@ -35615,6 +35615,26 @@
     "name": "Minior-Orange",
     "baseSpecies": "Minior",
     "forme": "Orange",
+    "types": [
+      "Rock",
+      "Flying"
+    ],
+    "baseStats": {
+      "hp": 60,
+      "atk": 100,
+      "def": 60,
+      "spa": 100,
+      "spd": 60,
+      "spe": 120
+    },
+    "abilities": {
+      "0": "Shields Down"
+    },
+    "heightm": 0.3,
+    "weightkg": 0.3,
+    "eggGroups": [
+      "Mineral"
+    ],
     "color": "Red",
     "tier": "ZU"
   },
@@ -35625,6 +35645,26 @@
     "name": "Minior-Yellow",
     "baseSpecies": "Minior",
     "forme": "Yellow",
+    "types": [
+      "Rock",
+      "Flying"
+    ],
+    "baseStats": {
+      "hp": 60,
+      "atk": 100,
+      "def": 60,
+      "spa": 100,
+      "spd": 60,
+      "spe": 120
+    },
+    "abilities": {
+      "0": "Shields Down"
+    },
+    "heightm": 0.3,
+    "weightkg": 0.3,
+    "eggGroups": [
+      "Mineral"
+    ],
     "color": "Yellow",
     "tier": "ZU"
   },
@@ -35635,6 +35675,26 @@
     "name": "Minior-Green",
     "baseSpecies": "Minior",
     "forme": "Green",
+    "types": [
+      "Rock",
+      "Flying"
+    ],
+    "baseStats": {
+      "hp": 60,
+      "atk": 100,
+      "def": 60,
+      "spa": 100,
+      "spd": 60,
+      "spe": 120
+    },
+    "abilities": {
+      "0": "Shields Down"
+    },
+    "heightm": 0.3,
+    "weightkg": 0.3,
+    "eggGroups": [
+      "Mineral"
+    ],
     "color": "Green",
     "tier": "ZU"
   },
@@ -35645,6 +35705,26 @@
     "name": "Minior-Blue",
     "baseSpecies": "Minior",
     "forme": "Blue",
+    "types": [
+      "Rock",
+      "Flying"
+    ],
+    "baseStats": {
+      "hp": 60,
+      "atk": 100,
+      "def": 60,
+      "spa": 100,
+      "spd": 60,
+      "spe": 120
+    },
+    "abilities": {
+      "0": "Shields Down"
+    },
+    "heightm": 0.3,
+    "weightkg": 0.3,
+    "eggGroups": [
+      "Mineral"
+    ],
     "color": "Blue",
     "tier": "ZU"
   },
@@ -35655,6 +35735,26 @@
     "name": "Minior-Indigo",
     "baseSpecies": "Minior",
     "forme": "Indigo",
+    "types": [
+      "Rock",
+      "Flying"
+    ],
+    "baseStats": {
+      "hp": 60,
+      "atk": 100,
+      "def": 60,
+      "spa": 100,
+      "spd": 60,
+      "spe": 120
+    },
+    "abilities": {
+      "0": "Shields Down"
+    },
+    "heightm": 0.3,
+    "weightkg": 0.3,
+    "eggGroups": [
+      "Mineral"
+    ],
     "color": "Blue",
     "tier": "ZU"
   },
@@ -35665,6 +35765,26 @@
     "name": "Minior-Violet",
     "baseSpecies": "Minior",
     "forme": "Violet",
+    "types": [
+      "Rock",
+      "Flying"
+    ],
+    "baseStats": {
+      "hp": 60,
+      "atk": 100,
+      "def": 60,
+      "spa": 100,
+      "spd": 60,
+      "spe": 120
+    },
+    "abilities": {
+      "0": "Shields Down"
+    },
+    "heightm": 0.3,
+    "weightkg": 0.3,
+    "eggGroups": [
+      "Mineral"
+    ],
     "color": "Purple",
     "tier": "ZU"
   },

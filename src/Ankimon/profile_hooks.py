@@ -1,4 +1,8 @@
 from anki.hooks import addHook
+try:
+    from anki.hooks import remHook
+except ImportError:
+    remHook = None
 from aqt import gui_hooks, mw
 
 from .services import services
@@ -23,6 +27,9 @@ sync_dialog = None
 # add-on reload), so re-registering swaps the handler in place instead of
 # stacking a second copy onto gui_hooks.profile_will_close.
 _CLOSE_HANDLER_RECORD = "_profile_close_cache_clear_handler"
+_DID_OPEN_HANDLER_RECORD = "_profile_did_open_handler"
+_WILL_CLOSE_BACKUP_RECORD = "_profile_will_close_backup_handler"
+_PROFILE_LOADED_HANDLER_RECORD = "_profile_loaded_handler"
 
 
 def _on_profile_close():
@@ -149,14 +156,35 @@ def register_profile_hooks(
         mw.add_catch_pokemon_hook = add_catch_pokemon_hook
         mw.add_defeat_pokemon_hook = add_defeat_pokemon_hook
 
-    addHook("profileLoaded", on_profile_loaded)
-    gui_hooks.profile_did_open.append(_on_profile_did_open(online_connectivity))
-    gui_hooks.profile_will_close.append(backup_manager.on_anki_close)
+    # All four registrations use the same registry-anchored dedup guard (F31
+    # pattern): register_profile_hooks runs at module import, so an add-on
+    # reload re-executes it, and these handlers are fresh closures / bound
+    # methods each time (identity-based de-dup can't catch them). Record the
+    # handler actually registered on the services registry and drop the
+    # previously-recorded one before appending, so a reload swaps each handler
+    # in place instead of stacking a duplicate. gui_hooks' remove() / remHook()
+    # both tolerate an already-absent callback.
+    did_open_handler = _on_profile_did_open(online_connectivity)
+    backup_handler = backup_manager.on_anki_close
 
-    # Cache-clear-on-close, registered idempotently (F31 registry-anchored
-    # guard): drop the previously-recorded handler before appending, so a second
-    # boot / add-on reload swaps it in place of stacking a duplicate. gui_hooks'
-    # remove() tolerates an already-absent callback.
+    previous_loaded_handler = getattr(services, _PROFILE_LOADED_HANDLER_RECORD, None)
+    if previous_loaded_handler is not None and remHook is not None:
+        remHook("profileLoaded", previous_loaded_handler)
+    addHook("profileLoaded", on_profile_loaded)
+    setattr(services, _PROFILE_LOADED_HANDLER_RECORD, on_profile_loaded)
+
+    previous_did_open_handler = getattr(services, _DID_OPEN_HANDLER_RECORD, None)
+    if previous_did_open_handler is not None:
+        gui_hooks.profile_did_open.remove(previous_did_open_handler)
+    gui_hooks.profile_did_open.append(did_open_handler)
+    setattr(services, _DID_OPEN_HANDLER_RECORD, did_open_handler)
+
+    previous_backup_handler = getattr(services, _WILL_CLOSE_BACKUP_RECORD, None)
+    if previous_backup_handler is not None:
+        gui_hooks.profile_will_close.remove(previous_backup_handler)
+    gui_hooks.profile_will_close.append(backup_handler)
+    setattr(services, _WILL_CLOSE_BACKUP_RECORD, backup_handler)
+
     previous_close_handler = getattr(services, _CLOSE_HANDLER_RECORD, None)
     if previous_close_handler is not None:
         gui_hooks.profile_will_close.remove(previous_close_handler)

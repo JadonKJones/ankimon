@@ -359,6 +359,17 @@ class ProfileData:
             "highest_level": _q(lambda: self.trainer_card.highest_pokemon_level()),
         }
 
+    def _row_to_stub(self, row):
+        """Base {n, sprite} render stub from a captured_pokemon row whose first
+        four columns are pokedex_id, name, shiny, gender (or None if the row is
+        empty). Shared by the favorite/highest/friendship stubs so the p-dict
+        build and sprite resolution live in one place with fixed column
+        positions (no per-query index drift)."""
+        if not row or not row[1]:
+            return None
+        p = {"id": row[0] or 0, "name": row[1], "shiny": bool(row[2]), "gender": row[3]}
+        return {"n": format_pokemon_name(row[1]), "sprite": self._sprite_url(p)}
+
     def _favorite_stub(self):
         """The trainer's main/favorite Pokémon as {n, sprite} (or None)."""
         try:
@@ -368,28 +379,22 @@ class ProfileData:
             ).fetchone()
         except Exception:
             row = None
-        if not row or not row[1]:
-            return None
-        p = {"id": row[0] or 0, "name": row[1], "shiny": bool(row[2]), "gender": row[3]}
-        return {"n": format_pokemon_name(row[1]), "sprite": self._sprite_url(p)}
+        return self._row_to_stub(row)
 
     def _highest_stub(self):
         """The highest-level captured Pokémon as {n, l, sprite} (or None)."""
         try:
             row = services.db.execute(
-                "SELECT pokedex_id, name, level, shiny, json_extract(data, '$.gender') "
+                "SELECT pokedex_id, name, shiny, json_extract(data, '$.gender'), level "
                 "FROM captured_pokemon WHERE level IS NOT NULL ORDER BY level DESC LIMIT 1"
             ).fetchone()
         except Exception:
             row = None
-        if not row or not row[1]:
+        stub = self._row_to_stub(row)
+        if stub is None:
             return None
-        p = {"id": row[0] or 0, "name": row[1], "shiny": bool(row[3]), "gender": row[4]}
-        return {
-            "n": format_pokemon_name(row[1]),
-            "l": int(row[2]) if row[2] is not None else 0,
-            "sprite": self._sprite_url(p),
-        }
+        stub["l"] = int(row[4]) if row[4] is not None else 0
+        return stub
 
     def _friendship_stub(self):
         """The highest-friendship captured Pokémon (the trainer's BFF) as
@@ -403,18 +408,15 @@ class ProfileData:
             ).fetchone()
         except Exception:
             row = None
-        if not row or not row[1]:
+        stub = self._row_to_stub(row)
+        if stub is None:
             return None
-        p = {"id": row[0] or 0, "name": row[1], "shiny": bool(row[2]), "gender": row[3]}
         try:
             fr_val = int(row[4]) if row[4] is not None else 0
         except (ValueError, TypeError):
             fr_val = 0
-        return {
-            "n": format_pokemon_name(row[1]),
-            "fr": fr_val,
-            "sprite": self._sprite_url(p),
-        }
+        stub["fr"] = fr_val
+        return stub
 
     def _badge_grid(self):
         """All badges as {id, name, unlocked} for the Profile badge case.
@@ -529,20 +531,14 @@ class ProfileData:
         pokedex_id alone is NOT enough for megas). Only call this for small
         sets (team, recent), never the whole collection."""
         try:
-            from ..functions.sprite_functions import get_sprite_path
+            from ..functions.sprite_functions import get_relative_sprite_path
 
-            abs_path = str(get_sprite_path(
-                "front", "png", p.get("id"),
-                bool(p.get("shiny")), (p.get("gender") or "N"), p.get("name"),
-            ))
-            # Convert the absolute sprite path to a path relative to a web page
-            # (all pages live one level under addon_dir). Locate the known
-            # sprites root rather than relying on relative_to, which is fragile
-            # when addon_dir is a symlink.
-            norm = abs_path.replace("\\", "/")
-            marker = "user_files/sprites/"
-            idx = norm.find(marker)
-            return ("../" + norm[idx:]) if idx != -1 else None
+            return get_relative_sprite_path(
+                p.get("id"),
+                bool(p.get("shiny")),
+                (p.get("gender") or "N"),
+                p.get("name"),
+            )
         except Exception as e:
             print(f"[Ankimon] profile: sprite url failed: {e}")
             return None
@@ -598,20 +594,21 @@ class ProfileData:
         try:
             xp_share = self.settings_obj.get("trainer.xp_share") or None
             cycle_count = self.settings_obj.get("controls.team_cycle_count", 3)
+            sprite_mode = self.settings_obj.get(
+                "ankidex.spriteMode",
+                self.settings_obj.get("pokedex_v2.spriteMode", "static")
+            )
         except Exception:
             xp_share = None
             cycle_count = 3
-
-        sprite_mode = self.settings_obj.get(
-            "ankidex.spriteMode",
-            self.settings_obj.get("pokedex_v2.spriteMode", "static")
-        )
+            sprite_mode = "static"
 
         # companion/companion_info expose the current main Pokémon as a ready
         # read-seam for the deferred Active Companion picker (team.js does not
         # render them yet — see handle_save_team). Kept so that UI can wire in
         # without a Python change.
-        main_pkmn = services.db.get_main_pokemon()
+        db = services.db
+        main_pkmn = db.get_main_pokemon() if db else None
         companion_id = main_pkmn.get("individual_id") if main_pkmn else None
 
         return {

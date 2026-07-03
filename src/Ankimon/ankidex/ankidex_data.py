@@ -132,7 +132,10 @@ def get_ankidex_data(db, settings, tracker=None):
     )
     for row in cursor.fetchall():
         if row[0]:
-            caught_ids.add(int(row[0]))
+            try:
+                caught_ids.add(int(row[0]))
+            except (ValueError, TypeError):
+                continue
 
     # Explicitly recorded caught Pokemon (e.g. from evolutions or prior captures)
     if hasattr(db, "get_caught_ids"):

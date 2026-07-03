@@ -80,11 +80,6 @@ const TYPES = [
 
 // Entry point called from Python
 window.initializeAnkidex = async function (data) {
-  if (state.isInitializing) {
-    console.log("Ankidex already initializing, skipping redundant call.");
-    return;
-  }
-  state.isInitializing = true;
   console.log("Initializing Ankidex with collection data...");
 
   state.collection.owned = new Set(data.owned);
@@ -105,6 +100,15 @@ window.initializeAnkidex = async function (data) {
   const newHash = `${data.owned.length}-${data.seen.length}-${data.shinies.length}-${data.owned.slice(0, 10).join(",")}`;
   const collectionChanged = state.collectionHash !== newHash;
   state.collectionHash = newHash;
+
+  // A concurrent push during the async first-load has now been applied above;
+  // the in-flight initialization will render the latest collection when it
+  // resumes, so skip re-entering the load/render path.
+  if (state.isInitializing) {
+    console.log("Ankidex already initializing, applied collection update.");
+    return;
+  }
+  state.isInitializing = true;
 
   if (state.allPokemon.length === 0) {
     await loadSpeciesData();
@@ -394,6 +398,10 @@ function setupEventListeners() {
     document
       .querySelector('.nav-item[data-filter="all"]')
       .classList.add("active");
+    const activeModeBtn = document.querySelector(
+      `.nav-item[data-mode="${state.ui.activeMode}"]`,
+    );
+    if (activeModeBtn) activeModeBtn.classList.add("active");
     document
       .querySelectorAll(".type-filter")
       .forEach((b) => b.classList.remove("active"));
@@ -853,6 +861,10 @@ function updatePanelVisibility() {
 
 function switchMode(mode) {
   state.ui.activeMode = mode;
+  // The other mode's DOM was not re-rendered while it was hidden, so mark both
+  // views stale to reflect any collection changes applied in the meantime.
+  state.mapDirty = true;
+  state.lastRenderState = null;
   if (mode === "discovery") {
     state.ui.selectedPokemonId = null;
     document
@@ -1029,7 +1041,8 @@ function selectPokemon(id, cardElement = null) {
   else if (visState === 1)
     sprite.style.filter = "brightness(0) invert(1) brightness(0.4)";
   else sprite.style.filter = "none";
-  const primaryType = p.types[0].toLowerCase();
+  const types = Array.isArray(p.types) ? p.types : [];
+  const primaryType = (types[0] || "normal").toLowerCase();
   document.getElementById("det-glow").style.background =
     `radial-gradient(circle, var(--type-${primaryType}) 0%, transparent 70%)`;
   document.getElementById("det-glow").style.opacity =
@@ -1037,7 +1050,7 @@ function selectPokemon(id, cardElement = null) {
   const typeContainer = document.getElementById("det-types");
   typeContainer.innerHTML = "";
   if (visState >= 1) {
-    p.types.forEach((t) => {
+    types.forEach((t) => {
       const badge = document.createElement("span");
       badge.className = "mini-type";
       badge.style.backgroundColor = `var(--type-${t.toLowerCase()})`;
@@ -1056,7 +1069,7 @@ function selectPokemon(id, cardElement = null) {
     spd: "SPD",
     spe: "SPE",
   };
-  Object.entries(p.baseStats).forEach(([key, val]) => {
+  Object.entries(p.baseStats || {}).forEach(([key, val]) => {
     total += val;
     const item = document.createElement("div");
     item.className = "stat-item";
@@ -1145,6 +1158,7 @@ function renderBriefing(p, id, visState, displayId) {
   });
 
   const totalReqs = isOR ? 1 : reqs.length;
+  const displayCaught = Math.min(caughtCount, totalReqs);
   const reqsMet = isOR ? caughtCount > 0 : caughtCount === totalReqs;
 
   // Badges & Status Summary & Next Step
@@ -1169,7 +1183,7 @@ function renderBriefing(p, id, visState, displayId) {
   } else if (caughtCount > 0) {
     badgeEl.textContent = "In Progress";
     badgeEl.classList.add("in-progress");
-    summaryEl.textContent = `${caughtCount} of ${totalReqs} requirements caught.`;
+    summaryEl.textContent = `${displayCaught} of ${totalReqs} requirements caught.`;
 
     const missingReqs = reqs.filter((rId) => !state.collection.owned.has(resolveActualId(rId)));
     if (isOR) {
@@ -1223,7 +1237,7 @@ function renderBriefing(p, id, visState, displayId) {
   const reqsListEl = document.getElementById("briefing-reqs-list");
   reqsListEl.innerHTML = "";
   document.getElementById("briefing-reqs-count").textContent =
-    reqs.length > 0 ? `${caughtCount} / ${totalReqs}` : "None";
+    reqs.length > 0 ? `${displayCaught} / ${totalReqs}` : "None";
 
   if (reqs.length > 0) {
     reqs.forEach((reqId) => {
@@ -1753,8 +1767,9 @@ function buildMapNodes() {
 
   const tiers = {};
   const memo = {};
-  const getDepth = (id) => {
+  const getDepth = (id, visiting = new Set()) => {
     if (id in memo) return memo[id];
+    if (visiting.has(id)) return 0; // break mutual prerequisite cycles
     const reqs = state.prerequisites[id];
     if (!reqs) return (memo[id] = 0);
     const ids =
@@ -1766,11 +1781,13 @@ function buildMapNodes() {
     const validIds = ids.filter((r) => typeof r === "number" && allIds.has(r));
     if (validIds.length === 0) return (memo[id] = 0);
 
+    visiting.add(id);
     let maxD = 0;
     validIds.forEach((rid) => {
       if (rid === id) return;
-      maxD = Math.max(maxD, 1 + getDepth(rid));
+      maxD = Math.max(maxD, 1 + getDepth(rid, visiting));
     });
+    visiting.delete(id);
     return (memo[id] = maxD);
   };
 
