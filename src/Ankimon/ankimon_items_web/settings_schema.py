@@ -200,15 +200,21 @@ ACTIVE_REGION_OPTIONS = [
 ]
 
 
-def validate_and_clamp(config):
+def validate_and_clamp(config, original=None):
     """Apply the legacy window's save-time bounds. Returns (config, adjustments)
     where adjustments is a list of human-readable strings describing what
-    was changed (empty if nothing was clamped)."""
+    was changed (empty if nothing was clamped).
+
+    ``original`` is the pre-edit config snapshot; it lets cards_per_round fall
+    back to the prior stored value on non-numeric input, matching the legacy
+    window (pyobj/settings_window.py::on_save) instead of silently resetting."""
     adjustments = []
+    original = original or {}
 
     if "battle.cards_per_round" in config:
         config["battle.cards_per_round"] = _coerce_cards_per_round(
-            config["battle.cards_per_round"]
+            config["battle.cards_per_round"],
+            original.get("battle.cards_per_round", 2),
         )
 
     if "trainer.cash_reward_interval" in config:
@@ -241,8 +247,11 @@ def validate_and_clamp(config):
     return config, adjustments
 
 
-def _coerce_cards_per_round(value):
-    """Accept an int, the string "a-b" range, or fall back to 2 on garbage."""
+def _coerce_cards_per_round(value, original=2):
+    """Accept an int or the string "a-b" range. On unparseable input, match the
+    legacy window (settings_window.py::on_save): a malformed dashed range falls
+    back to 2, but non-dashed garbage preserves the prior stored value
+    (``original``) rather than silently resetting to 2."""
     if isinstance(value, int):
         return 1 if value == 0 else value
     text = str(value).strip()
@@ -257,5 +266,5 @@ def _coerce_cards_per_round(value):
             low, high = min(a, b), max(a, b)
             return f"{low}-{high}"
         except ValueError:
-            pass
-    return 2
+            return 2
+    return original
