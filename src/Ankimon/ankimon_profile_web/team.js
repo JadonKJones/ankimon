@@ -15,8 +15,6 @@
         team: [null, null, null, null, null, null],
         xpShare: null,         // individual_id of the XP Share holder (any owned Pokémon)
         xpShareInfo: null,     // display stub for the holder (may be benched)
-        companion: null,
-        companionInfo: null,
         maxSize: 6,
         teamCycleCount: 3,     // limit for hotkey 9 rotation
         roster: null,          // null = not loaded yet
@@ -28,7 +26,11 @@
         spriteMode: 'static',
     };
 
-    const isCompanionPicker = false;
+    // NOTE: the "Active Companion" picker (an iframe mode="companion-picker"
+    // flow) was never finished — no page hosts the iframe and its helpers were
+    // undefined — so that dead path is removed here. The Python read/write seam
+    // (get_team_data.companion / handle_save_team companion_id) is retained for
+    // whenever the picker UI is actually built; saveTeam sends '' until then.
     let teamBridge = null;
 
     function spriteUrl(stub, mode = state.spriteMode) {
@@ -448,12 +450,11 @@
             return;
         }
         const xpMode = state.pickerMode === 'xpshare';
-        const companionMode = state.pickerMode === 'companion';
         const q = (document.getElementById('picker-search').value || '').toLowerCase();
         const typeF = state.rosterType || 'all';
         const sort = state.rosterSort || 'cp';
         // In slot mode, Pokémon already in OTHER slots can't be added twice.
-        const taken = (xpMode || companionMode) ? new Set() : new Set(
+        const taken = xpMode ? new Set() : new Set(
             state.team.map((m, i) => (m && i !== state.pickerSlot ? String(m.id) : null)).filter(Boolean)
         );
         let choices = (state.roster || []).filter((c) => {
@@ -470,7 +471,7 @@
         const countEl = document.getElementById('picker-count');
         if (countEl) countEl.textContent = choices.length + ' Pokémon';
 
-        if (!choices.length && !xpMode && !companionMode) {
+        if (!choices.length && !xpMode) {
             list.classList.add('hidden');
             list.innerHTML = '';
             if (empty) empty.classList.remove('hidden');
@@ -492,10 +493,8 @@
         }
         const CAP = 200;
         choices.slice(0, CAP).forEach((c) => {
-            const inTeam = (!xpMode && !companionMode) && taken.has(String(c.id));
-            const isCurrent = xpMode 
-                ? String(state.xpShare) === String(c.id)
-                : (companionMode ? String(state.companion) === String(c.id) : false);
+            const inTeam = !xpMode && taken.has(String(c.id));
+            const isCurrent = xpMode && String(state.xpShare) === String(c.id);
             const card = document.createElement('div');
             card.className = 'roster-card' + (inTeam ? ' in-team' : '') + (isCurrent ? ' current' : '');
             const types = (c.types || []).map(typeBadge).join('');
@@ -510,21 +509,10 @@
                 card.addEventListener('click', () => {
                     if (xpMode) {
                         setXpShare(c);
-                    } else if (companionMode) {
-                        setCompanion(c);
                     } else {
                         assignSlot(state.pickerSlot, c);
                     }
                     showPicker(false);
-                    if (companionMode && isCompanionPicker) {
-                        saveTeam().then((res) => {
-                            if (res && res.ok && window.parent && window.parent.closeCompanionPicker) {
-                                window.parent.closeCompanionPicker();
-                            }
-                        }).catch((err) => {
-                            console.error('Companion auto-save failed:', err);
-                        });
-                    }
                 });
             }
             frag.appendChild(card);
@@ -560,6 +548,8 @@
             updateSaveUI();
             return Promise.resolve({ ok: true });
         }
+        // Third arg is companion_id — always '' (no shipped companion picker; the
+        // Python seam accepts it for when that UI is built).
         return teamBridge.saveTeam(JSON.stringify(ids), state.xpShare || '', '').then((res) => {
             if (res && res.ok) {
                 state.dirty = false;
@@ -591,8 +581,6 @@
         for (let i = 0; i < state.maxSize; i++) state.team.push(team[i] || null);
         state.xpShare = data.xp_share ? String(data.xp_share) : null;
         state.xpShareInfo = data.xp_share_info || null;
-        state.companion = null;
-        state.companionInfo = null;
         state.spriteMode = data.sprite_mode || 'static';
         state.teamCycleCount = data.team_cycle_count || 3;
 
@@ -608,9 +596,6 @@
         state.roster = null;
         renderTeam();
         updateSaveUI();
-        if (isCompanionPicker) {
-            openCompanionPicker();
-        }
     }
 
     window.initializeTeam = applyData;
@@ -649,17 +634,11 @@
         }
         document.getElementById('picker-close').addEventListener('click', () => {
             showPicker(false);
-            if (isCompanionPicker && window.parent && window.parent.closeCompanionPicker) {
-                window.parent.closeCompanionPicker();
-            }
         });
         document.getElementById('picker-search').addEventListener('input', () => renderRosterList());
         document.getElementById('picker').addEventListener('click', (e) => {
             if (e.target.id === 'picker') {
                 showPicker(false);
-                if (isCompanionPicker && window.parent && window.parent.closeCompanionPicker) {
-                    window.parent.closeCompanionPicker();
-                }
             }
         });
         const pickerClear = document.getElementById('picker-clear');
@@ -677,9 +656,6 @@
             if (e.key === 'Escape') {
                 if (document.querySelector('#picker-toolbar .filter-select.open')) { closePickerMenus(); return; }
                 showPicker(false);
-                if (isCompanionPicker && window.parent && window.parent.closeCompanionPicker) {
-                    window.parent.closeCompanionPicker();
-                }
                 return;
             }
             // Cmd/Ctrl+S saves the team (matches the Settings screen).
