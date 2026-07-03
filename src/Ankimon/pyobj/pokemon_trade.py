@@ -686,24 +686,26 @@ class PokemonTrade:
                 return 33
 
     def find_pokemon_by_id(self, pokemon_id):
-        try:
-            from ..functions.pokedex_functions import _load_pokedex_cache
-            # Use the in-memory pokedex cache instead of re-reading/parsing
-            # pokedex.json from disk on the GUI thread for every trade lookup.
-            pokedex = _load_pokedex_cache()
-            # First pass: check actual_id for precise form match (e.g. Mega Diancie)
-            for details in pokedex.values():
-                if details.get('actual_id') == pokemon_id:
-                    return details
-            # Second pass fallback: check species_id
-            for details in pokedex.values():
-                if details.get('species_id') == pokemon_id:
-                    return details
-            self.logger.log_and_showinfo("warning",f"No Pokémon found with ID: {pokemon_id}")
+        from ..functions.pokedex_functions import _load_pokedex_cache
+        # Use the in-memory pokedex cache instead of re-reading/parsing
+        # pokedex.json from disk on the GUI thread for every trade lookup.
+        # _load_pokedex_cache() swallows a missing/corrupt pokedex.json and
+        # returns {} rather than raising, so surface that specific failure here
+        # (a bare `except FileNotFoundError` around this call was unreachable).
+        pokedex = _load_pokedex_cache()
+        if not pokedex:
+            self.logger.log_and_showinfo("warning", "Pokedex file not found or failed to load.")
             return None
-        except FileNotFoundError as e:
-            show_warning_with_traceback(parent=self.parent_window, exception=e, message=f"Pokedex file not found.")
-            return None
+        # First pass: check actual_id for precise form match (e.g. Mega Diancie)
+        for details in pokedex.values():
+            if details.get('actual_id') == pokemon_id:
+                return details
+        # Second pass fallback: check species_id
+        for details in pokedex.values():
+            if details.get('species_id') == pokemon_id:
+                return details
+        self.logger.log_and_showinfo("warning",f"No Pokémon found with ID: {pokemon_id}")
+        return None
 
     def gender_from_id(self, gender_id):
         return {0: "M", 1: "F", 2: "N"}.get(gender_id, "N/A")
