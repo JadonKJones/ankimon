@@ -4,13 +4,22 @@ from datetime import datetime
 import json
 from aqt.utils import showInfo
 from aqt import mw
+from ..services import services
 from ..resources import mypokemon_path, mainpokemon_path, itembag_path, badgebag_path, user_path_credentials, backup_root, user_path
 # Define backup directory and files to back up
 backup_folders = [os.path.join(backup_root, f"backup_{i}") for i in range(1, 4)]
-files_to_backup = [mypokemon_path, mainpokemon_path, itembag_path, badgebag_path, user_path_credentials, user_path / "ankimon.db"]  # Adjust as needed
+files_to_backup = [mypokemon_path, mainpokemon_path, itembag_path, badgebag_path, user_path_credentials, user_path / "ankimon.db", user_path / "ankimonDEV.db"]  # Adjust as needed
 
 def create_backup_folder(folder_path):
     """Creates a backup folder and places a timestamped text file inside."""
+    # Checkpoint the active database first so WAL frames are flushed to the
+    # main DB file before the single-file copy below.
+    if services.db is not None:
+        try:
+            services.db.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        except Exception:
+            pass
+
     os.makedirs(folder_path, exist_ok=True)
 
     # Create a timestamp file
