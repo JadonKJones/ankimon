@@ -79,7 +79,15 @@
                 close();
                 if (item.classList.contains('active')) return;
                 const fn = methodFor(screen);
-                if (fn && typeof nav[fn] === 'function') nav[fn]();
+                const navigate = () => {
+                    if (fn && typeof nav[fn] === 'function') nav[fn]();
+                };
+                // Give the active page a chance to intercept (e.g. Settings
+                // guarding unsaved edits). A guard returns true when it takes
+                // ownership of navigation and will call `navigate` itself.
+                const guard = window.navBeforeLeave;
+                if (typeof guard === 'function' && guard(navigate) === true) return;
+                navigate();
             });
         });
 

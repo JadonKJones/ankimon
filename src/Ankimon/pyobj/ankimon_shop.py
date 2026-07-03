@@ -42,8 +42,9 @@ class PokemonShopManager:
                 return shop_data.get("items")
 
         seed = datetime.now().strftime("%Y-%m-%d")
-        random.seed(seed)
-        return random.sample(DAILY_ITEMS_POOL, self.number_of_daily_items)
+        rng = random.Random(seed)
+        num_items = min(self.number_of_daily_items, len(DAILY_ITEMS_POOL))
+        return rng.sample(DAILY_ITEMS_POOL, num_items)
 
     def get_daily_tms(self):
         """Works like get_daily_items, but for TMs"""
@@ -55,8 +56,9 @@ class PokemonShopManager:
 
         tm_pool = self.get_tm_pool()
         seed = datetime.now().strftime("%Y-%m-%d")
-        random.seed(seed)
-        return random.sample(tm_pool, self.number_of_daily_items)
+        rng = random.Random(seed)
+        num_tms = min(self.number_of_daily_items, len(tm_pool))
+        return rng.sample(tm_pool, num_tms)
 
     def get_tm_pool(self) -> list[dict]:
         # Cached: pokemon_tm_learnset.json is immutable at runtime, and this

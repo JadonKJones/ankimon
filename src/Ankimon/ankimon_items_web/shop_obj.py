@@ -241,6 +241,11 @@ class ItemsBridge(QObject):
     # the modal, then useItemOnPokemon() with the chosen individual_id.
     @pyqtSlot(str, result="QVariant")
     def getPokemonChoices(self, item_name=None):
+        # Each picker (re)open requests a fresh roster: a catch/release/evolution
+        # during reviews changes the captured-Pokémon set without pushing a screen
+        # refresh, so drop the base cache here before rebuilding to avoid serving a
+        # stale roster (JS keeps its own per-context cache for in-modal re-renders).
+        self._w._pokemon_choices_cache = None
         return self._w.get_pokemon_choices(item_name)
 
     @pyqtSlot(str, str, result="QVariant")
@@ -370,9 +375,6 @@ class MobileBridge(QObject):
             if pending_count > 0:
                 estimates_loading = True
 
-                trainer_card = services.trainer_card
-                ankimon_tracker_obj = services.tracker
-
                 def run_sim(col):
                     reviews_rows_thread = db.execute(
                         """SELECT id, revlog_id, card_id, ease, review_time, review_type, queued_at
@@ -501,6 +503,23 @@ class MobileBridge(QObject):
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def _run_resolve_all(self, limit=None):
+        # Lazy import: mobile_sync is a later unit; callers translate its
+        # absence into a benign error payload instead of crashing the shell.
+        from ..functions.mobile_sync import resolve_all
+
+        day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
+        return resolve_all(
+            db=services.db,
+            settings_obj=services.settings,
+            tracker=services.tracker,
+            trainer_card=services.trainer_card,
+            main_pokemon=services.main_pokemon,
+            logger=services.logger,
+            day_cutoff=day_cutoff,
+            limit=limit,
+        )
+
     @pyqtSlot(result="QVariant")
     def resolveAll(self) -> dict:
         """
@@ -508,26 +527,7 @@ class MobileBridge(QObject):
         encounters and outcomes simulated in the preview.
         """
         try:
-            # Lazy import: mobile_sync is a later unit; if absent, fall through
-            # to the benign error payload below instead of crashing the shell.
-            from ..functions.mobile_sync import resolve_all
-
-            db = services.db
-            settings_obj = services.settings
-            tracker = services.tracker
-            trainer_card = services.trainer_card
-            main_pokemon = services.main_pokemon
-            day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
-
-            return resolve_all(
-                db=db,
-                settings_obj=settings_obj,
-                tracker=tracker,
-                trainer_card=trainer_card,
-                main_pokemon=main_pokemon,
-                logger=services.logger,
-                day_cutoff=day_cutoff
-            )
+            return self._run_resolve_all()
         except Exception as e:
             import traceback
             logger = services.logger
@@ -541,29 +541,9 @@ class MobileBridge(QObject):
         Resolves a chunk of pending battles up to the specified limit.
         """
         try:
-            # Lazy import: mobile_sync is a later unit — return a benign payload
-            # when it (or the mobile DB layer) is not present.
-            from ..functions.mobile_sync import resolve_all
-
-            db = services.db
-            settings_obj = services.settings
-            tracker = services.tracker
-            trainer_card = services.trainer_card
-            main_pokemon = services.main_pokemon
-            day_cutoff = mw.col.sched.day_cutoff if (mw and mw.col) else 0
-
-            res = resolve_all(
-                db=db,
-                settings_obj=settings_obj,
-                tracker=tracker,
-                trainer_card=trainer_card,
-                main_pokemon=main_pokemon,
-                logger=services.logger,
-                day_cutoff=day_cutoff,
-                limit=limit
-            )
+            res = self._run_resolve_all(limit=limit)
             if isinstance(res, dict) and res.get("success"):
-                res["done"] = (db.get_pending_mobile_count() == 0)
+                res["done"] = (services.db.get_pending_mobile_count() == 0)
             return res
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -847,10 +827,7 @@ class MobileBridge(QObject):
             for t in team_rows:
                 ind_id = t.get("individual_id")
                 if ind_id:
-                    if hasattr(db, "get_pokemon_by_individual_id"):
-                        data = db.get_pokemon_by_individual_id(ind_id)
-                    else:
-                        data = db.get_pokemon(ind_id)
+                    data = db.get_pokemon(ind_id)
                     if data:
                         from ..pyobj.pokemon_obj import PokemonObject
                         pkmn = PokemonObject(**data)
@@ -1745,6 +1722,7 @@ class AnkimonItemsWeb(QDialog):
 
         choices = []
         for data in pokemons:
+          try:
             if not isinstance(data, dict):
                 continue
             individual_id = data.get("individual_id")
@@ -1823,6 +1801,11 @@ class AnkimonItemsWeb(QDialog):
                                         break
 
             choices.append(entry)
+          except Exception as e:
+            logger = services.logger
+            if logger:
+                logger.log("error", f"[Ankimon] get_pokemon_choices: skipping malformed record: {e}")
+            continue
 
         # Eligible first, then active first, then level (high → low), then alphabetical.
         choices.sort(

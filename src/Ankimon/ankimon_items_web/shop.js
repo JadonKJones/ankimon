@@ -1061,13 +1061,13 @@
         // ~100-byte URL per Pokémon in the inventory payload.
         img.src = `../user_files/sprites/front_default/${choice.p || 0}.png`;
         img.alt = displayName;
+        let baseFallbackTried = false;
         img.onerror = () => {
             // Stage 1 Fallback: Try the base species ID (choice.b) if different from choice.p.
             // This handles regional/mega forms that don't have their own sprites.
-            if (choice.b && choice.b !== choice.p) {
-                const baseId = choice.b;
-                choice.b = null; // Prevent infinite loop if baseId also fails
-                img.src = `../user_files/sprites/front_default/${baseId}.png`;
+            if (!baseFallbackTried && choice.b && choice.b !== choice.p) {
+                baseFallbackTried = true; // Prevent infinite loop if baseId also fails
+                img.src = `../user_files/sprites/front_default/${choice.b}.png`;
             } else {
                 // Stage 2 Fallback: Placeholder, then dim if even that fails.
                 img.onerror = () => { img.style.opacity = '0.25'; };
@@ -1087,9 +1087,9 @@
         // Second line: held item (or species when nickname differs).
         const metaParts = [];
         if (heldItem) {
-            metaParts.push(`<span class="meta-held">Holds ${titleCase(heldItem)}</span>`);
+            metaParts.push(`<span class="meta-held">Holds ${esc(titleCase(heldItem))}</span>`);
         } else if (nickname && name && nickname.toLowerCase() !== name.toLowerCase()) {
-            metaParts.push(titleCase(name));
+            metaParts.push(esc(titleCase(name)));
         }
         if (metaParts.length > 0) {
             const meta = document.createElement('div');
@@ -1107,6 +1107,13 @@
         return String(s || '').replace(/-/g, ' ').replace(
             /\w\S*/g, (t) => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()
         );
+    }
+
+    function esc(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
     }
 
     function onPickerChoose(choice) {

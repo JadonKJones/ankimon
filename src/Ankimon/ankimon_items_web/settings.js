@@ -13,6 +13,7 @@
 
     let bridge = null;
     let nav = null;
+    let unsavedGuardOpen = false;
 
     function initChannel(cb) {
         if (typeof qt === 'undefined' || !qt.webChannelTransport) {
@@ -666,10 +667,16 @@
             status.textContent = 'All saved';
             status.style.color = 'var(--accent-green)';
         }
-        // Sync the row-level dirty markers (in case render rebuilt them)
+        // Sync the row-level dirty markers (in case render rebuilt them).
+        // Chip rows key their edits under each chip's sub-key, not the row's
+        // group key, so fall back to scanning the row's chips for those.
         document.querySelectorAll('.setting-row').forEach((row) => {
-            row.classList.toggle('dirty',
-                Object.prototype.hasOwnProperty.call(state.edits, row.dataset.key));
+            let rowDirty = Object.prototype.hasOwnProperty.call(state.edits, row.dataset.key);
+            if (!rowDirty) {
+                rowDirty = Array.from(row.querySelectorAll('.setting-chip')).some((c) =>
+                    Object.prototype.hasOwnProperty.call(state.edits, c.dataset.key));
+            }
+            row.classList.toggle('dirty', rowDirty);
         });
     }
 
@@ -698,15 +705,18 @@
     }
 
     // ---------- Save ----------
-    function onSave() {
-        if (!bridge) return;
+    function onSave(onDone) {
+        // onDone (optional) fires only after a successful save/no-op, so
+        // callers like the unsaved-changes guard can chain navigation.
+        const done = typeof onDone === 'function' ? onDone : null;
+        if (!bridge) { if (done) done(); return; }
         const payload = {...state.edits};
-        if (Object.keys(payload).length === 0) return;
+        if (Object.keys(payload).length === 0) { if (done) done(); return; }
         // Stringify so the bridge sees a stable `str` parameter — see the
         // SettingsBridge.saveSettings comment for why we avoid passing the
         // dict directly through QVariant.
         bridge.saveSettings(JSON.stringify(payload), function (result) {
-            if (!result) return;
+            if (!result) { if (done) done(); return; }
             if (result.ok) {
                 const adj = (result.adjustments || []).join('\n');
                 const msg = adj ? result.message + '\n' + adj : result.message;
@@ -715,11 +725,100 @@
                 // persisted (including any clamping).
                 bridge.getSettings(function (fresh) {
                     if (fresh) window.initializeSettings(fresh);
+                    if (done) done();
                 });
             } else {
                 showToast(result.message || 'Save failed', true);
+                // Save failed — do not run onDone; keep the user on the page.
             }
         });
+    }
+
+    // Unsaved-changes guard for navigation away from Settings. Returns true
+    // when it takes ownership of navigation (a modal is shown); the shared
+    // nav switcher then waits for the user's choice before leaving.
+    function guardUnsavedNavigation(proceed) {
+        if (Object.keys(state.edits).length === 0) return false;
+        showUnsavedGuardModal(proceed);
+        return true;
+    }
+
+    function showUnsavedGuardModal(proceed) {
+        if (unsavedGuardOpen) return;
+        unsavedGuardOpen = true;
+        const n = Object.keys(state.edits).length;
+
+        const backdrop = document.createElement('div');
+        backdrop.className = 'wishlist-modal-backdrop';
+
+        const content = document.createElement('div');
+        content.className = 'wishlist-modal-content';
+        content.style.maxWidth = '420px';
+
+        const header = document.createElement('div');
+        header.className = 'wishlist-modal-header';
+        const title = document.createElement('h3');
+        title.className = 'wishlist-modal-title';
+        title.textContent = 'Unsaved Changes';
+        header.appendChild(title);
+
+        const body = document.createElement('div');
+        body.className = 'wishlist-modal-body';
+        const msg = document.createElement('div');
+        msg.className = 'wishlist-modal-subtitle';
+        msg.textContent = 'You have ' + n + ' unsaved ' +
+            (n === 1 ? 'change' : 'changes') +
+            '. Save before leaving, discard them, or stay on this page?';
+        body.appendChild(msg);
+
+        const close = () => {
+            backdrop.remove();
+            unsavedGuardOpen = false;
+            document.removeEventListener('keydown', handleEsc);
+        };
+        const handleEsc = (e) => { if (e.key === 'Escape') close(); };
+
+        const actions = document.createElement('div');
+        actions.style.display = 'flex';
+        actions.style.gap = '10px';
+        actions.style.justifyContent = 'flex-end';
+
+        const stayBtn = document.createElement('button');
+        stayBtn.type = 'button';
+        stayBtn.className = 'settings-discard-btn';
+        stayBtn.textContent = 'Stay';
+        stayBtn.addEventListener('click', close);
+
+        const discardBtn = document.createElement('button');
+        discardBtn.type = 'button';
+        discardBtn.className = 'settings-discard-btn';
+        discardBtn.textContent = 'Discard & Leave';
+        discardBtn.addEventListener('click', () => {
+            state.edits = {};
+            renderAll();
+            close();
+            proceed();
+        });
+
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'settings-discard-btn';
+        saveBtn.style.color = 'var(--accent-green)';
+        saveBtn.style.borderColor = 'var(--accent-green)';
+        saveBtn.textContent = 'Save & Leave';
+        saveBtn.addEventListener('click', () => {
+            close();
+            onSave(proceed);
+        });
+
+        actions.append(stayBtn, discardBtn, saveBtn);
+        body.appendChild(actions);
+        content.append(header, body);
+        backdrop.append(content);
+        // Clicking the dim backdrop keeps the user on the page (safe default).
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        document.addEventListener('keydown', handleEsc);
+        document.body.appendChild(backdrop);
     }
 
     function onDiscard() {
@@ -852,8 +951,10 @@
             applySearchFilter();
         });
 
-        document.getElementById('save-btn').addEventListener('click', onSave);
+        document.getElementById('save-btn').addEventListener('click', () => onSave());
         document.getElementById('discard-btn').addEventListener('click', onDiscard);
+        // Let the shared nav switcher consult us before leaving with unsaved edits.
+        window.navBeforeLeave = guardUnsavedNavigation;
 
         const scroller = document.querySelector('.content-scroll');
         if (scroller) scroller.addEventListener('scroll', updateActiveSection);

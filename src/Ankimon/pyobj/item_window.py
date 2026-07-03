@@ -480,7 +480,7 @@ class ItemWindow(QWidget):
                         comboBox.setItemData(comboBox.count() - 1, individual_id, role=UserRole)
                         comboBox.setItemData(comboBox.count() - 1, id_, role=UserRole + 1)
         except Exception as e:
-            self.logger.log_and_showinfo("error", f"Error loading Pokémon list: {e} {pokemon}")
+            self.logger.log_and_showinfo("error", f"Error loading Pokémon list: {e}")
 
     def _load_pokemon_choices(self):
         if self._pokemon_choices_cache is not None:
