@@ -237,6 +237,15 @@ def get_gen_id_chart():
     return _cached("gen_id_chart", _build)
 
 
+def get_nature_chart():
+    def _build():
+        from .gui_entities import NatureTableWidget
+
+        return NatureTableWidget()
+
+    return _cached("nature_chart", _build)
+
+
 def get_license():
     def _build():
         from .gui_entities import License
@@ -506,6 +515,7 @@ _LAZY_WINDOWS = {
     "eff_chart": get_eff_chart,
     "pokedex": get_pokedex_widget,
     "gen_id_chart": get_gen_id_chart,
+    "nature_chart": get_nature_chart,
     "license": get_license,
     "credits": get_credits,
     "version_dialog": get_version_dialog,
