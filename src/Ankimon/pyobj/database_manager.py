@@ -1480,11 +1480,18 @@ class AnkimonDB:
 _db_instance: Optional[AnkimonDB] = None
 
 
-def get_db(logger=None) -> AnkimonDB:
-    """Gets the singleton database instance."""
+def get_db(logger=None, db_path=None) -> AnkimonDB:
+    """Gets the singleton database instance.
+
+    ``db_path`` lets a caller build the singleton against a specific database
+    file (multi-profile / hot-reload account preservation); when omitted the
+    default ``ankimon.db`` under ``user_path`` is used. It is only honoured when
+    the singleton does not yet exist — call :func:`reset_db` first to rebuild
+    against a different path.
+    """
     global _db_instance
     if _db_instance is None:
-        _db_instance = AnkimonDB(logger)
+        _db_instance = AnkimonDB(logger, db_path=db_path)
     return _db_instance
 
 
