@@ -95,10 +95,19 @@ def mock_env(tmp_path):
     addon_dir = tmp_path / "Ankimon"
     addon_dir.mkdir()
 
-    # Mock resources within database_manager and backup_manager namespaces
+    # Mock resources within database_manager and backup_manager namespaces.
+    # Also neutralize the interactive/UI helpers bound inside backup_manager:
+    # in a full-suite run the real aqt.utils may already be imported, so the
+    # module binds the real askUser/showInfo/showWarning (which dereference
+    # aqt.mw.app) and the real close_anki. Patch them on the module under
+    # test so the tests are deterministic regardless of collection order.
     with patch.object(_db_mod, "user_path", user_files_dir), \
          patch.object(_bm_mod, "user_path", user_files_dir), \
-         patch.object(_bm_mod, "addon_dir", addon_dir):
+         patch.object(_bm_mod, "addon_dir", addon_dir), \
+         patch.object(_bm_mod, "askUser", return_value=True), \
+         patch.object(_bm_mod, "showInfo"), \
+         patch.object(_bm_mod, "showWarning"), \
+         patch.object(_bm_mod, "close_anki"):
 
         # Instantiate test database manager
         db = AnkimonDB(MockLogger())

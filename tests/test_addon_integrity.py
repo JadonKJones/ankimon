@@ -274,34 +274,45 @@ def test_ankimon_submodule_integrity(qapp):
 
     aqt.mw.settings_obj = _ImportSafeSettings()
 
-    # Install pre-stubs so that imports of heavy modules are intercepted
+    # Install pre-stubs so that imports of heavy modules are intercepted.
+    # Force-install even when an entry already exists: other test modules
+    # (e.g. test_location_evolutions, test_friendship_evolution) install bare
+    # module-level stubs of Ankimon.singletons at collection time, and those
+    # lack the names (main_pokemon, logger, ...) that real modules from-import.
+    # The prior entries are restored below so those suites keep their stubs.
+    _prev_stubs = {}
     for mod_name in PRE_STUB_MODULES:
-        if mod_name not in sys.modules:
-            sys.modules[mod_name] = MagicMock()
+        _prev_stubs[mod_name] = sys.modules.get(mod_name)
+        sys.modules[mod_name] = MagicMock()
 
     errors = []
     checked = 0
 
-    for mod_name in MODULES_TO_CHECK:
-        # Exact-match skips, plus prefix skips for anything living *under* a
-        # skipped package.  The bare "Ankimon" entry must be exact-match only:
-        # every module in MODULES_TO_CHECK starts with "Ankimon.", so
-        # prefix-matching it would silently skip the entire list and make the
-        # test vacuous.
-        if mod_name in SKIP_MODULES or any(
-            mod_name.startswith(skip + ".")
-            for skip in SKIP_MODULES
-            if skip != "Ankimon"
-        ):
-            continue
+    try:
+        for mod_name in MODULES_TO_CHECK:
+            # Exact-match skips, plus prefix skips for anything living *under* a
+            # skipped package.  The bare "Ankimon" entry must be exact-match only:
+            # every module in MODULES_TO_CHECK starts with "Ankimon.", so
+            # prefix-matching it would silently skip the entire list and make the
+            # test vacuous.
+            if mod_name in SKIP_MODULES or any(
+                mod_name.startswith(skip + ".")
+                for skip in SKIP_MODULES
+                if skip != "Ankimon"
+            ):
+                continue
 
-        checked += 1
-        try:
-            importlib.import_module(mod_name)
-        except Exception:
-            tb = traceback.format_exc()
-            if not any(pat in tb for pat in KNOWN_BENIGN_PATTERNS):
-                errors.append(f"[{mod_name}]\n{tb}")
+            checked += 1
+            try:
+                importlib.import_module(mod_name)
+            except Exception:
+                tb = traceback.format_exc()
+                if not any(pat in tb for pat in KNOWN_BENIGN_PATTERNS):
+                    errors.append(f"[{mod_name}]\n{tb}")
+    finally:
+        for mod_name, _prev in _prev_stubs.items():
+            if _prev is not None:
+                sys.modules[mod_name] = _prev
 
     if errors:
         divider = "\n" + "-" * 60 + "\n"
