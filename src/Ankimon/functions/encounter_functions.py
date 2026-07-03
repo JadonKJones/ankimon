@@ -114,13 +114,9 @@ def _build_regional_lookup() -> None:
     before data files exist).
     """
     try:
-        pokedex_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "data_files",
-            "pokedex.json",
-        )
-        with open(pokedex_path, "r", encoding="utf-8") as f:
-            pokedex = json.load(f)
+        from ..functions.pokedex_functions import _load_pokedex_cache
+
+        pokedex = _load_pokedex_cache()
         aid_to_sid: dict[int, int] = {
             v["actual_id"]: v["species_id"]
             for v in pokedex.values()
@@ -169,6 +165,7 @@ _percentages_cache = {
     "total_reviews": None,
     "trainer_level": None,
     "main_pokemon_level": None,
+    "daily_average": None,
 }
 
 # ==============================================================================
@@ -443,6 +440,7 @@ def _modify_percentages_legacy(
         and _percentages_cache["total_reviews"] == total_reviews
         and _percentages_cache["trainer_level"] == trainer_level
         and _percentages_cache["main_pokemon_level"] == main_pokemon_level
+        and _percentages_cache["daily_average"] == daily_average
     ):
         return _percentages_cache["percentages"]
 
@@ -537,6 +535,7 @@ def _modify_percentages_legacy(
         _percentages_cache["total_reviews"] = total_reviews
         _percentages_cache["trainer_level"] = trainer_level
         _percentages_cache["main_pokemon_level"] = main_pokemon_level
+        _percentages_cache["daily_average"] = daily_average
 
     return percentages
 
@@ -549,6 +548,7 @@ def clear_encounter_cache():
         "total_reviews": None,
         "trainer_level": None,
         "main_pokemon_level": None,
+        "daily_average": None,
     }
 
 
@@ -857,6 +857,17 @@ def generate_random_pokemon(
     else:
         active_region = None
 
+    def _variant_eligible(variant_id):
+        # A regional/boosted variant must pass BOTH guards the base-pool builder
+        # applies (Guard 1 generation + Guard 2 min-generate-level); the deleted
+        # 500-attempt retry loop enforced the level invariant on the FINAL id.
+        if not check_id_ok(variant_id):
+            return False
+        vname = search_pokedex_by_id(variant_id)
+        if not vname or vname == "Pokémon not found":
+            return False
+        return wild_pokemon_lvl >= check_min_generate_level(str(vname.lower()))
+
     # Iterate through tiers starting from the rolled one
     for i in range(start_idx, len(TIER_ORDER)):
         current_tier = TIER_ORDER[i]
@@ -907,7 +918,7 @@ def generate_random_pokemon(
                     _get_regional_form_lookup().get(pid, {}).get(active_region, [])
                 )
                 for opt in options:
-                    if check_id_ok(opt) and opt not in boosted_pool:
+                    if _variant_eligible(opt) and opt not in boosted_pool:
                         boosted_pool.append(opt)
 
         if active_region and boosted_pool:
@@ -926,6 +937,20 @@ def generate_random_pokemon(
     if not selected_pokemon_id:
         selected_pokemon_id = 19  # Rattata
         selected_tier = "Normal"
+        warn_msg = (
+            "Failed to generate a valid Pokémon. Please ensure at least one "
+            "generation is enabled in the settings. Defaulting to Rattata."
+        )
+        if not check_id_ok(selected_pokemon_id):
+            warn_msg = (
+                "Failed to generate a valid Pokémon and the default (Rattata) is "
+                "also restricted by the current settings. Please enable at least "
+                "one generation."
+            )
+        try:
+            services.ui.warn(warn_msg)
+        except Exception:
+            pass
 
     # --- Regional form resolution ---
     # Apply 7%-per-variant resolution for base species.
@@ -935,12 +960,12 @@ def generate_random_pokemon(
         if active_region and active_region not in ("no region", ""):
             variants = region_forms.get(active_region, [])
             for v in variants:
-                if check_id_ok(v):
+                if _variant_eligible(v):
                     eligible_variants.append(v)
         else:
             for variants in region_forms.values():
                 for v in variants:
-                    if check_id_ok(v):
+                    if _variant_eligible(v):
                         eligible_variants.append(v)
 
         num_eligible = len(eligible_variants)
@@ -1069,15 +1094,14 @@ def new_pokemon(
     except Exception as e:
         print(f"[Ankimon] Error resetting battle state in new_pokemon: {e}")
 
-    # Force HUD update on next card/refresh. The _last_state/_ownership_cache
-    # attributes belong to the reviewer-HUD perf leaf; guarded so this works
-    # both before and after that leaf lands (and with the harness recording
-    # fakes, whose __getattr__ synthesizes attributes).
+    # Force HUD update on next card/refresh via the HUD leaf's public
+    # invalidation method, so this call site never has to track the leaf's
+    # private cache set. Guarded so it works both before and after that leaf
+    # lands (and with the harness recording fakes).
     if reviewer_obj is not None:
-        reviewer_obj._last_state = None
-        _ownership_cache = getattr(reviewer_obj, "_ownership_cache", None)
-        if isinstance(_ownership_cache, dict):
-            _ownership_cache.clear()
+        invalidate = getattr(reviewer_obj, "invalidate_hud_cache", None)
+        if callable(invalidate):
+            invalidate()
     (
         name,
         pkmn_id,

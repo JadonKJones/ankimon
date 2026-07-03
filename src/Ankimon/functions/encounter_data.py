@@ -72,7 +72,6 @@ LEGENDARY = [
     891,
     892,
     894,  # kubfu, urshifu-single-strike, regieleki
-    10191,  # urshifurapidstrike
     895,
     896,
     897,  # regidrago, glastrier, spectrier

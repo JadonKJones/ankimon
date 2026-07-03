@@ -612,7 +612,20 @@ def get_base_experience(actual_id: int) -> int:
     cache = _load_pokemon_csv_cache()
     row = cache.get(actual_id)
     if row:
-        return int(row["base_experience"])
+        base_exp = safe_int(row.get("base_experience"), default=None)
+        if base_exp is not None:
+            return base_exp
+        # Alternate-form rows (mega/regional actual_ids >= 10000) carry an empty
+        # base_experience field; fall back to the base species' value via the
+        # row's own species_id, mirroring get_growth_rate's form handling.
+        base_species_id = safe_int(row.get("species_id"), default=None)
+        if base_species_id and base_species_id != actual_id:
+            base_row = cache.get(base_species_id)
+            if base_row:
+                base_exp = safe_int(base_row.get("base_experience"), default=None)
+                if base_exp is not None:
+                    return base_exp
+        return 0
     raise ValueError(actual_id)
 
 

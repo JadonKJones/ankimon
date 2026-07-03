@@ -165,9 +165,22 @@ def test_encounter_data_agrees_with_pokemon_tiers_on_f38_ids():
             "(no F38 form IDs present yet); this consistency guard arms "
             "automatically once F22 lands"
         )
-    missing_legendary = sorted(LEGENDARY_NEW_FORMS - legendary)
+    # 10191 (urshifu-rapid-strike) is flagged UNAVAILABLE in encounter_data, so it
+    # is intentionally excluded from the encounterable LEGENDARY pool even though
+    # POKEMON_TIERS still classifies it as Legendary for capture/tier logic. It
+    # must therefore NOT appear in encounter_data.LEGENDARY.
+    unavailable_forms = set(encounter_data.UNAVAILABLE)
+    expected_legendary = LEGENDARY_NEW_FORMS - unavailable_forms
+    missing_legendary = sorted(expected_legendary - legendary)
     assert not missing_legendary, (
         f"encounter_data.LEGENDARY is missing form IDs: {missing_legendary}"
+    )
+    unavailable_but_encounterable = sorted(
+        (LEGENDARY_NEW_FORMS & unavailable_forms) & legendary
+    )
+    assert not unavailable_but_encounterable, (
+        "UNAVAILABLE forms must not remain in the encounterable LEGENDARY pool: "
+        f"{unavailable_but_encounterable}"
     )
     missing_mythical = sorted(MYTHICAL_NEW_FORMS - mythical)
     assert not missing_mythical, (
