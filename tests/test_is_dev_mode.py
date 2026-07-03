@@ -2,16 +2,13 @@
 
 The helper is the single source of truth behind the developer-only menu entries
 (Switch Account / Encounter Rate Simulator) and the reviewer test hotkey. It must
-read misc.developer_mode through the settings seam and default to False (dev
-tools hidden) when settings are missing or the read raises.
-
-Qt-free: uses the real Ankimon.utils (conftest keeps it real) and swaps only
-services.settings, so nothing Qt is constructed. The import is done inside the
-fixture — after conftest's autouse restore has re-established the Ankimon package
-with its __path__ (other test modules clobber that stub at their import time).
+determine developer mode dynamically by checking if the active Anki Profile name
+or the Trainer name contains the substring "dev_" or "_dev" at runtime.
 """
 
+import sys
 import pytest
+from unittest.mock import MagicMock
 
 
 @pytest.fixture
@@ -26,24 +23,52 @@ def dev(monkeypatch):
             return store.get(key, default)
 
     monkeypatch.setattr(utils_mod.services, "settings", _Settings())
-    return is_dev_mode, store
+
+    # Setup aqt.mw mock
+    mock_mw = MagicMock()
+    mock_mw.pm = None
+
+    if "aqt" not in sys.modules:
+        aqt_mock = MagicMock()
+        aqt_mock.mw = mock_mw
+        monkeypatch.setitem(sys.modules, "aqt", aqt_mock)
+    else:
+        monkeypatch.setattr(sys.modules["aqt"], "mw", mock_mw)
+
+    return is_dev_mode, store, mock_mw
 
 
-def test_dev_mode_true_when_flag_enabled(dev):
-    is_dev_mode, store = dev
-    store["misc.developer_mode"] = True
+def test_dev_mode_true_when_profile_has_prefix(dev):
+    is_dev_mode, store, mock_mw = dev
+    mock_mw.pm = MagicMock()
+    mock_mw.pm.name = "dev_user"
     assert is_dev_mode() is True
 
 
-def test_dev_mode_false_when_flag_disabled(dev):
-    is_dev_mode, store = dev
-    store["misc.developer_mode"] = False
-    assert is_dev_mode() is False
+def test_dev_mode_true_when_profile_has_suffix(dev):
+    is_dev_mode, store, mock_mw = dev
+    mock_mw.pm = MagicMock()
+    mock_mw.pm.name = "user_dev"
+    assert is_dev_mode() is True
 
 
-def test_dev_mode_defaults_false_when_key_absent(dev):
-    is_dev_mode, _ = dev
-    # Nothing set — the helper must default to hidden dev tools.
+def test_dev_mode_true_when_trainer_has_prefix(dev):
+    is_dev_mode, store, mock_mw = dev
+    store["trainer.name"] = "dev_trainer"
+    assert is_dev_mode() is True
+
+
+def test_dev_mode_true_when_trainer_has_suffix(dev):
+    is_dev_mode, store, mock_mw = dev
+    store["trainer.name"] = "trainer_dev"
+    assert is_dev_mode() is True
+
+
+def test_dev_mode_false_when_normal(dev):
+    is_dev_mode, store, mock_mw = dev
+    mock_mw.pm = MagicMock()
+    mock_mw.pm.name = "normal_user"
+    store["trainer.name"] = "normal_trainer"
     assert is_dev_mode() is False
 
 
@@ -56,4 +81,13 @@ def test_dev_mode_false_and_no_raise_when_settings_broken(monkeypatch):
             raise RuntimeError("settings not ready")
 
     monkeypatch.setattr(utils_mod.services, "settings", _Broken())
+    
+    # Ensure profile name doesn't match either
+    try:
+        from aqt import mw
+        if mw:
+            mw.pm = None
+    except Exception:
+        pass
+
     assert is_dev_mode() is False

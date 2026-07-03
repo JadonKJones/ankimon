@@ -1015,16 +1015,23 @@ def is_alive(obj) -> bool:
 
 
 def is_dev_mode() -> bool:
-    """True when the user has enabled Developer Mode (``misc.developer_mode``).
-
-    Single source of truth for the developer-only surface: the menu entries
-    ``Switch Account (DEV/Normal)`` / ``Encounter Rate Simulator`` and the
-    reviewer test hotkey ('0'). Reads through the settings seam and never raises
-    — a missing settings service or key leaves the dev tools hidden (default
-    False), so importers can drop their local ImportError fallbacks now that the
-    helper has landed.
-    """
+    """Check if the user is a developer based on profile name or trainer name."""
     try:
-        return bool(services.settings.get("misc.developer_mode", False))
+        # Check Anki profile name (case-insensitive check for 'dev' triggers)
+        try:
+            from aqt import mw
+            if mw and mw.pm and mw.pm.name:
+                profile_name = mw.pm.name.lower()
+                if "dev_" in profile_name or "_dev" in profile_name:
+                    return True
+        except Exception:
+            pass
+
+        # Check Trainer name in config
+        if services.settings is not None:
+            trainer_name = services.settings.get("trainer.name", "").lower()
+            if "dev_" in trainer_name or "_dev" in trainer_name:
+                return True
     except Exception:
-        return False
+        pass
+    return False
