@@ -777,15 +777,19 @@ def return_identifier_for_item_id(item_id):
     return None
 
 
-def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
+def check_evolution_by_item(pokemon_id, item_id):
     """
     Check if a Pokémon evolves using a specific item.
 
     Region-aware and driven exclusively by pokedex.json form data: a candidate
-    evolution qualifies when its ``evoType`` is ``"useItem"`` and its ``evoItem``
-    matches the supplied item. Regional forms (``evoRegion``) are preferred when
-    the active region matches; a plain form is suppressed only when a matching
-    regional sibling exists for the current region.
+    evolution qualifies when its ``evoType`` is ``"useItem"`` **or** ``"trade"``
+    and its ``evoItem`` matches the supplied item. ``trade`` is accepted because
+    Ankimon has no trading, so the 16 trade-with-held-item species (Onix->Steelix
+    via Metal Coat, Poliwhirl->Politoed via King's Rock, Seadra->Kingdra via
+    Dragon Scale, ...) are evolved by applying the held item directly. Regional
+    forms (``evoRegion``) are preferred when the active region matches; a plain
+    form is suppressed only when a matching regional sibling exists for the
+    current region.
 
     Args:
         pokemon_id (int): The ID of the (pre-evolution) Pokémon.
@@ -822,7 +826,10 @@ def check_evolution_by_item(pokemon_id, item_id, file_path=poke_evo_path):
                             normalized_target
                         ) or pokedex_data.get(target_evo_name.lower())
 
-                        if target_data and target_data.get("evoType") == "useItem":
+                        if target_data and target_data.get("evoType") in (
+                            "useItem",
+                            "trade",
+                        ):
                             # Normalize both sides by stripping spaces, hyphens and
                             # apostrophes so pokedex.json display names (e.g.
                             # "King's Rock") match items.csv identifiers (e.g.
@@ -1003,6 +1010,14 @@ def check_evolution_for_pokemon(
     if getattr(utils, "in_bulk_resolve", False) or evolution_rejected or everstone:
         return None
 
+    # A dead/never-built evolution window (F31 lazy singletons can leave
+    # services.evo_window None) means there's nowhere to prompt the offer; skip
+    # it so the caller's defeat-persistence path is never aborted by an
+    # AttributeError from evo_window.ask_pokemon_evo(...). The offer re-fires on
+    # the next defeat once a live window exists.
+    if evo_window is None:
+        return None
+
     try:
         current_time = get_time_of_day()
 
@@ -1085,8 +1100,12 @@ def check_evolution_for_pokemon(
                                 ):
                                     knows_move = True
                             else:
-                                # Fallback when the moveset is unavailable (e.g. tests).
-                                knows_move = True
+                                # Fail closed when the moveset can't be fetched:
+                                # a move-gated evolution must never fire on
+                                # unconfirmed data (mirrors friendship_evolution.py's
+                                # conservative levelMove handling). knows_move stays
+                                # False so the evolution simply doesn't trigger.
+                                knows_move = False
 
                             if knows_move:
                                 is_level_evo = True
