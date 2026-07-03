@@ -14,17 +14,35 @@ _desktop_session_revlog_ids: set[int] = set()
 _desktop_session_card_ids: set[int] = set()
 MOBILE_QUEUE_CAP = 10_000
 
+def _mobile_sync_configured(settings) -> bool:
+    """Whether mobile reviews can actually reach this device. They arrive only via
+    AnkiWeb sync, so when that is off the durable desktop-processed record is
+    pointless and its per-review commit (an fsync on the GUI thread) is skipped."""
+    if settings is None:
+        # Unknown config: keep the safe de-dupe record rather than risk a mobile
+        # double-process on the next sync.
+        return True
+    try:
+        if not settings.get("mobile.enabled", True):
+            return False
+        return bool(settings.get("misc.ankiweb_sync", False))
+    except Exception:
+        return True
+
 def record_desktop_review(revlog_id: int, card_id: int = None) -> None:
     """Record a revlog.id that Ankimon handled on desktop this inter-sync interval."""
     if revlog_id:
         _desktop_session_revlog_ids.add(revlog_id)
-        # Also durably advance the watermark so a restart mid-session can't re-expose this review
+        # Durably record this desktop-processed id (NOT a watermark advance) so a
+        # mid-session restart can't re-expose it as a mobile review, while an OLDER
+        # not-yet-synced mobile review with a lower revlog id stays detectable.
+        # Advancing the watermark here would permanently skip that older review.
         try:
             from ..services import services
-            db = services.db
-            current = db.get_mobile_watermark()
-            if revlog_id > current:
-                db.set_mobile_watermark(revlog_id)
+            if _mobile_sync_configured(services.settings):
+                db = services.db
+                if db is not None:
+                    db.record_desktop_processed_review(revlog_id, card_id)
         except Exception:
             pass
     if card_id is not None:
@@ -32,6 +50,15 @@ def record_desktop_review(revlog_id: int, card_id: int = None) -> None:
 
 def get_desktop_session_revlog_ids(col=None) -> frozenset[int]:
     ids = set(_desktop_session_revlog_ids)
+    # Merge the durably-recorded desktop-processed ids so a restart that cleared
+    # the in-memory set can't re-expose those reviews as mobile battles.
+    try:
+        from ..services import services
+        db = services.db
+        if db is not None:
+            ids |= db.get_desktop_processed_revlog_ids()
+    except Exception:
+        pass
     if col and _desktop_session_card_ids:
         try:
             placeholders = ",".join("?" for _ in _desktop_session_card_ids)
@@ -94,7 +121,7 @@ def _get_team_max_level(team_clones: list, db, settings_obj, main_pokemon) -> in
         if use_fallback or not levels:
             for ind_id in inactive:
                 try:
-                    pdata = db.get_pokemon_by_individual_id(ind_id) if hasattr(db, "get_pokemon_by_individual_id") else db.get_pokemon(ind_id)
+                    pdata = db.get_pokemon(ind_id)
                     if pdata:
                         lvl = pdata.get("level")
                         if lvl is not None:
@@ -376,10 +403,7 @@ def load_active_team_clones(ankimon_db, settings_obj, main_pokemon_fallback) -> 
                 is_mock = type(ankimon_db).__name__ in ("MagicMock", "Mock", "NonCallableMagicMock")
                 if is_mock:
                     for ind_id in active_ids:
-                        if hasattr(ankimon_db, "get_pokemon_by_individual_id"):
-                            data = ankimon_db.get_pokemon_by_individual_id(ind_id)
-                        else:
-                            data = ankimon_db.get_pokemon(ind_id)
+                        data = ankimon_db.get_pokemon(ind_id)
                         if data:
                             try:
                                 pkmn = PokemonObject(**data)
@@ -786,6 +810,7 @@ def _run_mobile_battles_impl(
         first_review = all_unresolved[0]
         resolved_count = sum(1 for r in all_reviews if r.get("resolved") == 1)
         encounter_idx = _compute_encounter_idx(all_reviews, db, settings_obj, tracker, trainer_card, main_pokemon, commit=commit)
+        seed_idx = cards_per_round - 1  # default when all_reviews is empty
         if all_reviews:
             seed_idx = min(len(all_reviews) - 1, (encounter_idx + 1) * cards_per_round - 1)
             seed_review = all_reviews[seed_idx]
@@ -825,10 +850,7 @@ def _run_mobile_battles_impl(
                     break
             if selected_override is None:
                 try:
-                    if hasattr(db, "get_pokemon_by_individual_id"):
-                        data = db.get_pokemon_by_individual_id(companion_override_id)
-                    else:
-                        data = db.get_pokemon(companion_override_id)
+                    data = db.get_pokemon(companion_override_id)
                     if data:
                         from ..pyobj.pokemon_obj import PokemonObject
                         pkmn = PokemonObject(**data)
@@ -849,6 +871,13 @@ def _run_mobile_battles_impl(
             main_pokemon_clone = selected_override
         else:
             main_pokemon_clone = select_best_companion(team_clones, current_enemy_pokemon)
+
+        if main_pokemon_clone is None:
+            # No active companion, no override, and no main-Pokemon fallback: without
+            # a battler simulate_battle_with_poke_engine(None, ...) raises, is swallowed
+            # into enemy.hp = 0, and every review is auto-won for free. Bail out the
+            # same way the mode=="all" path does instead of proceeding to the loop.
+            return {"success": False, "error": "No active companion or main Pokémon available to battle."}
 
         mutator_full_reset = 1
         engine_state = None
@@ -1742,7 +1771,6 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
         total_xp = outcome_data["total_xp"]
         accumulated_evs = outcome_data["accumulated_evs"]
         total_trainer_xp = outcome_data["total_trainer_xp"]
-        gained_cash = outcome_data.get("gained_cash", 0)
 
         now_ms = int(time.time() * 1000)
         review_ids = outcome_data.get("review_ids", [])
@@ -1973,6 +2001,10 @@ def _resolve_internal(mode="all", companion_id="", limit=None, db=None, settings
     use_transaction = (mode == "all")
     if use_transaction:
         conn._disable_commit = True
+        # Defer per-battle mirror-DB syncs: sync_resolutions_to_other_db commits on
+        # a separate connection, so firing it inside the outer transaction would
+        # leave the mirror DB resolved=1 even if this transaction later rolls back.
+        db.begin_deferred_mirror_sync()
         from .. import utils
         utils.in_bulk_resolve = True
 
@@ -1994,6 +2026,9 @@ def _resolve_internal(mode="all", companion_id="", limit=None, db=None, settings
                     mode=mode,
                     progress_callback=progress_callback
                 )
+            # Outer transaction committed successfully — now safe to propagate the
+            # resolutions to the mirror DB.
+            db.flush_deferred_mirror_sync()
         else:
             result = run_mobile_battles(
                 reviews=None,
@@ -2014,6 +2049,9 @@ def _resolve_internal(mode="all", companion_id="", limit=None, db=None, settings
     finally:
         if use_transaction:
             conn._disable_commit = False
+            # Drop any mirror resolutions that were not flushed (transaction rolled
+            # back / raised). No-op after a successful flush above.
+            db.discard_deferred_mirror_sync()
             # Reset the bulk-resolve flag. If this is dropped, in_bulk_resolve
             # stays True for the rest of the session and silently suppresses
             # level-up tooltips, evolution prompts and learn-move dialogs in
@@ -2033,7 +2071,7 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
     pkmndata = None
     if companion_id:
         try:
-            pkmndata = db.get_pokemon_by_individual_id(companion_id) if hasattr(db, "get_pokemon_by_individual_id") else db.get_pokemon(companion_id)
+            pkmndata = db.get_pokemon(companion_id)
         except Exception:
             pass
 

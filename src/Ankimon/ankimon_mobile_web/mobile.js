@@ -625,6 +625,15 @@ function clearReplayTimeouts() {
     _replayTimeouts = [];
 }
 
+// A battle is lost when the companion faints while the enemy is still standing.
+// Mirrors mobile_sync's companion_fainted (comp_hp_after <= 0) resolution.
+function replayCompanionFainted(result) {
+    const turns = (result && result.turns) || [];
+    if (turns.length === 0) return false;
+    const last = turns[turns.length - 1];
+    return last.comp_hp_pct <= 0 && last.enemy_hp_pct > 0;
+}
+
 function startReplay() {
     _replayCompanionOverride = null;
     if (!mobileBridge) return;
@@ -749,13 +758,26 @@ function renderReplayBattle(result) {
     function animateTurn(idx) {
         if (!_replayRunning) return;
         if (idx >= turns.length) {
+            const catchBtn = document.getElementById('replay-catch-btn');
+            const defeatBtn = document.getElementById('replay-defeat-btn');
+            if (replayCompanionFainted(result)) {
+                // Companion fainted while the enemy is still standing — the battle
+                // was lost, so there is nothing to catch. Only allow acknowledging.
+                if (choiceBox) {
+                    choiceBox.classList.remove('hidden');
+                    if (catchBtn) catchBtn.disabled = true;
+                    if (defeatBtn) { defeatBtn.disabled = false; defeatBtn.textContent = 'Continue'; }
+                }
+                if (narrateEl) {
+                    narrateEl.innerHTML = `<strong>${escapeHtml(result.companion_name)}</strong> fainted! Wild <strong>${escapeHtml(result.enemy_name)}</strong> won the battle.`;
+                }
+                return;
+            }
             // Battle finished, show choice controls
             if (choiceBox) {
                 choiceBox.classList.remove('hidden');
-                const catchBtn = document.getElementById('replay-catch-btn');
-                const defeatBtn = document.getElementById('replay-defeat-btn');
                 if (catchBtn) catchBtn.disabled = false;
-                if (defeatBtn) defeatBtn.disabled = false;
+                if (defeatBtn) { defeatBtn.disabled = false; defeatBtn.textContent = 'Defeat'; }
             }
             if (narrateEl) {
                 narrateEl.innerHTML = `Wild <strong>${escapeHtml(result.enemy_name)}</strong> is vulnerable! What will you do?`;
@@ -887,6 +909,13 @@ function animateResolution(outcome, xp_gained, remaining) {
             setTimeout(() => catchFlash.classList.add('hidden'), 300);
         }
         enemySprite.classList.add('caught-fade');
+    } else if (replayCompanionFainted(result)) {
+        // The companion fainted — this encounter was lost, not a victory.
+        if (narrateEl) {
+            narrateEl.innerHTML = `<strong>${escapeHtml(result.companion_name)}</strong> fainted! Wild <strong>${escapeHtml(result.enemy_name)}</strong> won the battle.`;
+        }
+        const playerSprite = document.getElementById('replay-player-sprite');
+        if (playerSprite) playerSprite.classList.add('fainted-fade');
     } else {
         if (narrateEl) {
             narrateEl.innerHTML = `<strong>${escapeHtml(result.enemy_name)}</strong> was defeated! <span style="color: var(--accent-blue)">+${xp_gained} XP</span>` +

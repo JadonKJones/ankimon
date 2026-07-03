@@ -212,15 +212,46 @@ def test_history_trims_to_500(mobile_db):
 
 # --- Desktop-session bookkeeping + watermark ------------------------------
 
-def test_record_desktop_review_tracks_session_and_advances_watermark(mobile_db):
+def test_record_desktop_review_durably_records_without_advancing_watermark(mobile_db):
     db, _ = mobile_db
-    db.set_mobile_watermark(1000)
-    ms.record_desktop_review(500)          # below watermark -> no advance
-    ms.record_desktop_review(1500)         # above watermark -> durable advance
-    assert ms.get_desktop_session_revlog_ids() == frozenset({500, 1500})
-    assert db.get_mobile_watermark() == 1500
-    ms.clear_desktop_session()
-    assert ms.get_desktop_session_revlog_ids() == frozenset()
+    prev_settings = services.settings
+    services.settings = _Settings({"mobile.enabled": True, "misc.ankiweb_sync": True})
+    try:
+        db.set_mobile_watermark(1000)
+        ms.record_desktop_review(1200)
+        ms.record_desktop_review(1500)
+        # The watermark is NOT advanced: advancing it would permanently skip an
+        # older, not-yet-synced mobile review whose revlog id is below a desktop
+        # review's timestamp.
+        assert db.get_mobile_watermark() == 1000
+        # Ids are tracked via the in-memory session set + the durable store.
+        assert ms.get_desktop_session_revlog_ids() == frozenset({1200, 1500})
+        # Durable: they survive an in-memory session clear (a mid-session restart).
+        ms.clear_desktop_session()
+        assert ms.get_desktop_session_revlog_ids() == frozenset({1200, 1500})
+        # Advancing the watermark past an id prunes it from the durable store (it
+        # is already excluded by the `id > watermark` detection filter).
+        db.set_mobile_watermark(1300)
+        assert ms.get_desktop_session_revlog_ids() == frozenset({1500})
+    finally:
+        services.settings = prev_settings
+        db.clear_desktop_processed_reviews()
+        ms.clear_desktop_session()
+
+
+def test_record_desktop_review_skips_durable_write_when_sync_off(mobile_db):
+    db, _ = mobile_db
+    prev_settings = services.settings
+    # Mobile reviews only arrive via AnkiWeb sync; with it off the durable
+    # per-review write (an fsync) is skipped, but session de-dupe still works.
+    services.settings = _Settings({"mobile.enabled": True, "misc.ankiweb_sync": False})
+    try:
+        ms.record_desktop_review(2000)
+        assert 2000 in ms.get_desktop_session_revlog_ids()
+        assert db.get_desktop_processed_revlog_ids() == set()
+    finally:
+        services.settings = prev_settings
+        ms.clear_desktop_session()
 
 
 def test_get_desktop_session_resolves_card_ids_via_col(mobile_db):

@@ -618,6 +618,24 @@ class AnkimonDataSync:
             # Profile not loaded yet
             return []
 
+    def _close_live_db_connection(self, target_file: Path) -> None:
+        """If ``target_file`` is the DB file that ``services.db`` currently holds
+        open, close that connection before it is overwritten on disk. The
+        connection reopens lazily against the new file on next use, so callers
+        need not reopen it. Best-effort: any failure is a benign no-op."""
+        try:
+            from ..services import services
+            db = services.db
+            if db is None:
+                return
+            db_path = getattr(db, "db_path", None)
+            if db_path is None:
+                return
+            if Path(db_path).resolve() == Path(target_file).resolve():
+                db.close()
+        except Exception:
+            pass
+
     def read_configs(self, media_sync_status: bool = False) -> List[str]:
         """
         Read configs from media subfolder and copy to addon folder.
@@ -646,6 +664,11 @@ class AnkimonDataSync:
 
                     # Copy if source doesn't exist or files differ
                     if not source_file.is_file() or not filecmp.cmp(source_file, media_file, shallow=False):
+                        # Overwriting a SQLite file while services.db holds a live
+                        # connection to it risks 'database disk image is malformed'
+                        # / lost writes. Close that connection first; it reopens
+                        # lazily against the fresh file on next use.
+                        self._close_live_db_connection(source_file)
                         shutil.copy2(media_file, source_file)
                         updated_files.append(filename)
 

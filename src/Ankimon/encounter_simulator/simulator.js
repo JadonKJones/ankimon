@@ -13,9 +13,9 @@
 
     // Exponential curve parameters (loaded dynamically from python OVERHAUL_TIER_PARAMS)
     let TIER_PARAMS = {
-        "Normal": { base: 97.08, max_val: 85.20 },
-        "Baby": { base: 2.30, max_val: 2.50 },
-        "Ultra": { base: 0.25, max_val: 4.50 },
+        "Normal": { base: 96.98, max_val: 84.70 },
+        "Baby": { base: 2.30, max_val: 3.0 },
+        "Ultra": { base: 0.35, max_val: 4.50 },
         "Gmax": { base: 0.15, max_val: 2.50 },
         "Starter": { base: 0.10, max_val: 1.80 },
         "Mega": { base: 0.05, max_val: 1.50 },
@@ -24,7 +24,7 @@
     };
 
     let LEVEL_THRESHOLDS = {
-        "Starter": 30,
+        "Starter": 80,
         "Ultra": 30,
         "Legendary": 50,
         "Mega": 60,
@@ -49,10 +49,10 @@
     let TIER_PITY_THRESHOLDS = {
         "Ultra": 100,
         "Gmax": 150,
-        "Starter": 200,
-        "Mega": 250,
-        "Legendary": 250,
-        "Mythical": 600
+        "Starter": 175,
+        "Mega": 200,
+        "Legendary": 200,
+        "Mythical": 400
     };
     let PITY_DIVISOR = 50.0;
 

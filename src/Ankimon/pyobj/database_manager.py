@@ -124,6 +124,11 @@ class AnkimonDB:
         self._wal = wal
         self._connection: Optional[ConnectionWrapper] = None       # GUI-thread connection
         self._local_conn = threading.local()                       # per-background-thread
+        # When non-None, mark_mobile_battle_resolved defers the mirror-DB sync
+        # (which commits on a separate connection, escaping any outer transaction)
+        # and collects the revlog ids here to be flushed after the caller's bulk
+        # transaction commits. See begin/flush/discard_deferred_mirror_sync.
+        self._deferred_mirror_revlog_ids: Optional[list] = None
         self._setup_database()
 
     def _prepare_connection(self, conn):
@@ -381,6 +386,19 @@ class AnkimonDB:
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_timestamp ON mobile_battle_history(timestamp)")
+
+        # Durable record of revlog ids Ankimon already turned into battle progress
+        # on desktop. Consulted by the mobile-review detection pass to exclude them
+        # from the mobile queue even after a mid-session restart (which loses the
+        # in-memory session set). Unlike advancing the watermark to these ids, this
+        # keeps an OLDER not-yet-synced mobile review (lower revlog id) detectable:
+        # rows here are pruned once the watermark advances past them.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS desktop_processed_reviews (
+                revlog_id INTEGER PRIMARY KEY,
+                card_id   INTEGER
+            )
+        """)
 
         conn.commit()
         self._log("info", "AnkimonDB: Database schema initialized.")
@@ -1208,6 +1226,39 @@ class AnkimonDB:
                 "INSERT OR REPLACE INTO metadata (key, value) VALUES ('mobile_revlog_watermark', ?)",
                 (str(watermark_ms),)
             )
+            # Any desktop-processed id at or below the watermark is already
+            # excluded by the `id > watermark` detection filter, so the explicit
+            # record is redundant — prune it to keep the table bounded.
+            try:
+                self._get_connection().execute(
+                    "DELETE FROM desktop_processed_reviews WHERE revlog_id <= ?",
+                    (int(watermark_ms),)
+                )
+            except Exception:
+                pass
+
+    def record_desktop_processed_review(self, revlog_id: int, card_id: Optional[int] = None) -> None:
+        """Durably record a revlog id Ankimon handled on desktop, so a mid-session
+        restart can't re-expose it as a mobile review on the next sync."""
+        if not revlog_id:
+            return
+        with self._get_connection():
+            self._get_connection().execute(
+                "INSERT OR IGNORE INTO desktop_processed_reviews (revlog_id, card_id) VALUES (?, ?)",
+                (int(revlog_id), card_id)
+            )
+
+    def get_desktop_processed_revlog_ids(self) -> set:
+        """Return the durably-recorded desktop-processed revlog ids."""
+        try:
+            rows = self.execute("SELECT revlog_id FROM desktop_processed_reviews").fetchall()
+            return {int(r[0]) for r in rows}
+        except Exception:
+            return set()
+
+    def clear_desktop_processed_reviews(self) -> None:
+        with self._get_connection():
+            self._get_connection().execute("DELETE FROM desktop_processed_reviews")
 
     def queue_mobile_battles(self, reviews: list[dict]) -> int:
         """Insert mobile reviews into pending queue. Returns count inserted (skips duplicates)."""
@@ -1258,7 +1309,32 @@ class AnkimonDB:
             )
 
         if revlog_id:
-            self.sync_resolutions_to_other_db([revlog_id], now)
+            if self._deferred_mirror_revlog_ids is not None:
+                # Inside a bulk "Resolve All" transaction: defer the mirror sync so
+                # it doesn't commit resolved=1 on the other DB before (or despite) a
+                # rollback of the primary transaction.
+                self._deferred_mirror_revlog_ids.append(revlog_id)
+            else:
+                self.sync_resolutions_to_other_db([revlog_id], now)
+
+    def begin_deferred_mirror_sync(self) -> None:
+        """Start collecting mirror-DB resolutions instead of syncing them
+        immediately. Call before a bulk 'Resolve All' transaction."""
+        self._deferred_mirror_revlog_ids = []
+
+    def flush_deferred_mirror_sync(self) -> None:
+        """Sync all deferred resolutions to the mirror DB and stop deferring.
+        Call only AFTER the bulk transaction has committed successfully."""
+        import time
+        ids = self._deferred_mirror_revlog_ids
+        self._deferred_mirror_revlog_ids = None
+        if ids:
+            self.sync_resolutions_to_other_db(ids, int(time.time() * 1000))
+
+    def discard_deferred_mirror_sync(self) -> None:
+        """Drop any deferred resolutions without syncing (e.g. the bulk
+        transaction rolled back) and stop deferring."""
+        self._deferred_mirror_revlog_ids = None
 
     def add_mobile_history_entry(self, entry: Dict[str, Any]) -> bool:
         """Saves a single mobile battle outcome to history."""
