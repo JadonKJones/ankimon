@@ -311,7 +311,7 @@ class PokemonTrade:
         self.trade_code_layout = QVBoxLayout()
         self.trade_code_layout.setSpacing(5)
 
-        self.legacy_checkbox = QCheckBox("Legacy Mode (Trade with Official Release)")
+        self.legacy_checkbox = QCheckBox("Legacy Mode (Trade with older Ankimon versions)")
         self.legacy_checkbox.setFont(QFont("Arial", 10))
         self.trade_code_layout.addWidget(self.legacy_checkbox)
 
