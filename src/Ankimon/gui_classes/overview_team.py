@@ -28,6 +28,7 @@ Note:
 
 from __future__ import annotations
 
+import html
 import json
 import os
 from typing import Any
@@ -224,12 +225,16 @@ def _build_card_html(pokemon: dict[str, Any], id_prefix: str) -> str:
 
     name = pokemon.get("name", "Unknown")
     nickname = pokemon.get("nickname", "")
-    display_name = nickname or format_lore_name(name)
+    # The nickname is player-controlled (rename flow) and Pokémon dicts can also
+    # arrive from external channels (trade codes / monthly-challenge payloads),
+    # so HTML-escape every user-facing string before it is interpolated into the
+    # raw markup rendered by Anki's QtWebEngine Deck Browser / Overview webview.
+    display_name = html.escape(nickname or format_lore_name(name))
     level = pokemon.get("level", 1)
     gender = pokemon.get("gender", "M")
     current_hp = pokemon.get("current_hp", 0)
     types: list = pokemon.get("type", [])
-    type_str = "/".join(types) if types else "Normal"
+    type_str = html.escape("/".join(types) if types else "Normal")
 
     safe_id = f"{id_prefix}-{name.lower().replace(' ', '-')}"
 

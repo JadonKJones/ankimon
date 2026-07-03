@@ -554,6 +554,27 @@ def clear_layout(layout):
             clear_layout(item.layout())
 
 
+def _refresh_open_item_windows():
+    """Refresh the item/bag window and the web shell if they are already open.
+
+    The item window and the unified web shell live only in ``singletons``' own
+    caches — they are never assigned onto ``mw``. The previous
+    ``hasattr(mw, "item_window")`` / ``hasattr(mw, "items_web_window")`` guards
+    were therefore permanently dead. This peeks the singletons caches directly
+    (never constructing a window just to refresh it), mirroring
+    ``singletons.swap_ankimon_account``.
+    """
+    from .. import singletons
+
+    item_win = singletons._WINDOW_CACHE.get("item_window")
+    if is_alive(item_win):
+        item_win.renewWidgets()
+
+    web_win = singletons._items_web_window
+    if is_alive(web_win) and web_win.isVisible():
+        web_win.update_ui_data()
+
+
 class PokemonSlotButton(QPushButton):
     rightClicked = pyqtSignal()
 
@@ -2370,10 +2391,7 @@ class PokemonPC(QDialog):
             self.refresh_gui()
 
             # Refresh open item/bag/shop windows
-            if hasattr(mw, "item_window") and is_alive(mw.item_window):
-                mw.item_window.renewWidgets()
-            if hasattr(mw, "items_web_window") and is_alive(mw.items_web_window):
-                mw.items_web_window.update_ui_data()
+            _refresh_open_item_windows()
 
         give_item_window = GiveItemWindow(
             item_list=items_names,
@@ -2421,10 +2439,7 @@ class PokemonPC(QDialog):
         self.refresh_gui()
 
         # Refresh open item/bag/shop windows
-        if hasattr(mw, "item_window") and is_alive(mw.item_window):
-            mw.item_window.renewWidgets()
-        if hasattr(mw, "items_web_window") and is_alive(mw.items_web_window):
-            mw.items_web_window.update_ui_data()
+        _refresh_open_item_windows()
 
     def ensure_data_integrity(self):
         """

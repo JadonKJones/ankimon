@@ -148,7 +148,7 @@ class StarterWindow(QWidget):
         )
 
         # Load existing Pokémon data from database
-        db = mw.ankimon_db
+        db = services.db
         caught_pokemon_data = main_pokemon.to_dict()
 
         # Save to database - both as captured pokemon and main pokemon

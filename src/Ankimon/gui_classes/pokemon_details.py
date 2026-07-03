@@ -665,6 +665,7 @@ def PokemonCollectionDetailsSplit(
                 shiny,
                 logger,
                 refresh_callback,
+                nature=nature,
             ),
         )
         rename_button = QPushButton("Rename Pokémon")
@@ -985,7 +986,13 @@ class AnimatedStatBar(QWidget):
         if self.new_value > 200:
             self.new_value = 200
 
-        self.animation = QPropertyAnimation(self, b"current_value")
+        # Parent the animation to this widget (third arg) so Qt destroys it as a
+        # child when the bar is deleteLater()'d. Without a parent the animation
+        # outlives the widget and keeps ticking into current_value/self.update()
+        # after the C++ object is gone — re-selecting a Pokémon mid-slide
+        # (pc_box swap_stack_widget) would then raise RuntimeError from inside the
+        # animation callback (PyQt aborts on that boundary -> SIGABRT).
+        self.animation = QPropertyAnimation(self, b"current_value", self)
         self.animation.setDuration(800)  # 800ms for a smooth slide
         self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.animation.setStartValue(self._current_value)
