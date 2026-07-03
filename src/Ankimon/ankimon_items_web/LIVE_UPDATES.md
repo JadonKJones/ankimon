@@ -7,6 +7,15 @@ highest Pokémon, XP bar and "Recently Caught" list as you review.
 This document is the contract for that mechanism so it can be reused (a future
 **Stats** screen, a live **Team** view, etc.).
 
+> **Status: NOT wired yet.** This is the *intended design/contract*, not shipped
+> behavior. `singletons.notify_stats_changed()` does not exist on this tip, and
+> the gameplay write sites do **not** call it — so ordinary catches / XP / cash
+> during review do not live-refresh an open shell today. The only in-process
+> caller of `refresh_live_screen()` is `getBulkResolveProgress` (after a bulk
+> mobile auto-resolve). Wiring the `notify_stats_changed()` bridge into the real
+> write sites is a deferred web-shell seam; treat everything below as the plan
+> for that leaf, not a description of current runtime behavior.
+
 ---
 
 ## TL;DR
@@ -151,7 +160,8 @@ except Exception:
     pass
 ```
 
-Current triggers: `functions/encounter_functions.py:save_caught_pokemon`
+Intended trigger sites (deferred — **not yet wired**; none of these call
+`notify_stats_changed()` today): `functions/encounter_functions.py:save_caught_pokemon`
 (catches), `pyobj/trainer_card.py:gain_xp` (XP/level/total XP),
 `battle_loop.py` cash-reward block (in-review cash). Stat changes that happen
 *inside* a shell screen (shop purchases, team edits) don't need a trigger — you
