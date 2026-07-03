@@ -283,9 +283,12 @@ class ProfileData:
             except Exception:
                 return default
 
+        # Only fields profile.js actually renders are shipped. (trainer_id and a
+        # numeric badge count were computed here but never read by the renderer —
+        # it shows badge_grid instead — so they were dropped to keep the payload
+        # honest; re-add them here if/when the Profile rail surfaces them.)
         data = {
             "name": getattr(tc, "trainer_name", "") or "Trainer",
-            "trainer_id": getattr(tc, "trainer_id", ""),
             "sprite_url": (
                 f"../addon_sprites/trainers/{sprite_name}.png" if sprite_name else ""
             ),
@@ -293,7 +296,6 @@ class ProfileData:
             "xp": _safe(lambda: int(tc.xp), 0),
             "total_xp": _safe(lambda: int(tc.total_xp), 0),
             "xp_for_next_level": _safe(lambda: int(tc.xp_for_next_level()), 0),
-            "badges": _safe(lambda: int(tc.badge_count()), 0),
             "cash": _safe(lambda: int(tc.cash), 0),
             "favorite_pokemon": format_pokemon_name(
                 getattr(tc, "favorite_pokemon", "") or "None"
@@ -322,8 +324,13 @@ class ProfileData:
             except Exception:
                 return default
 
-        # 1. Retrieve all caught IDs using the database manager's comprehensive set method
-        # (which merges active captured, released history, and explicit caught history).
+        # 1. Retrieve caught pokedex IDs. NOTE: db.get_all_pokemon_ids() reads
+        # ONLY the live captured_pokemon table — it does NOT merge released or
+        # explicit caught history, so a released species drops out of this count.
+        # The Ankidex screen does that 3-way pokemon_history union inline, so the
+        # two dex counts can disagree for a player who has released Pokémon.
+        # Folding the history union in here is a deferred pokedex-completion DB
+        # leaf (see tests/test_profile_pokedex_completion.py).
         try:
             caught_ids = db.get_all_pokemon_ids() or set()
         except Exception:
@@ -600,6 +607,10 @@ class ProfileData:
             self.settings_obj.get("pokedex_v2.spriteMode", "static")
         )
 
+        # companion/companion_info expose the current main Pokémon as a ready
+        # read-seam for the deferred Active Companion picker (team.js does not
+        # render them yet — see handle_save_team). Kept so that UI can wire in
+        # without a Python change.
         main_pkmn = services.db.get_main_pokemon()
         companion_id = main_pkmn.get("individual_id") if main_pkmn else None
 
@@ -727,7 +738,13 @@ class ProfileData:
             return 0
 
     def handle_save_team(self, team_ids, xp_share_id, companion_id):
-        """Persist the chosen team + XP Share + Active Companion (any owned Pokémon)."""
+        """Persist the chosen team + XP Share holder.
+
+        ``companion_id`` (Active Companion / main-Pokémon override) is a ready
+        write-seam, but NO shipped UI populates it yet — the Team screen's
+        companion picker is deferred (team.js sends ''), so the set_main_pokemon
+        branch below is inert until that UI lands. Do not describe Active
+        Companion as a working feature."""
         seen = set()
         clean_ids = []
         for raw in team_ids or []:
@@ -744,7 +761,9 @@ class ProfileData:
         companion_id = str(companion_id) if companion_id else None
 
         try:
-            self.settings_obj.set("trainer.team", team_data)
+            # NOTE: no legacy "trainer.team" config write — the DB team table
+            # (services.db.save_team) is the sole source of truth every read path
+            # uses; settings.py migrates/deletes the old config key on load.
             self.settings_obj.set("trainer.xp_share", xp_share_id)
             services.db.save_team(team_data)
             if companion_id:
