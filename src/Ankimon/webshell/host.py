@@ -19,6 +19,14 @@ QWebChannel wiring uses the current PyQt6 API confirmed via Context7:
 
 Kept out of the addon's live boot path: nothing in the base imports this module, so
 importing the addon never loads QtWebEngine. A Stage-B web-shell leaf wires it in.
+
+NOTE (as shipped): the live Ankimon web shell is ``ankimon_items_web.shop_obj``'s
+``AnkimonItemsWeb``, which grew its own inline nav-stack + live-update path
+(``_live_refreshers`` / ``refresh_live_screen``) rather than mounting onto this
+frame. So this scaffolding is currently unused by production code and is exercised
+only by ``tests/test_scaffolding_smoke.py``. Consolidating the two mechanisms
+(fold ``AnkimonItemsWeb`` onto ``WebShellHost``/``LiveUpdateBridge`` or retire this
+frame) is a deferred web-shell-owning cleanup — don't assume this is the live path.
 """
 
 from __future__ import annotations
