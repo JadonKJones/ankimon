@@ -873,10 +873,6 @@
                 {
                     "name": "pokemon_details.py",
                     "type": "file"
-                },
-                {
-                    "name": "pokemon_team_window.py",
-                    "type": "file"
                 }
             ]
         },
@@ -4760,10 +4756,6 @@
                 },
                 {
                     "name": "trainer_card.py",
-                    "type": "file"
-                },
-                {
-                    "name": "trainer_card_window.py",
                     "type": "file"
                 }
             ]

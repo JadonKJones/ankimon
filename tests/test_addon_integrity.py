@@ -188,7 +188,6 @@ MODULES_TO_CHECK = [
     "Ankimon.pyobj.starter_window",
     "Ankimon.pyobj.test_window",
     "Ankimon.pyobj.trainer_card",
-    "Ankimon.pyobj.trainer_card_window",
     "Ankimon.pyobj.translator",
     "Ankimon.pyobj.update_dialog",
     "Ankimon.pyobj.update_manager",
@@ -196,10 +195,8 @@ MODULES_TO_CHECK = [
     "Ankimon.gui_classes",
     "Ankimon.gui_classes.backup_manager_dialog",
     "Ankimon.gui_classes.check_files",
-    "Ankimon.gui_classes.choose_trainer_sprite_graphical",
     "Ankimon.gui_classes.overview_team",
     "Ankimon.gui_classes.pokemon_details",
-    "Ankimon.gui_classes.pokemon_team_window",
     # classes/
     "Ankimon.classes.choose_move_dialog",
     # pokedex/ (legacy; superseded by the future ankidex leaf)
@@ -215,8 +212,6 @@ MODULES_TO_CHECK = [
 KNOWN_BENIGN_PATTERNS = [
     # overview_team.init_hooks — tracked as a separate fix
     "module 'Ankimon.gui_classes.overview_team' has no attribute 'init_hooks'",
-    # trainer_card_window reference cleanup in progress
-    "No module named 'Ankimon.pyobj.trainer_card_window'",
 ]
 
 # ---------------------------------------------------------------------------
