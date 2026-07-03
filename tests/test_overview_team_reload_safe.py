@@ -85,6 +85,13 @@ def _exec_overview_team(monkeypatch, hooks):
     )
     monkeypatch.setitem(
         sys.modules,
+        "Ankimon.functions.pokedex_functions",
+        _stub_module(
+            "Ankimon.functions.pokedex_functions", format_lore_name=lambda n: n
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
         "Ankimon.resources",
         _stub_module(
             "Ankimon.resources",
@@ -181,3 +188,40 @@ def test_register_overview_hooks_no_settings_is_safe(monkeypatch):
 
     mod.register_overview_hooks()  # must not raise
     assert _counts(hooks) == (0, 0)
+
+
+def test_build_card_html_escapes_nickname(monkeypatch):
+    """Stored-XSS guard: a player-controlled nickname (rename flow / external
+    trade / monthly-challenge payload) containing HTML/JS must be HTML-escaped
+    before it is interpolated into the raw Deck Browser webview markup — both in
+    the <h3> body and the sprite alt attribute. Without escaping the raw payload
+    would execute in Anki's QtWebEngine main-window webview."""
+    services = _fresh_services(monkeypatch)
+    services.settings = _settings(True)
+    hooks = _fresh_hooks()
+    mod = _exec_overview_team(monkeypatch, hooks)
+
+    payload = "<img src=x onerror=alert(1)>"
+    pokemon = {"name": "pikachu", "nickname": payload, "type": ["electric"]}
+    html_out = mod._build_card_html(pokemon, "pokemon")
+
+    # The raw markup must never survive; only its escaped form may appear.
+    assert payload not in html_out
+    assert "&lt;img src=x onerror=alert(1)&gt;" in html_out
+    assert "<h3>&lt;img" in html_out          # escaped in the heading body
+    assert 'alt="&lt;img' in html_out         # escaped in the alt attribute
+
+
+def test_build_card_html_escapes_type_string(monkeypatch):
+    """The type string is also interpolated into the webview and must be
+    escaped so a crafted ``type`` value cannot inject markup."""
+    services = _fresh_services(monkeypatch)
+    services.settings = _settings(True)
+    hooks = _fresh_hooks()
+    mod = _exec_overview_team(monkeypatch, hooks)
+
+    pokemon = {"name": "pikachu", "nickname": "Sparky", "type": ["<script>"]}
+    html_out = mod._build_card_html(pokemon, "pokemon")
+
+    assert "<script>" not in html_out
+    assert "&lt;script&gt;" in html_out
