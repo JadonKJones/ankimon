@@ -21,12 +21,9 @@ from .functions.encounter_functions import (
 )
 from .texts import _bottomHTML_template, button_style
 
-try:
-    from .utils import is_dev_mode
-except ImportError:  # dev helper not landed yet (thread-reload-and-misc-utils unit)
-
-    def is_dev_mode():
-        return False
+# Developer-mode gate (reads misc.developer_mode via the settings seam). Guards
+# the dev-only test-encounter hotkey ('0'); default-off so it stays hidden.
+from .utils import is_dev_mode
 
 
 _collected_pokemon_ids = set()

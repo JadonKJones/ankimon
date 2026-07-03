@@ -1016,3 +1016,19 @@ def is_alive(obj) -> bool:
         return True
     except (RuntimeError, AttributeError):
         return False
+
+
+def is_dev_mode() -> bool:
+    """True when the user has enabled Developer Mode (``misc.developer_mode``).
+
+    Single source of truth for the developer-only surface: the menu entries
+    ``Switch Account (DEV/Normal)`` / ``Encounter Rate Simulator`` and the
+    reviewer test hotkey ('0'). Reads through the settings seam and never raises
+    — a missing settings service or key leaves the dev tools hidden (default
+    False), so importers can drop their local ImportError fallbacks now that the
+    helper has landed.
+    """
+    try:
+        return bool(services.settings.get("misc.developer_mode", False))
+    except Exception:
+        return False

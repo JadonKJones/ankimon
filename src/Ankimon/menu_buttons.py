@@ -35,14 +35,10 @@ from .gui_entities import (
     Version_Dialog,
 )
 
-# is_dev_mode lands with the thread-reload-and-misc-utils unit; until then fall
-# back to a disabled dev mode so the developer-only menu entries stay hidden.
-try:
-    from .utils import is_dev_mode
-except ImportError:  # pragma: no cover - dev helper not landed yet
-
-    def is_dev_mode():
-        return False
+# Developer-mode gate (reads misc.developer_mode via the settings seam). Hides
+# the developer-only menu entries (Switch Account / Encounter Rate Simulator)
+# unless the user has turned Developer Mode on.
+from .utils import is_dev_mode, is_alive
 
 
 debug = True
@@ -325,14 +321,25 @@ def create_menu_actions(
     switch_account_action.triggered.connect(swap_ankimon_account)
     mw.pokemenu.addAction(switch_account_action)
 
-    # Encounter Rate Simulator (developer tool).
+    # Encounter Rate Simulator (developer tool). Cache the dialog on mw (like the
+    # file's other game/dev windows) before showing it: the dialog is parentless
+    # and embeds a QWebEngineView, so if the only reference lived in the lambda it
+    # would be dropped the moment the lambda returned and SIP would delete the
+    # underlying C++ widget — the window would vanish or crash on open. Keeping a
+    # Python reference on mw (rebuilt when its C++ object dies) keeps it alive.
     from .pyobj.encounter_simulator_dialog import EncounterSimulatorDialog
+
+    def _open_encounter_simulator():
+        if not is_alive(getattr(mw, "_encounter_simulator_dialog", None)):
+            mw._encounter_simulator_dialog = EncounterSimulatorDialog(addon_dir)
+        dlg = mw._encounter_simulator_dialog
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     simulator_action = QAction("Encounter Rate Simulator", mw)
     simulator_action.setMenuRole(QAction.MenuRole.NoRole)
-    simulator_action.triggered.connect(
-        lambda: EncounterSimulatorDialog(addon_dir).show()
-    )
+    simulator_action.triggered.connect(_open_encounter_simulator)
     help_menu.addAction(simulator_action)
 
     # Re-evaluate the developer-only entries each time the menu opens, so
@@ -396,6 +403,19 @@ def create_menu_actions(
     mobile_battles_action.triggered.connect(lambda: _open_shell_at("mobile"))
     game_menu.addAction(mobile_battles_action)
     _mobile_battles_action = mobile_battles_action
+
+    # Restore the previous-session pending count now that the action exists. The
+    # profile_did_open bootstrap calls update_mobile_badge() as it restores the
+    # badge, but on a cold boot that fires (10ms Qt timer) before this menu is
+    # built by the background-boot success callback — so its update was a no-op
+    # and the count was dropped. Re-applying here makes the restore ordering-
+    # independent: the badge is correct the instant the action is created.
+    try:
+        from .services import services
+
+        update_mobile_badge(services.db.get_pending_mobile_count())
+    except Exception:
+        pass
 
     file_check_action = QAction(mw.translator.translate("ankimon_file_checker_button"), mw)
     file_check_action.setMenuRole(QAction.MenuRole.NoRole)
