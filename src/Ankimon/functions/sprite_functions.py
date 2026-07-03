@@ -108,11 +108,8 @@ def get_sprite_path(
     lookup_id = id
 
     # For Mega/Gmax forms, try to get the form-specific ID from pokedex.
-    # Match whole name tokens (split on '-'/space) so base names that merely
-    # contain "mega" (Meganium, Yanmega) do not trigger a form lookup.
     base_species_id = None
-    name_tokens = pokemon_name.lower().replace("-", " ").split() if pokemon_name else ()
-    if any(form in name_tokens for form in ("mega", "gmax", "gigantamax")):
+    if pokemon_name and any(form in pokemon_name.lower() for form in ["mega", "gmax", "gigantamax"]):
         forme_id = _get_pokemon_id_from_pokedex(pokemon_name)
         if forme_id:
             lookup_id = forme_id
@@ -200,7 +197,4 @@ def get_relative_sprite_path(
             return "../" + norm[idx:]
     except Exception:
         pass
-    # Web-relative twin of SUBSTITUTE_PATH: unlike exp's "0.png" (no sprite id
-    # 0 exists), substitute.png ships with the sprite pack, so the client gets
-    # a real image instead of a broken link.
-    return "../user_files/sprites/front_default/substitute.png"
+    return "../user_files/sprites/front_default/0.png"
