@@ -845,6 +845,11 @@ def read_ankimon_configs(settings_obj, media_sync_status: bool = False):
 # Global flag to track if automatic sync is enabled
 _automatic_sync_enabled = False
 
+# Reload safety (F31): the (hook, handler) pairs this module last registered,
+# stored on the services registry so they survive a re-execution of this module
+# (unlike a module-level flag) and can be removed before re-appending.
+_SYNC_HOOK_RECORD = "_ankimon_sync_hook_handlers"
+
 def setup_ankimon_sync_hooks(settings_obj, logger):
     """Set up hooks for automatic Ankimon data syncing - but disabled by default."""
     ankiweb_sync = settings_obj.get("misc.ankiweb_sync")
@@ -881,6 +886,8 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
                     detect_mobile_reviews,
                     get_desktop_session_revlog_ids,
                     clear_desktop_session,
+                    _mobile_sync_lock,
+                    MOBILE_QUEUE_CAP,
                 )
                 from ..menu_buttons import update_mobile_badge
 
@@ -891,41 +898,71 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
                 newly_queued_normal = 0
                 newly_queued_dev = 0
 
-                try:
-                    # 1. Queue to ankimon.db
-                    if db.db_path.name != "ankimon.db":
-                        db.switch_database("ankimon.db")
-                    watermark_normal = db.get_mobile_watermark()
-                    all_mobile_normal = detect_mobile_reviews(col, watermark_normal, desktop_ids)
-                    if all_mobile_normal:
-                        newly_queued_normal = db.queue_mobile_battles(all_mobile_normal)
-                        db.set_mobile_watermark(max(r["id"] for r in all_mobile_normal))
+                def _cap_mobile(reviews):
+                    # Bound each queueing pass to the same MOBILE_QUEUE_CAP the
+                    # startup pass (process_mobile_reviews_after_sync) applies, so
+                    # a huge backlog is handled consistently regardless of which
+                    # trigger fires first. Keep the newest N (list is ASC) and
+                    # warn — the dropped oldest are permanently discarded.
+                    if len(reviews) > MOBILE_QUEUE_CAP:
+                        discarded = len(reviews) - MOBILE_QUEUE_CAP
+                        msg = (
+                            f"Mobile sync: {len(reviews)} new reviews exceed the "
+                            f"{MOBILE_QUEUE_CAP} system cap — the {discarded} oldest "
+                            f"were discarded and will not become mobile battles."
+                        )
+                        try:
+                            logger.log_and_showinfo("warning", msg)
+                        except Exception:
+                            logger.log("warning", msg)
+                        return reviews[-MOBILE_QUEUE_CAP:]
+                    return reviews
 
-                    max_revlog_id = col.db.scalar("SELECT MAX(id) FROM revlog")
-                    if type(max_revlog_id).__name__ in ("MagicMock", "Mock"):
-                        max_revlog_id = None
-                    if isinstance(max_revlog_id, (int, float)):
-                        current_watermark = db.get_mobile_watermark()
-                        if max_revlog_id > current_watermark:
-                            db.set_mobile_watermark(max_revlog_id)
+                # Serialize the dual-DB switch/queue/restore dance against any
+                # in-flight background mobile-resolve (run_mobile_battles /
+                # commit_replay_outcome's do_db_work both hold _mobile_sync_lock).
+                # Without this, switch_database() mutates db.db_path mid-op and a
+                # background thread's next _get_connection() silently reopens
+                # against the wrong Ankimon DB file. The lock is released before
+                # the auto-resolve branch below (resolveAll reacquires it).
+                with _mobile_sync_lock:
+                    try:
+                        # 1. Queue to ankimon.db
+                        if db.db_path.name != "ankimon.db":
+                            db.switch_database("ankimon.db")
+                        watermark_normal = db.get_mobile_watermark()
+                        all_mobile_normal = detect_mobile_reviews(col, watermark_normal, desktop_ids)
+                        if all_mobile_normal:
+                            all_mobile_normal = _cap_mobile(all_mobile_normal)
+                            newly_queued_normal = db.queue_mobile_battles(all_mobile_normal)
+                            db.set_mobile_watermark(max(r["id"] for r in all_mobile_normal))
 
-                    # 2. Queue to ankimonDEV.db if present
-                    if dev_db_path.is_file():
-                        if db.db_path.name != "ankimonDEV.db":
-                            db.switch_database("ankimonDEV.db")
-                        watermark_dev = db.get_mobile_watermark()
-                        all_mobile_dev = detect_mobile_reviews(col, watermark_dev, desktop_ids)
-                        if all_mobile_dev:
-                            newly_queued_dev = db.queue_mobile_battles(all_mobile_dev)
-                            db.set_mobile_watermark(max(r["id"] for r in all_mobile_dev))
-
+                        max_revlog_id = col.db.scalar("SELECT MAX(id) FROM revlog")
+                        if type(max_revlog_id).__name__ in ("MagicMock", "Mock"):
+                            max_revlog_id = None
                         if isinstance(max_revlog_id, (int, float)):
                             current_watermark = db.get_mobile_watermark()
                             if max_revlog_id > current_watermark:
                                 db.set_mobile_watermark(max_revlog_id)
-                finally:
-                    if db.db_path.name != original_db_name:
-                        db.switch_database(original_db_name)
+
+                        # 2. Queue to ankimonDEV.db if present
+                        if dev_db_path.is_file():
+                            if db.db_path.name != "ankimonDEV.db":
+                                db.switch_database("ankimonDEV.db")
+                            watermark_dev = db.get_mobile_watermark()
+                            all_mobile_dev = detect_mobile_reviews(col, watermark_dev, desktop_ids)
+                            if all_mobile_dev:
+                                all_mobile_dev = _cap_mobile(all_mobile_dev)
+                                newly_queued_dev = db.queue_mobile_battles(all_mobile_dev)
+                                db.set_mobile_watermark(max(r["id"] for r in all_mobile_dev))
+
+                            if isinstance(max_revlog_id, (int, float)):
+                                current_watermark = db.get_mobile_watermark()
+                                if max_revlog_id > current_watermark:
+                                    db.set_mobile_watermark(max_revlog_id)
+                    finally:
+                        if db.db_path.name != original_db_name:
+                            db.switch_database(original_db_name)
 
                 # Clear desktop session to prevent indefinite exclusion-set accumulation
                 clear_desktop_session()
@@ -990,9 +1027,26 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
         except Exception as e:
             logger.log("error", f"Failed to read files after sync: {str(e)}")
 
-    # Register hooks (but they won't auto-sync until enabled)
-    gui_hooks.sync_will_start.append(on_sync_will_start)
-    gui_hooks.sync_did_finish.append(on_sync_did_finish)
+    # Register hooks (but they won't auto-sync until enabled). Reload safety
+    # (F31 registry-anchored guard): a second boot in the same Anki session (the
+    # F26 branch self-updater reloading add-on code, or any re-run of
+    # register_profile_hooks) must not stack a second on_sync_did_finish — that
+    # would double the dual-DB queueing pass, double the tooltip, and in auto
+    # mode fire MobileBridge.resolveAll() twice per sync. Remove the previously
+    # recorded handlers first; gui_hooks' remove() tolerates already-absent
+    # callbacks, and the closures above are NEW objects each call, so only the
+    # stored originals can be found and removed.
+    from ..services import services
+    for hook, handler in getattr(services, _SYNC_HOOK_RECORD, ()):
+        hook.remove(handler)
+
+    _handlers = (
+        (gui_hooks.sync_will_start, on_sync_will_start),
+        (gui_hooks.sync_did_finish, on_sync_did_finish),
+    )
+    for hook, handler in _handlers:
+        hook.append(handler)
+    setattr(services, _SYNC_HOOK_RECORD, _handlers)
 
     logger.log("info", "Ankimon sync hooks registered (automatic sync disabled until manual sync)")
 
