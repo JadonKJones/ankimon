@@ -80,10 +80,9 @@ def open_help_window(online_connectivity):
 def check_branch_update(online_connectivity: bool, ssh: bool):
     """Poll GitHub for new commits on the branch this install came from.
 
-    Only acts when ``update_state.json`` records a branch install of
-    BRRRR_Experimental (written by ``apply_update``); honors the weekly
-    ``skip_until`` snooze. On a new remote SHA it shows the update prompt
-    (``show_branch_update_prompt``) with the pending commit feed.
+    Only acts when ``update_state.json`` records a branch install (defaulting
+    to main on fresh installs); honors the weekly ``skip_until`` snooze. On a
+    new remote SHA it shows the update prompt with the pending commit feed.
     """
     _log_info(
         f"check_branch_update triggered: online_connectivity={online_connectivity}, ssh={ssh}"
@@ -93,11 +92,34 @@ def check_branch_update(online_connectivity: bool, ssh: bool):
         return
 
     from .pyobj.update_manager import read_update_state
+    from .resources import addon_ver
 
     state = read_update_state()
     _log_info(f"check_branch_update: read_update_state={state}")
-    if not state:
-        _log_info("check_branch_update exited early: state is None")
+    if not state or state.get("addon_version") != addon_ver:
+        from .pyobj.update_manager import is_git_clone
+        if is_git_clone():
+            _log_info("check_branch_update exited early: git clone detected")
+            return
+
+        branch_name = (state.get("source_name") if state else None) or "main"
+
+        # Initialize branch check tracking silently
+        def bg_init(_col):
+            try:
+                from .pyobj.update_manager import fetch_branch_sha, save_update_state
+                remote_sha = fetch_branch_sha(branch_name)
+                if remote_sha:
+                    save_update_state("branch", branch_name, remote_sha)
+                return remote_sha
+            except Exception as e:
+                return e
+
+        QueryOp(
+            parent=mw,
+            op=bg_init,
+            success=lambda res: _log_info(f"Initialized update_state.json for {branch_name} branch: {res}"),
+        ).without_collection().run_in_background()
         return
 
     import time
@@ -113,24 +135,24 @@ def check_branch_update(online_connectivity: bool, ssh: bool):
         return
 
     source_type = state.get("source_type")
-    source_name = state.get("source_name")
+    source_name = state.get("source_name") or "main"
     local_sha = state.get("commit_sha")
     _log_info(
         f"check_branch_update: source_type={source_type}, source_name={source_name}, local_sha={local_sha}"
     )
 
-    if source_type != "branch" or source_name != "BRRRR_Experimental":
-        _log_info("check_branch_update exited early: source_type/name mismatch")
+    if source_type != "branch":
+        _log_info("check_branch_update exited early: source_type is not branch")
         return
 
     def bg(_col):
         try:
             from .pyobj.update_manager import fetch_branch_sha, fetch_branch_commits
 
-            remote_sha = fetch_branch_sha("BRRRR_Experimental")
+            remote_sha = fetch_branch_sha(source_name)
             commits = []
             if remote_sha and local_sha != remote_sha:
-                commits = fetch_branch_commits("BRRRR_Experimental", local_sha)
+                commits = fetch_branch_commits(source_name, local_sha)
             return remote_sha, commits
         except Exception as e:
             return e
@@ -146,7 +168,7 @@ def check_branch_update(online_connectivity: bool, ssh: bool):
         if local_sha != remote_sha:
             from .pyobj.update_dialog import show_branch_update_prompt
 
-            show_branch_update_prompt("BRRRR_Experimental", remote_sha, commits)
+            show_branch_update_prompt(source_name, remote_sha, commits)
 
     QueryOp(
         parent=mw,
