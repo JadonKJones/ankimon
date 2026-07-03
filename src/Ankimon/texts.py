@@ -9,6 +9,7 @@ _bottomHTML_template = """
         <td align=center valign=top class=stat>
         <button title="%(DefeatKey)s" onclick="pycmd('defeat');">Defeat Pokemon</button>
         <button title="%(CatchKey)s" onclick="pycmd('catch');">Catch Pokemon</button>
+        <button title="%(TeamCycleKey)s" onclick="pycmd('team_cycle');">Cycle Team</button>
         </td>
         <td align=end valign=top class=stat>
         <button title="%(morekey)s" onclick="pycmd('more');">%(more)s %(downArrow)s</button>
