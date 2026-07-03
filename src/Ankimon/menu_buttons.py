@@ -153,7 +153,15 @@ def create_menu_actions(
         pokemon_pc_action = QAction("Pokémon PC", mw)
         pokemon_pc_action.setMenuRole(QAction.MenuRole.NoRole)
         collection_menu.addAction(pokemon_pc_action)
-        qconnect(pokemon_pc_action.triggered, pokemon_pc.show)
+
+        def _open_pokemon_pc():
+            if pokemon_pc.isMinimized():
+                pokemon_pc.setWindowState(pokemon_pc.windowState() & ~Qt.WindowState.WindowMinimized)
+            pokemon_pc.show()
+            pokemon_pc.raise_()
+            pokemon_pc.activateWindow()
+
+        qconnect(pokemon_pc_action.triggered, _open_pokemon_pc)
 
         # Ankimon Window
         ankimon_window_action = QAction(mw.translator.translate("open_ankimon_window_button"), mw)
