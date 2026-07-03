@@ -121,6 +121,21 @@ _pokemon_csv_cache = None
 _stats_csv_cache = None
 _poke_evo_cache = None
 _moves_cache = None
+_items_cost_cache = None
+
+def _load_items_cost_cache():
+    """Cache items.csv to avoid repeated file I/O"""
+    global _items_cost_cache
+    if _items_cost_cache is None:
+        try:
+            _items_cost_cache = []
+            with open(csv_file_items_cost, mode="r", encoding="utf-8") as file:
+                reader = csv.DictReader(file)
+                _items_cost_cache = list(reader)
+        except Exception as e:
+            print(f"Error loading items cost cache: {e}")
+            _items_cost_cache = []
+    return _items_cost_cache
 
 def _load_pokemon_csv_cache():
     """Cache pokemon.csv to avoid repeated file I/O"""
@@ -227,13 +242,14 @@ def _load_pokemon_descriptions_csv():
 
 def clear_pokedex_caches():
     """Call this when pokedex data is updated or session ends"""
-    global _pokedex_cache, _poke_species_cache, _pokemon_csv_cache, _stats_csv_cache, _poke_evo_cache, _moves_cache, _pokedex_id_index, _pokemon_names_cache, _pokemon_descriptions_cache
+    global _pokedex_cache, _poke_species_cache, _pokemon_csv_cache, _stats_csv_cache, _poke_evo_cache, _moves_cache, _pokedex_id_index, _pokemon_names_cache, _pokemon_descriptions_cache, _items_cost_cache
     _pokedex_cache = None
     _poke_species_cache = None
     _pokemon_csv_cache = None
     _stats_csv_cache = None
     _poke_evo_cache = None
     _moves_cache = None
+    _items_cost_cache = None
     _pokedex_id_index = None
     _pokemon_names_cache = {}
     _pokemon_descriptions_cache = {}
