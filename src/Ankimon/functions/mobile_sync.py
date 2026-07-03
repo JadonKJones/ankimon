@@ -131,8 +131,29 @@ def _parse_cards_per_round(settings_obj) -> tuple[int, int]:
                         cards_per_round = 2
         except Exception:
             cards_per_round = 2
+    # Clamp to >= 1. The int-branch guard that both settings UIs apply
+    # (settings_window.py / settings_schema._coerce_cards_per_round: `1 if
+    # value == 0 else value`) only covers the plain-int case, so a range string
+    # whose average truncates to 0 (e.g. "0-0" / "0-1") would otherwise leak a
+    # cards_per_round of 0 here and later ZeroDivide (encounter_idx math,
+    # avg_reviews_per_encounter, seed_idx) at the mobile-sync entry point.
+    if not isinstance(cards_per_round, int) or cards_per_round < 1:
+        cards_per_round = 1
     cpr_split = cards_per_round
     return cards_per_round, cpr_split
+
+def _xp_share_split(earned_xp: int, earner_id, xp_share_id) -> tuple[int, int]:
+    """Split one companion's battle XP under trainer.xp_share.
+
+    Returns ``(xp_kept_by_earner, xp_for_share_target)`` mirroring the 50/50
+    split desktop ``encounter_functions.kill_pokemon`` applies. No share when
+    XP-Share is unset, points at the earner itself, or there is no positive XP;
+    the earner keeps the odd remainder so no XP is lost.
+    """
+    if not xp_share_id or earned_xp <= 0 or str(xp_share_id) == str(earner_id):
+        return earned_xp, 0
+    share_half = int(earned_xp * 0.5)
+    return earned_xp - share_half, share_half
 
 def _compute_initial_reviews(db, tracker, day_cutoff: int) -> int:
     """Computes the adjusted total review count for encounter seeding based on day_cutoff."""
@@ -299,13 +320,21 @@ def process_mobile_reviews_after_sync(col, ankimon_db, settings_obj, logger) -> 
 
         all_mobile = detect_mobile_reviews(col, watermark, desktop_ids)
 
-        # Apply cap — take the MOST RECENT N (highest revlog IDs)
+        # Apply cap — take the MOST RECENT N (highest revlog IDs). The dropped
+        # oldest reviews are permanently discarded (the watermark advances past
+        # them below), so this must NOT be silent: surface a user-visible
+        # warning, not just an info log line.
         if len(all_mobile) > MOBILE_QUEUE_CAP:
-            logger.log("info",
-                f"Mobile sync: {len(all_mobile)} reviews found. "
-                f"System cap is {MOBILE_QUEUE_CAP}. "
-                f"{len(all_mobile) - MOBILE_QUEUE_CAP} discarded."
+            discarded = len(all_mobile) - MOBILE_QUEUE_CAP
+            msg = (
+                f"Mobile sync: {len(all_mobile)} new reviews exceed the "
+                f"{MOBILE_QUEUE_CAP} system cap — the {discarded} oldest were "
+                f"discarded and will not become mobile battles."
             )
+            try:
+                logger.log_and_showinfo("warning", msg)
+            except Exception:
+                logger.log("warning", msg)
             all_mobile = all_mobile[-MOBILE_QUEUE_CAP:]  # list is ASC, so take tail
         else:
             logger.log("info", f"Mobile sync: {len(all_mobile)} reviews found.")
@@ -1151,6 +1180,12 @@ def _run_mobile_battles_impl(
     current_battle_cash = 0
     ci = int(settings_obj.get("trainer.cash_reward_interval", 5)) if settings_obj else 5
     ca = int(settings_obj.get("trainer.cash_reward_amount", 10)) if settings_obj else 10
+    # Seed the per-encounter cash counter from the SAME persisted carryover the
+    # final wallet credit uses (trainer.mobile_reviews_resolved_since_payout),
+    # so the sum of history entries' cash_gained matches trainer.cash actually
+    # credited below. Without this, cash payouts are counted from 0 each run and
+    # the Mobile Battle History screen misattributes where the cash came from.
+    payout_start = int(settings_obj.get("trainer.mobile_reviews_resolved_since_payout", 0)) if settings_obj else 0
 
     from .. import utils
     orig_load_ids = utils.load_collected_pokemon_ids
@@ -1200,7 +1235,7 @@ def _run_mobile_battles_impl(
                         pass
                 except Exception:
                     pass
-            if commit and ci > 0 and total_reviews_processed % ci == 0:
+            if commit and ci > 0 and (payout_start + total_reviews_processed) % ci == 0:
                 current_battle_cash += ca
             cards_battle_round += 1
             current_turn_reviews.append(review)
@@ -1471,16 +1506,29 @@ def _run_mobile_battles_impl(
                 if sk in companion_evs[cid]:
                     companion_evs[cid][sk] += v
 
+        # XP-Share (desktop parity): mirror encounter_functions.kill_pokemon —
+        # the battling companion keeps half of its battle XP and the configured
+        # trainer.xp_share target receives the other half. Without this the
+        # winning companion took 100% and the share target got nothing on every
+        # mobile-resolved battle. The share is applied through the same mobile
+        # attribution path used for teammates (below), so bulk-resolve UI
+        # suppression / thread serialisation still hold — the mobile path does
+        # not open the evolution window for companions, so we intentionally do
+        # not route through the desktop evo-triggering xp_share_gain_exp here.
+        xp_share_id = settings_obj.get("trainer.xp_share") if settings_obj else None
+        xp_share_pending = 0
         for cid, earned_xp in companion_xp.items():
             evs_gained = companion_evs.get(cid, {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0})
             battles_fought = companion_battle_count.get(cid, 0)
-            if earned_xp > 0 or any(evs_gained.values()) or battles_fought > 0:
+            grant_xp, share_half = _xp_share_split(earned_xp, cid, xp_share_id)
+            xp_share_pending += share_half
+            if grant_xp > 0 or any(evs_gained.values()) or battles_fought > 0:
                 if main_pokemon and cid == main_pokemon.individual_id:
                     class DummyEnemy:
                         def __init__(self, ev_yield): self.ev_yield = ev_yield
                     from ..services import services
                     save_main_pokemon_progress(
-                        main_pokemon, DummyEnemy(evs_gained), earned_xp,
+                        main_pokemon, DummyEnemy(evs_gained), grant_xp,
                         services.achievements, logger, get_evo_window()
                     )
                     # Apply additional battles fought to main_pokemon.pokemon_defeated
@@ -1495,7 +1543,15 @@ def _run_mobile_battles_impl(
                         except Exception:
                             pass
                 else:
-                    _attribute_xp_and_evs_to_companion(cid, earned_xp, evs_gained, settings_obj, battles_fought=battles_fought, db=db, logger=logger)
+                    _attribute_xp_and_evs_to_companion(cid, grant_xp, evs_gained, settings_obj, battles_fought=battles_fought, db=db, logger=logger)
+
+        # Grant the accumulated XP-Share half to the configured target Pokémon.
+        if xp_share_id and xp_share_pending > 0:
+            _attribute_xp_and_evs_to_companion(
+                str(xp_share_id), xp_share_pending,
+                {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+                settings_obj, battles_fought=0, db=db, logger=logger
+            )
 
         total_trainer_xp = 0
         from ..pyobj.trainer_card import POKEMON_TIERS
@@ -1513,10 +1569,12 @@ def _run_mobile_battles_impl(
             trainer_card.total_xp = settings_obj.get("trainer.total_xp")
             trainer_card.check_level_up()
 
-        # Cash Reward
+        # Cash Reward — credited off the same carryover the per-encounter
+        # history counter (payout_start) was seeded from, so the wallet credit
+        # and the sum of history cash_gained agree.
         gained_cash = 0
         total_reviews_resolved = total_reviews_processed
-        current_counter = int(settings_obj.get("trainer.mobile_reviews_resolved_since_payout", 0)) if settings_obj else 0
+        current_counter = payout_start
         new_counter = current_counter + total_reviews_resolved
         
         ci = int(settings_obj.get("trainer.cash_reward_interval", 5)) if settings_obj else 5
@@ -1743,9 +1801,31 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
                     companion_id = outcome_data.get("companion_id", "")
                     if not companion_id and main_pokemon:
                         companion_id = getattr(main_pokemon, "individual_id", "")
-                    
-                    if companion_id and (total_xp > 0 or any(accumulated_evs.values())):
-                        _attribute_xp_and_evs_to_companion(companion_id, total_xp, accumulated_evs, settings_obj, db=db, logger=logger)
+
+                    # XP-Share (desktop parity): the manual replay-resolve path
+                    # must split the battling companion's XP 50/50 with the
+                    # configured trainer.xp_share target too, exactly like the
+                    # bulk-resolve commit block above and desktop
+                    # encounter_functions.kill_pokemon. Without this, XP-Share is
+                    # still 100% bypassed for every single-battle replay defeat
+                    # (total_xp here is the full, un-split battle XP built in the
+                    # replay prep). Runs on this QueryOp background thread under
+                    # _mobile_sync_lock via the mobile attribution path, so no
+                    # evo-window / tooltip Qt work happens here.
+                    xp_share_id = settings_obj.get("trainer.xp_share") if settings_obj else None
+                    grant_xp, share_half = (
+                        _xp_share_split(total_xp, companion_id, xp_share_id)
+                        if companion_id else (total_xp, 0)
+                    )
+
+                    if companion_id and (grant_xp > 0 or any(accumulated_evs.values())):
+                        _attribute_xp_and_evs_to_companion(companion_id, grant_xp, accumulated_evs, settings_obj, db=db, logger=logger)
+                    if companion_id and xp_share_id and share_half > 0:
+                        _attribute_xp_and_evs_to_companion(
+                            str(xp_share_id), share_half,
+                            {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+                            settings_obj, battles_fought=0, db=db, logger=logger
+                        )
 
                 # 3. Mark resolved in DB
                 if review_ids:

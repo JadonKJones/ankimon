@@ -197,7 +197,7 @@ window.updateMobileEstimates = function(estimates) {
                 item.className = 'caught-pokemon-item';
                 const shinyIcon = pkmn.shiny ? '<span class="shiny-badge">✨</span> ' : '';
                 item.innerHTML = `
-                    <span class="caught-pokemon-name">${shinyIcon}${pkmn.name}</span>
+                    <span class="caught-pokemon-name">${shinyIcon}${escapeHtml(pkmn.name)}</span>
                     <span class="caught-pokemon-lvl">Lv.${pkmn.level}</span>
                 `;
                 caughtListEl.appendChild(item);
@@ -365,7 +365,7 @@ function fillPending(data) {
                 const shinyIcon = pkmn.shiny ? '<span class="shiny-badge">✨</span> ' : '';
 
                 item.innerHTML = `
-                    <span class="caught-pokemon-name">${shinyIcon}${pkmn.name}</span>
+                    <span class="caught-pokemon-name">${shinyIcon}${escapeHtml(pkmn.name)}</span>
                     <span class="caught-pokemon-lvl">Lv.${pkmn.level}</span>
                 `;
                 caughtListEl.appendChild(item);
@@ -587,7 +587,7 @@ function showSummaryModal(result) {
             const shiny = p.shiny ? '<span class="shiny-badge">✨</span> ' : '';
             const tier = (p.tier && p.tier !== 'Normal') ? `<span class="tier-badge">${p.tier}</span>` : '';
             item.innerHTML = `
-                <span class="caught-pokemon-name">${shiny}${p.name} ${tier}</span>
+                <span class="caught-pokemon-name">${shiny}${escapeHtml(p.name)} ${tier}</span>
                 <div style="display: flex; align-items: center; gap: 6px;">
                     <span class="caught-pokemon-lvl">Lv.${p.level}</span>
                     <span class="caught-pokemon-cp">CP ${p.cp || 10}</span>
@@ -740,7 +740,7 @@ function renderReplayBattle(result) {
     // Set initial narration
     const narrateEl = document.getElementById('narration-text');
     if (narrateEl) {
-        narrateEl.innerHTML = `<span class="narrate-encounter">Wild <strong>${result.enemy_name}</strong> appeared!</span>`;
+        narrateEl.innerHTML = `<span class="narrate-encounter">Wild <strong>${escapeHtml(result.enemy_name)}</strong> appeared!</span>`;
     }
 
     // Timeline sequence: animate turns list sequentially
@@ -758,7 +758,7 @@ function renderReplayBattle(result) {
                 if (defeatBtn) defeatBtn.disabled = false;
             }
             if (narrateEl) {
-                narrateEl.innerHTML = `Wild <strong>${result.enemy_name}</strong> is vulnerable! What will you do?`;
+                narrateEl.innerHTML = `Wild <strong>${escapeHtml(result.enemy_name)}</strong> is vulnerable! What will you do?`;
             }
             return;
         }
@@ -799,7 +799,7 @@ function renderReplayBattle(result) {
                 // 2. Enemy Attack
                 enemyCard.classList.add('attack-dash');
                 if (narrateEl) {
-                    narrateEl.innerHTML = `Wild <strong>${result.enemy_name}</strong> used <strong>${turn.enemy_attack}</strong>!`;
+                    narrateEl.innerHTML = `Wild <strong>${escapeHtml(result.enemy_name)}</strong> used <strong>${escapeHtml(turn.enemy_attack)}</strong>!`;
                 }
 
                 const tEnemyAttack = setTimeout(() => {
@@ -880,7 +880,7 @@ function animateResolution(outcome, xp_gained, remaining) {
 
     if (outcome === 'caught') {
         if (narrateEl) {
-            narrateEl.innerHTML = `You caught <strong>${result.enemy_name}</strong>! <span style="color: var(--accent-green)">Success!</span>`;
+            narrateEl.innerHTML = `You caught <strong>${escapeHtml(result.enemy_name)}</strong>! <span style="color: var(--accent-green)">Success!</span>`;
         }
         if (catchFlash) {
             catchFlash.classList.remove('hidden');
@@ -889,7 +889,7 @@ function animateResolution(outcome, xp_gained, remaining) {
         enemySprite.classList.add('caught-fade');
     } else {
         if (narrateEl) {
-            narrateEl.innerHTML = `<strong>${result.enemy_name}</strong> was defeated! <span style="color: var(--accent-blue)">+${xp_gained} XP</span>` +
+            narrateEl.innerHTML = `<strong>${escapeHtml(result.enemy_name)}</strong> was defeated! <span style="color: var(--accent-blue)">+${xp_gained} XP</span>` +
                 (result.cash_gained > 0 ? ` <span style="color: var(--accent-gold)">+${result.cash_gained}¥</span>` : '');
         }
         enemySprite.classList.add('fainted-fade');

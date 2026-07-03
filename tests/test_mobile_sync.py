@@ -296,6 +296,13 @@ def test_process_applies_queue_cap(mobile_db, monkeypatch):
     (4, 4),
     ("3", 3),
     ("1-3", 2),
+    # cards_per_round must never be 0 — a range whose average truncates to 0
+    # (e.g. "0-0" / "0-1") or a plain 0/negative would ZeroDivide at the
+    # mobile-sync entry point; every branch clamps to >= 1.
+    ("0-0", 1),
+    ("0-1", 1),
+    (0, 1),
+    (-5, 1),
     (None, 2),
 ])
 def test_parse_cards_per_round(value, expected):
@@ -303,6 +310,136 @@ def test_parse_cards_per_round(value, expected):
     assert ms._parse_cards_per_round(settings)[0] == expected
 
 
+@pytest.mark.parametrize("earned,earner,share_id,expected", [
+    (100, "A", "B", (50, 50)),      # even split
+    (101, "A", "B", (51, 50)),      # earner keeps the odd remainder, no XP lost
+    (100, "A", "A", (100, 0)),      # can't share with yourself
+    (100, "A", None, (100, 0)),     # XP-Share not configured
+    (0, "A", "B", (0, 0)),          # nothing to split
+    (100, "A", "b", (50, 50)),      # distinct ids -> split applies
+])
+def test_xp_share_split(earned, earner, share_id, expected):
+    assert ms._xp_share_split(earned, earner, share_id) == expected
+
+
+def test_commit_replay_defeat_applies_xp_share(monkeypatch):
+    """XP-Share parity on the MANUAL replay-resolve path: commit_replay_outcome
+    ('defeat', ...) must split the battling companion's XP 50/50 with the
+    configured trainer.xp_share target, exactly like the bulk-resolve commit
+    block. Without the split this path grants the companion 100% and the
+    XP-Share target nothing (finding: mobile_sync commit_replay_outcome)."""
+    class _S:
+        def __init__(self, d): self._d = dict(d)
+        def get(self, k, default=None): return self._d.get(k, default)
+        def set(self, k, v): self._d[k] = v
+
+    # Spy on the attribution seam so we can see who got how much XP.
+    calls = []
+    monkeypatch.setattr(
+        ms, "_attribute_xp_and_evs_to_companion",
+        lambda cid, xp, evs, settings_obj, battles_fought=1, db=None, logger=None: calls.append((str(cid), xp)),
+    )
+    # Patch on the imported module object (not a dotted string path, which is
+    # import-order fragile across the full suite).
+    import Ankimon.business as _biz
+    monkeypatch.setattr(_biz, "calculate_cp_from_dict", lambda d: 10)
+
+    settings = _S({"trainer.xp_share": "TARGET"})
+    db = MagicMock()
+    db.get_pending_mobile_count.return_value = 0
+    enemy = MagicMock()
+    outcome_data = {
+        "enemy_pokemon": enemy,
+        "battle_xp": 100,
+        "total_xp": 100,
+        "accumulated_evs": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        "total_trainer_xp": 0,
+        "gained_cash": 0,
+        "companion_id": "COMP",
+        "companion_name": "Comp",
+        "companion_level": 5,
+        "review_ids": [],
+        "companion_fainted": False,
+    }
+
+    res = ms.commit_replay_outcome("defeat", outcome_data, db, settings, None, None)
+    assert res.get("success") is True
+    # Companion keeps half; the XP-Share target receives the other half.
+    assert ("COMP", 50) in calls
+    assert ("TARGET", 50) in calls
+
+
+def test_commit_replay_defeat_no_share_when_unset(monkeypatch):
+    """With XP-Share unset the manual replay-defeat path grants the companion the
+    full battle XP and makes no second attribution call."""
+    class _S:
+        def __init__(self, d): self._d = dict(d)
+        def get(self, k, default=None): return self._d.get(k, default)
+        def set(self, k, v): self._d[k] = v
+
+    calls = []
+    monkeypatch.setattr(
+        ms, "_attribute_xp_and_evs_to_companion",
+        lambda cid, xp, evs, settings_obj, battles_fought=1, db=None, logger=None: calls.append((str(cid), xp)),
+    )
+    import Ankimon.business as _biz
+    monkeypatch.setattr(_biz, "calculate_cp_from_dict", lambda d: 10)
+
+    settings = _S({})  # no trainer.xp_share
+    db = MagicMock()
+    db.get_pending_mobile_count.return_value = 0
+    outcome_data = {
+        "enemy_pokemon": MagicMock(),
+        "battle_xp": 100, "total_xp": 100,
+        "accumulated_evs": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        "total_trainer_xp": 0, "gained_cash": 0,
+        "companion_id": "COMP", "companion_name": "Comp", "companion_level": 5,
+        "review_ids": [], "companion_fainted": False,
+    }
+    res = ms.commit_replay_outcome("defeat", outcome_data, db, settings, None, None)
+    assert res.get("success") is True
+    assert calls == [("COMP", 100)]
+
+
 def test_normalize_ev_yield_renames_keys():
     assert ms._normalize_ev_yield({"attack": 4, "speed": 2, "hp": 1}) == {"atk": 4, "spe": 2, "hp": 1}
     assert ms._normalize_ev_yield({}) == {}
+
+
+def test_answercard_after_records_desktop_review(monkeypatch):
+    """F29 de-dupe: answerCard_after must record the just-resolved review's
+    revlog id + card id into the mobile-sync exclusion set, so the next
+    detect pass does not re-queue it as a mobile battle (double XP/catches)."""
+    # card_hooks pulls the heavy singletons module (markdown/Qt) transitively;
+    # stub it with just the two names the module binds at import.
+    stub = types.ModuleType("Ankimon.singletons")
+    stub.ankimon_tracker_obj = MagicMock()
+    stub.reviewer_obj = MagicMock()
+    monkeypatch.setitem(sys.modules, "Ankimon.singletons", stub)
+    monkeypatch.delitem(sys.modules, "Ankimon.card_hooks", raising=False)
+
+    import Ankimon.card_hooks as ch
+
+    ms.clear_desktop_session()
+
+    class _Card:
+        id = 42
+
+    class _DB:
+        def scalar(self, _sql, cid):
+            return 9999 if cid == 42 else 0
+
+    class _Sched:
+        def answerButtons(self, _card):
+            return 4
+
+    rev = types.SimpleNamespace(
+        mw=types.SimpleNamespace(col=types.SimpleNamespace(db=_DB(), sched=_Sched()))
+    )
+
+    try:
+        ch.answerCard_after(rev, _Card(), ease=4)
+        ids = ms.get_desktop_session_revlog_ids()
+        assert 9999 in ids
+    finally:
+        ms.clear_desktop_session()

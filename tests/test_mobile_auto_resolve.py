@@ -173,3 +173,58 @@ def test_no_new_reviews_no_notify(wired):
     hook()
     assert db.get_pending_mobile_count() == 0
     assert not tooltip.called
+
+
+def test_setup_hooks_reload_safe(wired):
+    """A second setup in the same session removes the first handlers before
+    re-appending (F31), so on_sync_did_finish is never double-registered."""
+    db, build, tooltip, mock_bridge = wired
+    settings = _Settings({
+        "misc.ankiweb_sync": True, "mobile.enabled": True,
+        "mobile.resolution_mode": "manual",
+    })
+    sdf = MagicMock()
+    sws = MagicMock()
+    asy.gui_hooks.sync_did_finish = sdf
+    asy.gui_hooks.sync_will_start = sws
+    setattr(services, asy._SYNC_HOOK_RECORD, ())  # start from a clean record
+
+    asy.setup_ankimon_sync_hooks(settings, _Logger())
+    asy.setup_ankimon_sync_hooks(settings, _Logger())
+
+    # Two setups -> two appends, but the second removed the first's handler.
+    assert sdf.append.call_count == 2
+    assert sdf.remove.call_count == 1
+    first_handler = sdf.append.call_args_list[0][0][0]
+    assert sdf.remove.call_args[0][0] is first_handler
+
+
+def test_sync_did_finish_applies_queue_cap(wired, monkeypatch):
+    """on_sync_did_finish bounds each queueing pass by MOBILE_QUEUE_CAP the same
+    way the startup pass does: keep the newest N, discard the oldest."""
+    from Ankimon.functions import mobile_sync as ms
+    db, build, tooltip, mock_bridge = wired
+    monkeypatch.setattr(ms, "MOBILE_QUEUE_CAP", 2)
+    hook = build([1, 2, 3, 4], resolution_mode="manual")
+    hook()
+    assert db.get_pending_mobile_count() == 2
+    batch = db.get_next_pending_mobile_batch(limit=10)
+    assert sorted(r["revlog_id"] for r in batch) == [3, 4]
+
+
+def test_sync_did_finish_holds_lock_during_switch(wired, monkeypatch):
+    """The dual-DB switch/queue pass runs under _mobile_sync_lock so it cannot
+    interleave with an in-flight background mobile-resolve."""
+    from Ankimon.functions import mobile_sync as ms
+    db, build, tooltip, mock_bridge = wired
+    observed = {}
+    real_detect = ms.detect_mobile_reviews
+
+    def spy(col, watermark, ids):
+        observed["locked"] = ms._mobile_sync_lock.locked()
+        return real_detect(col, watermark, ids)
+
+    monkeypatch.setattr(ms, "detect_mobile_reviews", spy)
+    hook = build([1, 2, 3], resolution_mode="manual")
+    hook()
+    assert observed.get("locked") is True
