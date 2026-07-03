@@ -43,6 +43,11 @@ from .utils import is_dev_mode, is_alive
 
 debug = True
 
+# Registry key for the reload-teardown guard: create_menu_actions records the
+# menu it adds to the menubar on `services` so a later boot can remove the prior
+# one instead of stacking a duplicate 'Ankimon' menu.
+_MENU_RECORD = "_ankimon_menubar_menu"
+
 # Initialize the menu. Under a headless MockWindow (integrity / import smoke) mw
 # is a lightweight stand-in, so build a DummyMock menu — importing this module
 # then never needs a real Translator or QMenu. The real (production) path below
@@ -432,7 +437,20 @@ def create_menu_actions(
     downloader_action.triggered.connect(show_agreement_and_download_dialog)
     help_menu.addAction(downloader_action)
 
+    # Reload-teardown guard (registry-anchored, same contract as card_hooks): a
+    # module re-exec rebuilds mw.pokemenu at module scope, so drop any menu a
+    # previous boot added to the menubar before adding the new one — otherwise
+    # the 'Ankimon' menu stacks a duplicate on every reload.
+    from .services import services
+
+    _prev_menu = getattr(services, _MENU_RECORD, None)
+    if _prev_menu is not None and is_alive(_prev_menu) and _prev_menu is not mw.pokemenu:
+        try:
+            mw.form.menubar.removeAction(_prev_menu.menuAction())
+        except Exception:
+            pass
     mw.form.menubar.addMenu(mw.pokemenu)
+    setattr(services, _MENU_RECORD, mw.pokemenu)
 
 
 # The "Mobile and Web Reviews" menu action is created by the later menu rewrite

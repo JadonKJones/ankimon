@@ -26,21 +26,42 @@ class Reviewer_Manager:
             False  # JS keydown listener registered once per view
         )
 
-        # Register the functions for the hooks
-        gui_hooks.reviewer_will_end.append(self.reviewer_reset_life_bar_inject)
-        # Idempotent: drop any prior registration before appending so a re-run of
-        # __init__ (e.g. add-on reload) does not double-fire update_life_bar.
-        try:
-            gui_hooks.reviewer_did_answer_card.remove(self.update_life_bar)
-        except (ValueError, AttributeError):
-            pass
-        gui_hooks.reviewer_did_answer_card.append(self.update_life_bar)
+        # Register the functions for the hooks. Reload safety (F31 registry-anchored
+        # pattern, matching __init__.py's _review_card_handlers): the (hook, handler)
+        # records live on the services registry, which survives a re-construction of
+        # this manager. A rebuilt instance therefore removes the PREVIOUS instance's
+        # handlers before appending its own — a self-only remove cannot, since a
+        # bound method of a new instance never compares equal to the old one.
+        _RECORD_ATTR = "_reviewer_hook_handlers"
+        for _hook, _handler in getattr(services, _RECORD_ATTR, ()):
+            try:
+                _hook.remove(_handler)
+            except (ValueError, AttributeError):
+                pass
+        _handlers = (
+            (gui_hooks.reviewer_will_end, self.reviewer_reset_life_bar_inject),
+            (gui_hooks.reviewer_did_answer_card, self.update_life_bar),
+        )
+        for _hook, _handler in _handlers:
+            _hook.append(_handler)
+        setattr(services, _RECORD_ATTR, _handlers)
 
     def reviewer_reset_life_bar_inject(self):
         """Clear per-session HUD state when the battle/review session ends."""
         self.life_bar_injected = False
         self._ownership_cache.clear()
         self._last_state = None
+
+    def invalidate_hud_cache(self):
+        """Clear the per-encounter HUD perf caches so the next repaint rebuilds.
+
+        Public entry point for external callers (e.g. a new wild encounter) that
+        need the HUD to forget the previous Pokémon's ownership/state without
+        reaching into these private attributes directly.
+        """
+        self._last_state = None
+        if isinstance(self._ownership_cache, dict):
+            self._ownership_cache.clear()
 
     def get_boost_values_string(
         self, pokemon: PokemonObject, display_neutral_boost: bool = False
@@ -209,6 +230,15 @@ class Reviewer_Manager:
         """)
 
         # 2. State-based update check (avoid redundant eval() calls for HTML/CSS).
+        def _boost_snapshot(pkmn):
+            # Hashable snapshot of the stat boosts rendered into the HUD name
+            # display; stat-only moves (Growl/Swords Dance) change these without
+            # touching hp/status/xp, so they must be part of the repaint key.
+            stages = getattr(pkmn, "stat_stages", None)
+            if isinstance(stages, dict):
+                return tuple(sorted(stages.items()))
+            return None
+
         current_state = (
             self.enemy_pokemon.id,
             self.enemy_pokemon.hp,
@@ -221,6 +251,8 @@ class Reviewer_Manager:
             self.settings.get("gui.show_mainpkmn_in_reviewer"),
             self.settings.get("gui.reviewer_image_gif"),
             self.settings.get("misc.language"),
+            _boost_snapshot(self.enemy_pokemon),
+            _boost_snapshot(self.main_pokemon),
         )
         if self._last_state == current_state and card is not None:
             return  # No changes, skip update

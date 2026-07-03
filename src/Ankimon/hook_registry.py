@@ -2,8 +2,8 @@ from .singletons import (
     enemy_pokemon,
     main_pokemon,
     ankimon_tracker_obj,
-    test_window,
-    evo_window,
+    get_test_window,
+    get_evo_window,
     logger,
     achievements,
     trainer_card,
@@ -39,7 +39,7 @@ def CatchPokemonHook(collected_pokemon_ids):
         )
         new_pokemon(
             enemy_pokemon,
-            test_window,
+            get_test_window(),
             ankimon_tracker_obj,
             reviewer_obj,
             update_hud=True,
@@ -51,11 +51,16 @@ def CatchPokemonHook(collected_pokemon_ids):
 def DefeatPokemonHook():
     if enemy_pokemon.hp < 1:
         kill_pokemon(
-            main_pokemon, enemy_pokemon, evo_window, logger, achievements, trainer_card
+            main_pokemon,
+            enemy_pokemon,
+            get_evo_window(),
+            logger,
+            achievements,
+            trainer_card,
         )
         new_pokemon(
             enemy_pokemon,
-            test_window,
+            get_test_window(),
             ankimon_tracker_obj,
             reviewer_obj,
             update_hud=True,

@@ -312,8 +312,8 @@ def _load_reviewer_ui(fake_services, dummy_reviewer=None, wrap_counter=None):
         "enemy_pokemon",
         "main_pokemon",
         "ankimon_tracker_obj",
-        "test_window",
-        "evo_window",
+        "get_test_window",
+        "get_evo_window",
         "logger",
         "achievements",
         "trainer_card",
@@ -604,6 +604,13 @@ class _ReviewerStub:
         self._ownership_cache = {}
         self._last_state = ("stale",)
         self.refresh_hud = MagicMock()
+
+    def invalidate_hud_cache(self):
+        # Mirrors Reviewer_Manager.invalidate_hud_cache: new_pokemon now clears
+        # the HUD perf caches through this public method instead of poking the
+        # private attributes directly.
+        self._last_state = None
+        self._ownership_cache.clear()
 
 
 def test_new_pokemon_update_hud_clears_cache_and_refreshes():
