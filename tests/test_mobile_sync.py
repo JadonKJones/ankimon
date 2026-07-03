@@ -322,6 +322,85 @@ def test_xp_share_split(earned, earner, share_id, expected):
     assert ms._xp_share_split(earned, earner, share_id) == expected
 
 
+def test_commit_replay_defeat_applies_xp_share(monkeypatch):
+    """XP-Share parity on the MANUAL replay-resolve path: commit_replay_outcome
+    ('defeat', ...) must split the battling companion's XP 50/50 with the
+    configured trainer.xp_share target, exactly like the bulk-resolve commit
+    block. Without the split this path grants the companion 100% and the
+    XP-Share target nothing (finding: mobile_sync commit_replay_outcome)."""
+    class _S:
+        def __init__(self, d): self._d = dict(d)
+        def get(self, k, default=None): return self._d.get(k, default)
+        def set(self, k, v): self._d[k] = v
+
+    # Spy on the attribution seam so we can see who got how much XP.
+    calls = []
+    monkeypatch.setattr(
+        ms, "_attribute_xp_and_evs_to_companion",
+        lambda cid, xp, evs, settings_obj, battles_fought=1, db=None, logger=None: calls.append((str(cid), xp)),
+    )
+    # Patch on the imported module object (not a dotted string path, which is
+    # import-order fragile across the full suite).
+    import Ankimon.business as _biz
+    monkeypatch.setattr(_biz, "calculate_cp_from_dict", lambda d: 10)
+
+    settings = _S({"trainer.xp_share": "TARGET"})
+    db = MagicMock()
+    db.get_pending_mobile_count.return_value = 0
+    enemy = MagicMock()
+    outcome_data = {
+        "enemy_pokemon": enemy,
+        "battle_xp": 100,
+        "total_xp": 100,
+        "accumulated_evs": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        "total_trainer_xp": 0,
+        "gained_cash": 0,
+        "companion_id": "COMP",
+        "companion_name": "Comp",
+        "companion_level": 5,
+        "review_ids": [],
+        "companion_fainted": False,
+    }
+
+    res = ms.commit_replay_outcome("defeat", outcome_data, db, settings, None, None)
+    assert res.get("success") is True
+    # Companion keeps half; the XP-Share target receives the other half.
+    assert ("COMP", 50) in calls
+    assert ("TARGET", 50) in calls
+
+
+def test_commit_replay_defeat_no_share_when_unset(monkeypatch):
+    """With XP-Share unset the manual replay-defeat path grants the companion the
+    full battle XP and makes no second attribution call."""
+    class _S:
+        def __init__(self, d): self._d = dict(d)
+        def get(self, k, default=None): return self._d.get(k, default)
+        def set(self, k, v): self._d[k] = v
+
+    calls = []
+    monkeypatch.setattr(
+        ms, "_attribute_xp_and_evs_to_companion",
+        lambda cid, xp, evs, settings_obj, battles_fought=1, db=None, logger=None: calls.append((str(cid), xp)),
+    )
+    import Ankimon.business as _biz
+    monkeypatch.setattr(_biz, "calculate_cp_from_dict", lambda d: 10)
+
+    settings = _S({})  # no trainer.xp_share
+    db = MagicMock()
+    db.get_pending_mobile_count.return_value = 0
+    outcome_data = {
+        "enemy_pokemon": MagicMock(),
+        "battle_xp": 100, "total_xp": 100,
+        "accumulated_evs": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        "total_trainer_xp": 0, "gained_cash": 0,
+        "companion_id": "COMP", "companion_name": "Comp", "companion_level": 5,
+        "review_ids": [], "companion_fainted": False,
+    }
+    res = ms.commit_replay_outcome("defeat", outcome_data, db, settings, None, None)
+    assert res.get("success") is True
+    assert calls == [("COMP", 100)]
+
+
 def test_normalize_ev_yield_renames_keys():
     assert ms._normalize_ev_yield({"attack": 4, "speed": 2, "hp": 1}) == {"atk": 4, "spe": 2, "hp": 1}
     assert ms._normalize_ev_yield({}) == {}

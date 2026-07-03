@@ -1801,9 +1801,31 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
                     companion_id = outcome_data.get("companion_id", "")
                     if not companion_id and main_pokemon:
                         companion_id = getattr(main_pokemon, "individual_id", "")
-                    
-                    if companion_id and (total_xp > 0 or any(accumulated_evs.values())):
-                        _attribute_xp_and_evs_to_companion(companion_id, total_xp, accumulated_evs, settings_obj, db=db, logger=logger)
+
+                    # XP-Share (desktop parity): the manual replay-resolve path
+                    # must split the battling companion's XP 50/50 with the
+                    # configured trainer.xp_share target too, exactly like the
+                    # bulk-resolve commit block above and desktop
+                    # encounter_functions.kill_pokemon. Without this, XP-Share is
+                    # still 100% bypassed for every single-battle replay defeat
+                    # (total_xp here is the full, un-split battle XP built in the
+                    # replay prep). Runs on this QueryOp background thread under
+                    # _mobile_sync_lock via the mobile attribution path, so no
+                    # evo-window / tooltip Qt work happens here.
+                    xp_share_id = settings_obj.get("trainer.xp_share") if settings_obj else None
+                    grant_xp, share_half = (
+                        _xp_share_split(total_xp, companion_id, xp_share_id)
+                        if companion_id else (total_xp, 0)
+                    )
+
+                    if companion_id and (grant_xp > 0 or any(accumulated_evs.values())):
+                        _attribute_xp_and_evs_to_companion(companion_id, grant_xp, accumulated_evs, settings_obj, db=db, logger=logger)
+                    if companion_id and xp_share_id and share_half > 0:
+                        _attribute_xp_and_evs_to_companion(
+                            str(xp_share_id), share_half,
+                            {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+                            settings_obj, battles_fought=0, db=db, logger=logger
+                        )
 
                 # 3. Mark resolved in DB
                 if review_ids:
