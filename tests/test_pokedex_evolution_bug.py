@@ -479,3 +479,104 @@ def test_move_based_evolution_none_move_safe(monkeypatch):
     win2 = _EvoWin()
     assert _PF.check_evolution_for_pokemon("iid-2", 90101, 20, win2) is None
     assert win2.called is None
+
+
+def test_check_evolution_by_item_trade_species_real_data(monkeypatch):
+    """Trade-with-held-item species (``evoType == "trade"``) are evolvable by
+    applying the held item directly — Ankimon has no trading. Exercised against
+    the REAL pokedex.json + items.csv (not a synthetic ``useItem`` fixture), so
+    a regression that only accepts ``useItem`` fails here."""
+    monkeypatch.setattr(_PF.services, "settings", None, raising=False)  # No Region
+    # (pre_evo_id, item_id) -> evolved_id, all from the real bundled data:
+    #   Onix 95      + Metal Coat 210   -> Steelix 208
+    #   Scyther 123  + Metal Coat 210   -> Scizor 212
+    #   Seadra 117   + Dragon Scale 212 -> Kingdra 230
+    #   Poliwhirl 61 + King's Rock 198  -> Politoed 186
+    #   Slowpoke 79  + King's Rock 198  -> Slowking 199
+    assert _PF.check_evolution_by_item(95, 210) == 208
+    assert _PF.check_evolution_by_item(123, 210) == 212
+    assert _PF.check_evolution_by_item(117, 212) == 230
+    assert _PF.check_evolution_by_item(61, 198) == 186
+    assert _PF.check_evolution_by_item(79, 198) == 199
+    # Wrong item must not trigger: Onix needs Metal Coat, not King's Rock.
+    assert _PF.check_evolution_by_item(95, 198) is None
+
+
+def test_move_based_evolution_fails_closed_when_data_unavailable(monkeypatch):
+    """A ``levelMove`` evolution must NOT fire when the moveset can't be
+    confirmed (DB record lacks ``attacks`` or ``get_pokemon`` raises) — it fails
+    closed, mirroring friendship_evolution.py, instead of the old fail-open
+    default that could evolve on unconfirmed data (Gemini :1087)."""
+    monkeypatch.setattr(_PF.services, "settings", None, raising=False)
+    _install_synthetic_pokedex(
+        monkeypatch,
+        {
+            "movemon": {
+                "species_id": 90301,
+                "actual_id": 90301,
+                "evos": ["MoveKing"],
+            },
+            "moveking": {
+                "species_id": 90302,
+                "actual_id": 90302,
+                "evoType": "levelMove",
+                "evoMove": "Psyshield Bash",
+            },
+        },
+    )
+
+    class _EvoWin:
+        def __init__(self):
+            self.called = None
+
+        def ask_pokemon_evo(self, individual_id, pokemon_id, evo_id):
+            self.called = (individual_id, pokemon_id, evo_id)
+
+    # DB record without an "attacks" key -> move unconfirmed -> no evolution.
+    class _DBNoAttacks:
+        def get_pokemon(self, individual_id):
+            return {"level": 20}
+
+    monkeypatch.setattr(_PF.services, "db", _DBNoAttacks(), raising=False)
+    win = _EvoWin()
+    assert _PF.check_evolution_for_pokemon("iid", 90301, 20, win) is None
+    assert win.called is None
+
+    # DB unavailable (raises) -> also fails closed, no crash.
+    class _DBRaises:
+        def get_pokemon(self, individual_id):
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr(_PF.services, "db", _DBRaises(), raising=False)
+    win2 = _EvoWin()
+    assert _PF.check_evolution_for_pokemon("iid", 90301, 20, win2) is None
+    assert win2.called is None
+
+
+def test_check_evolution_for_pokemon_none_window_skips_cleanly(monkeypatch):
+    """A ``None`` evo_window (F31 lazy singletons can leave services.evo_window
+    None) must skip the offer and return None WITHOUT reaching
+    ``evo_window.ask_pokemon_evo(...)`` — so the caller's defeat-persistence path
+    is never aborted by an AttributeError (the old broad-except only turned that
+    crash into a scary warning dialog)."""
+    monkeypatch.setattr(_PF.services, "settings", None, raising=False)
+    _install_synthetic_pokedex(
+        monkeypatch,
+        {
+            "levelmon": {
+                "species_id": 90401,
+                "actual_id": 90401,
+                "evos": ["LevelKing"],
+            },
+            "levelking": {
+                "species_id": 90402,
+                "actual_id": 90402,
+                "evoLevel": 16,
+            },
+        },
+    )
+    _PF.show_warning_with_traceback.reset_mock()
+    # Level 20 >= evoLevel 16 would normally prompt; a None window degrades to
+    # "no offer" without crashing or warning.
+    assert _PF.check_evolution_for_pokemon("iid", 90401, 20, None) is None
+    _PF.show_warning_with_traceback.assert_not_called()

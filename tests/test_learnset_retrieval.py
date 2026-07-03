@@ -103,6 +103,21 @@ FAKE_LEARNSET = {
             "zapcannon": ["9L61"],
         }
     },
+    # Event 'S' codes carry a distribution INDEX, not a level (mirrors the real
+    # learnsets.json). Mewtwo "9S8" / Charizard "9S11" must NOT leak Psystrike /
+    # Flare Blitz into ordinary low-level movesets — only the real "9L" applies.
+    "mewtwo": {
+        "learnset": {
+            "confusion": ["9L1"],
+            "psystrike": ["9L72", "9S8"],
+        }
+    },
+    "charizard": {
+        "learnset": {
+            "ember": ["9L1"],
+            "flareblitz": ["9L62", "9S11"],
+        }
+    },
 }
 
 _FAKE_JSON = json.dumps(FAKE_LEARNSET)
@@ -207,6 +222,30 @@ class TestGetLevelupMove:
     def test_no_match_returns_empty_list(self):
         result = get_levelup_move_for_pokemon("slowpoke", 13, 9)
         assert result == []
+
+
+class TestEventSCodesExcluded:
+    """'S' method codes encode an event-distribution index, not a level, so they
+    must never contribute a level-up move (regression for the S-code fix)."""
+
+    def test_scode_not_leaked_below_real_level(self):
+        # "9S8" must NOT be read as level 8 — Psystrike's only legit source here
+        # is "9L72", so it is absent everywhere below level 72.
+        assert "psystrike" not in _get_learnset_moves("mewtwo", 8, 9)
+        assert "psystrike" not in _get_learnset_moves("mewtwo", 71, 9)
+
+    def test_real_level_entry_still_applies(self):
+        # The genuine "9L72" entry is unaffected by dropping the S branch.
+        assert _get_learnset_moves("mewtwo", 72, 9).get("psystrike") == 72
+
+    def test_charizard_flareblitz_scode_excluded(self):
+        # "9S11" must not leak Flare Blitz at level 11; "9L62" still grants it.
+        assert "flareblitz" not in _get_learnset_moves("charizard", 11, 9)
+        assert _get_learnset_moves("charizard", 62, 9).get("flareblitz") == 62
+
+    def test_scode_absent_from_public_move_pools(self):
+        # get_all_pokemon_moves feeds wild/starter movesets; no S-code leakage.
+        assert "psystrike" not in get_all_pokemon_moves("mewtwo", 8, 9)
 
 
 class TestLearnsetMismatches:

@@ -17,7 +17,13 @@ from .functions.battle_functions import (
     process_battle_data,
 )
 from .functions.drawing_utils import tooltipWithColour
-from .utils import safe_get_random_move, play_effect_sound, play_sound, is_alive
+from .utils import (
+    safe_get_random_move,
+    play_effect_sound,
+    play_sound,
+    is_alive,
+    random_item,
+)
 from .functions.ankimon_hooks_to_poke_engine import simulate_battle_with_poke_engine
 from .pyobj.error_handler import show_warning_with_traceback
 
@@ -104,14 +110,24 @@ def on_review_card(*args):
         s.item_receive_value -= 1
         if s.item_receive_value <= 0:
             s.item_receive_value = random.randint(3, 385)
-            # Liveness guard (F24): the seam window may have been closed (its C++
-            # object deleted) since boot; resolve it fresh from the registry and
-            # only paint while it is still alive.
+            # Reward the item every time this trigger fires (main granted it
+            # unconditionally). display_item() both rolls+grants the reward (via
+            # random_item -> give_item) AND paints the popup; the grant is the
+            # actual reward, the QDialog is only the visual. Liveness guard (F24):
+            # the seam window may have been closed (its C++ object deleted) since
+            # boot. When it's dead we still roll+grant the reward directly via
+            # random_item() so it is never silently dropped — only the popup is
+            # skipped.
             item_window = services.test_window
             if is_alive(item_window):
                 try:
                     item_window.display_item()
                 except RuntimeError:
+                    pass
+            else:
+                try:
+                    random_item()
+                except Exception:
                     pass
             if not check_for_badge(achievements, 6):
                 receive_badge(6, achievements)
@@ -215,11 +231,13 @@ def on_review_card(*args):
             )
 
             if true_dmg_from_enemy_move < 0:
-                true_dmg_from_enemy_move = 0
+                # abs() must be taken BEFORE zeroing, or the heal tooltip always
+                # shows +0 instead of the recovered magnitude.
                 heals_to_user += abs(true_dmg_from_enemy_move)
+                true_dmg_from_enemy_move = 0
             if true_dmg_from_user_move < 0:
-                true_dmg_from_user_move = 0
                 heals_to_opponent += abs(true_dmg_from_user_move)
+                true_dmg_from_user_move = 0
 
             main_pokemon.hp = s.new_state.user.active.hp
             main_pokemon.current_hp = s.new_state.user.active.hp

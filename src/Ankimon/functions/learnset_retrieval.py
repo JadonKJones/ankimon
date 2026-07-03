@@ -205,7 +205,12 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
                 if not learn_code or learn_code[0] != target_generation:
                     continue
 
-                # Parse method: L (level-up), R (relearn), S (special/event level)
+                # Parse method: L (level-up) and R (relearn) are the only
+                # level-based sources. Every other code (M/E/T/V/D and S) is
+                # ignored. In particular 'S' encodes an event-distribution INDEX
+                # (e.g. Mewtwo "9S8", Charizard "9S11"), NOT a character level, so
+                # parsing its trailing digits as a learn level leaks event-only
+                # moves (Psystrike, Flare Blitz) into ordinary low-level movesets.
                 method = learn_code[1] if len(learn_code) > 1 else ""
                 if method == "L":
                     try:
@@ -214,11 +219,6 @@ def _get_learnset_moves(pokemon_name, pokemon_level, generation=9):
                         continue
                 elif method == "R":
                     learn_level = 1  # Relearn moves can be learned at any level >= 1
-                elif method == "S":
-                    try:
-                        learn_level = int(learn_code[2:])
-                    except ValueError:
-                        continue
                 else:
                     continue
 

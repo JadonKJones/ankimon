@@ -345,3 +345,106 @@ def test_meets_prerequisites_fusion_and_normal():
     assert ef._meets_prerequisites(1024, {1008}) is True
     assert ef._meets_prerequisites(1024, {1007, 1008}) is True
     assert ef._meets_prerequisites(1024, set()) is False
+
+
+def test_save_main_pokemon_progress_persists_when_evo_window_none():
+    """A friendship-evo-ready main Pokemon defeated while the evo window is
+    dead/None (F31 lazy singletons) must still persist its level/xp/EV/friendship.
+
+    check_friendship_evolution_for_pokemon calls ``evo_window.ask_pokemon_evo(...)``
+    unguarded; without the call-site guard, the resulting AttributeError aborts
+    save_main_pokemon_progress before its final ankimon_db.save_main_pokemon(...),
+    silently discarding the defeat's progress. The guard must skip the offer (not
+    invoke the checker) when the window is None so the save always runs.
+    """
+    import types
+
+    names = (
+        "settings_obj",
+        "translator",
+        "services",
+        "ankimon_db",
+        "find_experience_for_level",
+        "limit_ev_yield",
+        "check_friendship_evolution_for_pokemon",
+        "check_evolution_for_pokemon",
+    )
+    orig = {n: getattr(ef, n) for n in names}
+    try:
+        main_data = {
+            "name": "Pikachu",
+            "attacks": ["Tackle"],
+            "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+            "held_item": None,
+            "pokemon_defeated": 0,
+            "stats": {},
+            "level": 50,
+            "xp": 0,
+            "friendship": 300,
+        }
+
+        settings = mock.MagicMock()
+        settings.get = lambda k, d=None: {
+            "misc.remove_level_cap": False,
+            "gui.pop_up_dialog_message_on_defeat": False,
+        }.get(k, d)
+        ef.settings_obj = settings
+
+        ef.translator = mock.MagicMock()
+        ef.translator.translate = lambda *a, **k: "msg"
+
+        ef.services = mock.MagicMock()
+        ef.services.db.get_main_pokemon.return_value = main_data
+        ef.ankimon_db = mock.MagicMock()
+
+        # Never level up (keeps the friendship path the only evolution branch).
+        ef.find_experience_for_level = lambda *a, **k: 10**9
+        ef.limit_ev_yield = lambda have, add: {
+            "hp": 0,
+            "attack": 0,
+            "defense": 0,
+            "special-attack": 0,
+            "special-defense": 0,
+            "speed": 0,
+        }
+        # Simulate the real UNGUARDED crash: reaching this with a None window
+        # raises exactly as evo_window.ask_pokemon_evo(...) would.
+        ef.check_friendship_evolution_for_pokemon = mock.MagicMock(
+            side_effect=AttributeError(
+                "'NoneType' object has no attribute 'ask_pokemon_evo'"
+            )
+        )
+        ef.check_evolution_for_pokemon = mock.MagicMock(return_value=None)
+
+        main = types.SimpleNamespace(
+            name="Pikachu",
+            growth_rate="medium",
+            level=50,
+            xp=0,
+            individual_id="iid",
+            id=25,
+            everstone=False,
+            friendship=300,
+            stats={},
+            ev={"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+            hp=100,
+            held_item=None,
+            pokemon_defeated=0,
+            tier="Normal",
+            is_favorite=False,
+            evolution_rejected=False,
+            invalidate_cp_cache=lambda: None,
+        )
+        enemy = types.SimpleNamespace(ev_yield={})
+
+        # evo_window=None must NOT abort the save.
+        result = ef.save_main_pokemon_progress(
+            main, enemy, 5, {}, mock.MagicMock(), None
+        )
+
+        ef.ankimon_db.save_main_pokemon.assert_called_once()  # persistence intact
+        ef.check_friendship_evolution_for_pokemon.assert_not_called()  # offer skipped
+        assert result == 50
+    finally:
+        for n, v in orig.items():
+            setattr(ef, n, v)
