@@ -36,6 +36,20 @@ def answerCard_after(rev, card, ease):
         tooltip("Error in ColorConfirmation: Couldn't interpret ease")
     ankimon_tracker_obj.reset_card_timer()
 
+    # Mobile-review de-dupe (F29): this review was just turned into battle
+    # progress on desktop, so record its revlog id (and card id) to keep it out
+    # of the mobile queue. Without this the exclusion set is never populated and
+    # detect_mobile_reviews() re-queues every desktop review as a "mobile"
+    # review after the next sync, double-processing it (double XP / catches).
+    try:
+        from .functions.mobile_sync import record_desktop_review
+        revlog_id = rev.mw.col.db.scalar(
+            "SELECT MAX(id) FROM revlog WHERE cid = ?", card.id
+        )
+        record_desktop_review(revlog_id, card_id=card.id)
+    except Exception:
+        pass
+
 
 # Reload safety (F31): a second boot in the same session must not leave the
 # reviewer hooks registered twice, or every review would be double-counted.

@@ -296,6 +296,13 @@ def test_process_applies_queue_cap(mobile_db, monkeypatch):
     (4, 4),
     ("3", 3),
     ("1-3", 2),
+    # cards_per_round must never be 0 — a range whose average truncates to 0
+    # (e.g. "0-0" / "0-1") or a plain 0/negative would ZeroDivide at the
+    # mobile-sync entry point; every branch clamps to >= 1.
+    ("0-0", 1),
+    ("0-1", 1),
+    (0, 1),
+    (-5, 1),
     (None, 2),
 ])
 def test_parse_cards_per_round(value, expected):
@@ -303,6 +310,57 @@ def test_parse_cards_per_round(value, expected):
     assert ms._parse_cards_per_round(settings)[0] == expected
 
 
+@pytest.mark.parametrize("earned,earner,share_id,expected", [
+    (100, "A", "B", (50, 50)),      # even split
+    (101, "A", "B", (51, 50)),      # earner keeps the odd remainder, no XP lost
+    (100, "A", "A", (100, 0)),      # can't share with yourself
+    (100, "A", None, (100, 0)),     # XP-Share not configured
+    (0, "A", "B", (0, 0)),          # nothing to split
+    (100, "A", "b", (50, 50)),      # distinct ids -> split applies
+])
+def test_xp_share_split(earned, earner, share_id, expected):
+    assert ms._xp_share_split(earned, earner, share_id) == expected
+
+
 def test_normalize_ev_yield_renames_keys():
     assert ms._normalize_ev_yield({"attack": 4, "speed": 2, "hp": 1}) == {"atk": 4, "spe": 2, "hp": 1}
     assert ms._normalize_ev_yield({}) == {}
+
+
+def test_answercard_after_records_desktop_review(monkeypatch):
+    """F29 de-dupe: answerCard_after must record the just-resolved review's
+    revlog id + card id into the mobile-sync exclusion set, so the next
+    detect pass does not re-queue it as a mobile battle (double XP/catches)."""
+    # card_hooks pulls the heavy singletons module (markdown/Qt) transitively;
+    # stub it with just the two names the module binds at import.
+    stub = types.ModuleType("Ankimon.singletons")
+    stub.ankimon_tracker_obj = MagicMock()
+    stub.reviewer_obj = MagicMock()
+    monkeypatch.setitem(sys.modules, "Ankimon.singletons", stub)
+    monkeypatch.delitem(sys.modules, "Ankimon.card_hooks", raising=False)
+
+    import Ankimon.card_hooks as ch
+
+    ms.clear_desktop_session()
+
+    class _Card:
+        id = 42
+
+    class _DB:
+        def scalar(self, _sql, cid):
+            return 9999 if cid == 42 else 0
+
+    class _Sched:
+        def answerButtons(self, _card):
+            return 4
+
+    rev = types.SimpleNamespace(
+        mw=types.SimpleNamespace(col=types.SimpleNamespace(db=_DB(), sched=_Sched()))
+    )
+
+    try:
+        ch.answerCard_after(rev, _Card(), ease=4)
+        ids = ms.get_desktop_session_revlog_ids()
+        assert 9999 in ids
+    finally:
+        ms.clear_desktop_session()
