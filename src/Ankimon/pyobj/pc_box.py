@@ -1852,7 +1852,7 @@ class PokemonPC(QDialog):
         target_stat = stat_map.get(sort_key_str)
 
         if sort_key_str == "date":
-            order_clause = f"ORDER BY original_index {direction}"
+            order_clause = f"ORDER BY captured_date {direction}, original_index {direction}"
         elif sort_key_str == "name":
             order_clause = f"ORDER BY name {direction}, json_extract(data, '$.nickname') {direction}"
         elif sort_key_str == "level":
