@@ -2,6 +2,7 @@ from ..resources import trainer_sprites_path, mypokemon_path, team_pokemon_path
 from ..functions.trainer_functions import find_trainer_rank
 from ..functions.badges_functions import get_achieved_badges
 from ..services import services
+from ..events import events
 import math
 import json
 
@@ -247,6 +248,16 @@ class TrainerCard:
         self.total_xp = self.settings_obj.get("trainer.total_xp")
         print(f"Gained {xp_gained} XP from defeating a {tier} Pokémon!")
         self.check_level_up()
+
+        # Announce the XP / level / Total-XP change on the shared "stats_changed"
+        # seam — the same signal ankimon_sync / mobile_sync / shop_obj fire as the
+        # replacement for exp's singletons.notify_stats_changed(). This is aqt-free
+        # core logic with no handle to the GUI shell, so it only emits the seam
+        # signal; the call sites that DO hold a shell handle (shop_obj) drive the
+        # open screen's actual re-render via refresh_live_screen(). events.emit is
+        # free/no-op unless the agent harness (or an opt-in dev console) has
+        # enabled capture, so this adds zero production overhead.
+        events.emit("stats_changed")
 
     def check_level_up(self):
         """Update level based on XP."""
