@@ -76,6 +76,25 @@ _MAX_TEAM_SIZE: int = 6
 #: at module load.  Empty string when the source PNG is missing.
 POKEBALL_DATA_URI: str = png_to_base64(str(pokeball_path))
 
+#: Per-path cache of sprite ``data:`` URIs, keyed on ``(path, mtime)`` so a
+#: replaced sprite file invalidates naturally.  Avoids re-reading and
+#: base64-encoding the same team PNGs on every Deck Browser / Overview render.
+_SPRITE_URI_CACHE: dict[str, tuple[float, str]] = {}
+
+
+def _cached_sprite_base64(path: str) -> str:
+    """Return the base64 ``data:`` URI for *path*, memoized by mtime."""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return png_to_base64(path)
+    cached = _SPRITE_URI_CACHE.get(path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    uri = png_to_base64(path)
+    _SPRITE_URI_CACHE[path] = (mtime, uri)
+    return uri
+
 # ---------------------------------------------------------------------------
 # CSS (injected once per grid)
 # ---------------------------------------------------------------------------
@@ -246,13 +265,17 @@ def _build_card_html(pokemon: dict[str, Any], id_prefix: str) -> str:
         gender,
         pokemon.get("name"),
     )
-    sprite_src = png_to_base64(sprite_path)
+    sprite_src = _cached_sprite_base64(sprite_path)
 
     bg_style = _bg_style_from_types(types)
     style_attr = f' style="{bg_style}"' if bg_style else ""
     pokeball_style = _build_pokeball_style()
 
     cp_value = pokemon.get("cp") or calculate_cp_from_dict(pokemon)
+    try:
+        cp_value = int(cp_value)
+    except (TypeError, ValueError):
+        cp_value = calculate_cp_from_dict(pokemon)
 
     return (
         f'<div id="{safe_id}" class="poke-item"{style_attr}>'
@@ -414,9 +437,12 @@ def deck_browser_will_render(deck_browser: Any, content: Any) -> None:
         deck_browser (aqt.deckbrowser.DeckBrowser): The Deck Browser instance.
         content (aqt.deckbrowser.DeckBrowserContent): Mutable content object.
     """
-    team = load_pokemon_team()
-    grid_html = _build_pokemon_grid(team, id_prefix="pokemon")
-    content.stats = grid_html + (content.stats or "")
+    try:
+        team = load_pokemon_team()
+        grid_html = _build_pokemon_grid(team, id_prefix="pokemon")
+        content.stats = grid_html + (content.stats or "")
+    except Exception as e:
+        print(f"Ankimon Team Overview - Deck Browser render error: {e}")
 
 
 def on_overview_will_render_content(overview: Any, content: Any) -> None:
@@ -429,9 +455,12 @@ def on_overview_will_render_content(overview: Any, content: Any) -> None:
         overview (aqt.overview.Overview): The Overview instance.
         content (aqt.overview.OverviewContent): Mutable content object.
     """
-    team = load_pokemon_team()
-    grid_html = _build_pokemon_grid(team, id_prefix="pokemon")
-    content.table = grid_html + (content.table or "")
+    try:
+        team = load_pokemon_team()
+        grid_html = _build_pokemon_grid(team, id_prefix="pokemon")
+        content.table = grid_html + (content.table or "")
+    except Exception as e:
+        print(f"Ankimon Team Overview - Overview render error: {e}")
 
 
 # ---------------------------------------------------------------------------

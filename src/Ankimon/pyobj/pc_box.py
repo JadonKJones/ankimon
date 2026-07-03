@@ -718,6 +718,12 @@ class PokemonPC(QDialog):
         Callback function triggered when Anki's theme changes (light to dark or vice versa).
         Refreshes the GUI to apply the new theme settings.
         """
+        if not is_alive(self):
+            try:
+                gui_hooks.theme_did_change.remove(self.on_theme_change)
+            except (ValueError, RuntimeError):
+                pass
+            return
         self.refresh_gui()
 
     def create_gui(self):
@@ -1899,7 +1905,7 @@ class PokemonPC(QDialog):
                 # Pre-calculate sums/stats for sorting if needed
                 if use_python_sort:
                     if sort_key_str == "friendship":
-                        p["_sort_value"] = row["friendship"] or 0
+                        p["_sort_value"] = int(row["friendship"] or 0)
                     elif "iv" in sort_key_str or "ev" in sort_key_str:
                         key = "iv" if "iv" in sort_key_str else "ev"
                         stats_json = row[f"{key}_json"]
@@ -2127,6 +2133,9 @@ class PokemonPC(QDialog):
             friendship=pokemon.get("friendship", 0),
             evolution_rejected=pokemon.get("evolution_rejected", False),
             trigger_evo_callback=trigger_evo,
+            friendship_time_enabled=self.settings.get(
+                "evolution.friendship_time_enabled", True
+            ),
         )
 
         self._last_pokemon_stats = current_stats
@@ -2191,6 +2200,7 @@ class PokemonPC(QDialog):
                 h_layout = h_widget.layout()
                 # h_layout -> name_label (index 0), first_layout (index 1)
                 if h_layout and h_layout.count() > 1:
+                    top_r_layout = None
                     first_layout_item = h_layout.itemAt(1)
                     if first_layout_item and first_layout_item.layout():
                         first_layout = first_layout_item.layout()
@@ -2198,6 +2208,9 @@ class PokemonPC(QDialog):
                         top_r_item = first_layout.itemAt(1)
                         if top_r_item and top_r_item.widget():
                             top_r_layout = top_r_item.widget().layout()
+
+                    if top_r_layout is None:
+                        return
 
                     # Add new Move Manager
                     def _save_pokemon(data):
