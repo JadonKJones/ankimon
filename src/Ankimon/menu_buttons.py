@@ -339,6 +339,17 @@ def create_menu_actions(
     switch_account_action.triggered.connect(swap_ankimon_account)
     mw.pokemenu.addAction(switch_account_action)
 
+    # Restart Ankimon — developer hot-reload (teardown + in-place re-import of
+    # the add-on). The Ctrl+Shift+R accelerator is owned by a dedicated QShortcut
+    # wired at startup (see __init__.py); this menu entry deliberately sets no
+    # shortcut of its own to avoid an "ambiguous shortcut overload" with it.
+    from .reloader import restart_ankimon
+
+    restart_ankimon_action = QAction("Restart Ankimon", mw)
+    restart_ankimon_action.setMenuRole(QAction.MenuRole.NoRole)
+    restart_ankimon_action.triggered.connect(restart_ankimon)
+    mw.pokemenu.addAction(restart_ankimon_action)
+
     # Encounter Rate Simulator (developer tool). Cache the dialog on mw (like the
     # file's other game/dev windows) before showing it: the dialog is parentless
     # and embeds a QWebEngineView, so if the only reference lived in the lambda it
@@ -376,6 +387,7 @@ def create_menu_actions(
     def update_dev_actions_visibility():
         is_dev = is_dev_mode()
         switch_account_action.setVisible(is_dev)
+        restart_ankimon_action.setVisible(is_dev)
         simulator_action.setVisible(is_dev)
         # Hide the Debug submenu and disable the tracker hotkey unless Developer
         # Mode is on. setEnabled(False) is what actually suppresses the
