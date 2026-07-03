@@ -105,6 +105,10 @@ class AnkimonDB:
     
     DB_FILENAME = "ankimon.db"
 
+    # Every connection (GUI + per-background-thread) waits this long for a
+    # write lock before sqlite raises "database is locked". See _prepare_connection.
+    _BUSY_TIMEOUT_MS = 30000
+
     def __init__(self, logger=None, db_path: Optional[Union[str, Path]] = None,
                  *, wal: bool = False):
         self.logger = logger
@@ -123,8 +127,23 @@ class AnkimonDB:
         self._setup_database()
 
     def _prepare_connection(self, conn):
-        """Apply row factory and (only when opted in) WAL-family PRAGMAs, then wrap."""
+        """Apply row factory, a generous busy-timeout, and (only when opted in)
+        WAL-family PRAGMAs, then wrap."""
         conn.row_factory = sqlite3.Row  # Access columns by name
+        # Busy-timeout on EVERY connection (GUI + per-background-thread), regardless
+        # of journal mode. mobile-sync's bulk "Resolve All" runs on a background
+        # thread and holds one long write transaction (conn._disable_commit while it
+        # batches every companion), so a concurrent GUI-thread write — a live
+        # review's save_pokemon / set_config_value — can find the DB write-locked.
+        # Without a busy-timeout sqlite3 raises "database is locked" immediately;
+        # with one it waits for the bulk transaction to commit instead of erroring.
+        # 30s comfortably covers a full bulk resolve (Python's connect() default is
+        # only 5s). This is the robust, single-file-safe alternative to enabling WAL
+        # here (which would need a checkpoint-before-copy backup fix, NR-05).
+        try:
+            conn.execute(f"PRAGMA busy_timeout={self._BUSY_TIMEOUT_MS};")
+        except Exception as e:
+            self._log("warning", f"Failed to set busy_timeout: {e}")
         if self._wal:
             try:
                 mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]

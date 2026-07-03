@@ -411,8 +411,15 @@ def swap_ankimon_account():
         # Reload configuration in place.
         services.settings.load_config()
 
-        # Update the main Pokémon in place.
-        update_main_pokemon(services.main_pokemon)
+        # Update the main Pokémon. update_main_pokemon() mutates the passed-in
+        # object in place ONLY when the now-active DB already has a saved main;
+        # for a DB with none yet (e.g. the first switch to ankimonDEV.db) it
+        # returns a fresh, unrelated PokemonObject. Discarding that would leave
+        # the live singleton — shared by test_window / battle_loop / pokemon_pc —
+        # still showing the previous account's Pokemon, so apply it back.
+        new_main, _ = update_main_pokemon(services.main_pokemon)
+        if new_main is not None and new_main is not services.main_pokemon:
+            services.main_pokemon.update_stats(**new_main.to_dict())
 
         # Refresh trainer-card data from the now-active account.
         services.trainer_card.refresh()
