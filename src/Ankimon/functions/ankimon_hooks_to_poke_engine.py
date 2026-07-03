@@ -274,6 +274,8 @@ def simulate_battle_with_poke_engine(
         if state.opponent.active.hp == 0:
             main_move = "Splash"
             enemy_move = "Splash"
+            main_move_normalized = normalize_name(main_move)
+            enemy_move_normalized = normalize_name(enemy_move)
 
         # Get all possible outcomes
         transpose_instructions = get_all_state_instructions(

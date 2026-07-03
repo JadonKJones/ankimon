@@ -540,6 +540,7 @@ def _process_battle_effects(
                     and isinstance(after, tuple)
                     and len(before) >= 1
                     and len(after) >= 1
+                    and after[0] > 0
                 ):
                     if before[0] > after[0] and after[0] > 0:
                         message = safe_translate(
@@ -556,6 +557,7 @@ def _process_battle_effects(
                     and isinstance(after, tuple)
                     and len(before) >= 1
                     and len(after) >= 1
+                    and after[0] == 0
                 ):
                     if before[0] > 0 and after[0] == 0:
                         message = safe_translate(
@@ -764,6 +766,6 @@ def calculate_hp(base_stat_hp, level, ev, iv):
     iv_value = iv["hp"]
     # hp = int(((iv + 2 * (base_stat_hp + ev) + 100) * level) / 100 + 10)
     hp = int(
-        (((((base_stat_hp + iv_value) * 2) + ev_value) * level) / 100) + level + 10
+        ((((2 * base_stat_hp) + iv_value + ev_value) * level) / 100) + level + 10
     )
     return hp

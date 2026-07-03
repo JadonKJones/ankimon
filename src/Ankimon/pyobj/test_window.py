@@ -236,7 +236,7 @@ class TestWindow(QWidget):
     def _get_display_name(self, pokemon):
         """Helper to safely get localized or pretty name for normal and special forms."""
         if hasattr(pokemon, "name") and any(
-            f in pokemon.name.lower() for f in ["mega", "gmax"]
+            f in pokemon.name.lower() for f in ["-mega", "-gmax"]
         ):
             return get_pretty_name_for_name(pokemon.name)
         return get_pokemon_diff_lang_name(

@@ -11,6 +11,7 @@ from ..functions.sprite_functions import get_sprite_path
 from datetime import datetime
 import uuid
 from ..functions.pokedex_functions import get_base_experience, get_growth_rate
+from ..utils import get_tier_by_id
 from .error_handler import show_warning_with_traceback
 from ..services import services
 
@@ -641,6 +642,7 @@ class PokemonTrade:
                 "nickname": "",
                 "ability": ability,
                 "id": pokemon_id,
+                "tier": get_tier_by_id(pokemon_id) or "Normal",
                 "gender": self.gender_from_id(gender_id),
                 "level": level,
                 "type": details["types"],
