@@ -338,13 +338,6 @@ def save_update_state(
         }
         if skip_until is not None:
             state["skip_until"] = skip_until
-        elif path.exists():
-            try:
-                old_state = json.loads(path.read_text(encoding="utf-8"))
-                if "skip_until" in old_state:
-                    state["skip_until"] = old_state["skip_until"]
-            except Exception:
-                pass
         path.write_text(json.dumps(state, indent=2), encoding="utf-8")
     except Exception as e:
         print(f"Ankimon Updater: Failed to save update state: {e}")
@@ -584,6 +577,7 @@ def apply_update(
     gitignore_patterns = _get_gitignore_patterns()
 
     log("Validating update archive...")
+    backup_dir = None
     try:
         with zipfile.ZipFile(zip_path) as zf:
             names = zf.namelist()
@@ -689,23 +683,24 @@ def apply_update(
         # --- Rollback ---
         log(f"Update failed: {e}. Rolling back...")
         rollback_count = 0
-        for root, dirs, files in os.walk(backup_dir):
-            for fname in files:
-                backup_path = Path(root) / fname
-                rel = str(backup_path.relative_to(backup_dir)).replace("\\", "/")
-                dest = addon_dir / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    shutil.copy2(backup_path, dest)
-                    rollback_count += 1
-                except Exception:
-                    pass
-        log(f"Rolled back {rollback_count} files.")
+        if backup_dir is not None:
+            for root, dirs, files in os.walk(backup_dir):
+                for fname in files:
+                    backup_path = Path(root) / fname
+                    rel = str(backup_path.relative_to(backup_dir)).replace("\\", "/")
+                    dest = addon_dir / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        shutil.copy2(backup_path, dest)
+                        rollback_count += 1
+                    except Exception:
+                        pass
+            log(f"Rolled back {rollback_count} files.")
 
-        try:
-            shutil.rmtree(backup_dir)
-        except Exception:
-            pass
+            try:
+                shutil.rmtree(backup_dir)
+            except Exception:
+                pass
 
         cleanup()
         return False, f"Update failed and was rolled back: {e}"

@@ -699,7 +699,22 @@ class UpdateDialog(QDialog):
         self.status_label.setText("Loading developer options...")
 
         def bg(_col):
-            return (fetch_tags(), fetch_branches(), fetch_open_prs())
+            tags = []
+            try:
+                tags = fetch_tags()
+            except Exception:
+                pass
+            branches = []
+            try:
+                branches = fetch_branches()
+            except Exception:
+                pass
+            prs = []
+            try:
+                prs = fetch_open_prs()
+            except Exception:
+                pass
+            return (tags, branches, prs)
 
         def on_done(result):
             self._set_busy(False)
