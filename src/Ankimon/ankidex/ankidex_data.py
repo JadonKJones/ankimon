@@ -53,7 +53,7 @@ def build_encounterable_ids(settings):
         ids.discard(uid)
 
     # Regional forms for the active region — same generation gate as the roll.
-    active_region = settings.get("misc.active_region") if settings else None
+    active_region = settings.get("misc.active_region") if settings is not None else None
     regional = getattr(encounter_data, "REGIONAL_FORMS", {})
     if active_region and active_region in regional:
         for pid in regional[active_region]:
@@ -83,7 +83,7 @@ def _empty_payload():
 
 def _prefs(settings):
     """Read the Ankidex view prefs, falling back to the legacy pokedex_v2 keys."""
-    if not settings:
+    if settings is None:
         return {"viewMode": "grid", "sortMode": "id-asc", "spriteMode": "static"}
     return {
         "viewMode": settings.get(
@@ -105,7 +105,7 @@ def get_ankidex_data(db, settings, tracker=None):
     stays testable and reusable); ``tracker`` is optional (its
     ``get_ids_in_collection()`` side effect is preserved when present).
     """
-    if not db:
+    if db is None:
         # Reload-safe: between a profile swap and the next populate() the registry
         # can be unpopulated (db is None). Serve an empty-but-valid payload so the
         # SPA still renders instead of raising AttributeError on db.execute(...).
@@ -126,16 +126,21 @@ def get_ankidex_data(db, settings, tracker=None):
     )
     caught_ids = {row[0] for row in cursor.fetchall()}
 
-    # Released Pokemon (from history)
-    cursor = db.execute(
-        "SELECT DISTINCT json_extract(data, '$.id') FROM pokemon_history"
-    )
-    for row in cursor.fetchall():
-        if row[0]:
-            try:
-                caught_ids.add(int(row[0]))
-            except (ValueError, TypeError):
-                continue
+    # Released Pokemon (from history). Wrapped so an older/unmigrated DB file
+    # (e.g. a restored backup predating the pokemon_history table) degrades to
+    # "no released entries" instead of failing the whole payload.
+    try:
+        cursor = db.execute(
+            "SELECT DISTINCT json_extract(data, '$.id') FROM pokemon_history"
+        )
+        for row in cursor.fetchall():
+            if row[0]:
+                try:
+                    caught_ids.add(int(row[0]))
+                except (ValueError, TypeError):
+                    continue
+    except Exception:
+        pass
 
     # Explicitly recorded caught Pokemon (e.g. from evolutions or prior captures)
     if hasattr(db, "get_caught_ids"):

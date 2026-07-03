@@ -253,11 +253,11 @@ def _coerce_cards_per_round(value, original=2):
     back to 2, but non-dashed garbage preserves the prior stored value
     (``original``) rather than silently resetting to 2."""
     if isinstance(value, int):
-        return 1 if value == 0 else value
+        return 1 if value <= 0 else value
     text = str(value).strip()
     try:
         n = int(text)
-        return 1 if n == 0 else n
+        return 1 if n <= 0 else n
     except ValueError:
         pass
     if "-" in text:

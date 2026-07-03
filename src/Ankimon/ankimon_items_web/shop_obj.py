@@ -70,7 +70,7 @@ class NavBridge(QObject):
     def getPendingReviewsCount(self) -> int:
         try:
             db = services.db
-            return db.get_pending_mobile_count() if db else 0
+            return db.get_pending_mobile_count() if db is not None else 0
         except Exception:
             return 0
 
@@ -294,10 +294,17 @@ class MobileBridge(QObject):
             settings_obj = services.settings
             cards_per_round, _ = mobile_sync._parse_cards_per_round(settings_obj)
 
-            # Read cached resolved count to compute total battle count quickly
-            cursor = db.execute("SELECT value FROM metadata WHERE key = 'mobile_resolved_encounters_count'")
-            row = cursor.fetchone()
-            resolved_battles = int(row[0]) if row else 0
+            # Read cached resolved count to compute total battle count quickly.
+            # Wrapped individually so an older/unmigrated DB lacking the metadata
+            # table degrades to resolved_battles=0 instead of failing the whole
+            # status load.
+            resolved_battles = 0
+            try:
+                cursor = db.execute("SELECT value FROM metadata WHERE key = 'mobile_resolved_encounters_count'")
+                row = cursor.fetchone()
+                resolved_battles = int(row[0]) if row else 0
+            except Exception:
+                pass
             battle_count = resolved_battles + math.ceil(pending_count / cards_per_round)
 
             if pending_count == 0:
@@ -328,7 +335,7 @@ class MobileBridge(QObject):
             auto_battle_mode = auto_battle_mode_names.get(auto_battle_val, "Manual")
 
             rare_catch_active = False
-            if settings_obj:
+            if settings_obj is not None:
                 rare_catch_active = (
                     settings_obj.get("battle.auto_catch_legendary", True)
                     or settings_obj.get("battle.auto_catch_mythical", True)
@@ -345,7 +352,7 @@ class MobileBridge(QObject):
             main_pokemon_level = None
             main_pokemon_sprite = None
             sprite_mode = "static"
-            if main_pokemon:
+            if main_pokemon is not None:
                 main_pokemon_name = main_pokemon.name
                 main_pokemon_level = main_pokemon.level
                 
@@ -354,7 +361,7 @@ class MobileBridge(QObject):
                     main_pokemon.id, bool(main_pokemon.shiny), (main_pokemon.gender or "N"), main_pokemon.name, "gif"
                 )
 
-            if settings_obj:
+            if settings_obj is not None:
                 sprite_mode = settings_obj.get(
                     "ankidex.spriteMode",
                     settings_obj.get("pokedex_v2.spriteMode", "static")
@@ -768,6 +775,8 @@ class MobileBridge(QObject):
             from ..functions.mobile_sync import commit_replay_outcome
 
             db = services.db
+            if db is None:
+                return {"success": False, "error": "Database service is uninitialized."}
             settings_obj = services.settings
             trainer_card = services.trainer_card
             main_pokemon = services.main_pokemon
@@ -1098,7 +1107,7 @@ class AnkimonItemsWeb(QDialog):
             self.webview_mobile.page().runJavaScript(js)
         elif self.current_screen == SCREEN_HISTORY:
             db = services.db
-            data = db.get_mobile_history() if db else []
+            data = db.get_mobile_history() if db is not None else []
             js = f"if (window.initializeHistory) window.initializeHistory({json.dumps(data)});"
             self.webview_history.page().runJavaScript(js)
 
@@ -1170,7 +1179,7 @@ class AnkimonItemsWeb(QDialog):
         if active_view:
             try:
                 db = services.db
-                count = db.get_pending_mobile_count() if db else 0
+                count = db.get_pending_mobile_count() if db is not None else 0
                 active_view.page().runJavaScript(f"if (window.updateNavSwitcherUnresolvedCount) window.updateNavSwitcherUnresolvedCount({count});")
             except Exception:
                 pass
@@ -1208,7 +1217,7 @@ class AnkimonItemsWeb(QDialog):
     def _push_history_live(self):
         """Push a history refresh when a mobile review outcome is committed."""
         db = services.db
-        history_data = db.get_mobile_history() if db else []
+        history_data = db.get_mobile_history() if db is not None else []
         js = (
             "if (window.liveRefreshHistory) "
             f"window.liveRefreshHistory({json.dumps(history_data)});"
@@ -1341,6 +1350,16 @@ class AnkimonItemsWeb(QDialog):
 
     def get_inventory_data(self):
         sm = self.shop_manager
+        if sm is None:
+            # Reload-safe: shop_manager can be unset during early boot / a
+            # profile swap. Serve an empty-but-valid payload (same keys the
+            # normal return builds) so shop.js still renders.
+            return {
+                "cash": 0,
+                "reroll_cost": 0,
+                "skip_reroll_confirm": False,
+                "items": [],
+            }
 
         # Today's stock (cached by PokemonShopManager.get_daily_items)
         raw_items = sm.get_daily_items() or []
@@ -1524,8 +1543,9 @@ class AnkimonItemsWeb(QDialog):
         if not entry:
             return None
         try:
-            lang = int(self.shop_manager.settings_obj.get("misc.language") or 9)
-        except (TypeError, ValueError):
+            settings = self.shop_manager.settings_obj
+            lang = int(settings.get("misc.language") or 9) if settings is not None else 9
+        except (TypeError, ValueError, AttributeError):
             lang = 9
         if lang == 14:  # es_latam → fall back to es per legacy behaviour
             lang = 7
@@ -1892,7 +1912,7 @@ class AnkimonItemsWeb(QDialog):
             # proxy — that proxy would CONSTRUCT a brand-new PC window (and a Test
             # window) when none is open, so is_alive() would always be True and
             # we'd force an unwanted build. Mirrors singletons.swap_ankimon_account.
-            from ..singletons import is_alive
+            from ..utils import is_alive
             pc = services.pokemon_pc
             if is_alive(pc):
                 pc.refresh_gui()
@@ -1915,7 +1935,12 @@ class AnkimonItemsWeb(QDialog):
         """Build the schema + current values payload for the Settings screen."""
         from . import settings_schema
 
-        settings_obj = self.shop_manager.settings_obj
+        settings_obj = self.shop_manager.settings_obj if self.shop_manager is not None else None
+        if settings_obj is None:
+            # Reload-safe: shop_manager / settings can be unset during early boot
+            # or a profile swap. Serve an empty-but-valid payload so settings.js
+            # still renders instead of crashing the Settings screen.
+            return {"groups": [], "dev_mode": False}
         # Refresh config from disk so external edits are picked up.
         try:
             config = settings_obj.load_config()
@@ -2080,7 +2105,9 @@ class AnkimonItemsWeb(QDialog):
         if not isinstance(payload, dict):
             return {"ok": False, "message": "Invalid payload."}
 
-        settings_obj = self.shop_manager.settings_obj
+        settings_obj = self.shop_manager.settings_obj if self.shop_manager is not None else None
+        if settings_obj is None:
+            return {"ok": False, "message": "Settings service is uninitialized."}
         try:
             config = settings_obj.load_config()
         except Exception:

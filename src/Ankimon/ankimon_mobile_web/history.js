@@ -228,7 +228,12 @@ function clearHistory() {
 function formatTime(timestamp) {
     if (!timestamp) return '';
     try {
-        const date = new Date(timestamp);
+        // Timestamps arrive as epoch-ms numbers (or numeric strings after a
+        // JSON round-trip); coerce and guard so an invalid value renders as
+        // blank instead of "Invalid Date" — matches formatTime in mobile.js.
+        const ts = Number(timestamp);
+        if (isNaN(ts) || ts <= 0) return '';
+        const date = new Date(ts);
         const now = new Date();
         
         const diffMs = now - date;

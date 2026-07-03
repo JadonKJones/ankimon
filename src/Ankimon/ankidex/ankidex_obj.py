@@ -90,7 +90,7 @@ class Ankidex(QDialog):
 
     def save_preferences(self):
         def on_state_ready(state):
-            if state and isinstance(state, dict) and services.settings:
+            if state and isinstance(state, dict) and services.settings is not None:
                 for key, val in state.items():
                     services.settings.set(f"ankidex.{key}", val)
 
