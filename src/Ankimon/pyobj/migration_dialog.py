@@ -260,6 +260,10 @@ class MigrationDialog(QDialog):
                 # by identity (name + level + species_id) instead of generating new UUIDs.
                 try:
                     all_captured = self.db.get_all_pokemon()
+                    # Map each identity tuple to a queue of individual_ids so that
+                    # N captured Pokémon sharing (name, level, species_id) hand out
+                    # N distinct ids to N legacy team members instead of aliasing
+                    # every slot to the same captured row.
                     _collection_index = {}
                     for p in all_captured:
                         key = (
@@ -267,8 +271,9 @@ class MigrationDialog(QDialog):
                             str(p.get("level", "")),
                             str(p.get("species_id", p.get("id", ""))),
                         )
-                        if key not in _collection_index:
-                            _collection_index[key] = p.get("individual_id")
+                        individual_id = p.get("individual_id")
+                        if individual_id:
+                            _collection_index.setdefault(key, []).append(individual_id)
                 except Exception:
                     _collection_index = {}
 
@@ -281,11 +286,9 @@ class MigrationDialog(QDialog):
                                 str(member.get("level", "")),
                                 str(member.get("species_id", member.get("id", ""))),
                             )
-                            matched_id = _collection_index.get(match_key)
-                            if matched_id:
-                                member["individual_id"] = matched_id
-                            else:
-                                member["individual_id"] = str(uuid.uuid4())
+                            ids_for_key = _collection_index.get(match_key)
+                            matched_id = ids_for_key.pop(0) if ids_for_key else None
+                            member["individual_id"] = matched_id or str(uuid.uuid4())
                         valid_team_list.append(member)
                 if self.db.save_team(valid_team_list):
                     stats["team"] = len(valid_team_list)

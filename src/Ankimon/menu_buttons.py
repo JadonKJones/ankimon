@@ -36,9 +36,9 @@ from .gui_entities import (
     NatureTableWidget,
 )
 
-# Developer-mode gate (reads misc.developer_mode via the settings seam). Hides
-# the developer-only menu entries (Switch Account / Encounter Rate Simulator)
-# unless the user has turned Developer Mode on.
+# Developer-mode gate (detects "dev_"/"_dev" in the profile or trainer name).
+# Hides the developer-only menu entries (Switch Account / Encounter Rate
+# Simulator) unless the user is in Developer Mode.
 from .utils import is_dev_mode, is_alive
 
 
@@ -404,6 +404,14 @@ def create_menu_actions(
         tracker_window_action.setEnabled(is_dev)
         if debug is True:
             debug_menu.menuAction().setVisible(is_dev)
+        # Keep the Ctrl+Shift+R hot-reload accelerator in lockstep with the menu
+        # action (registered in __init__.on_startup_complete). Guard on liveness:
+        # the shortcut list may be absent before startup-complete or hold a dead
+        # widget after a reload.
+        from .services import services
+        for _sc in getattr(services, "_reload_shortcuts", ()) or ():
+            if is_alive(_sc):
+                _sc.setEnabled(is_dev)
 
     mw.pokemenu.aboutToShow.connect(update_dev_actions_visibility)
     update_dev_actions_visibility()

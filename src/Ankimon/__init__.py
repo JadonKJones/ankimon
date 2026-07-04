@@ -278,6 +278,7 @@ def start_asynchronous_startup():
         #     avoid an "ambiguous shortcut overload" with the menu entry.
         from PyQt6.QtGui import QKeySequence, QShortcut
         from .reloader import restart_ankimon
+        from .utils import is_dev_mode
 
         for _stale_sc in getattr(services, "_reload_shortcuts", ()) or ():
             try:
@@ -287,6 +288,10 @@ def start_asynchronous_startup():
                 pass
         _reload_shortcut = QShortcut(QKeySequence("Ctrl+Shift+R"), mw)
         _reload_shortcut.activated.connect(restart_ankimon)
+        # Developer-only accelerator: disable it for normal users so the hidden
+        # hot-reload chord can't tear down the add-on by accident. Kept in lockstep
+        # with the "Restart Ankimon" menu action by update_dev_actions_visibility().
+        _reload_shortcut.setEnabled(is_dev_mode())
         services._reload_shortcuts = [_reload_shortcut]
 
         # 6. Boot finished: open the review gate and signal observers.

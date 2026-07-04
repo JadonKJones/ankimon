@@ -102,6 +102,16 @@ def check_branch_update(online_connectivity: bool, ssh: bool):
             _log_info("check_branch_update exited early: git clone detected")
             return
 
+        # Only branch installs poll a branch SHA. A pre-existing release/tag/PR
+        # install has a source_name that is NOT a branch, so fetch_branch_sha
+        # would 404 and never persist addon_version — repeating the wasted GitHub
+        # round-trip every startup (and risking a release->branch source_type
+        # coercion if a tag happened to share a branch name). Fresh installs
+        # (no state) still fall through and default to the main branch.
+        if state and state.get("source_type") != "branch":
+            _log_info("check_branch_update: skipping branch init for non-branch install")
+            return
+
         branch_name = (state.get("source_name") if state else None) or "main"
 
         # Initialize branch check tracking silently

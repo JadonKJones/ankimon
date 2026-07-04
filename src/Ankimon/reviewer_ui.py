@@ -21,8 +21,8 @@ from .functions.encounter_functions import (
 )
 from .texts import _bottomHTML_template, button_style
 
-# Developer-mode gate (reads misc.developer_mode via the settings seam). Guards
-# the dev-only test-encounter hotkey ('0'); default-off so it stays hidden.
+# Developer-mode gate (detects "dev_"/"_dev" in the profile or trainer name).
+# Guards the dev-only test-encounter hotkey ('0'); default-off so it stays hidden.
 from .utils import is_dev_mode
 
 
