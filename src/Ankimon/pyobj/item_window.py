@@ -621,7 +621,7 @@ class ItemWindow(QWidget):
                 if not is_alive(self.evo_window):
                     from ..singletons import get_evo_window
                     self.evo_window = get_evo_window()
-                self.evo_window.ask_pokemon_evo(individual_id, prevo_id, evo_id)
+                self.evo_window.ask_pokemon_evo(individual_id, prevo_id, evo_id, item_name=item_name)
             else:
                 self.logger.log_and_showinfo("info", "This Pokemon does not need this item.")
         except Exception as e:
