@@ -62,6 +62,107 @@ if not getattr(
     )
 
 
+# --- Non-canonical form-id tolerance for engine pokedex lookups ---------------
+# Ankimon battles Mega/Gmax/regional forms (actual_id >= 10000, e.g. "golurkmega",
+# "darkraimega" — Golurk/Darkrai have no real Mega) whose normalized id is NOT a
+# Smogon pokedex key. The vendored engine's weight-based moves (Heavy Slam / Heat
+# Crash / Low Kick / Grass Knot) index ``pokedex[pokemon.id][WEIGHT]`` directly, so
+# such a form raised ``KeyError``. That error is caught, but the handler
+# (show_warning_with_traceback) then builds a Qt dialog — and mobile bulk
+# auto-resolve runs on a worker thread, where constructing a QWidget is a C++-level
+# abort ("force-close" after ~230 reviews, once a Mega/Gmax battler is drawn).
+#
+# The engine is a git submodule (its edits are lost on ``git submodule update``),
+# so instead of patching it we install a form-tolerant *view* of its pokedex on the
+# modules that do id-keyed lookups. A missing form id resolves to the longest base
+# species key it starts with (``golurkmega`` -> ``golurk``); canonical ids pass
+# through unchanged, so battle behaviour for known Pokemon is identical. Applied
+# once and idempotent under the reload-safe-singletons module reload (it always
+# wraps the raw data-module dict, never a previously installed view).
+from ..poke_engine.data import pokedex as _engine_pokedex
+
+_pokedex_key_cache = {}
+
+
+def resolve_pokedex_key(name):
+    """Return an engine-pokedex key for ``name`` (itself if canonical, else the
+    longest base-species key it starts with), or ``None`` if nothing matches."""
+    if name in _engine_pokedex:
+        return name
+    if name in _pokedex_key_cache:
+        return _pokedex_key_cache[name]
+    best = None
+    for key in _engine_pokedex:
+        if name.startswith(key) and (best is None or len(key) > len(best)):
+            best = key
+    _pokedex_key_cache[name] = best
+    return best
+
+
+class _FormTolerantPokedex:
+    """Read-through view of the engine pokedex that resolves non-canonical form
+    ids to their base species so id-keyed lookups (notably weight-based moves)
+    never KeyError. Every other mapping operation delegates to the real pokedex."""
+
+    __slots__ = ("_base",)
+    # Only ever returned for a totally unresolvable id (no base-species prefix
+    # exists) — eff. impossible for real data, since base species are always
+    # present; a neutral weight keeps weight-based moves functional regardless.
+    _FALLBACK = {constants.WEIGHT: 100.0}
+
+    def __init__(self, base):
+        self._base = base
+
+    def __getitem__(self, key):
+        base = self._base
+        if key in base:
+            return base[key]
+        resolved = resolve_pokedex_key(key)
+        return base[resolved] if resolved is not None else self._FALLBACK
+
+    def __contains__(self, key):
+        return key in self._base
+
+    def __iter__(self):
+        return iter(self._base)
+
+    def __len__(self):
+        return len(self._base)
+
+    def get(self, key, default=None):
+        return self._base.get(key, default)
+
+    def keys(self):
+        return self._base.keys()
+
+    def values(self):
+        return self._base.values()
+
+    def items(self):
+        return self._base.items()
+
+
+def _install_form_tolerant_pokedex():
+    # Patch the modules whose lookups are keyed by a live battler's id/name. The
+    # weight moves in modify_move are the confirmed crash; damage_calculator's
+    # (terastallize-gated) STAB lookup is guarded defensively too. Always wraps the
+    # raw dict so a module reload can't nest views.
+    from ..poke_engine.special_effects.moves import modify_move
+    from ..poke_engine import damage_calculator
+
+    view = _FormTolerantPokedex(_engine_pokedex)
+    modify_move.pokedex = view
+    damage_calculator.pokedex = view
+
+
+try:
+    _install_form_tolerant_pokedex()
+except Exception:
+    # Never let a hardening patch break battle import; the raw engine still works
+    # for every canonical Pokemon, which is the overwhelming majority.
+    pass
+
+
 def reset_stat_boosts(pokemon: Pokemon) -> Pokemon:
     """
     Resets all stat boosts of a given Pokemon to zero.

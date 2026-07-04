@@ -583,6 +583,7 @@ class MobileBridge(QObject):
         self._bulk_paused = False
         self._bulk_stopped = False
         self._bulk_refreshed = False
+        self._bulk_last_yield = 0.0  # GIL-yield throttle clock (Bug 2)
 
         # Read the scheduler's day cutoff on the main GUI thread — mw.col.sched
         # must not be touched from the worker thread. Matches resolveAll /
@@ -602,11 +603,26 @@ class MobileBridge(QObject):
                         self._bulk_progress["processed"] = status
                         if total is not None:
                             self._bulk_progress["total"] = total
-                    
+
                     import time
+                    # GIL yield / rate limit (Bug 2). The per-review battle
+                    # simulation is CPU-bound pure Python that holds the GIL; on a
+                    # plain worker thread it starves the Qt GUI thread, so the
+                    # progress bar froze then jumped and Pause/Stop registered late.
+                    # Sleeping briefly hands the GIL to the GUI thread so it can
+                    # repaint and process clicks. Time-gated (~3ms handed over per
+                    # ~20ms of work => ~13% slower, smooth UI) rather than per call,
+                    # so throughput barely drops. Only the background bulk-resolve
+                    # passes a progress_callback, so the synchronous post-sync
+                    # auto-resolve path is unaffected.
+                    now = time.monotonic()
+                    if now - getattr(self, "_bulk_last_yield", 0.0) >= 0.02:
+                        time.sleep(0.003)
+                        self._bulk_last_yield = time.monotonic()
+
                     while getattr(self, "_bulk_paused", False) and not getattr(self, "_bulk_stopped", False):
                         time.sleep(0.1)
-                    
+
                     if getattr(self, "_bulk_stopped", False):
                         return False
                     return True
