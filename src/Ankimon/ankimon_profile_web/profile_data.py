@@ -554,7 +554,7 @@ class ProfileData:
                 SELECT individual_id, name, level, pokedex_id, shiny,
                        json_extract(data, '$.gender') AS gender
                 FROM captured_pokemon
-                ORDER BY rowid DESC
+                ORDER BY json_extract(data, '$.captured_date') DESC, rowid DESC
                 LIMIT 6
                 """
             )
