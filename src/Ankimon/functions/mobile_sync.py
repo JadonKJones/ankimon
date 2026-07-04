@@ -1816,7 +1816,11 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
             current_counter = int(settings_obj.get("trainer.mobile_reviews_resolved_since_payout", 0))
             new_counter = current_counter + total_reviews_resolved
             
-            ci = int(settings_obj.get("trainer.cash_reward_interval", 5))
+            # Clamp to >=1: an explicitly-stored 0 survives the default and would
+            # crash `new_counter // ci` / `% ci` below (the UI clamps to >=5, but
+            # a hand-edited config can reach 0). Mirrors the ci > 0 guard in the
+            # auto-resolve path.
+            ci = max(1, int(settings_obj.get("trainer.cash_reward_interval", 5)))
             ca = int(settings_obj.get("trainer.cash_reward_amount", 10))
             
             raw_gained_cash = (new_counter // ci) * ca
