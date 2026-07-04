@@ -223,3 +223,68 @@ def test_cache_clear_hook_idempotent_on_module_reexec(monkeypatch):
 
     assert gui_hooks.profile_will_close.count(mod2._on_profile_close) == 1
     assert mod1._on_profile_close not in gui_hooks.profile_will_close
+
+
+# --- Mobile-review sync wiring (decoupling fix) ------------------------------
+# The profile_did_open handler must register the AnkiWeb sync hooks
+# SYNCHRONOUSLY and independent of the legacy misc.ankiweb_sync file-sync
+# toggle, so mobile-review detection is live for a default-config user. The
+# file-based data-sync DIALOG, by contrast, stays gated behind that toggle.
+
+
+class _Future:
+    def __init__(self, value):
+        self._value = value
+
+    def result(self):
+        return self._value
+
+
+def _fire_profile_did_open(monkeypatch, *, ankiweb_sync, mobile_enabled=True):
+    """Register hooks, then fire the profile_did_open handler with the given
+    settings and return (profile_hooks, its stubbed ankimon_sync module)."""
+    _fresh_services(monkeypatch)
+    gui_hooks = _fresh_gui_hooks()
+    profile_hooks = _exec_profile_hooks(monkeypatch, gui_hooks)
+
+    def _get(key, default=None):
+        return {
+            "misc.ankiweb_sync": ankiweb_sync,
+            "mobile.enabled": mobile_enabled,
+        }.get(key, default)
+
+    profile_hooks.settings_obj.get.side_effect = _get
+
+    # Run the backgrounded connectivity task synchronously so on_done executes.
+    def _run_in_background(task, on_done=None):
+        value = task()
+        if on_done is not None:
+            on_done(_Future(value))
+
+    profile_hooks.mw.taskman = SimpleNamespace(run_in_background=_run_in_background)
+
+    _register(profile_hooks)
+    handler = gui_hooks.profile_did_open[0]
+    handler()
+
+    sync_mod = sys.modules["Ankimon.pyobj.ankimon_sync"]
+    return profile_hooks, sync_mod
+
+
+def test_sync_hooks_registered_even_when_ankiweb_sync_disabled(monkeypatch):
+    """Regression guard: mobile-review detection must be wired for a DEFAULT
+    user (misc.ankiweb_sync=False). Previously on_done returned early on the
+    False flag and setup_ankimon_sync_hooks was never called, so a mid-session
+    sync never turned phone reviews into battles."""
+    _, sync_mod = _fire_profile_did_open(monkeypatch, ankiweb_sync=False)
+
+    sync_mod.setup_ankimon_sync_hooks.assert_called_once()
+    # The OPT-IN file-based data-sync dialog stays gated behind the toggle.
+    sync_mod.check_and_sync_pokemon_data.assert_not_called()
+
+
+def test_sync_hooks_registered_when_ankiweb_sync_enabled(monkeypatch):
+    """With the file-sync toggle on, the hooks still register (unconditional)."""
+    _, sync_mod = _fire_profile_did_open(monkeypatch, ankiweb_sync=True)
+
+    sync_mod.setup_ankimon_sync_hooks.assert_called_once()

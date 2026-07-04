@@ -474,3 +474,46 @@ def test_answercard_after_records_desktop_review(monkeypatch):
         assert 9999 in ids
     finally:
         ms.clear_desktop_session()
+
+
+def test_commit_replay_mobile_cash_cap(monkeypatch):
+    """Verifies that commit_replay_outcome caps cash at 400 per day."""
+    class _S:
+        def __init__(self, d): self._d = dict(d)
+        def get(self, k, default=None): return self._d.get(k, default)
+        def set(self, k, v): self._d[k] = v
+
+    import Ankimon.business as _biz
+    monkeypatch.setattr(_biz, "calculate_cp_from_dict", lambda d: 10)
+
+    from datetime import date
+    today_str = str(date.today())
+
+    # Mock the companion attribution call so it doesn't try to query the mock DB
+    monkeypatch.setattr(
+        ms, "_attribute_xp_and_evs_to_companion",
+        lambda *args, **kwargs: None
+    )
+
+    settings = _S({
+        "trainer.mobile_cash_earned_today": 380,
+        "trainer.last_mobile_cash_reward_date": today_str,
+        "trainer.cash_reward_interval": 5,
+        "trainer.cash_reward_amount": 50,
+        "trainer.mobile_reviews_resolved_since_payout": 0,
+    })
+    db = MagicMock()
+    db.get_pending_mobile_count.return_value = 0
+    outcome_data = {
+        "enemy_pokemon": MagicMock(),
+        "battle_xp": 100, "total_xp": 100,
+        "accumulated_evs": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        "total_trainer_xp": 0, "gained_cash": 0,
+        "companion_id": "COMP", "companion_name": "Comp", "companion_level": 5,
+        "review_ids": [1, 2, 3, 4, 5], "companion_fainted": False,
+    }
+
+    res = ms.commit_replay_outcome("defeat", outcome_data, db, settings, None, None)
+    assert res.get("success") is True
+    assert res.get("cash_gained") == 20
+

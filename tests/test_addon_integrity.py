@@ -17,9 +17,10 @@ iterating a MagicMock __path__ generates objects indefinitely.
 
 The explicit MODULES_TO_CHECK list is reconciled against main's actual module
 set: it includes main's service-seam / scaffolding modules (core, services,
-events, ui_port, gui_presenter, boot_async, webshell.*) and omits Stage-B leaf
-modules that have not landed on this branch yet (e.g. pyobj.move_picker,
-pyobj.encounter_simulator_dialog, ankidex.ankidex_obj, reloader).
+events, ui_port, gui_presenter, boot_async, webshell.*) and the developer
+hot-reload module (reloader), and omits Stage-B leaf modules that have not
+landed on this branch yet (e.g. pyobj.move_picker,
+pyobj.encounter_simulator_dialog, ankidex.ankidex_obj).
 """
 
 import os
@@ -122,6 +123,7 @@ MODULES_TO_CHECK = [
     "Ankimon.menu_buttons",
     "Ankimon.move_names",
     "Ankimon.profile_hooks",
+    "Ankimon.reloader",
     "Ankimon.resources",
     "Ankimon.reviewer_ui",
     "Ankimon.startup",

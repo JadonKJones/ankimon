@@ -257,6 +257,11 @@ class TrainerCard:
         # free/no-op unless the agent harness (or an opt-in dev console) has
         # enabled capture, so this adds zero production overhead.
         events.emit("stats_changed")
+        try:
+            from ..singletons import notify_stats_changed
+            notify_stats_changed()
+        except Exception:
+            pass
 
     def check_level_up(self):
         """Update level based on XP."""

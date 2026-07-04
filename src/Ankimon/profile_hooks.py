@@ -83,6 +83,20 @@ def _on_profile_did_open(online_connectivity):
         except Exception as e:
             logger.log("error", f"Failed to initialize mobile watermark: {e}")
 
+        # Register the AnkiWeb sync hooks SYNCHRONOUSLY here — not in the
+        # backgrounded connectivity callback below. Anki fires profile_did_open
+        # immediately before its own auto-sync-on-open (aqt loadProfile), so
+        # registering on_sync_did_finish now guarantees it is attached before
+        # that first sync completes; deferring it into the background task would
+        # race the sync and miss the reviews it pulls in. Registration needs no
+        # connectivity, no collection, and is idempotent (F31 dedup), and mobile
+        # detection must not depend on the legacy misc.ankiweb_sync file-sync
+        # toggle — the hook self-gates internally.
+        try:
+            setup_ankimon_sync_hooks(settings_obj, logger)
+        except Exception as e:
+            logger.log("error", f"Failed to register Ankimon sync hooks: {e}")
+
         try:
             show_tip_of_the_day()
         except Exception as e:
@@ -113,24 +127,25 @@ def _on_profile_did_open(online_connectivity):
                 )
 
             try:
+                # The sync HOOKS are already registered synchronously above, so
+                # mobile-review detection is live regardless of this block. What
+                # remains here is only the OPT-IN file-based data sync
+                # (subsystem B) — it copies/overwrites ankimon.db across devices,
+                # so it stays gated behind misc.ankiweb_sync + connectivity.
                 ankiweb_sync = settings_obj.get("misc.ankiweb_sync")
                 if not ankiweb_sync:
                     logger.log(
                         "info",
-                        "AnkiWeb sync is disabled in settings - skipping sync system initialization",
+                        "AnkiWeb file-sync disabled in settings - mobile-review detection still active",
                     )
-                    return
-
-                setup_ankimon_sync_hooks(settings_obj, logger)
-
-                if not is_online:
+                elif not is_online:
                     logger.log(
-                        "info", "No connection - AnkiWeb sync is disabled for this session"
+                        "info", "No connection - AnkiWeb file-sync disabled for this session"
                     )
                 else:
                     global sync_dialog
                     sync_dialog = check_and_sync_pokemon_data(settings_obj, logger)
-                    logger.log("info", "Ankimon sync system initialized successfully")
+                    logger.log("info", "Ankimon file-sync system initialized successfully")
             except Exception as e:
                 show_warning_with_traceback(
                     parent=mw, exception=e, message="Error setting up sync system:"

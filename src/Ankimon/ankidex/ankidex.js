@@ -1856,15 +1856,52 @@ function buildMapNodes() {
     }
   });
 
+  // DSU to group connected prerequisite components
+  const parent = {};
+  const find = (i) => {
+    if (parent[i] === undefined) return i;
+    let root = i;
+    while (parent[root] !== undefined) {
+      root = parent[root];
+    }
+    let curr = i;
+    while (curr !== root) {
+      let nxt = parent[curr];
+      parent[curr] = root;
+      curr = nxt;
+    }
+    return root;
+  };
+  const union = (i, j) => {
+    const rootI = find(i);
+    const rootJ = find(j);
+    if (rootI !== rootJ) {
+      parent[rootI] = rootJ;
+    }
+  };
+
+  // Union each node with its prerequisites to form connected components
+  allIds.forEach((id) => {
+    const reqs = state.prerequisites[id];
+    if (reqs) {
+      const ids =
+        Array.isArray(reqs) && reqs[0] === "OR"
+          ? reqs[1]
+          : Array.isArray(reqs)
+            ? reqs
+            : [reqs];
+      ids.forEach((rid) => {
+        if (typeof rid === "number" && allIds.has(rid)) {
+          union(id, rid);
+        }
+      });
+    }
+  });
+
   const chains = {};
   allIds.forEach((id) => {
-    const targets = Array.from(nodeTargets[id]).sort((a, b) => a - b);
-    const gk =
-      targets.length > 0
-        ? targets.join("-")
-        : legendaryTargetKeys.includes(id)
-          ? id.toString()
-          : "independent";
+    const root = find(id);
+    const gk = root.toString();
     if (!chains[gk]) chains[gk] = { ids: [] };
     chains[gk].ids.push(id);
   });

@@ -148,6 +148,7 @@ def test_profile_pokedex_completion(profile_env):
         "bulbasaur": {"species_id": 1, "actual_id": 1, "name": "Bulbasaur"},
         "vulpix": {"species_id": 37, "actual_id": 37, "name": "Vulpix"},
         "vulpixalola": {"species_id": 37, "actual_id": 10100, "name": "Vulpix-Alola"},
+        "oddish": {"species_id": 43, "actual_id": 43, "name": "Oddish"},
     }
     pf._pokedex_id_index = {
         3: "charizard",
@@ -155,6 +156,7 @@ def test_profile_pokedex_completion(profile_env):
         1: "bulbasaur",
         37: "vulpix",
         10100: "vulpixalola",
+        43: "oddish",
     }
 
     # Currently-owned box Pokémon spanning a base species, its Mega, and a
@@ -166,6 +168,10 @@ def test_profile_pokedex_completion(profile_env):
     db.save_pokemon({"individual_id": "b1", "id": 1, "name": "Bulbasaur", "level": 15, "shiny": False})
     # Alolan Vulpix (species_id 37) — regional form of Vulpix.
     db.save_pokemon({"individual_id": "v1", "id": 10100, "name": "Vulpix-Alola", "level": 20, "shiny": False})
+
+    # Oddish (species_id 43) is in history (released/no longer owned).
+    # This should be included in the unique Pokedex count (dex_seen), but not in the currently owned box count (caught).
+    db.add_to_history({"individual_id": "odd1", "id": 43, "name": "Oddish", "level": 12, "shiny": False})
 
     trainer_card = MagicMock()
     trainer_card.highest_pokemon_level.return_value = 60
@@ -180,8 +186,8 @@ def test_profile_pokedex_completion(profile_env):
 
     # Caught currently in box = 4 (2 Charizards + Bulbasaur + Alolan Vulpix).
     assert stats["caught"] == 4
-    # Dex unique base species caught = 3 (species 6 + 1 + 37); Mega Charizard X
-    # dedupes onto base Charizard (species 6).
-    assert stats["dex_seen"] == 3
+    # Dex unique base species caught = 4 (species 6 + 1 + 37 + 43); Mega Charizard X
+    # dedupes onto base Charizard (species 6), and Oddish from history is included.
+    assert stats["dex_seen"] == 4
     assert stats["shinies"] == 0
     assert stats["highest_level"] == 60

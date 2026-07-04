@@ -563,8 +563,16 @@ body {
     opacity: 0.6;
 }
 
+.pokemon-card.state-unseen:hover {
+    opacity: 0.9;
+}
+
 .pokemon-card.state-unseen .card-sprite img {
     filter: brightness(0) invert(1) brightness(0.15); /* Solid dark grey silhouette */
+}
+
+.pokemon-card.state-unseen:hover .card-sprite img {
+    filter: brightness(0) invert(1) brightness(0.25); /* Slightly lighter silhouette on hover so it remains visible */
 }
 
 .pokemon-card.state-seen {

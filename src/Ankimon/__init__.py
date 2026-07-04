@@ -218,6 +218,7 @@ def start_asynchronous_startup():
             pokedex_window,
             eff_chart,
             gen_id_chart,
+            nature_chart,
             license,
             credits,
             item_window,
@@ -237,6 +238,7 @@ def start_asynchronous_startup():
             flex_pokemon_collection,
             eff_chart,
             gen_id_chart,
+            nature_chart,
             credits,
             license,
             open_help_window,
@@ -265,6 +267,32 @@ def start_asynchronous_startup():
             settings_obj.get("controls.defeat_key"),
             settings_obj.get("controls.pokemon_buttons"),
         )
+
+        # 5b. Developer hot-reload shortcut (Ctrl+Shift+R -> restart_ankimon).
+        #     Wired here (startup-complete, main thread) rather than at module
+        #     scope so mw is fully up. Reload-safe: the QShortcut handle is
+        #     recorded on the services registry and deleted by
+        #     reloader.teardown_ankimon before this callback re-runs on a reload,
+        #     so a reload never stacks a second Ctrl+Shift+R binding. The
+        #     dedicated QShortcut (not the menu action) owns the accelerator to
+        #     avoid an "ambiguous shortcut overload" with the menu entry.
+        from PyQt6.QtGui import QKeySequence, QShortcut
+        from .reloader import restart_ankimon
+        from .utils import is_dev_mode
+
+        for _stale_sc in getattr(services, "_reload_shortcuts", ()) or ():
+            try:
+                _stale_sc.setEnabled(False)
+                _stale_sc.deleteLater()
+            except Exception:
+                pass
+        _reload_shortcut = QShortcut(QKeySequence("Ctrl+Shift+R"), mw)
+        _reload_shortcut.activated.connect(restart_ankimon)
+        # Developer-only accelerator: disable it for normal users so the hidden
+        # hot-reload chord can't tear down the add-on by accident. Kept in lockstep
+        # with the "Restart Ankimon" menu action by update_dev_actions_visibility().
+        _reload_shortcut.setEnabled(is_dev_mode())
+        services._reload_shortcuts = [_reload_shortcut]
 
         # 6. Boot finished: open the review gate and signal observers.
         setattr(services, _STARTUP_FINISHED_ATTR, True)

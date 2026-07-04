@@ -237,6 +237,15 @@ def get_gen_id_chart():
     return _cached("gen_id_chart", _build)
 
 
+def get_nature_chart():
+    def _build():
+        from .gui_entities import NatureTableWidget
+
+        return NatureTableWidget()
+
+    return _cached("nature_chart", _build)
+
+
 def get_license():
     def _build():
         from .gui_entities import License
@@ -354,7 +363,32 @@ def get_items_window():
         settings_obj=settings_obj,
         logger=logger,
     )
+    mw.items_web_window = _items_web_window
     return _items_web_window
+
+
+def notify_stats_changed():
+    """Tell the open Ankimon shell that gameplay stats changed (a catch, XP
+    gain, cash reward, level-up, ...) so it can live-refresh whichever screen is
+    showing — no manual reload. Screen-agnostic: the shell decides what (if
+    anything) to refresh based on its current screen (see
+    ``AnkimonItemsWeb.refresh_live_screen`` and ``LIVE_UPDATES.md``).
+
+    Pure best-effort and cheap: never creates the window, no-ops when no live
+    screen is visible, and swallows any error so a UI hiccup can't interfere
+    with gameplay. Call it from gameplay write chokepoints via a deferred
+    ``from .singletons import notify_stats_changed`` wrapped in try/except."""
+    from .utils import is_main_thread
+    if not is_main_thread():
+        return
+    global _items_web_window
+    if not is_alive(_items_web_window):
+        return
+    try:
+        _items_web_window.refresh_live_screen()
+    except Exception as e:
+        print(f"[Ankimon] notify_stats_changed failed: {e}")
+
 
 
 # The standalone Ankidex (Pokédex V2) SPA window (F16): its own QDialog +
@@ -506,6 +540,7 @@ _LAZY_WINDOWS = {
     "eff_chart": get_eff_chart,
     "pokedex": get_pokedex_widget,
     "gen_id_chart": get_gen_id_chart,
+    "nature_chart": get_nature_chart,
     "license": get_license,
     "credits": get_credits,
     "version_dialog": get_version_dialog,

@@ -327,17 +327,31 @@ def save_update_state(
 ):
     try:
         import time
+        from ..resources import addon_ver
 
         path = get_update_state_path()
         path.parent.mkdir(parents=True, exist_ok=True)
+
+        old_skip = None
+        if skip_until is None and path.exists():
+            try:
+                old_state = json.loads(path.read_text(encoding="utf-8"))
+                old_skip = old_state.get("skip_until")
+            except Exception:
+                pass
+
         state = {
             "source_type": source_type,
             "source_name": source_name,
             "commit_sha": commit_sha,
             "installed_at": time.time(),
+            "addon_version": addon_ver,
         }
         if skip_until is not None:
             state["skip_until"] = skip_until
+        elif old_skip is not None:
+            state["skip_until"] = old_skip
+
         path.write_text(json.dumps(state, indent=2), encoding="utf-8")
     except Exception as e:
         print(f"Ankimon Updater: Failed to save update state: {e}")
@@ -362,6 +376,13 @@ def read_update_state() -> Optional[dict]:
             # anything a text editor can produce must come back as None here.
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
+                # Auto-migrate legacy branch tracking from BRRRR_Experimental to main
+                if data.get("source_type") == "branch" and data.get("source_name") == "BRRRR_Experimental":
+                    data["source_name"] = "main"
+                    try:
+                        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                    except Exception:
+                        pass
                 return data
     except Exception:
         pass

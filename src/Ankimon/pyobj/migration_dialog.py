@@ -255,11 +255,40 @@ class MigrationDialog(QDialog):
                 self._update_progress(66, "Migrating team...")
                 with open(self.team_path, 'r', encoding='utf-8') as f:
                     team_list = json.load(f)
+
+                # Build a lookup of already-migrated collection so we can match team members
+                # by identity (name + level + species_id) instead of generating new UUIDs.
+                try:
+                    all_captured = self.db.get_all_pokemon()
+                    # Map each identity tuple to a queue of individual_ids so that
+                    # N captured Pokémon sharing (name, level, species_id) hand out
+                    # N distinct ids to N legacy team members instead of aliasing
+                    # every slot to the same captured row.
+                    _collection_index = {}
+                    for p in all_captured:
+                        key = (
+                            str(p.get("name", "")).lower(),
+                            str(p.get("level", "")),
+                            str(p.get("species_id", p.get("id", ""))),
+                        )
+                        individual_id = p.get("individual_id")
+                        if individual_id:
+                            _collection_index.setdefault(key, []).append(individual_id)
+                except Exception:
+                    _collection_index = {}
+
                 valid_team_list = []
                 for member in team_list:
                     if isinstance(member, dict):
                         if not member.get("individual_id"):
-                            member["individual_id"] = str(uuid.uuid4())
+                            match_key = (
+                                str(member.get("name", "")).lower(),
+                                str(member.get("level", "")),
+                                str(member.get("species_id", member.get("id", ""))),
+                            )
+                            ids_for_key = _collection_index.get(match_key)
+                            matched_id = ids_for_key.pop(0) if ids_for_key else None
+                            member["individual_id"] = matched_id or str(uuid.uuid4())
                         valid_team_list.append(member)
                 if self.db.save_team(valid_team_list):
                     stats["team"] = len(valid_team_list)

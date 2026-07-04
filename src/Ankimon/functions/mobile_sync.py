@@ -327,6 +327,20 @@ def detect_mobile_reviews(col, watermark_ms: int, desktop_revlog_ids: frozenset[
     ]
 
 
+# Residual known edge (deliberately NOT auto-recovered): a mobile review can sync
+# in with a revlog id OLDER than the desktop's latest review, so it lands at or
+# below the monotonic watermark and the ``id > watermark`` detector above never
+# sees it. Registering the post-sync hook (setup_ankimon_sync_hooks) makes the
+# watermark advance AFTER a sync rather than speculatively, which shrinks this
+# window; the remainder is benign (a few reviews just don't become battles).
+# It is NOT closed by scanning below the watermark, because that window also
+# contains ordinary desktop reviews Ankimon already battled and there is no
+# durable record that reliably distinguishes them (desktop_processed_reviews is
+# pruned as the watermark advances) — such a scan would re-queue already-credited
+# desktop reviews as phantom mobile battles (double XP). A safe recovery would
+# require a durable, age-pruned processed-review ledger; left as future work.
+
+
 def process_mobile_reviews_after_sync(col, ankimon_db, settings_obj, logger) -> int:
     """
     Full post-sync pipeline:
@@ -1197,6 +1211,19 @@ def _run_mobile_battles_impl(
     # the Mobile Battle History screen misattributes where the cash came from.
     payout_start = int(settings_obj.get("trainer.mobile_reviews_resolved_since_payout", 0)) if settings_obj else 0
 
+    from datetime import date
+    today_str = str(date.today())
+    last_reward_date = settings_obj.get("trainer.last_mobile_cash_reward_date", "") if settings_obj else ""
+    mobile_cash_earned_today = settings_obj.get("trainer.mobile_cash_earned_today", 0) if settings_obj else 0
+
+    if last_reward_date != today_str:
+        mobile_cash_earned_today = 0
+        if settings_obj:
+            settings_obj.set("trainer.last_mobile_cash_reward_date", today_str)
+            settings_obj.set("trainer.mobile_cash_earned_today", 0)
+
+    accumulated_cash_earned_this_batch = 0
+
     from .. import utils
     orig_load_ids = utils.load_collected_pokemon_ids
     utils.load_collected_pokemon_ids = lambda: collected_ids
@@ -1221,10 +1248,29 @@ def _run_mobile_battles_impl(
         reviews_to_process = reviews_list
         extra_reviews = []
 
+    # GIL yield for background preview sims (Bug 4). The mobile tab's estimates
+    # (getMobileStatus.run_sim -> simulate_pending_mobile_battles) and the manual
+    # replay "next" preview both run this CPU-bound loop on a QueryOp background
+    # thread with NO progress_callback; the pure-Python engine work holds the GIL
+    # and starves the Qt GUI, making the tab and replay transitions feel sluggish.
+    # Hand the GIL to the GUI periodically. Gated so it only fires on a real
+    # background thread (never the synchronous post-sync auto-resolve, which runs
+    # on the GUI thread) and only when nobody else is already throttling via a
+    # progress_callback (the bulk-resolve worker does its own yield). is_main_thread
+    # returns True headless, so the Tier-1 harness / tests are unaffected.
+    from ..utils import is_main_thread
+    _yield_bg = (progress_callback is None) and (not is_main_thread())
+    _last_yield = time.monotonic()
+
     try:
         for review in reviews_to_process:
             temp_tracker.total_reviews += 1
             total_reviews_processed += 1
+            if _yield_bg:
+                _now = time.monotonic()
+                if _now - _last_yield >= 0.02:
+                    time.sleep(0.003)
+                    _last_yield = time.monotonic()
             if progress_callback:
                 try:
                     cb_res = progress_callback({
@@ -1246,7 +1292,10 @@ def _run_mobile_battles_impl(
                 except Exception:
                     pass
             if commit and ci > 0 and (payout_start + total_reviews_processed) % ci == 0:
-                current_battle_cash += ca
+                if mobile_cash_earned_today + accumulated_cash_earned_this_batch < 400:
+                    allowed = min(ca, 400 - (mobile_cash_earned_today + accumulated_cash_earned_this_batch))
+                    current_battle_cash += allowed
+                    accumulated_cash_earned_this_batch += allowed
             cards_battle_round += 1
             current_turn_reviews.append(review)
             
@@ -1582,7 +1631,6 @@ def _run_mobile_battles_impl(
         # Cash Reward — credited off the same carryover the per-encounter
         # history counter (payout_start) was seeded from, so the wallet credit
         # and the sum of history cash_gained agree.
-        gained_cash = 0
         total_reviews_resolved = total_reviews_processed
         current_counter = payout_start
         new_counter = current_counter + total_reviews_resolved
@@ -1590,11 +1638,13 @@ def _run_mobile_battles_impl(
         ci = int(settings_obj.get("trainer.cash_reward_interval", 5)) if settings_obj else 5
         ca = int(settings_obj.get("trainer.cash_reward_amount", 10)) if settings_obj else 10
         
-        gained_cash = (new_counter // ci) * ca
+        gained_cash = accumulated_cash_earned_this_batch
         remaining_counter = new_counter % ci
         if settings_obj:
             settings_obj.set("trainer.mobile_reviews_resolved_since_payout", remaining_counter)
-            settings_obj.set("trainer.cash", int(settings_obj.get("trainer.cash", 0) + gained_cash))
+            if gained_cash > 0:
+                settings_obj.set("trainer.mobile_cash_earned_today", mobile_cash_earned_today + gained_cash)
+                settings_obj.set("trainer.cash", int(settings_obj.get("trainer.cash", 0) + gained_cash))
         if trainer_card and settings_obj:
             trainer_card.cash = settings_obj.get("trainer.cash")
 
@@ -1630,6 +1680,8 @@ def _run_mobile_battles_impl(
         try:
             from ..events import events
             events.emit("stats_changed")
+            from ..singletons import notify_stats_changed
+            notify_stats_changed()
         except Exception: pass
         return {
             "success": True, "resolved": encounters_fought, "xp_gained": total_xp,
@@ -1764,11 +1816,31 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
             current_counter = int(settings_obj.get("trainer.mobile_reviews_resolved_since_payout", 0))
             new_counter = current_counter + total_reviews_resolved
             
-            ci = int(settings_obj.get("trainer.cash_reward_interval", 5))
+            # Clamp to >=1: an explicitly-stored 0 survives the default and would
+            # crash `new_counter // ci` / `% ci` below (the UI clamps to >=5, but
+            # a hand-edited config can reach 0). Mirrors the ci > 0 guard in the
+            # auto-resolve path.
+            ci = max(1, int(settings_obj.get("trainer.cash_reward_interval", 5)))
             ca = int(settings_obj.get("trainer.cash_reward_amount", 10))
             
-            gained_cash = (new_counter // ci) * ca
+            raw_gained_cash = (new_counter // ci) * ca
             remaining_counter = new_counter % ci
+
+            # Enforce daily mobile cash cap
+            from datetime import date
+            today_str = str(date.today())
+            last_reward_date = settings_obj.get("trainer.last_mobile_cash_reward_date", "")
+            mobile_cash_earned_today = settings_obj.get("trainer.mobile_cash_earned_today", 0)
+
+            if last_reward_date != today_str:
+                mobile_cash_earned_today = 0
+                settings_obj.set("trainer.last_mobile_cash_reward_date", today_str)
+                settings_obj.set("trainer.mobile_cash_earned_today", 0)
+
+            if mobile_cash_earned_today < 400:
+                gained_cash = min(raw_gained_cash, 400 - mobile_cash_earned_today)
+            else:
+                gained_cash = 0
 
         # Calculate CP for the return value
         from ..business import calculate_cp_from_dict
@@ -1922,6 +1994,7 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
                 if review_ids and settings_obj:
                     settings_obj.set("trainer.mobile_reviews_resolved_since_payout", remaining_counter)
                     if gained_cash > 0:
+                        settings_obj.set("trainer.mobile_cash_earned_today", settings_obj.get("trainer.mobile_cash_earned_today", 0) + gained_cash)
                         settings_obj.set("trainer.cash", int(settings_obj.get("trainer.cash", 0) + gained_cash))
                         if trainer_card:
                             trainer_card.cash = settings_obj.get("trainer.cash")
@@ -1952,6 +2025,8 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
                 try:
                     from ..events import events
                     events.emit("stats_changed")
+                    from ..singletons import notify_stats_changed
+                    notify_stats_changed()
                 except Exception: pass
             except Exception as e:
                 if logger:

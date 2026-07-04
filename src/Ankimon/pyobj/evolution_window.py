@@ -484,15 +484,15 @@ class EvoWindow(QWidget):
             # and refresh any open item windows so the count updates live.
             if item_name:
                 db.update_item_quantity(item_name, -1)
-                from ..singletons import get_item_window
+                from ..singletons import get_item_window, get_items_window
 
                 item_w = get_item_window()
                 if item_w is not None and is_alive(item_w):
                     item_w.renewWidgets()
-                # DEFERRED SEAM (F36/Wave-4): the web Items screen refresh
-                # (singletons.get_items_window().update_ui_data()) has no
-                # factory on this base yet — its module does not exist. Re-add a
-                # get_items_window() poke here once that screen lands.
+
+                web_item_w = get_items_window()
+                if web_item_w is not None and is_alive(web_item_w):
+                    web_item_w.update_ui_data()
         except Exception as e:
             show_warning_with_traceback(
                 parent=mw, exception=e, message=f"Error occured in evolving pokemon"

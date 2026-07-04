@@ -62,7 +62,7 @@ class UpdateDialog(QDialog):
         body.setContentsMargins(20, 16, 20, 16)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_brrr_tab(), "  BRRRR_Experimental Branch  ")
+        self.tabs.addTab(self._build_brrr_tab(), f"  Branch: {self.active_branch}  ")
         self.tabs.addTab(self._build_releases_tab(), "  Releases  ")
         self.tabs.addTab(self._build_dev_tab(), "  Developer  ")
         self.tabs.currentChanged.connect(self._on_tab_changed)
@@ -82,6 +82,13 @@ class UpdateDialog(QDialog):
 
         layout.addLayout(body)
         self._load_data()
+
+    @property
+    def active_branch(self) -> str:
+        state = read_update_state()
+        if state and state.get("source_type") == "branch":
+            return state.get("source_name") or "main"
+        return "main"
 
     def _apply_theme(self):
         is_dark = theme_manager.night_mode
@@ -254,8 +261,8 @@ class UpdateDialog(QDialog):
         layout.setContentsMargins(10, 14, 10, 10)
 
         # Info & Details Group
-        details_group = QGroupBox("Active Branch: BRRRR_Experimental")
-        details_layout = QVBoxLayout(details_group)
+        self.brrr_details_group = QGroupBox(f"Active Branch: {self.active_branch}")
+        details_layout = QVBoxLayout(self.brrr_details_group)
         details_layout.setSpacing(6)
 
         self.brrr_installed_commit_label = QLabel("Installed Commit: Loading...")
@@ -282,7 +289,7 @@ class UpdateDialog(QDialog):
         )
         details_layout.addWidget(self.brrr_status_label)
 
-        layout.addWidget(details_group)
+        layout.addWidget(self.brrr_details_group)
 
         # Commits Feed
         commits_group = QGroupBox("Recent Branch Updates")
@@ -344,6 +351,11 @@ class UpdateDialog(QDialog):
         c = self._colors
         import time
         import html
+
+        # Update dynamic active branch labels
+        active = self.active_branch
+        self.brrr_details_group.setTitle(f"Active Branch: {active}")
+        self.tabs.setTabText(0, f"  Branch: {active}  ")
 
         # 1. Local Commit SHA ("or" also covers a null/empty value persisted in
         # the user-editable update_state.json, where .get() defaults would not)
@@ -425,7 +437,7 @@ class UpdateDialog(QDialog):
         # 6. Commits Feed
         if commits:
             accent_color = c["accent"]
-            html_content = "<b>What's New on Branch:</b><br><ul style='margin-top: 4px; margin-bottom: 4px; padding-left: 20px;'>"
+            html_content = f"<b>What's New on {active} Branch:</b><br><ul style='margin-top: 4px; margin-bottom: 4px; padding-left: 20px;'>"
             for commit in commits:
                 sha = commit.get("sha", "")
                 msg = commit.get("message", "")
@@ -449,11 +461,12 @@ class UpdateDialog(QDialog):
             set_update_skip_until(0)
 
     def _on_brrr_update_clicked(self):
+        branch = self.active_branch
         self._run_update(
-            lambda progress_cb: _download_branch_zip("BRRRR_Experimental", progress_cb),
-            "latest BRRRR_Experimental",
+            lambda progress_cb: _download_branch_zip(branch, progress_cb),
+            f"latest {branch}",
             source_type="branch",
-            source_name="BRRRR_Experimental",
+            source_name=branch,
         )
 
     def _build_releases_tab(self):
@@ -558,7 +571,6 @@ class UpdateDialog(QDialog):
         group_layout.addWidget(source_label)
 
         self.source_combo = QComboBox()
-        self.source_combo.addItem("Latest BRRRR_Experimental Branch", "branch_brrr")
         self.source_combo.addItem("Latest Main Branch", "main")
         self.source_combo.addItem("Pull Request", "pr")
         self.source_combo.addItem("Branch", "branch")
@@ -602,7 +614,7 @@ class UpdateDialog(QDialog):
 
     def _on_source_changed(self, index):
         source = self.source_combo.currentData()
-        show = source not in ("branch_brrr", "main")
+        show = source != "main"
         self.target_label.setVisible(show)
         self.target_combo.setVisible(show)
         if show:
@@ -623,7 +635,7 @@ class UpdateDialog(QDialog):
                 default_idx = 0
                 for idx, b in enumerate(self._branches):
                     self.target_combo.addItem(b["name"], b)
-                    if b["name"] == "BRRRR_Experimental":
+                    if b["name"] == "main":
                         default_idx = idx
                 self.target_combo.setCurrentIndex(default_idx)
             else:
@@ -656,11 +668,12 @@ class UpdateDialog(QDialog):
             # 2. Get local state
             state = read_update_state() or {}
             local_sha = state.get("commit_sha")
+            branch = state.get("source_name") or "main"
 
-            # 3. Fetch remote BRRR branch details
+            # 3. Fetch remote branch details
             remote_sha = None
             try:
-                remote_sha = fetch_branch_sha("BRRRR_Experimental")
+                remote_sha = fetch_branch_sha(branch)
             except Exception:
                 pass
 
@@ -671,10 +684,10 @@ class UpdateDialog(QDialog):
                 except Exception:
                     pass
 
-            # 4. Fetch last 5 commits on BRRR branch
+            # 4. Fetch last 5 commits on branch
             commits = []
             try:
-                commits = fetch_branch_commits("BRRRR_Experimental", local_sha)
+                commits = fetch_branch_commits(branch, local_sha)
             except Exception:
                 pass
 
@@ -763,7 +776,7 @@ class UpdateDialog(QDialog):
             self.release_combo.addItem("No releases found")
 
         source = self.source_combo.currentData()
-        if source and source not in ("branch_brrr", "main"):
+        if source and source != "main":
             self._populate_target(source)
 
     # --- Actions ---
@@ -870,16 +883,7 @@ class UpdateDialog(QDialog):
 
     def _on_dev_install(self):
         source = self.source_combo.currentData()
-        if source == "branch_brrr":
-            self._run_update(
-                lambda progress_cb: _download_branch_zip(
-                    "BRRRR_Experimental", progress_cb
-                ),
-                "latest BRRRR_Experimental",
-                source_type="branch",
-                source_name="BRRRR_Experimental",
-            )
-        elif source == "main":
+        if source == "main":
             self._run_update(
                 lambda progress_cb: _download_branch_zip("main", progress_cb),
                 "latest main",

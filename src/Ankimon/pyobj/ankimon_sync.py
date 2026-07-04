@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 from aqt import mw, gui_hooks
-from aqt.utils import showInfo, tooltip
+from aqt.utils import showInfo, showWarning, tooltip
 from ..pyobj.error_handler import show_warning_with_traceback
 
 from ..resources import user_path, addon_dir
@@ -406,16 +406,20 @@ class ImprovedPokemonDataSync(QDialog):
         """Import data from AnkiWeb to local storage."""
         try:
             success = self.sync_handler.force_sync_from_media()
-            if success:
-                # Enable automatic sync after successful manual sync
-                from .ankimon_sync import enable_automatic_sync
-                enable_automatic_sync()
+            if not success:
+                # force_sync_from_media already told the user WHY nothing was
+                # imported (integrity/backup abort, nothing-to-import, or a
+                # traceback for a genuine error). Don't enable auto-sync, close
+                # Anki, or stack a second alarming dialog on top of that message.
+                return
 
-                tooltip("Data imported from AnkiWeb successfully! Automatic sync is now enabled.")
-                self.close()
-                close_anki()
-            else:
-                raise Exception("Failed to import data from AnkiWeb.")
+            # Enable automatic sync after a successful manual import.
+            from .ankimon_sync import enable_automatic_sync
+            enable_automatic_sync()
+
+            tooltip("Data imported from AnkiWeb successfully! Automatic sync is now enabled.")
+            self.close()
+            close_anki()
         except Exception as e:
             self.logger.log("error", f"Failed to import from AnkiWeb: {str(e)}")
             show_warning_with_traceback(parent=self, exception=e, message="Error importing from AnkiWeb")
@@ -599,6 +603,11 @@ class AnkimonDataSync:
                     if not source_file.is_file():
                         continue
 
+                    # Flush any WAL sidecar into the main DB file first, or the
+                    # single-file copy below would export a stale snapshot.
+                    if filename.endswith(".db"):
+                        self._checkpoint_live_db(source_file)
+
                     # Copy if destination doesn't exist or files differ
                     if not dest_file.is_file():
                         shutil.copy2(source_file, dest_file)
@@ -636,6 +645,135 @@ class AnkimonDataSync:
         except Exception:
             pass
 
+    def _checkpoint_live_db(self, source_file: Path) -> None:
+        """If ``services.db`` holds a live WAL connection to ``source_file``,
+        checkpoint it before the single-file copy below reads it — WAL commits
+        live in a ``-wal`` sidecar that ``shutil.copy2`` would miss, so without
+        this an export could ship a stale ``ankimon.db``. Best-effort no-op.
+
+        KNOWN LIMITATION (WAL-mode DBs only; fresh installs are non-WAL): a
+        TRUNCATE checkpoint returns busy (does NOT raise) if another connection
+        holds a snapshot — e.g. a background mobile-resolve thread mid-write — so
+        the sidecar may not fully flush and the exported single file can be
+        *stale* (still valid SQLite). The import side's integrity check catches
+        the corrupt variant, not the stale one; a stale export self-corrects on
+        the next export once the writer has finished. Accepted for this opt-in
+        feature rather than pulling in the online-backup API / cross-thread
+        connection coordination."""
+        try:
+            from ..services import services
+            db = services.db
+            if db is None:
+                return
+            db_path = getattr(db, "db_path", None)
+            if db_path is None or Path(db_path).resolve() != Path(source_file).resolve():
+                return
+            try:
+                db.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    @staticmethod
+    def _verify_sqlite_integrity(db_file: Path) -> bool:
+        """True only if ``db_file`` is a readable, non-empty Ankimon SQLite DB
+        that passes a quick integrity check and carries the core
+        ``captured_pokemon`` table. Guards the live save against being
+        overwritten by a truncated / corrupt / half-synced / foreign media
+        file."""
+        try:
+            if not db_file.is_file() or db_file.stat().st_size < 512:
+                return False
+            import sqlite3
+            # Build the read-only URI via as_uri() so a profile path with spaces
+            # or unicode (e.g. C:\Users\John Doe\...) is percent-encoded correctly
+            # — a raw f-string URI would fail to open a perfectly valid DB and
+            # wrongly refuse the import.
+            uri = Path(db_file).resolve().as_uri() + "?mode=ro"
+            conn = sqlite3.connect(uri, uri=True)
+            try:
+                row = conn.execute("PRAGMA quick_check;").fetchone()
+                if not row or str(row[0]).lower() != "ok":
+                    return False
+                tables = {
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+                return "captured_pokemon" in tables
+            finally:
+                conn.close()
+        except Exception:
+            return False
+
+    def _backup_before_overwrite(self, required_file: str = "ankimon.db") -> bool:
+        """Timestamped backup of the local Ankimon DB(s) before an import
+        overwrites them, so a bad cross-device import is recoverable via the
+        Backup Manager. Reuses BackupManager (WAL checkpoint + summary +
+        retention) rather than a bare copy. Returns True only if a backup of
+        ``required_file`` (the file about to be overwritten) was actually
+        written — callers MUST refuse to overwrite when this is False, or a
+        failed backup would leave the live save with no recovery path."""
+        try:
+            from ..services import services
+            from .backup_manager import BackupManager
+            return bool(
+                BackupManager(services.logger, services.settings).create_backup(
+                    manual=False, required_file=required_file
+                )
+            )
+        except Exception as e:
+            try:
+                from ..services import services
+                services.logger.log("error", f"Pre-import backup failed: {e}")
+            except Exception:
+                pass
+            return False
+
+    def _atomic_replace(self, media_file: Path, source_file: Path) -> None:
+        """Overwrite ``source_file`` with ``media_file`` atomically: copy to a
+        temp file in the SAME directory (so ``os.replace`` is an atomic
+        same-filesystem rename, never a half-written destination), after closing
+        the GUI-thread connection to ``source_file``.
+
+        The media file is a single-file export (no WAL sidecar), so any stale
+        ``-wal`` / ``-shm`` belonging to the OLD ``source_file`` must be removed
+        after the swap — a fresh connection that found them would try to replay
+        an unrelated WAL over the new file and hit 'database disk image is
+        malformed'.
+
+        KNOWN LIMITATION: ``_close_live_db_connection`` -> ``db.close()`` closes
+        only the GUI thread's connection, NOT a background thread's
+        ``threading.local`` connection. This import path is not serialized against
+        an in-flight background mobile-resolve (``_mobile_sync_lock``), so if an
+        (opt-in) file-sync import lands mid-resolve, that thread's writes to the
+        pre-replace inode can be orphaned. Pre-existing to this change and narrow
+        (opt-in file-sync overlapping a live resolve); left documented rather than
+        pulling the multi-profile connection model into a hardening pass."""
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = source_file.with_name(source_file.name + ".synctmp")
+        try:
+            shutil.copy2(media_file, tmp)
+            self._close_live_db_connection(source_file)
+            os.replace(tmp, source_file)
+            for sidecar in ("-wal", "-shm"):
+                stale = source_file.with_name(source_file.name + sidecar)
+                try:
+                    if stale.exists():
+                        stale.unlink()
+                except Exception:
+                    pass
+        finally:
+            # Clean up the temp file if os.replace never consumed it (an error
+            # between copy and replace), so a stale .synctmp can't linger.
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+
     def read_configs(self, media_sync_status: bool = False) -> List[str]:
         """
         Read configs from media subfolder and copy to addon folder.
@@ -649,6 +787,7 @@ class AnkimonDataSync:
             migrated_files = self._migrate_legacy_files()
 
             updated_files = []
+            backed_up = False
 
             for filename in self.SYNC_FILES.keys():
                 try:
@@ -662,15 +801,46 @@ class AnkimonDataSync:
                     # Ensure source directory exists
                     source_file.parent.mkdir(parents=True, exist_ok=True)
 
-                    # Copy if source doesn't exist or files differ
-                    if not source_file.is_file() or not filecmp.cmp(source_file, media_file, shallow=False):
-                        # Overwriting a SQLite file while services.db holds a live
-                        # connection to it risks 'database disk image is malformed'
-                        # / lost writes. Close that connection first; it reopens
-                        # lazily against the fresh file on next use.
+                    # Nothing to do if the files are already identical.
+                    if source_file.is_file() and filecmp.cmp(source_file, media_file, shallow=False):
+                        continue
+
+                    is_db = filename.endswith(".db")
+
+                    # SAFETY 1 — never overwrite the live save with a corrupt /
+                    # truncated / half-synced / foreign media file. Skip loudly
+                    # rather than clobber good local data with garbage.
+                    if is_db and not self._verify_sqlite_integrity(media_file):
+                        tooltip(
+                            f"Ankimon: skipped importing {filename} from AnkiWeb — "
+                            "the synced file failed an integrity check. Your local "
+                            "data is unchanged."
+                        )
+                        continue
+
+                    # SAFETY 2 — back the local save up ONCE before the first
+                    # overwrite. If the backup can't be made, REFUSE to overwrite
+                    # (symmetric with the integrity check): never clobber the live
+                    # save with no recovery path.
+                    if source_file.is_file() and not backed_up:
+                        if not self._backup_before_overwrite(filename):
+                            tooltip(
+                                f"Ankimon: skipped importing {filename} from AnkiWeb "
+                                "— couldn't create a safety backup of your local data "
+                                "first. Your local data is unchanged."
+                            )
+                            continue
+                        backed_up = True
+
+                    # SAFETY 3 — atomic overwrite (temp + os.replace) with the
+                    # live connection closed first, so an interrupted copy can
+                    # never leave a half-written / malformed ankimon.db.
+                    if is_db:
+                        self._atomic_replace(media_file, source_file)
+                    else:
                         self._close_live_db_connection(source_file)
                         shutil.copy2(media_file, source_file)
-                        updated_files.append(filename)
+                    updated_files.append(filename)
 
                 except Exception as e:
                     show_warning_with_traceback(parent=mw, exception=e, message=f"Failed to read {filename}")
@@ -735,6 +905,11 @@ class AnkimonDataSync:
                 dest_file = self._get_media_path(filename)     # MEDIA file
 
                 if source_file.is_file():
+                    # Flush WAL into the main DB before copying, else a stale
+                    # snapshot is exported.
+                    if filename.endswith(".db"):
+                        self._checkpoint_live_db(source_file)
+
                     # Remove existing media file if it exists
                     if dest_file.is_file():
                         os.remove(dest_file)
@@ -753,17 +928,64 @@ class AnkimonDataSync:
         """Force sync all MEDIA files FROM subfolder to local folder (Import from AnkiWeb)."""
         try:
             updated_files = []
+            backed_up = False
+            safety_aborted = False
+            any_media = False
             for filename in self.SYNC_FILES.keys():
                 media_file = self._get_media_path(filename)    # MEDIA file
                 source_file = self._get_source_path(filename)  # LOCAL file
 
                 if media_file.is_file():
+                    any_media = True
                     # Ensure source directory exists
                     source_file.parent.mkdir(parents=True, exist_ok=True)
 
-                    # Copy MEDIA to LOCAL (Import direction)
-                    shutil.copy2(media_file, source_file)
+                    is_db = filename.endswith(".db")
+
+                    # SAFETY — refuse to import a corrupt/foreign DB over the save.
+                    if is_db and not self._verify_sqlite_integrity(media_file):
+                        showWarning(
+                            f"Import aborted for {filename}: the file on AnkiWeb "
+                            "failed an integrity check. Your local data is unchanged."
+                        )
+                        safety_aborted = True
+                        continue
+
+                    # SAFETY — back up the local save once before overwriting;
+                    # abort this file if the backup could not be made.
+                    if source_file.is_file() and not backed_up:
+                        if not self._backup_before_overwrite(filename):
+                            showWarning(
+                                f"Import aborted for {filename}: could not create a "
+                                "safety backup of your local data first. Your local "
+                                "data is unchanged."
+                            )
+                            safety_aborted = True
+                            continue
+                        backed_up = True
+
+                    # Copy MEDIA to LOCAL (Import direction), atomically for the DB.
+                    if is_db:
+                        self._atomic_replace(media_file, source_file)
+                    else:
+                        self._close_live_db_connection(source_file)
+                        shutil.copy2(media_file, source_file)
                     updated_files.append(filename)
+
+            # Report success ONLY if something was actually imported. A safety
+            # abort (integrity/backup failure) or an absent media file leaves
+            # updated_files empty — returning True there would make the caller
+            # (import_from_ankiweb) claim success, enable auto-sync, and CLOSE
+            # Anki despite nothing having been imported. Give the user a clear
+            # reason for the two benign empty cases; a safety abort already
+            # showed its own specific warning above.
+            if not updated_files:
+                if not any_media and not safety_aborted:
+                    showInfo(
+                        "No Ankimon data found on AnkiWeb to import yet. Export "
+                        "from another device first, then sync this one."
+                    )
+                return False
 
             showInfo(f"Imported {len(updated_files)} files from AnkiWeb: {', '.join(updated_files)}\n\nAnki will now close. Please reopen Anki to apply changes!")
             return True
@@ -868,19 +1090,29 @@ def read_ankimon_configs(settings_obj, media_sync_status: bool = False):
 # Global flag to track if automatic sync is enabled
 _automatic_sync_enabled = False
 
+# One-shot guard so a persistent mobile-detection failure surfaces a tooltip
+# once per session instead of spamming it on every sync.
+_mobile_detection_warned = False
+
 # Reload safety (F31): the (hook, handler) pairs this module last registered,
 # stored on the services registry so they survive a re-execution of this module
 # (unlike a module-level flag) and can be removed before re-appending.
 _SYNC_HOOK_RECORD = "_ankimon_sync_hook_handlers"
 
 def setup_ankimon_sync_hooks(settings_obj, logger):
-    """Set up hooks for automatic Ankimon data syncing - but disabled by default."""
-    ankiweb_sync = settings_obj.get("misc.ankiweb_sync")
+    """Register the AnkiWeb sync hooks.
 
-    # Check if sync is disabled
-    if not ankiweb_sync:
-        logger.log("info", "AnkiWeb sync is disabled in settings - skipping hook setup")
-        return
+    Registered UNCONDITIONALLY (not gated on the legacy ``misc.ankiweb_sync``
+    file-sync toggle) so that mobile-review detection actually runs for every
+    user. Mobile reviews arrive via Anki's own AnkiWeb sync — which is
+    independent of Ankimon's file-sync toggle — so gating detection behind that
+    toggle (default False, and never auto-enabled) meant ``on_sync_did_finish``
+    was never attached and a mid-session sync never turned phone reviews into
+    battles. The two behaviours inside these hooks keep their own narrower
+    guards: the mobile-detection block self-gates on ``mobile.enabled``, and the
+    file-based data-sync (subsystem B) stays dormant behind ``_automatic_sync_enabled``
+    until the user opts in via the sync dialog — so registering here changes
+    nothing for file-sync, it only lets mobile detection fire."""
 
     def on_sync_will_start():
         """Called before sync starts - only auto-sync if enabled."""
@@ -1029,10 +1261,25 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
                 try:
                     from ..events import events
                     events.emit("stats_changed")
+                    from ..singletons import notify_stats_changed
+                    notify_stats_changed()
                 except Exception:
                     pass
         except Exception as e:
             logger.log("error", f"Mobile review detection failed: {e}")
+            # Surface a hard failure to the user ONCE per session — a silent log
+            # is exactly what hid the original "sync not working" bug. Guarded so
+            # a persistent failure can't spam a tooltip on every sync.
+            global _mobile_detection_warned
+            if not _mobile_detection_warned:
+                _mobile_detection_warned = True
+                try:
+                    tooltip(
+                        "Ankimon: couldn't process mobile reviews after sync — see "
+                        "the Ankimon log. Your card reviews themselves are unaffected."
+                    )
+                except Exception:
+                    pass
         # === END mobile-review sync engine ===
 
         # Only auto-read Ankimon configs if automatic sync is enabled

@@ -433,6 +433,7 @@ class AnkimonDB:
                 (individual_id, obfuscated_data)
             )
         conn.commit()
+        self._clear_reviewer_ownership_cache()
         return True
 
     def get_pokemon(self, individual_id: str) -> Optional[Dict[str, Any]]:
@@ -465,6 +466,25 @@ class AnkimonDB:
         cursor = self.execute("SELECT 1 FROM captured_pokemon WHERE LOWER(name) = LOWER(?) LIMIT 1", (name,))
         return cursor.fetchone() is not None
 
+    def _clear_reviewer_ownership_cache(self):
+        """Clears the Reviewer_Manager's ownership cache and the internal Pokémon ID cache when database changes.
+
+        Uses ``services.reviewer`` (the seam-correct reference on this branch) rather
+        than ``mw.reviewer_obj`` (which is an exp-only pattern never set here).
+        Calls the public ``invalidate_hud_cache()`` API instead of reaching into the
+        private ``_ownership_cache`` dict directly.  Safe to call headless: the
+        ``services`` import is always available; ``services.reviewer`` is ``None``
+        outside of a live Anki session.
+        """
+        self._all_pokemon_ids_cache = None
+        try:
+            from ..services import services
+            reviewer = services.reviewer
+            if reviewer is not None and hasattr(reviewer, "invalidate_hud_cache"):
+                reviewer.invalidate_hud_cache()
+        except Exception:
+            pass
+
     def delete_pokemon(self, individual_id: str) -> bool:
         """Deletes a pokemon from the captured collection."""
         cursor = self.execute(
@@ -472,6 +492,7 @@ class AnkimonDB:
             (individual_id,)
         )
         self._get_connection().commit()
+        self._clear_reviewer_ownership_cache()
         return cursor.rowcount > 0
 
     def replace_pokemon(self, pokemon_data: Dict[str, Any], old_individual_id: str) -> bool:
@@ -523,7 +544,7 @@ class AnkimonDB:
         )
 
         conn.commit()
-
+        self._clear_reviewer_ownership_cache()
         return cursor.rowcount > 0
 
     def get_pokemon_count(self) -> int:
@@ -584,6 +605,7 @@ class AnkimonDB:
             (individual_id, obfuscated_data)
         )
         conn.commit()
+        self._clear_reviewer_ownership_cache()
         return True
 
     def get_main_pokemon(self) -> Optional[Dict[str, Any]]:
@@ -1220,7 +1242,15 @@ class AnkimonDB:
         ).fetchone()
         return int(row[0]) if row else 0
 
-    def set_mobile_watermark(self, watermark_ms: int) -> None:
+    def set_mobile_watermark(self, watermark_ms: int, *, force: bool = False) -> None:
+        # Monotonic by default: the watermark must never move backwards. A
+        # regression would re-expose already-processed reviews as "new" mobile
+        # battles on the next sync (double XP / phantom battles), so clamp to the
+        # current value. ``force=True`` is the escape hatch for an intentional
+        # reset (e.g. a future "reprocess mobile reviews" tool).
+        watermark_ms = int(watermark_ms)
+        if not force:
+            watermark_ms = max(watermark_ms, self.get_mobile_watermark())
         with self._get_connection():
             self._get_connection().execute(
                 "INSERT OR REPLACE INTO metadata (key, value) VALUES ('mobile_revlog_watermark', ?)",
@@ -1480,11 +1510,18 @@ class AnkimonDB:
 _db_instance: Optional[AnkimonDB] = None
 
 
-def get_db(logger=None) -> AnkimonDB:
-    """Gets the singleton database instance."""
+def get_db(logger=None, db_path=None) -> AnkimonDB:
+    """Gets the singleton database instance.
+
+    ``db_path`` lets a caller build the singleton against a specific database
+    file (multi-profile / hot-reload account preservation); when omitted the
+    default ``ankimon.db`` under ``user_path`` is used. It is only honoured when
+    the singleton does not yet exist — call :func:`reset_db` first to rebuild
+    against a different path.
+    """
     global _db_instance
     if _db_instance is None:
-        _db_instance = AnkimonDB(logger)
+        _db_instance = AnkimonDB(logger, db_path=db_path)
     return _db_instance
 
 

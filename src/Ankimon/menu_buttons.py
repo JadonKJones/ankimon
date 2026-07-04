@@ -33,11 +33,12 @@ from .gui_entities import (
     TableWidget,
     IDTableWidget,
     Version_Dialog,
+    NatureTableWidget,
 )
 
-# Developer-mode gate (reads misc.developer_mode via the settings seam). Hides
-# the developer-only menu entries (Switch Account / Encounter Rate Simulator)
-# unless the user has turned Developer Mode on.
+# Developer-mode gate (detects "dev_"/"_dev" in the profile or trainer name).
+# Hides the developer-only menu entries (Switch Account / Encounter Rate
+# Simulator) unless the user is in Developer Mode.
 from .utils import is_dev_mode, is_alive
 
 
@@ -92,6 +93,7 @@ def create_menu_actions(
     flex_pokemon_collection: Callable,
     eff_chart: TableWidget,
     gen_id_chart: IDTableWidget,
+    nature_chart: NatureTableWidget,
     credits: Credits,
     license: License,
     open_help_window: Callable,
@@ -112,7 +114,10 @@ def create_menu_actions(
     pokemon_pc: PokemonPC,
     backup_manager: BackupManager,
 ):
-    from .singletons import get_items_window
+    from .singletons import (
+        get_items_window,
+        get_nature_chart,
+    )
 
     actions = []
 
@@ -148,7 +153,15 @@ def create_menu_actions(
         pokemon_pc_action = QAction("Pokémon PC", mw)
         pokemon_pc_action.setMenuRole(QAction.MenuRole.NoRole)
         collection_menu.addAction(pokemon_pc_action)
-        qconnect(pokemon_pc_action.triggered, pokemon_pc.show)
+
+        def _open_pokemon_pc():
+            if pokemon_pc.isMinimized():
+                pokemon_pc.setWindowState(pokemon_pc.windowState() & ~Qt.WindowState.WindowMinimized)
+            pokemon_pc.show()
+            pokemon_pc.raise_()
+            pokemon_pc.activateWindow()
+
+        qconnect(pokemon_pc_action.triggered, _open_pokemon_pc)
 
         # Ankimon Window
         ankimon_window_action = QAction(mw.translator.translate("open_ankimon_window_button"), mw)
@@ -218,6 +231,14 @@ def create_menu_actions(
     gen_and_poke_chart_action.setMenuRole(QAction.MenuRole.NoRole)
     gen_and_poke_chart_action.triggered.connect(gen_id_chart.show_gen_chart)
     help_menu.addAction(gen_and_poke_chart_action)
+
+    # Nature chart
+    nature_chart_action = QAction(mw.translator.translate("nature_chart_button"), mw)
+    nature_chart_action.setMenuRole(QAction.MenuRole.NoRole)
+    nature_chart_action.triggered.connect(
+        lambda: get_nature_chart().show_nature_chart()
+    )
+    help_menu.addAction(nature_chart_action)
 
     # Join Discord
     join_discord_action = QAction(mw.translator.translate("join_discord_button"), mw)
@@ -326,6 +347,17 @@ def create_menu_actions(
     switch_account_action.triggered.connect(swap_ankimon_account)
     mw.pokemenu.addAction(switch_account_action)
 
+    # Restart Ankimon — developer hot-reload (teardown + in-place re-import of
+    # the add-on). The Ctrl+Shift+R accelerator is owned by a dedicated QShortcut
+    # wired at startup (see __init__.py); this menu entry deliberately sets no
+    # shortcut of its own to avoid an "ambiguous shortcut overload" with it.
+    from .reloader import restart_ankimon
+
+    restart_ankimon_action = QAction("Restart Ankimon", mw)
+    restart_ankimon_action.setMenuRole(QAction.MenuRole.NoRole)
+    restart_ankimon_action.triggered.connect(restart_ankimon)
+    mw.pokemenu.addAction(restart_ankimon_action)
+
     # Encounter Rate Simulator (developer tool). Cache the dialog on mw (like the
     # file's other game/dev windows) before showing it: the dialog is parentless
     # and embeds a QWebEngineView, so if the only reference lived in the lambda it
@@ -363,6 +395,7 @@ def create_menu_actions(
     def update_dev_actions_visibility():
         is_dev = is_dev_mode()
         switch_account_action.setVisible(is_dev)
+        restart_ankimon_action.setVisible(is_dev)
         simulator_action.setVisible(is_dev)
         # Hide the Debug submenu and disable the tracker hotkey unless Developer
         # Mode is on. setEnabled(False) is what actually suppresses the
@@ -371,6 +404,14 @@ def create_menu_actions(
         tracker_window_action.setEnabled(is_dev)
         if debug is True:
             debug_menu.menuAction().setVisible(is_dev)
+        # Keep the Ctrl+Shift+R hot-reload accelerator in lockstep with the menu
+        # action (registered in __init__.on_startup_complete). Guard on liveness:
+        # the shortcut list may be absent before startup-complete or hold a dead
+        # widget after a reload.
+        from .services import services
+        for _sc in getattr(services, "_reload_shortcuts", ()) or ():
+            if is_alive(_sc):
+                _sc.setEnabled(is_dev)
 
     mw.pokemenu.aboutToShow.connect(update_dev_actions_visibility)
     update_dev_actions_visibility()

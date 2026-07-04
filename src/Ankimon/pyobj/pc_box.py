@@ -1027,7 +1027,19 @@ class PokemonPC(QDialog):
         Refreshes the grid to ensure newly caught Pokémon are visible.
         """
         super().showEvent(event)
-        # We call refresh_pokemon_grid which uses the cache-detection logic (count check)
+        
+        # Avoid clearing/rebuilding the layout (which causes black screens)
+        # if the grid is already built and the count of Pokémon hasn't changed.
+        try:
+            cursor = services.db.execute("SELECT COUNT(*) FROM captured_pokemon")
+            current_count = cursor.fetchone()[0]
+        except Exception:
+            current_count = 0
+
+        grid_populated = self.pokemon_grid is not None and self.pokemon_grid.count() > 0
+        if grid_populated and current_count == self._total_pokemon_count:
+            return
+
         self.refresh_pokemon_grid()
 
     def setup_filters_layout(self, parent_layout):
@@ -1852,7 +1864,7 @@ class PokemonPC(QDialog):
         target_stat = stat_map.get(sort_key_str)
 
         if sort_key_str == "date":
-            order_clause = f"ORDER BY original_index {direction}"
+            order_clause = f"ORDER BY captured_date {direction}, original_index {direction}"
         elif sort_key_str == "name":
             order_clause = f"ORDER BY name {direction}, json_extract(data, '$.nickname') {direction}"
         elif sort_key_str == "level":
@@ -2554,11 +2566,14 @@ class PokemonPC(QDialog):
             self.details_widget.setFixedSize(0, 0)
             self.pokemon_details_layout = None
 
-    def closeEvent(self, event: QCloseEvent):
-        self.on_window_close()
-        event.accept()  # Accept the close event
-
     def reject(self):  # Called when pressing Escape
+        import base64
+        try:
+            mw.pm.profile[self.GEOMETRY_KEY] = base64.b64encode(
+                bytes(self.saveGeometry())
+            ).decode()
+        except Exception:
+            pass
         self.on_window_close()
         super().reject()
 

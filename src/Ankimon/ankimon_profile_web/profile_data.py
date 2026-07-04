@@ -325,16 +325,33 @@ class ProfileData:
                 return default
 
         # 1. Retrieve caught pokedex IDs. NOTE: db.get_all_pokemon_ids() reads
-        # ONLY the live captured_pokemon table — it does NOT merge released or
-        # explicit caught history, so a released species drops out of this count.
-        # The Ankidex screen does that 3-way pokemon_history union inline, so the
-        # two dex counts can disagree for a player who has released Pokémon.
-        # Folding the history union in here is a deferred pokedex-completion DB
-        # leaf (see tests/test_profile_pokedex_completion.py).
+        # ONLY the live captured_pokemon table. We also merge released history and
+        # explicit caught IDs to match Ankidex and ensure released species do not drop
+        # out of this count.
         try:
             caught_ids = db.get_all_pokemon_ids() or set()
         except Exception:
             caught_ids = set()
+
+        try:
+            cursor = db.execute(
+                "SELECT DISTINCT json_extract(data, '$.id') FROM pokemon_history"
+            )
+            for row in cursor.fetchall():
+                if row[0]:
+                    try:
+                        caught_ids.add(int(row[0]))
+                    except (ValueError, TypeError):
+                        continue
+        except Exception:
+            pass
+
+        if hasattr(db, "get_caught_ids"):
+            try:
+                caught_ids.update(db.get_caught_ids())
+            except Exception:
+                pass
+
 
         # 2. Map all caught IDs to their base species_id (deduplicating Megas, Gmax, and forms)
         from ..functions.pokedex_functions import _load_pokedex_cache, search_pokedex_by_id, safe_int
@@ -554,7 +571,7 @@ class ProfileData:
                 SELECT individual_id, name, level, pokedex_id, shiny,
                        json_extract(data, '$.gender') AS gender
                 FROM captured_pokemon
-                ORDER BY rowid DESC
+                ORDER BY json_extract(data, '$.captured_date') DESC, rowid DESC
                 LIMIT 6
                 """
             )
