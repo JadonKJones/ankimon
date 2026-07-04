@@ -327,6 +327,20 @@ def detect_mobile_reviews(col, watermark_ms: int, desktop_revlog_ids: frozenset[
     ]
 
 
+# Residual known edge (deliberately NOT auto-recovered): a mobile review can sync
+# in with a revlog id OLDER than the desktop's latest review, so it lands at or
+# below the monotonic watermark and the ``id > watermark`` detector above never
+# sees it. Registering the post-sync hook (setup_ankimon_sync_hooks) makes the
+# watermark advance AFTER a sync rather than speculatively, which shrinks this
+# window; the remainder is benign (a few reviews just don't become battles).
+# It is NOT closed by scanning below the watermark, because that window also
+# contains ordinary desktop reviews Ankimon already battled and there is no
+# durable record that reliably distinguishes them (desktop_processed_reviews is
+# pruned as the watermark advances) — such a scan would re-queue already-credited
+# desktop reviews as phantom mobile battles (double XP). A safe recovery would
+# require a durable, age-pruned processed-review ledger; left as future work.
+
+
 def process_mobile_reviews_after_sync(col, ankimon_db, settings_obj, logger) -> int:
     """
     Full post-sync pipeline:

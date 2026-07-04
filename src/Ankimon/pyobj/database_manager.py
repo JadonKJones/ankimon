@@ -1220,7 +1220,15 @@ class AnkimonDB:
         ).fetchone()
         return int(row[0]) if row else 0
 
-    def set_mobile_watermark(self, watermark_ms: int) -> None:
+    def set_mobile_watermark(self, watermark_ms: int, *, force: bool = False) -> None:
+        # Monotonic by default: the watermark must never move backwards. A
+        # regression would re-expose already-processed reviews as "new" mobile
+        # battles on the next sync (double XP / phantom battles), so clamp to the
+        # current value. ``force=True`` is the escape hatch for an intentional
+        # reset (e.g. a future "reprocess mobile reviews" tool).
+        watermark_ms = int(watermark_ms)
+        if not force:
+            watermark_ms = max(watermark_ms, self.get_mobile_watermark())
         with self._get_connection():
             self._get_connection().execute(
                 "INSERT OR REPLACE INTO metadata (key, value) VALUES ('mobile_revlog_watermark', ?)",
