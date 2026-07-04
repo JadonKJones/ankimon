@@ -174,6 +174,7 @@ _pokemon_csv_cache = None
 _stats_csv_cache = None
 _poke_evo_cache = None
 _moves_cache = None
+_items_cost_cache = None
 
 
 def _load_pokemon_csv_cache():
@@ -240,6 +241,22 @@ def _load_moves_cache():
             print(f"Error loading moves cache: {e}")
             _moves_cache = {}
     return _moves_cache
+
+
+def _load_items_cost_cache():
+    """Cache items.csv to avoid repeated file I/O"""
+    global _items_cost_cache
+    if _items_cost_cache is None:
+        try:
+            _items_cost_cache = []
+            with open(csv_file_items_cost, mode="r", encoding="utf-8") as file:
+                reader = csv.DictReader(file)
+                for row in reader:
+                    _items_cost_cache.append(row)
+        except Exception as e:
+            print(f"Error loading items cost CSV cache: {e}")
+            _items_cost_cache = []
+    return _items_cost_cache
 
 
 # === POKEMON NAME & DESCRIPTION CACHES ===
