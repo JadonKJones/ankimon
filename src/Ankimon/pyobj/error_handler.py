@@ -280,6 +280,19 @@ def show_warning_with_traceback(
     if not _HAVE_QT:
         return
 
+    # Constructing a QWidget/QDialog off the Qt GUI thread is a hard Qt violation
+    # that aborts the process at the C++ level (a "force-close", not a catchable
+    # Python error). Background workers — notably mobile bulk auto-resolve
+    # (ShopObj.startBulkResolve's bg_resolve thread) — funnel simulation
+    # exceptions here, so when we are not on the GUI thread we stop after the
+    # log + error-event above (the durable record) rather than building a dialog.
+    try:
+        from ..utils import is_main_thread
+        if not is_main_thread():
+            return
+    except Exception:
+        pass
+
     try:
         from aqt import mw as _mw
     except Exception:

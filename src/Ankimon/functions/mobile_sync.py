@@ -1248,10 +1248,29 @@ def _run_mobile_battles_impl(
         reviews_to_process = reviews_list
         extra_reviews = []
 
+    # GIL yield for background preview sims (Bug 4). The mobile tab's estimates
+    # (getMobileStatus.run_sim -> simulate_pending_mobile_battles) and the manual
+    # replay "next" preview both run this CPU-bound loop on a QueryOp background
+    # thread with NO progress_callback; the pure-Python engine work holds the GIL
+    # and starves the Qt GUI, making the tab and replay transitions feel sluggish.
+    # Hand the GIL to the GUI periodically. Gated so it only fires on a real
+    # background thread (never the synchronous post-sync auto-resolve, which runs
+    # on the GUI thread) and only when nobody else is already throttling via a
+    # progress_callback (the bulk-resolve worker does its own yield). is_main_thread
+    # returns True headless, so the Tier-1 harness / tests are unaffected.
+    from ..utils import is_main_thread
+    _yield_bg = (progress_callback is None) and (not is_main_thread())
+    _last_yield = time.monotonic()
+
     try:
         for review in reviews_to_process:
             temp_tracker.total_reviews += 1
             total_reviews_processed += 1
+            if _yield_bg:
+                _now = time.monotonic()
+                if _now - _last_yield >= 0.02:
+                    time.sleep(0.003)
+                    _last_yield = time.monotonic()
             if progress_callback:
                 try:
                     cb_res = progress_callback({
