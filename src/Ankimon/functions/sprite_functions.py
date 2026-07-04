@@ -108,12 +108,8 @@ def get_sprite_path(
     lookup_id = id
 
     # For Mega/Gmax forms, try to get the form-specific ID from pokedex.
-    # Tokenize on spaces/hyphens and match whole tokens (not a raw substring) so
-    # base names that merely contain "mega" (Meganium, Yanmega) do not trigger a
-    # form lookup, while "Charizard-Mega-X" / "Pikachu-Gmax" still do.
     base_species_id = None
-    name_tokens = pokemon_name.lower().replace("-", " ").split() if pokemon_name else ()
-    if any(form in name_tokens for form in ("mega", "gmax", "gigantamax")):
+    if pokemon_name and any(form in pokemon_name.lower() for form in ["mega", "gmax", "gigantamax"]):
         forme_id = _get_pokemon_id_from_pokedex(pokemon_name)
         if forme_id:
             lookup_id = forme_id
