@@ -66,5 +66,7 @@
     "trainer.cash_reward_amount": 40,
     "trainer.cash_reward_interval": 10,
     "trainer.cash_earned_today": 0,
-    "trainer.last_cash_reward_date": ""
+    "trainer.last_cash_reward_date": "",
+    "trainer.mobile_cash_earned_today": 0,
+    "trainer.last_mobile_cash_reward_date": ""
 }

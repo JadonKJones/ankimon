@@ -78,6 +78,8 @@ DEFAULT_CONFIG = {
     "trainer.cash_reward_interval": 10,
     "trainer.cash_earned_today": 0,
     "trainer.last_cash_reward_date": "",
+    "trainer.mobile_cash_earned_today": 0,
+    "trainer.last_mobile_cash_reward_date": "",
     "trainer.mobile_reviews_resolved_since_payout": 0,
     "trainer.level": 0,
     "trainer.xp": 0,
@@ -201,6 +203,7 @@ class Settings:
             "trainer.cash_reward_amount",
             "trainer.cash_reward_interval",
             "trainer.cash_earned_today",
+            "trainer.mobile_cash_earned_today",
             "controls.team_cycle_count",
         ]
         for key in keys_to_coerce_to_int:
