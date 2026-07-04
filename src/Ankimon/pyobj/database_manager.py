@@ -433,6 +433,7 @@ class AnkimonDB:
                 (individual_id, obfuscated_data)
             )
         conn.commit()
+        self._clear_reviewer_ownership_cache()
         return True
 
     def get_pokemon(self, individual_id: str) -> Optional[Dict[str, Any]]:
@@ -465,6 +466,25 @@ class AnkimonDB:
         cursor = self.execute("SELECT 1 FROM captured_pokemon WHERE LOWER(name) = LOWER(?) LIMIT 1", (name,))
         return cursor.fetchone() is not None
 
+    def _clear_reviewer_ownership_cache(self):
+        """Clears the Reviewer_Manager's ownership cache and the internal Pokémon ID cache when database changes.
+
+        Uses ``services.reviewer`` (the seam-correct reference on this branch) rather
+        than ``mw.reviewer_obj`` (which is an exp-only pattern never set here).
+        Calls the public ``invalidate_hud_cache()`` API instead of reaching into the
+        private ``_ownership_cache`` dict directly.  Safe to call headless: the
+        ``services`` import is always available; ``services.reviewer`` is ``None``
+        outside of a live Anki session.
+        """
+        self._all_pokemon_ids_cache = None
+        try:
+            from ..services import services
+            reviewer = services.reviewer
+            if reviewer is not None and hasattr(reviewer, "invalidate_hud_cache"):
+                reviewer.invalidate_hud_cache()
+        except Exception:
+            pass
+
     def delete_pokemon(self, individual_id: str) -> bool:
         """Deletes a pokemon from the captured collection."""
         cursor = self.execute(
@@ -472,6 +492,7 @@ class AnkimonDB:
             (individual_id,)
         )
         self._get_connection().commit()
+        self._clear_reviewer_ownership_cache()
         return cursor.rowcount > 0
 
     def replace_pokemon(self, pokemon_data: Dict[str, Any], old_individual_id: str) -> bool:
@@ -523,7 +544,7 @@ class AnkimonDB:
         )
 
         conn.commit()
-
+        self._clear_reviewer_ownership_cache()
         return cursor.rowcount > 0
 
     def get_pokemon_count(self) -> int:
@@ -584,6 +605,7 @@ class AnkimonDB:
             (individual_id, obfuscated_data)
         )
         conn.commit()
+        self._clear_reviewer_ownership_cache()
         return True
 
     def get_main_pokemon(self) -> Optional[Dict[str, Any]]:
