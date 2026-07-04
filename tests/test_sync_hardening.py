@@ -13,6 +13,7 @@ real add-on modules import Qt-free, then drive the real code.
 
 import os
 import sys
+import atexit
 import types
 import shutil
 import sqlite3
@@ -46,6 +47,7 @@ if str(_SRC) not in sys.path:
 
 _USER_DIR = Path(tempfile.mkdtemp(prefix="ankimon_hardening_ut_"))
 os.environ.setdefault("ANKIMON_USER_PATH", str(_USER_DIR))
+atexit.register(shutil.rmtree, _USER_DIR, ignore_errors=True)
 
 from Ankimon.services import services  # noqa: E402
 from Ankimon.pyobj.database_manager import AnkimonDB  # noqa: E402
@@ -286,6 +288,22 @@ def test_force_import_returns_true_when_imported(tmp_path, monkeypatch):
     finally:
         services.db = prev
     assert src.read_bytes().startswith(b"REMOTE")
+
+
+def test_force_import_returns_false_when_no_media_file(tmp_path, monkeypatch):
+    """Nothing on AnkiWeb to import yet is a benign no-op: return False (the
+    caller shows an informational message, not a scary traceback dialog) and
+    leave the local save untouched."""
+    src = tmp_path / "ankimon.db"
+    src.write_bytes(b"LOCAL" + b"\x00" * 600)
+    media = tmp_path / "media.db"   # deliberately NOT created
+
+    ds = AnkimonDataSync()
+    monkeypatch.setattr(ds, "_get_source_path", lambda fn: src)
+    monkeypatch.setattr(ds, "_get_media_path", lambda fn: media)
+
+    assert ds.force_sync_from_media() is False
+    assert src.read_bytes().startswith(b"LOCAL")
 
 
 # --------------------------------------------------------------------------

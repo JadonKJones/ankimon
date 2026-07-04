@@ -150,8 +150,6 @@ class BackupManager:
             with open(backup_dir / "summary.json", 'w', encoding='utf-8') as f:
                 json.dump(summary, f, indent=4)
 
-            if manual:
-                showInfo("Manual backup created successfully.")
             self.logger.log("info", f"Created backup: {backup_dir.name}")
 
             # Success = the SPECIFIC file the caller relies on landed in the
@@ -160,6 +158,18 @@ class BackupManager:
                 services.db.db_path.name if services.db is not None else "ankimon.db"
             )
             success = (backup_dir / needed).is_file()
+
+            # Report manual feedback based on the ACTUAL outcome — never claim
+            # success when the DB copy failed (per-file copy errors are logged,
+            # not raised), or the user would trust a backup that isn't there.
+            if manual:
+                if success:
+                    showInfo("Manual backup created successfully.")
+                else:
+                    showWarning(
+                        "Manual backup failed: the database could not be copied "
+                        "(see the Ankimon log). No backup was created."
+                    )
 
         except Exception as e:
             self.logger.log("error", f"Failed to create backup: {e}")

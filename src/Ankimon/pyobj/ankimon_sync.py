@@ -406,16 +406,20 @@ class ImprovedPokemonDataSync(QDialog):
         """Import data from AnkiWeb to local storage."""
         try:
             success = self.sync_handler.force_sync_from_media()
-            if success:
-                # Enable automatic sync after successful manual sync
-                from .ankimon_sync import enable_automatic_sync
-                enable_automatic_sync()
+            if not success:
+                # force_sync_from_media already told the user WHY nothing was
+                # imported (integrity/backup abort, nothing-to-import, or a
+                # traceback for a genuine error). Don't enable auto-sync, close
+                # Anki, or stack a second alarming dialog on top of that message.
+                return
 
-                tooltip("Data imported from AnkiWeb successfully! Automatic sync is now enabled.")
-                self.close()
-                close_anki()
-            else:
-                raise Exception("Failed to import data from AnkiWeb.")
+            # Enable automatic sync after a successful manual import.
+            from .ankimon_sync import enable_automatic_sync
+            enable_automatic_sync()
+
+            tooltip("Data imported from AnkiWeb successfully! Automatic sync is now enabled.")
+            self.close()
+            close_anki()
         except Exception as e:
             self.logger.log("error", f"Failed to import from AnkiWeb: {str(e)}")
             show_warning_with_traceback(parent=self, exception=e, message="Error importing from AnkiWeb")
@@ -925,11 +929,14 @@ class AnkimonDataSync:
         try:
             updated_files = []
             backed_up = False
+            safety_aborted = False
+            any_media = False
             for filename in self.SYNC_FILES.keys():
                 media_file = self._get_media_path(filename)    # MEDIA file
                 source_file = self._get_source_path(filename)  # LOCAL file
 
                 if media_file.is_file():
+                    any_media = True
                     # Ensure source directory exists
                     source_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -941,6 +948,7 @@ class AnkimonDataSync:
                             f"Import aborted for {filename}: the file on AnkiWeb "
                             "failed an integrity check. Your local data is unchanged."
                         )
+                        safety_aborted = True
                         continue
 
                     # SAFETY — back up the local save once before overwriting;
@@ -952,6 +960,7 @@ class AnkimonDataSync:
                                 "safety backup of your local data first. Your local "
                                 "data is unchanged."
                             )
+                            safety_aborted = True
                             continue
                         backed_up = True
 
@@ -967,8 +976,15 @@ class AnkimonDataSync:
             # abort (integrity/backup failure) or an absent media file leaves
             # updated_files empty — returning True there would make the caller
             # (import_from_ankiweb) claim success, enable auto-sync, and CLOSE
-            # Anki despite nothing having been imported.
+            # Anki despite nothing having been imported. Give the user a clear
+            # reason for the two benign empty cases; a safety abort already
+            # showed its own specific warning above.
             if not updated_files:
+                if not any_media and not safety_aborted:
+                    showInfo(
+                        "No Ankimon data found on AnkiWeb to import yet. Export "
+                        "from another device first, then sync this one."
+                    )
                 return False
 
             showInfo(f"Imported {len(updated_files)} files from AnkiWeb: {', '.join(updated_files)}\n\nAnki will now close. Please reopen Anki to apply changes!")
