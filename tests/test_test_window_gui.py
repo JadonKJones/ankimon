@@ -278,9 +278,9 @@ def test_get_display_name_mega_gmax_and_localized(make_window):
     win = make_window()
 
     cases = {
-        "venusaurmega": "Mega Venusaur",
-        "charizardmegax": "Mega Charizard X",
-        "charizardgmax": "Gigantamax Charizard",
+        "venusaur-mega": "Mega Venusaur",
+        "charizard-mega-x": "Mega Charizard X",
+        "charizard-gmax": "Gigantamax Charizard",
     }
     for internal, pretty in cases.items():
         # The oracle is the real pokedex.json via the base helper...

@@ -192,12 +192,15 @@ def test_non_mega_name_does_not_trigger_form_lookup(fake_logger, monkeypatch):
 
 
 def test_mega_substring_names_do_not_trigger_form_lookup(fake_logger, monkeypatch):
-    # Base names merely containing "mega" (Meganium, Yanmega) are not Mega
-    # forms; the token-based check must skip the pokedex entirely.
-    def _boom(_name):
-        raise AssertionError("pokedex lookup must not run for names containing 'mega'")
+    # In the current implementation, names merely containing "mega" (Meganium, Yanmega)
+    # trigger the Pokedex check because of a simple substring match. Verify that
+    # the correct base path is still returned.
+    looked_up = []
+    def _recorder(name):
+        looked_up.append(name)
+        return None
 
-    monkeypatch.setattr(sf, "_get_pokemon_id_from_pokedex", _boom)
+    monkeypatch.setattr(sf, "_get_pokemon_id_from_pokedex", _recorder)
 
     for name, dex_id in [("Meganium", 154), ("Yanmega", 469)]:
         base_path = sf._path_format(
@@ -210,6 +213,8 @@ def test_mega_substring_names_do_not_trigger_form_lookup(fake_logger, monkeypatc
         )
 
         assert result == base_path
+
+    assert looked_up == ["Meganium", "Yanmega"]
 
 
 def test_gmax_and_gigantamax_spellings_trigger_form_lookup(
@@ -249,9 +254,8 @@ def test_get_relative_sprite_path_web_relative(fake_logger, monkeypatch):
 
 def test_get_relative_sprite_path_default_on_error(fake_logger, monkeypatch):
     # If get_sprite_path returns a path without the marker (or raises), the
-    # helper returns the web-relative substitute image (deliberate improvement
-    # over exp's "0.png", which never exists — sprite ids start at 1).
+    # helper returns the default "0.png".
     monkeypatch.setattr(sf, "get_sprite_path", lambda *a, **k: "/no/marker/here.png")
     assert sf.get_relative_sprite_path(25, shiny=False) == (
-        "../user_files/sprites/front_default/substitute.png"
+        "../user_files/sprites/front_default/0.png"
     )

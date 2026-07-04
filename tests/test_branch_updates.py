@@ -49,9 +49,9 @@ def test_update_state_read_write(tmp_path):
         # When file doesn't exist, read_update_state should return None
         assert update_manager.read_update_state() is None
 
-        # Save state
+        # Save state with a custom branch to prevent auto-migration to main
         update_manager.save_update_state(
-            "branch", "BRRRR_Experimental", "c0ffee12345", skip_until=999999.9
+            "branch", "custom_branch", "c0ffee12345", skip_until=999999.9
         )
 
         # Verify it exists and matches
@@ -59,7 +59,7 @@ def test_update_state_read_write(tmp_path):
         state = update_manager.read_update_state()
         assert state is not None
         assert state["source_type"] == "branch"
-        assert state["source_name"] == "BRRRR_Experimental"
+        assert state["source_name"] == "custom_branch"
         assert state["commit_sha"] == "c0ffee12345"
         assert state["skip_until"] == 999999.9
 
@@ -67,6 +67,25 @@ def test_update_state_read_write(tmp_path):
         update_manager.set_update_skip_until(888888.8)
         state = update_manager.read_update_state()
         assert state["skip_until"] == 888888.8
+
+
+def test_update_state_migration_from_experimental(tmp_path):
+    """Test that legacy BRRRR_Experimental branch is auto-migrated to main."""
+    state_file = tmp_path / "update_state.json"
+
+    with patch.object(update_manager, "get_update_state_path", return_value=state_file):
+        import json
+        legacy_state = {
+            "source_type": "branch",
+            "source_name": "BRRRR_Experimental",
+            "commit_sha": "c0ffee12345",
+        }
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(json.dumps(legacy_state), encoding="utf-8")
+
+        state = update_manager.read_update_state()
+        assert state is not None
+        assert state["source_name"] == "main"
 
 
 @patch("Ankimon.pyobj.update_manager._api_get")
@@ -99,21 +118,23 @@ def test_fetch_commit_date(mock_api_get):
 
 @patch("Ankimon.changelog.QueryOp")
 @patch("Ankimon.pyobj.update_manager.read_update_state")
-def test_check_branch_update_no_state(mock_read_state, mock_query_op):
-    """Test check_branch_update does nothing if no update state exists."""
+@patch("Ankimon.pyobj.update_manager.is_git_clone", return_value=False)
+def test_check_branch_update_no_state(mock_is_git_clone, mock_read_state, mock_query_op):
+    """Test check_branch_update initializes tracking silently if no update state exists."""
     mock_read_state.return_value = None
     changelog.check_branch_update(True, True)
-    mock_query_op.assert_not_called()
+    mock_query_op.assert_called_once()
 
 
 @patch("Ankimon.changelog.QueryOp")
 @patch("Ankimon.pyobj.update_manager.read_update_state")
-def test_check_branch_update_not_experimental_branch(mock_read_state, mock_query_op):
-    """Test check_branch_update does nothing if not on BRRRR_Experimental."""
+def test_check_branch_update_not_branch_type(mock_read_state, mock_query_op):
+    """Test check_branch_update does nothing if source_type is not branch."""
     mock_read_state.return_value = {
-        "source_type": "branch",
+        "source_type": "release",
         "source_name": "main",
         "commit_sha": "abc1234",
+        "addon_version": changelog.addon_ver,
     }
     changelog.check_branch_update(True, True)
     mock_query_op.assert_not_called()
@@ -122,11 +143,12 @@ def test_check_branch_update_not_experimental_branch(mock_read_state, mock_query
 @patch("Ankimon.changelog.QueryOp")
 @patch("Ankimon.pyobj.update_manager.read_update_state")
 def test_check_branch_update_on_experimental_branch(mock_read_state, mock_query_op):
-    """Test check_branch_update starts QueryOp if on BRRRR_Experimental."""
+    """Test check_branch_update starts QueryOp if tracking a branch."""
     mock_read_state.return_value = {
         "source_type": "branch",
         "source_name": "BRRRR_Experimental",
         "commit_sha": "abc1234",
+        "addon_version": changelog.addon_ver,
     }
     changelog.check_branch_update(True, True)
     mock_query_op.assert_called_once()
@@ -192,6 +214,7 @@ def test_check_branch_update_bg_op(
         "source_type": "branch",
         "source_name": "BRRRR_Experimental",
         "commit_sha": "local_sha_123",
+        "addon_version": changelog.addon_ver,
     }
     mock_fetch_sha.return_value = "remote_sha_456"
     mock_fetch_commits.return_value = [{"sha": "7890123", "message": "Commit message"}]
@@ -221,6 +244,7 @@ def test_check_branch_update_skipped(mock_read_state, mock_query_op):
         "source_name": "BRRRR_Experimental",
         "commit_sha": "abc1234",
         "skip_until": time.time() + 3600,  # 1 hour in the future
+        "addon_version": changelog.addon_ver,
     }
     changelog.check_branch_update(True, True)
     mock_query_op.assert_not_called()
@@ -254,6 +278,7 @@ def test_check_branch_update_tolerates_bad_skip_until(mock_read_state, mock_quer
             "source_name": "BRRRR_Experimental",
             "commit_sha": "abc1234",
             "skip_until": bad_skip,
+            "addon_version": changelog.addon_ver,
         }
         changelog.check_branch_update(True, True)
         mock_query_op.assert_called_once()
@@ -272,6 +297,7 @@ def test_check_branch_update_null_commit_sha(
         "source_type": "branch",
         "source_name": "BRRRR_Experimental",
         "commit_sha": None,
+        "addon_version": changelog.addon_ver,
     }
     mock_fetch_sha.return_value = "remote_sha_456"
     mock_fetch_commits.return_value = []

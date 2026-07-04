@@ -677,6 +677,7 @@ def boot_env(monkeypatch):
         item_window=object(),
         version_dialog=object(),
         pokemon_pc=object(),
+        nature_chart=object(),
     )
 
     stubs = {
@@ -704,6 +705,17 @@ def boot_env(monkeypatch):
         "Ankimon.utils": _stub_module(
             "Ankimon.utils",
             test_online_connectivity=rec("test_online_connectivity", True),
+            is_dev_mode=rec("is_dev_mode", False),
+        ),
+        "PyQt6.QtGui": _stub_module(
+            "PyQt6.QtGui",
+            QKeySequence=lambda *args: None,
+            QShortcut=lambda *args, **kwargs: SimpleNamespace(
+                activated=SimpleNamespace(
+                    connect=rec("QShortcut.activated.connect")
+                ),
+                setEnabled=rec("QShortcut.setEnabled"),
+            ),
         ),
         "Ankimon.menu_buttons": _stub_module(
             "Ankimon.menu_buttons",
@@ -858,7 +870,7 @@ def test_menu_gets_base_call_shape_no_none_placeholders(boot_env):
 
     menu = _first(boot_env, "create_menu_actions")
     args = menu[1]
-    assert len(args) == 30
+    assert len(args) == 31
     # exp passed 11 None placeholders; the port passes base's real objects.
     assert not any(arg is None for arg in args)
     assert args[0] is True  # database_complete
