@@ -199,6 +199,46 @@ def test_setup_hooks_reload_safe(wired):
     assert sdf.remove.call_args[0][0] is first_handler
 
 
+def test_mobile_detection_registers_without_ankiweb_sync(wired):
+    """Regression guard for the mobile-sync decoupling fix.
+
+    Mobile reviews arrive via Anki's own AnkiWeb sync, independent of Ankimon's
+    legacy ``misc.ankiweb_sync`` file-sync toggle (default False, never
+    auto-enabled). Previously ``setup_ankimon_sync_hooks`` early-returned on that
+    False flag, so ``on_sync_did_finish`` was never attached and a mid-session
+    sync never turned phone reviews into battles. Every other test here forces
+    ``ankiweb_sync=True`` and so masked the bug; this one pins the DEFAULT."""
+    db, build, tooltip, mock_bridge = wired
+
+    settings = _Settings({
+        "misc.ankiweb_sync": False,   # the shipped default — the case that was broken
+        "mobile.enabled": True,
+        "mobile.resolution_mode": "manual",
+    })
+    services.col = _FakeCol([101, 102, 103])
+    db.set_mobile_watermark(0)
+
+    sdf = MagicMock()
+    asy.gui_hooks.sync_did_finish = sdf
+    setattr(services, asy._SYNC_HOOK_RECORD, ())  # start from a clean record
+
+    asy.setup_ankimon_sync_hooks(settings, _Logger())
+
+    # The detection hook IS registered even though ankiweb_sync is False.
+    assert sdf.append.called, "on_sync_did_finish was not registered for a default-config user"
+
+    # Firing it (exactly what a real mid-session AnkiWeb sync does) queues the
+    # reviews into pending battles — the behaviour a default user was missing.
+    handler = sdf.append.call_args[0][0]
+    handler()
+    assert db.get_pending_mobile_count() == 3
+
+    # Idempotent: a second sync (or the startup-pass/sync-hook overlap) does not
+    # double-count — revlog_id is UNIQUE and the watermark has advanced.
+    handler()
+    assert db.get_pending_mobile_count() == 3
+
+
 def test_sync_did_finish_applies_queue_cap(wired, monkeypatch):
     """on_sync_did_finish bounds each queueing pass by MOBILE_QUEUE_CAP the same
     way the startup pass does: keep the newest N, discard the oldest."""

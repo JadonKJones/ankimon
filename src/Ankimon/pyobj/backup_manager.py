@@ -102,11 +102,21 @@ class BackupManager:
                     backups.append(summary)
         return backups
 
-    def create_backup(self, manual=False):
-        """Creates a new backup."""
+    def create_backup(self, manual=False, required_file: str = None) -> bool:
+        """Creates a new backup.
+
+        Returns ``True`` only if the backup directory was written AND contains
+        the file the caller depends on. ``required_file`` names that file (the
+        one a pre-overwrite caller is protecting, e.g. ``ankimon.db``); when
+        omitted, the active-mode database is used. Callers that back up *before*
+        a destructive overwrite rely on this to refuse the overwrite when no
+        recoverable backup of THAT file was actually made — so one unrelated
+        file's copy failure must not blank another file's success (each copy is
+        isolated below)."""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         backup_dir = self.backups_path / f"backup_{timestamp}"
 
+        success = False
         try:
             # Checkpoint the active database first to flush all WAL changes to disk,
             # so the single-file copy below captures the latest committed state.
@@ -127,7 +137,13 @@ class BackupManager:
             for filename in files_to_copy:
                 source_path = self.user_files_path / filename
                 if source_path.exists():
-                    shutil.copy2(source_path, backup_dir / filename)
+                    # Isolate each copy: a failure on ankimonDEV.db must not mark
+                    # a successful ankimon.db backup as failed (which would
+                    # needlessly abort a safe import), and vice versa.
+                    try:
+                        shutil.copy2(source_path, backup_dir / filename)
+                    except Exception as e:
+                        self.logger.log("error", f"Failed to back up {filename}: {e}")
 
             summary = self._generate_summary(backup_dir)
             summary['manual'] = manual
@@ -138,12 +154,20 @@ class BackupManager:
                 showInfo("Manual backup created successfully.")
             self.logger.log("info", f"Created backup: {backup_dir.name}")
 
+            # Success = the SPECIFIC file the caller relies on landed in the
+            # backup dir. Defaults to the active-mode DB when unspecified.
+            needed = required_file or (
+                services.db.db_path.name if services.db is not None else "ankimon.db"
+            )
+            success = (backup_dir / needed).is_file()
+
         except Exception as e:
             self.logger.log("error", f"Failed to create backup: {e}")
             if manual:
                 showWarning(f"Failed to create backup: {e}")
 
         self.cleanup_backups()
+        return success
 
     def _get_db_file_stats(self, db_file_path: Path) -> Dict[str, Any]:
         """Reads summary stats directly from one Ankimon SQLite backup file.
