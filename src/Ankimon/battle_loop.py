@@ -154,6 +154,11 @@ def on_review_card(*args):
                     settings_obj.set("trainer.cash_earned_today", cash_earned_today + allowed_amount)
                     settings_obj.set("trainer.cash", settings_obj.get("trainer.cash") + allowed_amount)
                     trainer_card.cash = settings_obj.get("trainer.cash")
+                    try:
+                        from .singletons import notify_stats_changed
+                        notify_stats_changed()
+                    except Exception:
+                        pass
 
         if battle_sounds == True and ankimon_tracker_obj.general_card_count_for_battle == 1:
             play_sound(enemy_pokemon.id, settings_obj)

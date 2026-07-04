@@ -1261,6 +1261,8 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
                 try:
                     from ..events import events
                     events.emit("stats_changed")
+                    from ..singletons import notify_stats_changed
+                    notify_stats_changed()
                 except Exception:
                     pass
         except Exception as e:

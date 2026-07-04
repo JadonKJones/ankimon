@@ -1644,6 +1644,8 @@ def _run_mobile_battles_impl(
         try:
             from ..events import events
             events.emit("stats_changed")
+            from ..singletons import notify_stats_changed
+            notify_stats_changed()
         except Exception: pass
         return {
             "success": True, "resolved": encounters_fought, "xp_gained": total_xp,
@@ -1966,6 +1968,8 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
                 try:
                     from ..events import events
                     events.emit("stats_changed")
+                    from ..singletons import notify_stats_changed
+                    notify_stats_changed()
                 except Exception: pass
             except Exception as e:
                 if logger:

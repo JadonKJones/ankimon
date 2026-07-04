@@ -1665,6 +1665,12 @@ def save_caught_pokemon(
     # Save to database (replaces JSON file I/O for performance)
     ankimon_db.save_pokemon(caught_pokemon)
 
+    try:
+        from ..singletons import notify_stats_changed
+        notify_stats_changed()
+    except Exception:
+        pass
+
 
 def catch_pokemon(
     enemy_pokemon: PokemonObject,
