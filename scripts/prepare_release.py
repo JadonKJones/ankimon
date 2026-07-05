@@ -3,6 +3,7 @@ import json
 import subprocess
 import argparse
 import requests
+import re
 from typing import List, Dict, Optional
 
 def run_command(command: List[str], check: bool = True) -> str:
@@ -11,19 +12,24 @@ def run_command(command: List[str], check: bool = True) -> str:
 
 def get_previous_tag(current_version: str) -> Optional[str]:
     try:
-        # Find all -E pattern tags, sort by creation date
+        # Find all tags, sort by creation date
         tags = run_command(["git", "for-each-ref", "--sort=-creatordate", "--format=%(refname:short)", "refs/tags"]).split("\n")
-        # Filter for -E tags and exclude current version
-        version_tags = [t for t in tags if t.endswith("-E") and t != current_version]
+        # Filter for standard version tags (e.g. starts with digit, and is not the current version)
+        version_pattern = re.compile(r'^\d+(\.\d+)*(-[A-Z])?$')
+        version_tags = [t.strip() for t in tags if version_pattern.match(t.strip()) and t.strip() != current_version]
         return version_tags[0] if version_tags else None
     except Exception as e:
         print(f"Error finding previous tag: {e}")
         return None
 
+
 def fetch_prs_since_tag(repo: str, previous_tag: str) -> List[Dict]:
     # Get the date of the previous tag
     tag_date = run_command(["git", "log", "-1", "--format=%cI", previous_tag])
     headers = {"Accept": "application/vnd.github.v3+json"}
+    token = os.getenv("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"token {token}"
     
     pull_requests = []
     page = 1
@@ -108,6 +114,7 @@ def generate_changelogs(version: str, pull_requests: List[Dict], highlights: str
     repo_url = "https://github.com/h0tp-ftw/ankimon"
     
     categories = {
+        "critical": [],
         "enhancement": [],
         "bug": [],
         "documentation": [],
@@ -137,7 +144,9 @@ def generate_changelogs(version: str, pull_requests: List[Dict], highlights: str
         entry = f"- {pr['title']} {pr_link} {user_link}"
         
         cat = "other"
-        if any(l in labels for l in ["enhancement", "feature", "type: enhancement"]):
+        if "critical" in labels:
+            cat = "critical"
+        elif any(l in labels for l in ["enhancement", "feature", "type: enhancement"]):
             cat = "enhancement"
         elif any(l in labels for l in ["bug", "fix", "type: bug"]):
             cat = "bug"
@@ -163,11 +172,25 @@ def generate_changelogs(version: str, pull_requests: List[Dict], highlights: str
             thank_you = f"A huge thank you to {', '.join(c_links)} for their contributions to this update! <3"
         
         f.write(f"{thank_you}\n\n")
-        f.write("### What's new\n")
-        f.write(f"{highlights if highlights else '[JULES_HIGHLIGHTS]'}\n\n")
+        
+        # Break down enhancements and bug fixes
+        num_enhancements = len(categories["enhancement"])
+        num_bugs = len(categories["bug"])
+        f.write(f"This release includes {len(pull_requests)} merged pull requests with {num_enhancements} enhancements and {num_bugs} bug fixes!\n\n")
+        
+        if highlights:
+            f.write(f"{highlights}\n\n")
+            
+        # Discord Section
+        f.write("### 💬 Join the [Discord](https://discord.gg/Vkvdawxd5s)!\n")
+        f.write("Want to stay updated or get involved? Join our server for the latest updates on what's going on, or to get help from our custom AI assistant dedicated to Ankimon development!\n\n")
+        
         f.write("— h0tp 💖\n\n***\n\n")
         f.write(f"## 📜 Full changelog — v{version_no_v}\n\n")
         
+        if categories["critical"]:
+            f.write("### 🚨 Critical Changes!\n\n")
+            f.write("\n".join(categories["critical"]) + "\n\n")
         if categories["enhancement"]:
             f.write("### ✨ Features & Improvements!\n\n")
             f.write("\n".join(categories["enhancement"]) + "\n\n")
@@ -180,9 +203,6 @@ def generate_changelogs(version: str, pull_requests: List[Dict], highlights: str
         if categories["other"]:
             f.write("### 🔧 Other Changes!\n\n")
             f.write("\n".join(categories["other"]) + "\n\n")
-            
-        f.write("***\n\nMake a backup, but *your progress should NOT BE LOST from updating* - put a bug report if you lose your files\n\n")
-        f.write("Backup guide ➡️ https://discord.com/channels/1241773562629718148/1303759380768096318\n\n***\n")
 
 def main():
     parser = argparse.ArgumentParser()
