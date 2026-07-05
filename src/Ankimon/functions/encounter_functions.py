@@ -868,10 +868,19 @@ def generate_random_pokemon(
             return False
         return wild_pokemon_lvl >= check_min_generate_level(str(vname.lower()))
 
-    # Iterate through tiers starting from the rolled one
-    for i in range(start_idx, len(TIER_ORDER)):
-        current_tier = TIER_ORDER[i]
+    # Fallback order: try the rolled tier, then degrade STRAIGHT to the common
+    # Normal tier. Walking TIER_ORDER forward (rarest -> Normal) instead cascaded
+    # an emptied rare tier sideways into the next RARE tier (e.g. a Mega roll that
+    # fails its base-ownership/min-level guard fell through to Legendary), which
+    # over-represented rare encounters for players who can't yet access the rolled
+    # tier. Degrading to Normal keeps the rolled tier's chance while making a
+    # failed rare roll resolve to a common encounter, not another rare one.
+    rolled_tier = TIER_ORDER[start_idx]
+    fallback_tiers = [rolled_tier]
+    if rolled_tier != "Normal":
+        fallback_tiers.append("Normal")
 
+    for current_tier in fallback_tiers:
         tier_ids = get_all_pokemon_in_tier(current_tier)
         full_pool = []
         for pokemon_id in tier_ids:

@@ -448,3 +448,33 @@ def test_save_main_pokemon_progress_persists_when_evo_window_none():
     finally:
         for n, v in orig.items():
             setattr(ef, n, v)
+
+
+def test_tier_fallback_degrades_straight_to_normal(monkeypatch):
+    """A rolled rare tier that empties after its guards must fall back to the
+    common Normal tier, NOT cascade sideways into the next rare tiers (which would
+    over-represent rare/legendary encounters). We assert the exact tier-query order:
+    the rolled tier, then Normal — never Legendary/Gmax/Ultra in between."""
+    queried = []
+
+    class _Stop(Exception):
+        pass
+
+    def fake_pool(tier):
+        queried.append(tier)
+        if tier == "Normal":
+            # Stop before the heavy Rattata-fallback tuple build; we only care
+            # about which tiers were consulted, and in what order.
+            raise _Stop()
+        return []  # the rolled rare tier is empty -> triggers the fallback
+
+    monkeypatch.setattr(ef, "get_all_pokemon_in_tier", fake_pool)
+    monkeypatch.setattr(ef, "get_tier", lambda *a, **k: "Mega")
+
+    try:
+        ef.generate_random_pokemon(50, mock.MagicMock(), collected_ids=set())
+    except _Stop:
+        pass
+
+    assert queried == ["Mega", "Normal"]
+    assert "Legendary" not in queried  # no sideways cascade into other rare tiers

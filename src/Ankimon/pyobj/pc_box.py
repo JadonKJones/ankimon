@@ -679,7 +679,7 @@ class PokemonPC(QDialog):
         self.sort_by_level = None
         self.sort_by_date = None
         self.sort_group = None
-        self.selected_sort_key = "CP"
+        self.selected_sort_key = "cp"  # stable English key (see sort_combo userData)
         self.sort_combo = None
         self.desc_sort = None  # Sort by descending order
         self.current_stats_tab_index = 0  # Remember selected tab (Stats/IV/EV)
@@ -1157,30 +1157,36 @@ class PokemonPC(QDialog):
             self.selected_sort_key if hasattr(self, "selected_sort_key") else "Date"
         )
         self.sort_combo = QComboBox()
+        # (display label, stable English key). fetch_filtered_pokemon matches on
+        # the key, so the key is stored as userData and the localized label is
+        # shown. Storing the display text directly (the old behaviour) broke every
+        # translated sort — e.g. German "WP"/"Freundschaft" never matched the
+        # hardcoded "cp"/"friendship" branches and silently fell back to Date.
         sort_options = [
-            self.translator.translate("Date"),
-            self.translator.translate("ID"),
-            self.translator.translate("Name"),
-            self.translator.translate("Level"),
-            self.translator.translate("cp_label"),
-            self.translator.translate("friendship_label"),
-            "IV (Total)",
-            "EV (Total)",
-            "HP",
-            self.translator.translate("Attack"),
-            self.translator.translate("Defense"),
-            "Sp. Atk",
-            "Sp. Def",
-            self.translator.translate("Speed"),
+            (self.translator.translate("Date"), "date"),
+            (self.translator.translate("ID"), "id"),
+            (self.translator.translate("Name"), "name"),
+            (self.translator.translate("Level"), "level"),
+            (self.translator.translate("cp_label"), "cp"),
+            (self.translator.translate("friendship_label"), "friendship"),
+            ("IV (Total)", "iv (total)"),
+            ("EV (Total)", "ev (total)"),
+            ("HP", "hp"),
+            (self.translator.translate("Attack"), "attack"),
+            (self.translator.translate("Defense"), "defense"),
+            ("Sp. Atk", "sp. atk"),
+            ("Sp. Def", "sp. def"),
+            (self.translator.translate("Speed"), "speed"),
         ]
-        self.sort_combo.addItems(sort_options)
+        for label, key in sort_options:
+            self.sort_combo.addItem(label, key)
 
-        # Set current index based on previous selection
-        index = self.sort_combo.findText(prev_sort)
+        # Restore previous selection by its stable key (not display text).
+        index = self.sort_combo.findData(prev_sort)
         if index >= 0:
             self.sort_combo.setCurrentIndex(index)
         else:
-            self.sort_combo.setCurrentText("Date")
+            self.sort_combo.setCurrentIndex(0)  # Date
 
         self.sort_combo.currentTextChanged.connect(self.on_sort_changed)
 
@@ -1991,7 +1997,10 @@ class PokemonPC(QDialog):
             return []
 
     def on_sort_changed(self, text):
-        self.selected_sort_key = text
+        # Store the stable English key (userData), not the localized display text,
+        # so fetch_filtered_pokemon's token matching works in every language.
+        data = self.sort_combo.currentData() if self.sort_combo is not None else None
+        self.selected_sort_key = data if data is not None else text
         self.go_to_box(0)
 
     def show_actions_submenu(self, button: QPushButton, pokemon: dict[str, Any]):

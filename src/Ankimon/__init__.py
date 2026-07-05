@@ -306,11 +306,31 @@ def start_asynchronous_startup():
             except Exception:
                 pass
 
+    def on_startup_failed(exc):
+        # QueryOp offers no automatic recovery: if the background half raises
+        # (e.g. a locked/corrupt ankimon.db in one of the unguarded is_migrated /
+        # load_collected_pokemon_ids / get_pokemon_count reads), on_startup_complete
+        # never runs, so services.startup_finished stays False — every answered
+        # card is silently dropped and the Ankimon menu is never built. Without a
+        # .failure() handler that state is invisible to the user. Surface it.
+        try:
+            logger.log("error", f"Ankimon async startup failed: {exc}")
+        except Exception:
+            pass
+        try:
+            show_warning_with_traceback(
+                parent=mw,
+                exception=exc,
+                message="Ankimon failed to start; its features are disabled for this session:",
+            )
+        except Exception:
+            pass
+
     QueryOp(
         parent=mw,
         op=lambda _col: run_startup_background_checks(backup_manager),
         success=on_startup_complete,
-    ).without_collection().run_in_background()
+    ).failure(on_startup_failed).without_collection().run_in_background()
 
 
 # --- Discord integration ---

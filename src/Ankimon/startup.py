@@ -178,6 +178,17 @@ def run_startup_ui_callbacks(results):
             rate_path,
         )
 
+        # The background half (run_startup_background_checks) computed
+        # collected_pokemon_ids and needs_starter against the still-empty
+        # pre-migration DB. Migration just imported the user's legacy collection
+        # into captured_pokemon, so recompute both now — matching main's
+        # migration-before-checks ordering. Without this, an upgrading player is
+        # shown the starter picker (needs_starter left True) and their whole
+        # collection reads as un-owned for the session (collected set left empty).
+        results["collected_pokemon_ids"] = load_collected_pokemon_ids()
+        if results["database_complete"]:
+            results["needs_starter"] = ankimon_db.get_pokemon_count() == 0
+
     # Missing assets: sprite download agreement + file checker.
     if not results["database_complete"]:
         show_agreement_and_download_dialog(force_download=True)

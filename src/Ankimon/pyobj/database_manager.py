@@ -70,10 +70,21 @@ class ConnectionWrapper:
                 except Exception:
                     pass
             else:
+                # Do NOT swallow a commit failure: eating it here makes a lost
+                # write (disk full, or the busy_timeout expiring under write
+                # contention) look like success, so callers such as
+                # queue_mobile_battles / add_mobile_history_entries_batch /
+                # set_mobile_watermark return their success flag while nothing
+                # was persisted. Roll back and let the error propagate so the
+                # caller's error path (and the user) actually see it.
                 try:
                     self._conn.commit()
                 except Exception:
-                    pass
+                    try:
+                        self._conn.rollback()
+                    except Exception:
+                        pass
+                    raise
         return False
 
 

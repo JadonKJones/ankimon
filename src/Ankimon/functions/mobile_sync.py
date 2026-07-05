@@ -15,28 +15,44 @@ _desktop_session_card_ids: set[int] = set()
 MOBILE_QUEUE_CAP = 10_000
 
 def _mobile_sync_configured(settings) -> bool:
-    """Whether mobile reviews can actually reach this device. They arrive only via
-    AnkiWeb sync, so when that is off the durable desktop-processed record is
-    pointless and its per-review commit (an fsync on the GUI thread) is skipped."""
+    """Whether the durable desktop-processed dedup record must be written.
+
+    This MUST match the condition under which mobile-review detection actually
+    runs. Detection is registered unconditionally (setup_ankimon_sync_hooks) and
+    self-gates only on ``mobile.enabled`` — it is driven by Anki's native AnkiWeb
+    sync, which is independent of the legacy ``misc.ankiweb_sync`` file-sync
+    toggle. Gating this durable write on ``misc.ankiweb_sync`` (default False)
+    while detection ignores it meant that, in the default config, a restart lost
+    the in-memory desktop-session set and detection re-queued already-battled
+    desktop reviews as phantom mobile battles (double XP/catches). So gate the
+    record on the same flag detection uses: ``mobile.enabled``."""
     if settings is None:
         # Unknown config: keep the safe de-dupe record rather than risk a mobile
         # double-process on the next sync.
         return True
     try:
-        if not settings.get("mobile.enabled", True):
-            return False
-        return bool(settings.get("misc.ankiweb_sync", False))
+        return bool(settings.get("mobile.enabled", True))
     except Exception:
         return True
 
 def record_desktop_review(revlog_id: int, card_id: int = None) -> None:
-    """Record a revlog.id that Ankimon handled on desktop this inter-sync interval."""
+    """Record a revlog.id that Ankimon handled on desktop this inter-sync interval.
+
+    The durable record (NOT a watermark advance) keeps a mid-session restart from
+    re-exposing this id as a mobile review, while an OLDER not-yet-synced mobile
+    review with a lower revlog id stays detectable (advancing the watermark here
+    would permanently skip that older review).
+
+    The durable write is INLINE on purpose. Under the default single-file DB config
+    (rollback journal + ``synchronous=FULL``) the INSERT+commit fsyncs, but that
+    costs ~0.6 ms/answer — below per-card perceptibility, and the review-loop lag
+    this repo chased (#589) was a GIL-yield issue, not this. It must NOT be deferred
+    to a background daemon thread: daemon threads are killed at interpreter exit, so
+    a close right after the last answer would lose those close-adjacent ids —
+    exactly the ``> watermark`` reviews that would then be re-queued as phantom
+    mobile battles on reopen (the very double-processing this record prevents)."""
     if revlog_id:
         _desktop_session_revlog_ids.add(revlog_id)
-        # Durably record this desktop-processed id (NOT a watermark advance) so a
-        # mid-session restart can't re-expose it as a mobile review, while an OLDER
-        # not-yet-synced mobile review with a lower revlog id stays detectable.
-        # Advancing the watermark here would permanently skip that older review.
         try:
             from ..services import services
             if _mobile_sync_configured(services.settings):
@@ -1635,9 +1651,12 @@ def _run_mobile_battles_impl(
         current_counter = payout_start
         new_counter = current_counter + total_reviews_resolved
         
-        ci = int(settings_obj.get("trainer.cash_reward_interval", 5)) if settings_obj else 5
+        # Clamp to >=1: a raw config can hold 0 (the get() default only applies
+        # when the key is absent, not when it is 0), which would crash the modulo
+        # below with ZeroDivisionError. Matches commit_replay_outcome's clamp.
+        ci = max(1, int(settings_obj.get("trainer.cash_reward_interval", 5))) if settings_obj else 5
         ca = int(settings_obj.get("trainer.cash_reward_amount", 10)) if settings_obj else 10
-        
+
         gained_cash = accumulated_cash_earned_this_batch
         remaining_counter = new_counter % ci
         if settings_obj:
@@ -1725,8 +1744,10 @@ def _run_mobile_battles_impl(
         else:
             encounters_count = resolved_encounters
 
-        # Estimate trainer cash reward based on settings
-        cash_interval = int(settings_obj.get("trainer.cash_reward_interval", 5)) if settings_obj else 5
+        # Estimate trainer cash reward based on settings. Clamp to >=1: a raw
+        # config value of 0 would crash the floor-division below (the get()
+        # default only applies to an absent key, not a stored 0).
+        cash_interval = max(1, int(settings_obj.get("trainer.cash_reward_interval", 5))) if settings_obj else 5
         cash_amount = int(settings_obj.get("trainer.cash_reward_amount", 10)) if settings_obj else 10
         total_reviews_count = len(reviews_list)
         cash_gained = (total_reviews_count // cash_interval) * cash_amount

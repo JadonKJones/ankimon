@@ -551,14 +551,25 @@ class SyncQueryOp:
         type(self).instances.append(self)
         self._op = op
         self._success = success
+        self._failure = None
         self.without_collection_called = False
+
+    def failure(self, cb):
+        # Model aqt.operations.QueryOp.failure: on-op-exception callback.
+        self._failure = cb
+        return self
 
     def without_collection(self):
         self.without_collection_called = True
         return self
 
     def run_in_background(self):
-        result = self._op(None) if self._op else None
+        try:
+            result = self._op(None) if self._op else None
+        except Exception as exc:
+            if self._failure:
+                self._failure(exc)
+            return None
         if self._success:
             self._success(result)
         return result

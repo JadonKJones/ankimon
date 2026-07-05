@@ -239,12 +239,36 @@ def test_record_desktop_review_durably_records_without_advancing_watermark(mobil
         ms.clear_desktop_session()
 
 
-def test_record_desktop_review_skips_durable_write_when_sync_off(mobile_db):
+def test_record_desktop_review_durable_write_follows_mobile_enabled(mobile_db):
     db, _ = mobile_db
     prev_settings = services.settings
-    # Mobile reviews only arrive via AnkiWeb sync; with it off the durable
-    # per-review write (an fsync) is skipped, but session de-dupe still works.
+    # Detection runs whenever mobile.enabled — it is driven by Anki's native
+    # AnkiWeb sync and is DECOUPLED from the legacy misc.ankiweb_sync file-sync
+    # toggle — so the durable de-dupe record must be written in that same config.
+    # Gating it on misc.ankiweb_sync (off by default) while detection ignored the
+    # flag meant a restart lost the in-memory set and re-queued already-battled
+    # desktop reviews as phantom mobile battles (double XP).
     services.settings = _Settings({"mobile.enabled": True, "misc.ankiweb_sync": False})
+    try:
+        ms.record_desktop_review(2000)
+        assert 2000 in ms.get_desktop_session_revlog_ids()
+        # Durable write happens even with misc.ankiweb_sync off (the fix):
+        assert db.get_desktop_processed_revlog_ids() == {2000}
+        # It survives an in-memory clear (a mid-session restart):
+        ms.clear_desktop_session()
+        assert 2000 in ms.get_desktop_session_revlog_ids()
+    finally:
+        services.settings = prev_settings
+        db.clear_desktop_processed_reviews()
+        ms.clear_desktop_session()
+
+
+def test_record_desktop_review_skips_durable_write_when_mobile_disabled(mobile_db):
+    db, _ = mobile_db
+    prev_settings = services.settings
+    # With mobile disabled, detection never runs, so the durable record (an fsync)
+    # is pointless and skipped; the in-memory session set still de-dupes.
+    services.settings = _Settings({"mobile.enabled": False, "misc.ankiweb_sync": False})
     try:
         ms.record_desktop_review(2000)
         assert 2000 in ms.get_desktop_session_revlog_ids()
