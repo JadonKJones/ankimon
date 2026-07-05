@@ -28,6 +28,7 @@ MAIN_POKEMON_DEFAULT = {
     "tier": "Normal",
     "shiny": False,
     "captured_date": "2000-01-01 00:00:00",
+    "pokemon_defeated": 0,
 }
 
 
