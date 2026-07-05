@@ -41,7 +41,10 @@ def mock_db():
 
 @pytest.fixture
 def mock_mw(mock_db):
-    with patch("Ankimon.pyobj.pokemon_trade.mw") as mw_mock:
+    # The module reads the database through the services seam
+    # (`services.db`); keep mw.ankimon_db set too for any legacy access.
+    with patch("Ankimon.pyobj.pokemon_trade.mw") as mw_mock, \
+         patch("Ankimon.pyobj.pokemon_trade.services.db", mock_db):
         mw_mock.ankimon_db = mock_db
         yield mw_mock
 

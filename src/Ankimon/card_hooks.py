@@ -1,7 +1,7 @@
-import aqt
 from aqt import gui_hooks, mw, utils
 from aqt.utils import tooltip
 
+from .services import services
 from .singletons import ankimon_tracker_obj, reviewer_obj
 
 
@@ -36,10 +36,46 @@ def answerCard_after(rev, card, ease):
         tooltip("Error in ColorConfirmation: Couldn't interpret ease")
     ankimon_tracker_obj.reset_card_timer()
 
+    # Mobile-review de-dupe (F29): this review was just turned into battle
+    # progress on desktop, so record its revlog id (and card id) to keep it out
+    # of the mobile queue. Without this the exclusion set is never populated and
+    # detect_mobile_reviews() re-queues every desktop review as a "mobile"
+    # review after the next sync, double-processing it (double XP / catches).
+    try:
+        from .functions.mobile_sync import record_desktop_review
+        revlog_id = rev.mw.col.db.scalar(
+            "SELECT MAX(id) FROM revlog WHERE cid = ?", card.id
+        )
+        record_desktop_review(revlog_id, card_id=card.id)
+    except Exception:
+        pass
+
+
+# Reload safety (F31): a second boot in the same session must not leave the
+# reviewer hooks registered twice, or every review would be double-counted.
+# The registration record lives on the services registry — which, unlike a
+# module-level flag, survives a re-execution of this module — and it stores
+# the exact handler objects that were appended: after a re-exec the functions
+# above are NEW objects, so only the stored originals can still be found and
+# removed from gui_hooks. Re-registering therefore swaps the handlers for the
+# current module's instead of stacking a second set.
+_HANDLER_RECORD = "_card_hook_handlers"
+
 
 def register_card_hooks():
-    gui_hooks.reviewer_did_show_question.append(on_show_question)
-    gui_hooks.reviewer_did_show_answer.append(on_show_answer)
-    gui_hooks.reviewer_did_show_question.append(on_reviewer_did_show_question)
-    aqt.gui_hooks.reviewer_will_answer_card.append(answerCard_before)
-    aqt.gui_hooks.reviewer_did_answer_card.append(answerCard_after)
+    # Drop the previous registration first. No-op on a first boot (no record);
+    # on a re-boot the stored pairs are removed so the appends below cannot
+    # double-register. gui_hooks' remove() tolerates already-absent callbacks.
+    for hook, handler in getattr(services, _HANDLER_RECORD, ()):
+        hook.remove(handler)
+
+    handlers = (
+        (gui_hooks.reviewer_did_show_question, on_show_question),
+        (gui_hooks.reviewer_did_show_answer, on_show_answer),
+        (gui_hooks.reviewer_did_show_question, on_reviewer_did_show_question),
+        (gui_hooks.reviewer_will_answer_card, answerCard_before),
+        (gui_hooks.reviewer_did_answer_card, answerCard_after),
+    )
+    for hook, handler in handlers:
+        hook.append(handler)
+    setattr(services, _HANDLER_RECORD, handlers)

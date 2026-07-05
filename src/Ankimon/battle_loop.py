@@ -17,7 +17,13 @@ from .functions.battle_functions import (
     process_battle_data,
 )
 from .functions.drawing_utils import tooltipWithColour
-from .utils import safe_get_random_move, play_effect_sound, play_sound
+from .utils import (
+    safe_get_random_move,
+    play_effect_sound,
+    play_sound,
+    is_alive,
+    random_item,
+)
 from .functions.ankimon_hooks_to_poke_engine import simulate_battle_with_poke_engine
 from .pyobj.error_handler import show_warning_with_traceback
 
@@ -73,6 +79,12 @@ def _get_cards_per_round() -> int:
 
 
 def on_review_card(*args):
+    # Startup-readiness gate: a review that arrives before the async boot has
+    # finished cannot be battled. Instead of reading exp's raw
+    # ``mw.ankimon_startup_finished`` here, the gate is applied one level up on
+    # the seam — ``__init__``'s ``_on_review_card_gated`` forwards to this
+    # function only once ``services.startup_finished`` is True (F32) — so this
+    # body always runs against a fully-booted registry.
     global _state
     s = _state
 
@@ -98,7 +110,25 @@ def on_review_card(*args):
         s.item_receive_value -= 1
         if s.item_receive_value <= 0:
             s.item_receive_value = random.randint(3, 385)
-            test_window.display_item()
+            # Reward the item every time this trigger fires (main granted it
+            # unconditionally). display_item() both rolls+grants the reward (via
+            # random_item -> give_item) AND paints the popup; the grant is the
+            # actual reward, the QDialog is only the visual. Liveness guard (F24):
+            # the seam window may have been closed (its C++ object deleted) since
+            # boot. When it's dead we still roll+grant the reward directly via
+            # random_item() so it is never silently dropped — only the popup is
+            # skipped.
+            item_window = services.test_window
+            if is_alive(item_window):
+                try:
+                    item_window.display_item()
+                except RuntimeError:
+                    pass
+            else:
+                try:
+                    random_item()
+                except Exception:
+                    pass
             if not check_for_badge(achievements, 6):
                 receive_badge(6, achievements)
 
@@ -124,6 +154,11 @@ def on_review_card(*args):
                     settings_obj.set("trainer.cash_earned_today", cash_earned_today + allowed_amount)
                     settings_obj.set("trainer.cash", settings_obj.get("trainer.cash") + allowed_amount)
                     trainer_card.cash = settings_obj.get("trainer.cash")
+                    try:
+                        from .singletons import notify_stats_changed
+                        notify_stats_changed()
+                    except Exception:
+                        pass
 
         if battle_sounds == True and ankimon_tracker_obj.general_card_count_for_battle == 1:
             play_sound(enemy_pokemon.id, settings_obj)
@@ -201,11 +236,13 @@ def on_review_card(*args):
             )
 
             if true_dmg_from_enemy_move < 0:
-                true_dmg_from_enemy_move = 0
+                # abs() must be taken BEFORE zeroing, or the heal tooltip always
+                # shows +0 instead of the recovered magnitude.
                 heals_to_user += abs(true_dmg_from_enemy_move)
+                true_dmg_from_enemy_move = 0
             if true_dmg_from_user_move < 0:
-                true_dmg_from_user_move = 0
                 heals_to_opponent += abs(true_dmg_from_user_move)
+                true_dmg_from_user_move = 0
 
             main_pokemon.hp = s.new_state.user.active.hp
             main_pokemon.current_hp = s.new_state.user.active.hp
@@ -280,13 +317,25 @@ def on_review_card(*args):
 
             if enemy_pokemon.hp < 1:
                 enemy_pokemon.hp = 0
-                test_window.display_battle()
+                # Liveness guards (F24): resolve both windows fresh from the
+                # registry and only touch/pass them while their C++ objects are
+                # alive. A dead window becomes None so the faint handler's own
+                # None-checks (new_pokemon / display paths) take over instead of
+                # raising "wrapped C/C++ object deleted".
+                faint_window = services.test_window
+                live_faint_window = faint_window if is_alive(faint_window) else None
+                if live_faint_window is not None:
+                    try:
+                        live_faint_window.display_battle()
+                    except RuntimeError:
+                        live_faint_window = None
+                evo = services.evo_window
                 handle_enemy_faint(
                     main_pokemon,
                     enemy_pokemon,
                     s.collected_pokemon_ids,
-                    test_window,
-                    evo_window,
+                    live_faint_window,
+                    evo if is_alive(evo) else None,
                     reviewer_obj,
                     logger,
                     achievements,
@@ -297,15 +346,27 @@ def on_review_card(*args):
             play_sound(enemy_pokemon.id, settings_obj)
 
         if main_pokemon.hp < 1:
+            # Liveness guard (F24): hand the faint handler a live window or None
+            # (new_pokemon already None-checks before painting).
+            main_faint_window = services.test_window
             handle_main_pokemon_faint(
-                main_pokemon, enemy_pokemon, test_window, reviewer_obj, translator
+                main_pokemon,
+                enemy_pokemon,
+                main_faint_window if is_alive(main_faint_window) else None,
+                reviewer_obj,
+                translator,
             )
             s.mutator_full_reset = 1
 
         reviewer_obj.refresh_hud()
-        if test_window is not None:
-            if enemy_pokemon.hp > 0:
-                test_window.display_battle()
+        # Liveness guard (F24): is_alive replaces the bare None-check so a
+        # deleted-but-non-None widget can't raise on the end-of-turn repaint.
+        final_window = services.test_window
+        if is_alive(final_window) and enemy_pokemon.hp > 0:
+            try:
+                final_window.display_battle()
+            except RuntimeError:
+                pass
     except Exception as e:
         show_warning_with_traceback(
             exception=e, message="An error occurred in reviewer:"

@@ -174,6 +174,30 @@ def test_get_item_returns_empty_dict_extras(temp_env):
     conn = db._get_connection()
     conn.execute("INSERT INTO items (id, item_name, quantity, data) VALUES (999, 'null-item', 1, NULL)")
     conn.commit()
-    
+
     item = db.get_item("null-item")
     assert item["extra_data"] == {} # Should be {} not None
+
+
+def test_busy_timeout_set_on_gui_connection(temp_env):
+    """Concurrency guard: every connection must carry the generous busy-timeout
+    so a GUI-thread write does not immediately raise 'database is locked' while
+    mobile-sync's bulk 'Resolve All' holds its long background write transaction.
+    Without the fix the connect() default (5000ms) would be in effect."""
+    db, _ = temp_env
+    conn = db._get_connection()
+    got = conn.execute("PRAGMA busy_timeout;").fetchone()[0]
+    assert got == AnkimonDB._BUSY_TIMEOUT_MS
+    assert got >= 30000
+
+
+def test_busy_timeout_set_on_background_thread_connection(temp_env):
+    """The per-background-thread connection (used by the bulk mobile resolve) must
+    get the same busy-timeout as the GUI connection — it is the one that races.
+    Force the off-GUI-thread branch of _get_connection() so the dedicated
+    per-thread connection is what gets probed."""
+    db, _ = temp_env
+    with patch.object(_db_mod, "_is_main_thread", return_value=False):
+        conn = db._get_connection()  # dedicated per-thread connection
+        got = conn.execute("PRAGMA busy_timeout;").fetchone()[0]
+    assert got == AnkimonDB._BUSY_TIMEOUT_MS

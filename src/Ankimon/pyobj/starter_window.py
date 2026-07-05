@@ -34,7 +34,8 @@ from ..functions.badges_functions import check_for_badge, receive_badge
 from ..functions.battle_functions import calculate_hp
 from ..functions.pokedex_functions import get_base_experience, get_growth_rate, search_pokedex
 from ..functions.pokemon_functions import get_random_moves_for_pokemon, pick_random_gender
-from ..utils import load_custom_font, close_anki
+from ..services import services
+from ..utils import load_custom_font, close_anki, is_alive
 from ..resources import addon_dir, frontdefault
 from ..const import total_generations
 from .error_handler import show_warning_with_traceback
@@ -141,13 +142,13 @@ class StarterWindow(QWidget):
             current_hp=calculate_hp(int(base_stats["hp"]), level, ev, iv),
             growth_rate=growth_rate,
             individual_id=str(uuid.uuid4()),
-            captured_date=None,
+            captured_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             shiny=False,
             tier="Starter",
         )
 
         # Load existing Pokémon data from database
-        db = mw.ankimon_db
+        db = services.db
         caught_pokemon_data = main_pokemon.to_dict()
 
         # Save to database - both as captured pokemon and main pokemon
@@ -158,8 +159,10 @@ class StarterWindow(QWidget):
 
         self.display_chosen_starter_pokemon(starter_name)
 
-        from ..singletons import pokemon_pc
-        pokemon_pc.refresh_pokemon_grid()
+        # Read services.pokemon_pc directly rather than importing pokemon_pc from
+        # singletons, which would force-construct a PC window the user never opened.
+        if is_alive(services.pokemon_pc):
+            services.pokemon_pc.refresh_pokemon_grid()
 
         close_anki()
 

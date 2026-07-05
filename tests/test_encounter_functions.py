@@ -10,63 +10,471 @@ sys.modules["aqt.utils"] = mock.MagicMock()
 
 # Mock internal dependencies of encounter_functions
 for module in [
-    "Ankimon.pyobj.ankimon_tracker", "Ankimon.pyobj.pokemon_obj", 
-    "Ankimon.pyobj.reviewer_obj", "Ankimon.pyobj.test_window", 
-    "Ankimon.pyobj.trainer_card", "Ankimon.pyobj.InfoLogger", 
-    "Ankimon.pyobj.evolution_window", "Ankimon.pyobj.attack_dialog",
-    "Ankimon.pyobj.translator", "Ankimon.pyobj.error_handler",
-    "Ankimon.functions.pokemon_functions", "Ankimon.functions.pokedex_functions",
-    "Ankimon.functions.trainer_functions", "Ankimon.functions.badges_functions",
-    "Ankimon.functions.drawing_utils", "Ankimon.utils", "Ankimon.business", 
-    "Ankimon.const", "Ankimon.singletons", "Ankimon.resources"
+    "Ankimon.pyobj.ankimon_tracker",
+    "Ankimon.pyobj.pokemon_obj",
+    "Ankimon.pyobj.reviewer_obj",
+    "Ankimon.pyobj.test_window",
+    "Ankimon.pyobj.trainer_card",
+    "Ankimon.pyobj.InfoLogger",
+    "Ankimon.pyobj.evolution_window",
+    "Ankimon.pyobj.attack_dialog",
+    "Ankimon.pyobj.translator",
+    "Ankimon.pyobj.error_handler",
+    "Ankimon.functions.pokemon_functions",
+    "Ankimon.functions.trainer_functions",
+    "Ankimon.functions.badges_functions",
+    "Ankimon.functions.drawing_utils",
+    "Ankimon.utils",
+    "Ankimon.business",
+    "Ankimon.const",
+    "Ankimon.singletons",
+    "Ankimon.resources",
 ]:
     sys.modules[module] = mock.MagicMock()
 
 # Import the module under test
 _src = Path(__file__).parent.parent / "src"
+
+
+def force_load_module(name, filepath):
+    spec = importlib.util.spec_from_file_location(name, filepath)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# Force load encounter_data and pokedex_functions so they are not MagicMocks
+force_load_module(
+    "Ankimon.functions.encounter_data",
+    _src / "Ankimon" / "functions" / "encounter_data.py",
+)
+pdx = force_load_module(
+    "Ankimon.functions.pokedex_functions",
+    _src / "Ankimon" / "functions" / "pokedex_functions.py",
+)
+pdx.pokedex_path = _src / "Ankimon" / "data_files" / "pokedex.json"
+
 spec = importlib.util.spec_from_file_location(
     "Ankimon.functions.encounter_functions",
     _src / "Ankimon" / "functions" / "encounter_functions.py",
 )
 ef = importlib.util.module_from_spec(spec)
-# Pre-patch singletons used in the module
-ef.main_pokemon = mock.MagicMock()
-ef.settings_obj = mock.MagicMock()
-ef.ankimon_tracker_obj = mock.MagicMock()
-ef.trainer_card = mock.MagicMock()
 
 # Execute the module
 spec.loader.exec_module(ef)
 
 # exec_module runs `main_pokemon = None` / `settings_obj = None` at module top (the
-# bind_runtime_globals targets), which OVERWRITES the pre-patch above. modify_percentages
-# / get_tier read those bare globals, so (re)set the mocks AFTER exec.
+# bind_runtime_globals targets), which would overwrite any pre-patch. modify_percentages
+# / get_tier / handle_enemy_faint read those bare globals, so set the mocks AFTER exec.
 ef.main_pokemon = mock.MagicMock()
 ef.settings_obj = mock.MagicMock()
 ef.ankimon_tracker_obj = mock.MagicMock()
 ef.trainer_card = mock.MagicMock()
 
+
 def test_modify_percentages_does_not_raise_nameerror():
     # Setup mocks
     ef.main_pokemon.level = 50
-    
+
     # This should NOT raise NameError if fixed
     try:
-        res = ef.modify_percentages(total_reviews=100, daily_average=50, trainer_level=20)
+        res = ef.modify_percentages(
+            total_reviews=100, daily_average=50, trainer_level=20
+        )
         assert isinstance(res, dict)
         assert sum(res.values()) > 99.9  # Normalized to 100
     except NameError as e:
         import pytest
+
         pytest.fail(f"NameError raised: {e}")
+
 
 def test_get_tier_calls_modify_percentages_correctly():
     # Setup mocks
     ef.settings_obj.get.return_value = 100  # daily_average
-    
+
     # This should NOT raise NameError if fixed
     try:
         tier = ef.get_tier(total_reviews=150, trainer_level=25)
         assert isinstance(tier, str)
     except NameError as e:
         import pytest
+
         pytest.fail(f"NameError raised in get_tier: {e}")
+
+
+def test_modify_percentages_low_reviews_keyerror():
+    # Setup mocks
+    ef.main_pokemon.level = 50
+    ef.settings_obj.get.return_value = 100  # daily_average
+
+    # This should NOT raise KeyError if fixed (total_reviews=10, daily_average=100 -> ratio=0.1 < 0.4, trainer_level=20 > 10)
+    try:
+        res = ef.modify_percentages(
+            total_reviews=10, daily_average=100, trainer_level=20
+        )
+        assert isinstance(res, dict)
+        assert sum(res.values()) > 99.9  # Normalized to 100
+        # Ensure only active tiers are present/active
+        assert res.get("Normal") > 99.9
+        assert res.get("Legendary", 0) == 0
+    except KeyError as e:
+        import pytest
+
+        pytest.fail(f"KeyError raised: {e}")
+
+
+def test_handle_enemy_faint_auto_catch_regional_enabled():
+    # Save original globals
+    orig_settings = ef.settings_obj
+    orig_data = ef.encounter_data
+    orig_tracker = ef.ankimon_tracker_obj
+    orig_catch = ef.catch_pokemon
+    orig_new = ef.new_pokemon
+    orig_kill = ef.kill_pokemon
+
+    try:
+        # Create mock objects
+        mock_settings = mock.MagicMock()
+        mock_data = mock.MagicMock()
+        mock_tracker = mock.MagicMock()
+        mock_catch = mock.MagicMock()
+        mock_new = mock.MagicMock()
+        mock_kill = mock.MagicMock()
+
+        # Setup settings mock
+        def mock_get(key, default=None):
+            if key == "battle.automatic_battle":
+                return 3
+            if key == "battle.auto_catch_regional":
+                return True
+            if key.startswith("battle.auto_catch_"):
+                return False
+            return default
+
+        mock_settings.get = mock_get
+
+        # Setup tracker mock
+        mock_tracker.faint_processed = False
+
+        # Setup encounter_data mocks
+        mock_data.MEGA = []
+        mock_data.GMAX = []
+        mock_data.REGIONAL_FORM_REGION = {10091: "alola"}
+
+        # Assign mock objects to ef
+        ef.settings_obj = mock_settings
+        ef.encounter_data = mock_data
+        ef.ankimon_tracker_obj = mock_tracker
+        ef.catch_pokemon = mock_catch
+        ef.new_pokemon = mock_new
+        ef.kill_pokemon = mock_kill
+
+        # Setup main / enemy mock pokemon
+        main_pokemon = mock.MagicMock()
+        enemy_pokemon = mock.MagicMock()
+        enemy_pokemon.id = 10091
+        enemy_pokemon.tier = "Normal"
+        enemy_pokemon.name = "Rattata-Alola"
+        enemy_pokemon.shiny = False
+
+        collected_pokemon_ids = {10091}
+        test_window = mock.MagicMock()
+        evo_window = mock.MagicMock()
+        reviewer_obj = mock.MagicMock()
+        logger = mock.MagicMock()
+        achievements = {}
+
+        # Execute
+        ef.handle_enemy_faint(
+            main_pokemon,
+            enemy_pokemon,
+            collected_pokemon_ids,
+            test_window,
+            evo_window,
+            reviewer_obj,
+            logger,
+            achievements,
+        )
+
+        # Verify
+        mock_catch.assert_called_once()
+        mock_new.assert_called_once()
+        mock_kill.assert_not_called()
+        assert mock_tracker.faint_processed is True
+
+    finally:
+        # Restore original globals
+        ef.settings_obj = orig_settings
+        ef.encounter_data = orig_data
+        ef.ankimon_tracker_obj = orig_tracker
+        ef.catch_pokemon = orig_catch
+        ef.new_pokemon = orig_new
+        ef.kill_pokemon = orig_kill
+
+
+def test_handle_enemy_faint_auto_catch_regional_disabled():
+    # Save original globals
+    orig_settings = ef.settings_obj
+    orig_data = ef.encounter_data
+    orig_tracker = ef.ankimon_tracker_obj
+    orig_catch = ef.catch_pokemon
+    orig_new = ef.new_pokemon
+    orig_kill = ef.kill_pokemon
+
+    try:
+        # Create mock objects
+        mock_settings = mock.MagicMock()
+        mock_data = mock.MagicMock()
+        mock_tracker = mock.MagicMock()
+        mock_catch = mock.MagicMock()
+        mock_new = mock.MagicMock()
+        mock_kill = mock.MagicMock()
+
+        # Setup settings mock
+        def mock_get(key, default=None):
+            if key == "battle.automatic_battle":
+                return 3
+            if key == "battle.auto_catch_regional":
+                return False
+            if key.startswith("battle.auto_catch_"):
+                return False
+            return default
+
+        mock_settings.get = mock_get
+
+        # Setup tracker mock
+        mock_tracker.faint_processed = False
+
+        # Setup encounter_data mocks
+        mock_data.MEGA = []
+        mock_data.GMAX = []
+        mock_data.REGIONAL_FORM_REGION = {10091: "alola"}
+
+        # Assign mock objects to ef
+        ef.settings_obj = mock_settings
+        ef.encounter_data = mock_data
+        ef.ankimon_tracker_obj = mock_tracker
+        ef.catch_pokemon = mock_catch
+        ef.new_pokemon = mock_new
+        ef.kill_pokemon = mock_kill
+
+        # Setup main / enemy mock pokemon
+        main_pokemon = mock.MagicMock()
+        enemy_pokemon = mock.MagicMock()
+        enemy_pokemon.id = 10091
+        enemy_pokemon.tier = "Normal"
+        enemy_pokemon.name = "Rattata-Alola"
+        enemy_pokemon.shiny = False
+
+        collected_pokemon_ids = {10091}
+        test_window = mock.MagicMock()
+        evo_window = mock.MagicMock()
+        reviewer_obj = mock.MagicMock()
+        logger = mock.MagicMock()
+        achievements = {}
+
+        # Execute
+        ef.handle_enemy_faint(
+            main_pokemon,
+            enemy_pokemon,
+            collected_pokemon_ids,
+            test_window,
+            evo_window,
+            reviewer_obj,
+            logger,
+            achievements,
+        )
+
+        # Verify
+        mock_kill.assert_called_once()
+        mock_catch.assert_not_called()
+        mock_new.assert_called_once()
+        assert mock_tracker.faint_processed is True
+
+    finally:
+        # Restore original globals
+        ef.settings_obj = orig_settings
+        ef.encounter_data = orig_data
+        ef.ankimon_tracker_obj = orig_tracker
+        ef.catch_pokemon = orig_catch
+        ef.new_pokemon = orig_new
+        ef.kill_pokemon = orig_kill
+
+
+def test_meets_prerequisites_fusion_and_normal():
+    # Ensure the real _player_owns_base_form logic is used (in case simulation tests mutated it)
+    def real_owns_base_form(actual_id, collected_ids):
+        name = ef.search_pokedex_by_id(actual_id)
+        if not name or name == "Pokémon not found":
+            return True
+        species_id = ef.safe_int(ef.search_pokedex(name, "species_id"))
+        if not species_id:
+            return True
+        return species_id in collected_ids
+
+    ef._player_owns_base_form = real_owns_base_form
+
+    # 1. Test normal pokemon prerequisite (e.g. Mewtwo (150) needs Mew (151))
+    assert ef._meets_prerequisites(150, {151}) is True
+    assert ef._meets_prerequisites(150, set()) is False
+
+    # 2. Test fusion forms (specific actual_id prerequisite, e.g. Necrozma Dusk Mane (10155) needs Necrozma (800) and Solgaleo (791))
+    # It should not require Lunala (792) even though base Necrozma (800) requires Solgaleo and Lunala.
+    assert ef._meets_prerequisites(10155, {800, 791}) is True
+    assert ef._meets_prerequisites(10155, {800}) is False
+    assert ef._meets_prerequisites(10155, {791}) is False
+
+    # 3. Test fallback for forms not explicitly in PREREQUISITES (e.g. Aerodactyl Mega (10038) has base species Aerodactyl (142))
+    # Aerodactyl has no prerequisites, so Aerodactyl Mega should meet prerequisites unconditionally.
+    assert ef._meets_prerequisites(10038, set()) is True
+
+    # 4. Test stat-redistribution forms requiring their base forms
+    # Dialga Origin (10245) requires Dialga (483)
+    assert ef._meets_prerequisites(10245, {483}) is True
+    assert ef._meets_prerequisites(10245, set()) is False
+
+    # Meloetta Pirouette (10018) requires Meloetta (648)
+    assert ef._meets_prerequisites(10018, {648}) is True
+    assert ef._meets_prerequisites(10018, set()) is False
+
+    # 5. Test ("OR", {...}) prerequisites: any single member suffices
+    # Terapagos (1024) requires Koraidon (1007) OR Miraidon (1008)
+    assert ef._meets_prerequisites(1024, {1007}) is True
+    assert ef._meets_prerequisites(1024, {1008}) is True
+    assert ef._meets_prerequisites(1024, {1007, 1008}) is True
+    assert ef._meets_prerequisites(1024, set()) is False
+
+
+def test_save_main_pokemon_progress_persists_when_evo_window_none():
+    """A friendship-evo-ready main Pokemon defeated while the evo window is
+    dead/None (F31 lazy singletons) must still persist its level/xp/EV/friendship.
+
+    check_friendship_evolution_for_pokemon calls ``evo_window.ask_pokemon_evo(...)``
+    unguarded; without the call-site guard, the resulting AttributeError aborts
+    save_main_pokemon_progress before its final ankimon_db.save_main_pokemon(...),
+    silently discarding the defeat's progress. The guard must skip the offer (not
+    invoke the checker) when the window is None so the save always runs.
+    """
+    import types
+
+    names = (
+        "settings_obj",
+        "translator",
+        "services",
+        "ankimon_db",
+        "find_experience_for_level",
+        "limit_ev_yield",
+        "check_friendship_evolution_for_pokemon",
+        "check_evolution_for_pokemon",
+    )
+    orig = {n: getattr(ef, n) for n in names}
+    try:
+        main_data = {
+            "name": "Pikachu",
+            "attacks": ["Tackle"],
+            "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+            "held_item": None,
+            "pokemon_defeated": 0,
+            "stats": {},
+            "level": 50,
+            "xp": 0,
+            "friendship": 300,
+        }
+
+        settings = mock.MagicMock()
+        settings.get = lambda k, d=None: {
+            "misc.remove_level_cap": False,
+            "gui.pop_up_dialog_message_on_defeat": False,
+        }.get(k, d)
+        ef.settings_obj = settings
+
+        ef.translator = mock.MagicMock()
+        ef.translator.translate = lambda *a, **k: "msg"
+
+        ef.services = mock.MagicMock()
+        ef.services.db.get_main_pokemon.return_value = main_data
+        ef.ankimon_db = mock.MagicMock()
+
+        # Never level up (keeps the friendship path the only evolution branch).
+        ef.find_experience_for_level = lambda *a, **k: 10**9
+        ef.limit_ev_yield = lambda have, add: {
+            "hp": 0,
+            "attack": 0,
+            "defense": 0,
+            "special-attack": 0,
+            "special-defense": 0,
+            "speed": 0,
+        }
+        # Simulate the real UNGUARDED crash: reaching this with a None window
+        # raises exactly as evo_window.ask_pokemon_evo(...) would.
+        ef.check_friendship_evolution_for_pokemon = mock.MagicMock(
+            side_effect=AttributeError(
+                "'NoneType' object has no attribute 'ask_pokemon_evo'"
+            )
+        )
+        ef.check_evolution_for_pokemon = mock.MagicMock(return_value=None)
+
+        main = types.SimpleNamespace(
+            name="Pikachu",
+            growth_rate="medium",
+            level=50,
+            xp=0,
+            individual_id="iid",
+            id=25,
+            everstone=False,
+            friendship=300,
+            stats={},
+            ev={"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+            hp=100,
+            held_item=None,
+            pokemon_defeated=0,
+            tier="Normal",
+            is_favorite=False,
+            evolution_rejected=False,
+            invalidate_cp_cache=lambda: None,
+        )
+        enemy = types.SimpleNamespace(ev_yield={})
+
+        # evo_window=None must NOT abort the save.
+        result = ef.save_main_pokemon_progress(
+            main, enemy, 5, {}, mock.MagicMock(), None
+        )
+
+        ef.ankimon_db.save_main_pokemon.assert_called_once()  # persistence intact
+        ef.check_friendship_evolution_for_pokemon.assert_not_called()  # offer skipped
+        assert result == 50
+    finally:
+        for n, v in orig.items():
+            setattr(ef, n, v)
+
+
+def test_tier_fallback_degrades_straight_to_normal(monkeypatch):
+    """A rolled rare tier that empties after its guards must fall back to the
+    common Normal tier, NOT cascade sideways into the next rare tiers (which would
+    over-represent rare/legendary encounters). We assert the exact tier-query order:
+    the rolled tier, then Normal — never Legendary/Gmax/Ultra in between."""
+    queried = []
+
+    class _Stop(Exception):
+        pass
+
+    def fake_pool(tier):
+        queried.append(tier)
+        if tier == "Normal":
+            # Stop before the heavy Rattata-fallback tuple build; we only care
+            # about which tiers were consulted, and in what order.
+            raise _Stop()
+        return []  # the rolled rare tier is empty -> triggers the fallback
+
+    monkeypatch.setattr(ef, "get_all_pokemon_in_tier", fake_pool)
+    monkeypatch.setattr(ef, "get_tier", lambda *a, **k: "Mega")
+
+    try:
+        ef.generate_random_pokemon(50, mock.MagicMock(), collected_ids=set())
+    except _Stop:
+        pass
+
+    assert queried == ["Mega", "Normal"]
+    assert "Legendary" not in queried  # no sideways cascade into other rare tiers

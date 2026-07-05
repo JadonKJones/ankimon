@@ -2,6 +2,7 @@ from ..resources import trainer_sprites_path, mypokemon_path, team_pokemon_path
 from ..functions.trainer_functions import find_trainer_rank
 from ..functions.badges_functions import get_achieved_badges
 from ..services import services
+from ..events import events
 import math
 import json
 
@@ -88,6 +89,40 @@ class TrainerCard:
             self.logger.log_and_showinfo(
                 "error", f"Error in syncing data to leaderboard {e}"
             )
+
+    def refresh(self):
+        """Reload trainer data from current settings + database (in place).
+
+        Used after a database switch (swap_ankimon_account) so the cached
+        level/xp/cash/sprite/league/team fields reflect the now-active account.
+        """
+        # settings_obj can be uninitialised during a partial populate / reset;
+        # fall back to safe defaults (and default each key) rather than raising
+        # an AttributeError / int(None) TypeError.
+        settings = self.settings_obj
+        if settings is None:
+            self.trainer_name = "Trainer"
+            self.level = 1
+            self.xp = 0
+            self.total_xp = 0
+            self.cash = 0
+            sprite = "default"
+        else:
+            self.trainer_name = settings.get("trainer.name", "Trainer")
+            self.level = int(settings.get("trainer.level", 1))
+            self.xp = int(settings.get("trainer.xp", 0))
+            self.total_xp = int(settings.get("trainer.total_xp", 0))
+            self.cash = int(settings.get("trainer.cash", 0))
+            sprite = settings.get("trainer.sprite", "default")
+        self.image_path = f"{trainer_sprites_path}/{sprite}.png"
+        self.league = find_trainer_rank(
+            int(self.highest_pokemon_level()), int(self.level)
+        )
+        self.reload_team()
+        if getattr(self, "main_pokemon", None):
+            self.favorite_pokemon = self.main_pokemon.name
+        else:
+            self.favorite_pokemon = "None"
 
     # Number of badges the trainer has earned
     def badge_count(self):
@@ -211,8 +246,22 @@ class TrainerCard:
         )
         self.xp = self.settings_obj.get("trainer.xp")
         self.total_xp = self.settings_obj.get("trainer.total_xp")
-        print(f"Gained {xp_gained} XP from defeating a {tier} Pokémon!")
         self.check_level_up()
+
+        # Announce the XP / level / Total-XP change on the shared "stats_changed"
+        # seam — the same signal ankimon_sync / mobile_sync / shop_obj fire as the
+        # replacement for exp's singletons.notify_stats_changed(). This is aqt-free
+        # core logic with no handle to the GUI shell, so it only emits the seam
+        # signal; the call sites that DO hold a shell handle (shop_obj) drive the
+        # open screen's actual re-render via refresh_live_screen(). events.emit is
+        # free/no-op unless the agent harness (or an opt-in dev console) has
+        # enabled capture, so this adds zero production overhead.
+        events.emit("stats_changed")
+        try:
+            from ..singletons import notify_stats_changed
+            notify_stats_changed()
+        except Exception:
+            pass
 
     def check_level_up(self):
         """Update level based on XP."""

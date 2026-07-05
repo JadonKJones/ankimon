@@ -459,5 +459,12 @@
   "cp_label": "WP",
   "bp_label": "KP",
   "combat_power": "Wettkampfpunkte",
-  "battle_power": "Kampfstärke"
+  "battle_power": "Kampfstärke",
+  "friendship_label": "Freundschaft",
+  "friendship_tooltip": "Misst die Bindung zwischen dir und deinem Pokémon.",
+  "bff_tooltip": "💖 Bester Freund (Höchste Freundschaft)",
+  "evolve_now_button": "⇈ Jetzt zu {evo_name} entwickeln! ⇈",
+  "badge_ready": "⇈ Bereit zur Entwicklung!",
+  "badge_wait_day": "☀️ Bereit zur Entwicklung am Tag",
+  "badge_wait_night": "🌙 Bereit zur Entwicklung in der Nacht"
 }

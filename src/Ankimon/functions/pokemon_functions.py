@@ -98,6 +98,10 @@ def find_experience_for_level(group_growth_rate, level, remove_levelcap=True):
 
         return experience
     elif level > 99:
+        # Default to the medium(-fast) curve for unknown growth rates,
+        # matching get_growth_rate's 'medium' fallback and preventing
+        # UnboundLocalError from breaking the level-up path.
+        experience = ((level + 1) ** 3) - (level ** 3)
         if group_growth_rate == "erratic":
             if level + 1 < 50: # +1 was added to prevent -ve amounts of xp to come up (even though it wouldn't since the loop only takes in levels above 99)
                 experience = ((((level+1) ** 3) * (100 - (level+1))) // 50 - ((level ** 3) * (100 - level) // 50))
@@ -237,7 +241,7 @@ def save_fossil_pokemon(pokemon_id):
         "iv": iv,
         "attacks": attacks,
         "base_experience": base_experience,
-        "current_hp": calculate_hp(int(stats["hp"]), level, ev, iv),
+        "current_hp": calculate_hp(safe_int(stats.get("hp", 0)), level, ev, iv),
         "growth_rate": growth_rate,
         "friendship": 0,
         "pokemon_defeated": 0,
@@ -248,6 +252,7 @@ def save_fossil_pokemon(pokemon_id):
         "individual_id": str(uuid.uuid4()),
         "mega": False,
         "special_form": None,
+        "tier": "Fossil",
         "nature": "serious",
         "held_item": None,
         "is_favorite": False,

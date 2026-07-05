@@ -7,12 +7,108 @@ replacing multiple JSON files with a single, obfuscated database file.
 
 import json
 import sqlite3
+import threading
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import csv
 from ..resources import user_path, csv_file_items_cost, mypokemon_path, mainpokemon_path, items_path, badges_path, team_pokemon_path as team_path
+
+
+# --- Thread-safe connection layer (Stage A scaffolding) --------------------
+#
+# Re-fit from BRRRR_Experimental: a thin ConnectionWrapper plus per-thread
+# connections let the async-boot path and (deferred) mobile-review engine touch
+# the DB off the GUI thread without tripping sqlite's default same-thread guard.
+# Kept aqt-free (the thread check imports PyQt6 lazily and degrades to "main
+# thread" when there is no QApplication). Backward compatible: on the GUI thread
+# callers get the same single shared connection they always did, now WAL-mode.
+
+class ConnectionWrapper:
+    """Wraps a sqlite3.Connection, proxying everything, with a re-entrant
+    ``with conn:`` transaction and an opt-out commit flag (used by bulk paths)."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._disable_commit = False
+
+    def commit(self):
+        if not self._disable_commit:
+            self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    def execute(self, *args, **kwargs):
+        return self._conn.execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        return self._conn.executemany(*args, **kwargs)
+
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __enter__(self):
+        if getattr(self, "_txn_depth", 0) == 0:
+            self._conn.execute("BEGIN")
+        self._txn_depth = getattr(self, "_txn_depth", 0) + 1
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._txn_depth = getattr(self, "_txn_depth", 1) - 1
+        if self._txn_depth == 0:
+            if exc_type is not None:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+            else:
+                # Do NOT swallow a commit failure: eating it here makes a lost
+                # write (disk full, or the busy_timeout expiring under write
+                # contention) look like success, so callers such as
+                # queue_mobile_battles / add_mobile_history_entries_batch /
+                # set_mobile_watermark return their success flag while nothing
+                # was persisted. Roll back and let the error propagate so the
+                # caller's error path (and the user) actually see it.
+                try:
+                    self._conn.commit()
+                except Exception:
+                    try:
+                        self._conn.rollback()
+                    except Exception:
+                        pass
+                    raise
+        return False
+
+
+def _is_main_thread() -> bool:
+    """True on Qt's GUI thread, or whenever Qt is not loaded (headless / the
+    Tier-1 no-Qt harness / tests).
+
+    Deliberately consults ``sys.modules`` instead of importing PyQt6: force-loading
+    the Qt libraries inside the aqt-free Tier-1 harness (where PyQt6 may be
+    *installed* but must never be *initialized*) crashes with 'Qt requires a
+    QCoreApplication'. If Qt has not been loaded, we are headless → treat as main
+    thread. In real Anki, Qt is always already loaded, so the real check runs."""
+    import sys
+    qtwidgets = sys.modules.get("PyQt6.QtWidgets")
+    qtcore = sys.modules.get("PyQt6.QtCore")
+    if qtwidgets is None or qtcore is None:
+        return True
+    try:
+        app = qtwidgets.QApplication.instance()
+        if not app:
+            return True
+        return qtcore.QThread.currentThread() == app.thread()
+    except Exception:
+        return True
 
 
 class AnkimonDB:
@@ -20,11 +116,60 @@ class AnkimonDB:
     
     DB_FILENAME = "ankimon.db"
 
-    def __init__(self, logger=None):
+    # Every connection (GUI + per-background-thread) waits this long for a
+    # write lock before sqlite raises "database is locked". See _prepare_connection.
+    _BUSY_TIMEOUT_MS = 30000
+
+    def __init__(self, logger=None, db_path: Optional[Union[str, Path]] = None,
+                 *, wal: bool = False):
         self.logger = logger
-        self.db_path = user_path / self.DB_FILENAME
-        self._connection: Optional[sqlite3.Connection] = None
+        # db_path override supports multi-profile / account switching (switch_database).
+        if db_path:
+            self.db_path = Path(db_path)
+        else:
+            self.db_path = user_path / self.DB_FILENAME
+        # WAL is OPT-IN (default off) to preserve main's single-file persistence /
+        # backup guard: probe_persistence and BackupManager copy just ``ankimon.db``,
+        # which would miss WAL's ``-wal`` sidecar. A deferred concurrent-writer leaf
+        # (mobile-sync) turns WAL on together with a checkpoint-before-copy backup fix.
+        self._wal = wal
+        self._connection: Optional[ConnectionWrapper] = None       # GUI-thread connection
+        self._local_conn = threading.local()                       # per-background-thread
+        # When non-None, mark_mobile_battle_resolved defers the mirror-DB sync
+        # (which commits on a separate connection, escaping any outer transaction)
+        # and collects the revlog ids here to be flushed after the caller's bulk
+        # transaction commits. See begin/flush/discard_deferred_mirror_sync.
+        self._deferred_mirror_revlog_ids: Optional[list] = None
         self._setup_database()
+
+    def _prepare_connection(self, conn):
+        """Apply row factory, a generous busy-timeout, and (only when opted in)
+        WAL-family PRAGMAs, then wrap."""
+        conn.row_factory = sqlite3.Row  # Access columns by name
+        # Busy-timeout on EVERY connection (GUI + per-background-thread), regardless
+        # of journal mode. mobile-sync's bulk "Resolve All" runs on a background
+        # thread and holds one long write transaction (conn._disable_commit while it
+        # batches every companion), so a concurrent GUI-thread write — a live
+        # review's save_pokemon / set_config_value — can find the DB write-locked.
+        # Without a busy-timeout sqlite3 raises "database is locked" immediately;
+        # with one it waits for the bulk transaction to commit instead of erroring.
+        # 30s comfortably covers a full bulk resolve (Python's connect() default is
+        # only 5s). This is the robust, single-file-safe alternative to enabling WAL
+        # here (which would need a checkpoint-before-copy backup fix, NR-05).
+        try:
+            conn.execute(f"PRAGMA busy_timeout={self._BUSY_TIMEOUT_MS};")
+        except Exception as e:
+            self._log("warning", f"Failed to set busy_timeout: {e}")
+        if self._wal:
+            try:
+                mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
+                if str(mode).lower() != "wal":
+                    conn.execute("PRAGMA journal_mode=WAL;")
+                conn.execute("PRAGMA synchronous=NORMAL;")
+                conn.execute("PRAGMA temp_store=MEMORY;")
+            except Exception as e:
+                self._log("warning", f"Failed to set WAL PRAGMAs: {e}")
+        return ConnectionWrapper(conn)
 
     def _log(self, level: str, message: str):
         """Helper for logging."""
@@ -35,18 +180,62 @@ class AnkimonDB:
 
     # --- Connection Management ---
 
-    def _get_connection(self) -> sqlite3.Connection:
-        """Gets or creates a database connection."""
+    def _get_connection(self) -> ConnectionWrapper:
+        """Gets or creates a database connection for the CURRENT thread.
+
+        GUI thread: the single shared ``self._connection`` (as before, now WAL).
+        Background threads: a dedicated per-thread connection (``check_same_thread``
+        is disabled so a connection may be created off the GUI thread safely, and
+        each thread keeps its own so they never share a cursor)."""
+        if not _is_main_thread():
+            local = self._local_conn
+            if (not hasattr(local, "conn") or local.conn is None
+                    or getattr(local, "db_path", None) != self.db_path):
+                if getattr(local, "conn", None) is not None:
+                    try:
+                        local.conn.close()
+                    except Exception:
+                        pass
+                conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+                local.conn = self._prepare_connection(conn)
+                local.db_path = self.db_path
+            elif not isinstance(local.conn, ConnectionWrapper):
+                local.conn = ConnectionWrapper(local.conn)
+                local.db_path = self.db_path
+            return local.conn
+
         if self._connection is None:
-            self._connection = sqlite3.connect(str(self.db_path))
-            self._connection.row_factory = sqlite3.Row  # Access columns by name
+            conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self._connection = self._prepare_connection(conn)
+        elif not isinstance(self._connection, ConnectionWrapper):
+            self._connection = ConnectionWrapper(self._connection)
         return self._connection
 
     def close(self):
-        """Closes the database connection."""
+        """Closes the GUI-thread connection and this thread's background connection."""
         if self._connection:
-            self._connection.close()
+            try:
+                self._connection.close()
+            except Exception:
+                pass
             self._connection = None
+        if hasattr(self, "_local_conn") and getattr(self._local_conn, "conn", None):
+            try:
+                self._local_conn.conn.close()
+            except Exception:
+                pass
+            self._local_conn.conn = None
+
+    def switch_database(self, db_filename: str):
+        """Close current connections and reopen against a different profile DB file.
+
+        The multi-profile / account-switch primitive (DB layer only). The
+        account-switch menu action that calls this is a deferred Stage-B leaf."""
+        self.close()
+        self.db_path = user_path / db_filename
+        self._connection = None
+        self._setup_database()
+        self._log("info", f"Switched database to {db_filename}")
 
     # --- Obfuscation / De-obfuscation ---
 
@@ -174,6 +363,54 @@ class AnkimonDB:
             )
         """)
 
+        # --- Mobile-review scaffolding tables (Stage A) ---------------------
+        # Schema/migrations only; the mobile-review SYNC ENGINE and UI that read
+        # and write these are deferred Stage-B leaves. Idempotent, so shipping the
+        # empty tables in the base is harmless and lets those leaves land additively.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pending_mobile_battles (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                revlog_id     INTEGER UNIQUE NOT NULL,
+                card_id       INTEGER NOT NULL,
+                ease          INTEGER NOT NULL,
+                review_time   INTEGER NOT NULL,
+                review_type   INTEGER NOT NULL,
+                queued_at     INTEGER NOT NULL,
+                resolved      INTEGER NOT NULL DEFAULT 0,
+                resolved_at   INTEGER
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mobile_battle_history (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp         INTEGER NOT NULL,
+                enemy_id          INTEGER NOT NULL,
+                enemy_name        TEXT NOT NULL,
+                enemy_level       INTEGER NOT NULL,
+                enemy_shiny       INTEGER NOT NULL,
+                companion_name    TEXT,
+                companion_level   INTEGER,
+                outcome           TEXT NOT NULL,
+                xp_gained         INTEGER DEFAULT 0,
+                trainer_xp_gained INTEGER DEFAULT 0,
+                cash_gained       INTEGER DEFAULT 0
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_timestamp ON mobile_battle_history(timestamp)")
+
+        # Durable record of revlog ids Ankimon already turned into battle progress
+        # on desktop. Consulted by the mobile-review detection pass to exclude them
+        # from the mobile queue even after a mid-session restart (which loses the
+        # in-memory session set). Unlike advancing the watermark to these ids, this
+        # keeps an OLDER not-yet-synced mobile review (lower revlog id) detectable:
+        # rows here are pruned once the watermark advances past them.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS desktop_processed_reviews (
+                revlog_id INTEGER PRIMARY KEY,
+                card_id   INTEGER
+            )
+        """)
+
         conn.commit()
         self._log("info", "AnkimonDB: Database schema initialized.")
 
@@ -207,6 +444,7 @@ class AnkimonDB:
                 (individual_id, obfuscated_data)
             )
         conn.commit()
+        self._clear_reviewer_ownership_cache()
         return True
 
     def get_pokemon(self, individual_id: str) -> Optional[Dict[str, Any]]:
@@ -239,6 +477,25 @@ class AnkimonDB:
         cursor = self.execute("SELECT 1 FROM captured_pokemon WHERE LOWER(name) = LOWER(?) LIMIT 1", (name,))
         return cursor.fetchone() is not None
 
+    def _clear_reviewer_ownership_cache(self):
+        """Clears the Reviewer_Manager's ownership cache and the internal Pokémon ID cache when database changes.
+
+        Uses ``services.reviewer`` (the seam-correct reference on this branch) rather
+        than ``mw.reviewer_obj`` (which is an exp-only pattern never set here).
+        Calls the public ``invalidate_hud_cache()`` API instead of reaching into the
+        private ``_ownership_cache`` dict directly.  Safe to call headless: the
+        ``services`` import is always available; ``services.reviewer`` is ``None``
+        outside of a live Anki session.
+        """
+        self._all_pokemon_ids_cache = None
+        try:
+            from ..services import services
+            reviewer = services.reviewer
+            if reviewer is not None and hasattr(reviewer, "invalidate_hud_cache"):
+                reviewer.invalidate_hud_cache()
+        except Exception:
+            pass
+
     def delete_pokemon(self, individual_id: str) -> bool:
         """Deletes a pokemon from the captured collection."""
         cursor = self.execute(
@@ -246,6 +503,7 @@ class AnkimonDB:
             (individual_id,)
         )
         self._get_connection().commit()
+        self._clear_reviewer_ownership_cache()
         return cursor.rowcount > 0
 
     def replace_pokemon(self, pokemon_data: Dict[str, Any], old_individual_id: str) -> bool:
@@ -297,7 +555,7 @@ class AnkimonDB:
         )
 
         conn.commit()
-
+        self._clear_reviewer_ownership_cache()
         return cursor.rowcount > 0
 
     def get_pokemon_count(self) -> int:
@@ -358,6 +616,7 @@ class AnkimonDB:
             (individual_id, obfuscated_data)
         )
         conn.commit()
+        self._clear_reviewer_ownership_cache()
         return True
 
     def get_main_pokemon(self) -> Optional[Dict[str, Any]]:
@@ -981,16 +1240,299 @@ class AnkimonDB:
         row = cursor.fetchone()
         return row is not None and row["value"] == "true"
 
+    # --- Mobile Sync Operations ---
+    # Deferred F25 leaf accessors for the mobile-review sync engine (F14/F29).
+    # The pending_mobile_battles + mobile_battle_history tables already ship in
+    # the base schema (empty/idempotent); these methods are the leaf's read/write
+    # surface and were held back until the mobile engine landed.
+
+    def get_mobile_watermark(self) -> int:
+        """Return stored watermark (ms). Returns 0 if not set (first-ever run)."""
+        row = self.execute(
+            "SELECT value FROM metadata WHERE key = 'mobile_revlog_watermark'"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def set_mobile_watermark(self, watermark_ms: int, *, force: bool = False) -> None:
+        # Monotonic by default: the watermark must never move backwards. A
+        # regression would re-expose already-processed reviews as "new" mobile
+        # battles on the next sync (double XP / phantom battles), so clamp to the
+        # current value. ``force=True`` is the escape hatch for an intentional
+        # reset (e.g. a future "reprocess mobile reviews" tool).
+        watermark_ms = int(watermark_ms)
+        if not force:
+            watermark_ms = max(watermark_ms, self.get_mobile_watermark())
+        with self._get_connection():
+            self._get_connection().execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('mobile_revlog_watermark', ?)",
+                (str(watermark_ms),)
+            )
+            # Any desktop-processed id at or below the watermark is already
+            # excluded by the `id > watermark` detection filter, so the explicit
+            # record is redundant — prune it to keep the table bounded.
+            try:
+                self._get_connection().execute(
+                    "DELETE FROM desktop_processed_reviews WHERE revlog_id <= ?",
+                    (int(watermark_ms),)
+                )
+            except Exception:
+                pass
+
+    def record_desktop_processed_review(self, revlog_id: int, card_id: Optional[int] = None) -> None:
+        """Durably record a revlog id Ankimon handled on desktop, so a mid-session
+        restart can't re-expose it as a mobile review on the next sync."""
+        if not revlog_id:
+            return
+        with self._get_connection():
+            self._get_connection().execute(
+                "INSERT OR IGNORE INTO desktop_processed_reviews (revlog_id, card_id) VALUES (?, ?)",
+                (int(revlog_id), card_id)
+            )
+
+    def get_desktop_processed_revlog_ids(self) -> set:
+        """Return the durably-recorded desktop-processed revlog ids."""
+        try:
+            rows = self.execute("SELECT revlog_id FROM desktop_processed_reviews").fetchall()
+            return {int(r[0]) for r in rows}
+        except Exception:
+            return set()
+
+    def clear_desktop_processed_reviews(self) -> None:
+        with self._get_connection():
+            self._get_connection().execute("DELETE FROM desktop_processed_reviews")
+
+    def queue_mobile_battles(self, reviews: list[dict]) -> int:
+        """Insert mobile reviews into pending queue. Returns count inserted (skips duplicates)."""
+        import time
+        now = int(time.time() * 1000)
+        inserted = 0
+        conn = self._get_connection()
+        with conn:
+            for r in reviews:
+                cursor = conn.execute(
+                    """INSERT OR IGNORE INTO pending_mobile_battles
+                       (revlog_id, card_id, ease, review_time, review_type, queued_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (r["id"], r["cid"], r["ease"], r["time"], r["type"], now)
+                )
+                inserted += cursor.rowcount
+        return inserted
+
+    def get_pending_mobile_count(self) -> int:
+        return self.execute(
+            "SELECT COUNT(*) FROM pending_mobile_battles WHERE resolved = 0"
+        ).fetchone()[0]
+
+    def get_next_pending_mobile_batch(self, limit: int = 1) -> list[dict]:
+        """Return next N unresolved battles, oldest-first (lowest revlog_id first)."""
+        rows = self.execute(
+            """SELECT id, revlog_id, card_id, ease, review_time, review_type
+               FROM pending_mobile_battles
+               WHERE resolved = 0
+               ORDER BY revlog_id ASC
+               LIMIT ?""",
+            (limit,)
+        ).fetchall()
+        keys = ["queue_id", "revlog_id", "card_id", "ease", "review_time", "review_type"]
+        return [dict(zip(keys, r)) for r in rows]
+
+    def mark_mobile_battle_resolved(self, queue_id: int) -> None:
+        import time
+        now = int(time.time() * 1000)
+        cursor = self.execute("SELECT revlog_id FROM pending_mobile_battles WHERE id = ?", (queue_id,))
+        row = cursor.fetchone()
+        revlog_id = row[0] if row else None
+
+        with self._get_connection():
+            self._get_connection().execute(
+                "UPDATE pending_mobile_battles SET resolved=1, resolved_at=? WHERE id=?",
+                (now, queue_id)
+            )
+
+        if revlog_id:
+            if self._deferred_mirror_revlog_ids is not None:
+                # Inside a bulk "Resolve All" transaction: defer the mirror sync so
+                # it doesn't commit resolved=1 on the other DB before (or despite) a
+                # rollback of the primary transaction.
+                self._deferred_mirror_revlog_ids.append(revlog_id)
+            else:
+                self.sync_resolutions_to_other_db([revlog_id], now)
+
+    def begin_deferred_mirror_sync(self) -> None:
+        """Start collecting mirror-DB resolutions instead of syncing them
+        immediately. Call before a bulk 'Resolve All' transaction."""
+        self._deferred_mirror_revlog_ids = []
+
+    def flush_deferred_mirror_sync(self) -> None:
+        """Sync all deferred resolutions to the mirror DB and stop deferring.
+        Call only AFTER the bulk transaction has committed successfully."""
+        import time
+        ids = self._deferred_mirror_revlog_ids
+        self._deferred_mirror_revlog_ids = None
+        if ids:
+            self.sync_resolutions_to_other_db(ids, int(time.time() * 1000))
+
+    def discard_deferred_mirror_sync(self) -> None:
+        """Drop any deferred resolutions without syncing (e.g. the bulk
+        transaction rolled back) and stop deferring."""
+        self._deferred_mirror_revlog_ids = None
+
+    def add_mobile_history_entry(self, entry: Dict[str, Any]) -> bool:
+        """Saves a single mobile battle outcome to history."""
+        return self.add_mobile_history_entries_batch([entry])
+
+    def add_mobile_history_entries_batch(self, entries: List[Dict[str, Any]]) -> bool:
+        """Saves a batch of mobile battle outcomes to history in a single transaction."""
+        if not entries:
+            return True
+
+        def _clean_val(v, default):
+            if v is None:
+                return default
+            return v
+
+        try:
+            conn = self._get_connection()
+            with conn:
+                conn.executemany(
+                    """INSERT INTO mobile_battle_history (
+                        timestamp, enemy_id, enemy_name, enemy_level, enemy_shiny,
+                        companion_name, companion_level, outcome, xp_gained,
+                        trainer_xp_gained, cash_gained
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    [
+                        (
+                            _clean_val(entry.get("timestamp"), 0),
+                            _clean_val(entry.get("enemy_id"), 0),
+                            str(_clean_val(entry.get("enemy_name"), "")),
+                            _clean_val(entry.get("enemy_level"), 0),
+                            1 if entry.get("enemy_shiny") else 0,
+                            str(_clean_val(entry.get("companion_name"), "")),
+                            _clean_val(entry.get("companion_level"), 0),
+                            str(_clean_val(entry.get("outcome"), "")),
+                            _clean_val(entry.get("xp_gained"), 0),
+                            _clean_val(entry.get("trainer_xp_gained"), 0),
+                            _clean_val(entry.get("cash_gained"), 0),
+                        )
+                        for entry in entries
+                    ]
+                )
+                conn.execute(
+                    """DELETE FROM mobile_battle_history
+                       WHERE id NOT IN (
+                           SELECT id FROM mobile_battle_history
+                           ORDER BY timestamp DESC, id DESC
+                           LIMIT 500
+                       )"""
+                )
+            return True
+        except Exception as e:
+            self._log("error", f"Failed to batch add mobile history entries: {e}")
+            return False
+
+    def get_mobile_history(self, limit: int = 500) -> List[Dict[str, Any]]:
+        """Retrieves recent mobile battle history entries, newest first."""
+        try:
+            rows = self.execute(
+                """SELECT id, timestamp, enemy_id, enemy_name, enemy_level, enemy_shiny,
+                          companion_name, companion_level, outcome, xp_gained,
+                          trainer_xp_gained, cash_gained
+                   FROM mobile_battle_history
+                   ORDER BY timestamp DESC, id DESC
+                   LIMIT ?""",
+                (limit,)
+            ).fetchall()
+            keys = [
+                "id", "timestamp", "enemy_id", "enemy_name", "enemy_level", "enemy_shiny",
+                "companion_name", "companion_level", "outcome", "xp_gained",
+                "trainer_xp_gained", "cash_gained"
+            ]
+            result = []
+            for r in rows:
+                item = dict(zip(keys, r))
+                item["enemy_shiny"] = bool(item["enemy_shiny"])
+                result.append(item)
+            return result
+        except Exception as e:
+            self._log("error", f"Failed to get mobile history: {e}")
+            return []
+
+    def clear_mobile_history(self) -> bool:
+        """Clears all entries from the mobile battle history."""
+        try:
+            conn = self._get_connection()
+            with conn:
+                conn.execute("DELETE FROM mobile_battle_history")
+            return True
+        except Exception as e:
+            self._log("error", f"Failed to clear mobile history: {e}")
+            return False
+
+    def sync_resolutions_to_other_db(self, revlog_ids: list[int], resolved_at: int) -> None:
+        """
+        If the other database exists (normal vs dev), sync the resolved status of the given
+        revlog_ids to it directly.
+        """
+        if not revlog_ids:
+            return
+
+        current_name = self.db_path.name
+        if current_name == "ankimon.db":
+            other_name = "ankimonDEV.db"
+        elif current_name == "ankimonDEV.db":
+            other_name = "ankimon.db"
+        else:
+            return
+
+        other_path = user_path / other_name
+        if not other_path.is_file():
+            return
+
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(other_path), timeout=5.0)
+            try:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS pending_mobile_battles (
+                        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                        revlog_id     INTEGER UNIQUE NOT NULL,
+                        card_id       INTEGER NOT NULL,
+                        ease          INTEGER NOT NULL,
+                        review_time   INTEGER NOT NULL,
+                        review_type   INTEGER NOT NULL,
+                        queued_at     INTEGER NOT NULL,
+                        resolved      INTEGER NOT NULL DEFAULT 0,
+                        resolved_at   INTEGER
+                    )
+                """)
+                placeholders = ",".join("?" for _ in revlog_ids)
+                conn.execute(
+                    f"UPDATE pending_mobile_battles SET resolved=1, resolved_at=? WHERE revlog_id IN ({placeholders})",
+                    [resolved_at] + list(revlog_ids)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            self._log("error", f"Failed to sync resolutions to {other_name}: {e}")
+
 
 # Singleton instance for use throughout the addon
 _db_instance: Optional[AnkimonDB] = None
 
 
-def get_db(logger=None) -> AnkimonDB:
-    """Gets the singleton database instance."""
+def get_db(logger=None, db_path=None) -> AnkimonDB:
+    """Gets the singleton database instance.
+
+    ``db_path`` lets a caller build the singleton against a specific database
+    file (multi-profile / hot-reload account preservation); when omitted the
+    default ``ankimon.db`` under ``user_path`` is used. It is only honoured when
+    the singleton does not yet exist — call :func:`reset_db` first to rebuild
+    against a different path.
+    """
     global _db_instance
     if _db_instance is None:
-        _db_instance = AnkimonDB(logger)
+        _db_instance = AnkimonDB(logger, db_path=db_path)
     return _db_instance
 
 
