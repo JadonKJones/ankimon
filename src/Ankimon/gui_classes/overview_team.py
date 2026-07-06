@@ -492,7 +492,11 @@ def register_overview_hooks() -> None:
     setattr(services, _HANDLER_RECORD, ())
 
     settings = services.settings
-    if settings is None or settings.get("gui.team_deck_view") is not True:
+    if settings is None:
+        return
+
+    team_deck_view = settings.get("gui.team_deck_view")
+    if not (team_deck_view is True or str(team_deck_view).lower() in ("true", "1")):
         return
 
     handlers = (
