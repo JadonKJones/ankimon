@@ -28,7 +28,13 @@ def main():
             print("Error: Could not find version in manifest.json and no --version argument was provided.")
             return
 
+    # Validate version format before using it in file paths
+    version_pattern = re.compile(r'^\d+(\.\d+)*(-[A-Z])?$')
     version_no_v = version.lstrip('v')
+    if not version_pattern.match(version_no_v):
+        print(f"Error: Invalid version format: {version_no_v}")
+        print("Expected format: X.Y or X.Y-Z (e.g., 2.04 or 2.04-E)")
+        sys.exit(1)
     changelog_path = f"assets/changelogs/{version_no_v}.md"
 
     if not os.path.exists(changelog_path):

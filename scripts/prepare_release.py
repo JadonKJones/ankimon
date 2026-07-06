@@ -179,11 +179,13 @@ def generate_changelogs(version: str, pull_requests: List[Dict], highlights: str
             thank_you = f"A huge thank you to {', '.join(c_links)} for their contributions to this update! <3"
         
         f.write(f"{thank_you}\n\n")
-        
+
         # Break down enhancements and bug fixes
         num_enhancements = len(categories["enhancement"])
         num_bugs = len(categories["bug"])
-        f.write(f"This release includes {len(pull_requests)} merged pull requests with {num_enhancements} enhancements and {num_bugs} bug fixes!\n\n")
+        # Count only PRs actually included in the changelog (excluding filtered ones)
+        total_included_prs = sum(len(prs) for prs in categories.values())
+        f.write(f"This release includes {total_included_prs} merged pull requests with {num_enhancements} enhancements and {num_bugs} bug fixes!\n\n")
         
         if highlights:
             f.write(f"{highlights}\n\n")
