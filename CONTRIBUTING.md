@@ -204,6 +204,7 @@ Please adhere to the following rules when developing features or fixing bugs:
 - **Branch Off `main`**: Always create a feature branch off the `main` branch.
 - **No Direct Pushes**: Every change must go through a Pull Request, even small ones.
 - **External PRs**: For external contributors, if `maintainerCanModify` is set to true, maintainers may push adapted code directly to the branch before merging to ensure credit is given.
+- **Contributor Profile**: If this is your first contribution, please add/update your profile in `.all-contributorsrc` in the root of the repository as part of your PR. You can specify a custom `"nickname"` and your `"discord_id"` (optional, if you'd like to be pinged on the Discord server when your contribution is released).
 - **Commit Messages**: Reference the original issue or PR number in commit messages, e.g., `fix: nickname bug (#361)`.
 
 ---
