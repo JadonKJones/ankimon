@@ -1,0 +1,84 @@
+name: Nudge New Contributors
+
+on:
+  pull_request_target:
+    types: [opened]
+
+jobs:
+  nudge:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Check if contributor exists
+        id: check_contributor
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const prAuthor = context.payload.pull_request.user.login;
+            
+            // Exclude bots and maintainers
+            const excludedLogins = ['h0tp-ftw', 'github-actions[bot]', 'dependabot[bot]'];
+            if (excludedLogins.includes(prAuthor)) {
+              console.log(`Skipping nudge for excluded user: ${prAuthor}`);
+              core.setOutput('is_new', 'false');
+              return;
+            }
+            
+            try {
+              const fileContent = fs.readFileSync('.all-contributorsrc', 'utf8');
+              const data = JSON.parse(fileContent);
+              const contributors = data.contributors || [];
+              const exists = contributors.some(c => c.login === prAuthor);
+              
+              if (!exists) {
+                console.log(`User ${prAuthor} is a new contributor!`);
+                core.setOutput('is_new', 'true');
+              } else {
+                console.log(`User ${prAuthor} is already a contributor.`);
+                core.setOutput('is_new', 'false');
+              }
+            } catch (error) {
+              console.error('Error reading .all-contributorsrc:', error);
+              core.setOutput('is_new', 'false');
+            }
+
+      - name: Post comment nudge
+        if: steps.check_contributor.outputs.is_new == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prAuthor = context.payload.pull_request.user.login;
+            const commentBody = `Hi @${prAuthor}! Thank you so much for opening this Pull Request and contributing to Ankimon! 🌟
+            
+            We noticed you aren't registered in our \`.all-contributorsrc\` profile list yet. If you'd like to be credited with a custom nickname in our in-app changelogs and get pinged on our Discord server during release announcements, please add yourself to the \`.all-contributorsrc\` file in the root of the repository as part of this PR!
+            
+            You can simply add an entry under \`"contributors"\` like this:
+            \`\`\`json
+            {
+              "login": "${prAuthor}",
+              "name": "${prAuthor}",
+              "avatar_url": "https://github.com/${prAuthor}.png",
+              "profile": "https://github.com/${prAuthor}",
+              "contributions": ["code"],
+              "nickname": "Your Custom Nickname",
+              "discord_id": "Your Discord User ID (optional)"
+            }
+            \`\`\`
+            *(If you'd prefer to just use your GitHub username and skip the Discord release ping, you can leave nickname and discord_id blank or skip this step!)*`;
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: commentBody
+            });
