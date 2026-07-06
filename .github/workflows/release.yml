@@ -61,105 +61,26 @@ jobs:
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
           git add src/Ankimon/manifest.json .all-contributorsrc README.md assets/changelogs/
-          git commit -m "chore: bump version and update changelog for ${{ github.event.inputs.version }}"
-          git push origin main
+          if git diff --cached --quiet; then
+            echo "No release changes to commit (already up to date); skipping commit."
+          else
+            git commit -m "chore: bump version and update changelog for ${{ github.event.inputs.version }}"
+            git push origin main
+          fi
 
+      # Pushing the tag (with the PAT) triggers the existing "Create Add-on Release"
+      # workflow (main.yml), which checks out the tag *with submodules*, builds the
+      # .ankiaddon (injecting the poke_engine submodule), and publishes the GitHub
+      # Release. We intentionally do NOT build/publish here — doing both would race
+      # two identical builds onto the same tag and asset.
       - name: Create and Push Tag
         run: |
-          git tag "${{ github.event.inputs.version }}" -m "Release ${{ github.event.inputs.version }}"
-          git push origin "${{ github.event.inputs.version }}"
-
-      - name: Install Addon Builder dependencies
-        run: |
-          python -m pip install git+https://github.com/glutanimate/anki-addon-builder.git@4039b5bb743773a18cb2911e6dd38fa1e3f65982
-          python -m pip install pyqt5
-
-      - name: Create .ankiaddon package
-        run: |
-          aab build -d ankiweb
-
-      - name: Inject poke_engine submodule into package
-        run: |
-          ADDON_FILE=$(ls build/*.ankiaddon)
-          echo "Injecting poke_engine into $ADDON_FILE ..."
-          python3 - <<'EOF'
-          import os, sys, zipfile
-
-          addon_file = next(f for f in os.listdir("build") if f.endswith(".ankiaddon"))
-          addon_path = os.path.join("build", addon_file)
-          submodule_src = "src/Ankimon/poke_engine"
-
-          with zipfile.ZipFile(addon_path, "a", zipfile.ZIP_DEFLATED) as zf:
-              existing = set(zf.namelist())
-              added = 0
-              for root, dirs, files in os.walk(submodule_src):
-                  dirs[:] = [d for d in dirs if d != "__pycache__"]
-                  for fname in files:
-                      if fname.endswith((".pyc", ".pyo")):
-                          continue
-                      abs_path = os.path.join(root, fname)
-                      arc_path = os.path.relpath(abs_path, "src/Ankimon")
-                      arc_path = arc_path.replace(os.sep, "/")
-                      if arc_path not in existing:
-                          zf.write(abs_path, arc_path)
-                          added += 1
-              print(f"Injected {added} poke_engine files into {addon_file}")
-          EOF
-
-      - name: Copy to stable filename
-        run: |
-          ADDON_FILE=$(ls build/*.ankiaddon)
-          cp "$ADDON_FILE" build/Ankimon.ankiaddon
-          echo "Copied $ADDON_FILE to build/Ankimon.ankiaddon"
-
-      - name: Patch Changelog for GitHub Release
-        run: |
-          python -c "
-          import os, re, subprocess
-          path = 'assets/changelogs/${{ github.event.inputs.version }}.md'
-          content = ''
-          if os.path.exists(path):
-              with open(path, 'r', encoding='utf-8') as f:
-                  content = f.read()
-              # Replace [@username](url) (Nickname) -> @username
-              content = re.sub(r'\[@([\w-]+)\]\([^)]+\)\s*\([^)]*\)', r'@\1', content)
-              # Replace [@username](url) -> @username
-              content = re.sub(r'\[@([\w-]+)\]\([^)]+\)', r'@\1', content)
-              # Replace [#number](url) -> #number
-              content = re.sub(r'\[(#\d+)\]\([^)]+\)', r'\1', content)
-          else:
-              content = 'No changelog available for this release.'
-          
-          # Find previous tag dynamically
-          try:
-              tags = subprocess.check_output(['git', 'for-each-ref', '--sort=-creatordate', '--format=%(refname:short)', 'refs/tags'], text=True).split('\n')
-              version_pattern = re.compile(r'^\d+(\.\d+)*(-[A-Z])?$')
-              current_version = '${{ github.event.inputs.version }}'
-              version_tags = [t.strip() for t in tags if version_pattern.match(t.strip()) and t.strip() != current_version]
-              prev_tag = version_tags[0] if version_tags else '0.0.0'
-          except Exception:
-              prev_tag = '0.0.0'
-          
-          # Append Full Changelog link
-          compare_link = f'\n\n---\n\n**Full Changelog**: https://github.com/${{ github.repository }}/compare/{prev_tag}...${{ github.event.inputs.version }}'
-          content += compare_link
-          
-          # Append Download link
-          download_link = f'\n\n***\n\n**Download**: https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.version }}/Ankimon.ankiaddon'
-          content += download_link
-          
-          with open('patched_changelog.md', 'w', encoding='utf-8') as f:
-              f.write(content)
-          "
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: "Ankimon v${{ github.event.inputs.version }}"
-          body_path: patched_changelog.md
-          files: build/*.ankiaddon
-          draft: false
-          generate_release_notes: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION="${{ github.event.inputs.version }}"
+          if git ls-remote --exit-code origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "Tag ${VERSION} already exists on origin; skipping tag creation."
+            echo "To (re)build an existing tag, run the 'Create Add-on Release' workflow manually."
+          else
+            git tag "${VERSION}" -m "Release ${VERSION}"
+            git push origin "${VERSION}"
+            echo "Pushed tag ${VERSION}. The 'Create Add-on Release' workflow will now build and publish it."
+          fi
