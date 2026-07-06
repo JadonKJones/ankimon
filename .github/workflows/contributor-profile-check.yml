@@ -1,0 +1,51 @@
+name: Contributor Profile Check
+
+# Fails (a visible red check) while the PR author's auto-created contributor profile
+# still holds the PENDING_REVIEW placeholder, so nobody's nickname/discord_id gets
+# decided for them. Passes as soon as they set real values OR clear them to blank.
+# It never fails for authors without an entry, so it can't block brand-new PRs.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  check-profile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure placeholder profile was reviewed
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+
+          PLACEHOLDER = "PENDING_REVIEW"
+          author = os.environ["PR_AUTHOR"]
+          path = ".all-contributorsrc"
+
+          try:
+              with open(path, encoding="utf-8") as f:
+                  data = json.load(f)
+          except (FileNotFoundError, ValueError):
+              print("No .all-contributorsrc to check; skipping.")
+              sys.exit(0)
+
+          entry = next((c for c in data.get("contributors", []) if c.get("login") == author), None)
+          if entry is None:
+              print(f"No contributor profile for @{author} yet; nothing to review.")
+              sys.exit(0)
+
+          pending = [k for k in ("nickname", "discord_id") if entry.get(k) == PLACEHOLDER]
+          if pending:
+              fields = ", ".join(pending)
+              print(f"::error title=Contributor profile needs review::Your entry in .all-contributorsrc still "
+                    f"has the {PLACEHOLDER} placeholder in: {fields}.")
+              print(f"Please edit .all-contributorsrc and set your {fields} — or an empty string \"\" to skip — "
+                    "then push again.")
+              sys.exit(1)
+
+          print(f"@{author}'s contributor profile looks good. ✅")
+          PY

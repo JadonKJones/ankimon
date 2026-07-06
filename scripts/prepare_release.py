@@ -6,6 +6,13 @@ import requests
 import re
 from typing import List, Dict, Optional
 
+# Sentinel written into a contributor's nickname/discord_id when a profile entry is
+# auto-created for them (here as a release-time fallback, or by nudge-contributor.yml
+# when a PR is opened). It means "the contributor has not reviewed this yet" and is
+# treated as empty everywhere it would otherwise be displayed, so it never leaks into
+# a changelog as a fake nickname or Discord ping.
+PENDING_PROFILE = "PENDING_REVIEW"
+
 def run_command(command: List[str], check: bool = True) -> str:
     result = subprocess.run(command, capture_output=True, text=True, check=check)
     return result.stdout.strip()
@@ -97,8 +104,8 @@ def update_contributors(pull_requests: List[Dict]):
                 "avatar_url": f"https://github.com/{login}.png",
                 "profile": f"https://github.com/{login}",
                 "contributions": ["code"],
-                "nickname": "",
-                "discord_id": ""
+                "nickname": PENDING_PROFILE,
+                "discord_id": PENDING_PROFILE
             })
             existing_logins.add(login)
             new_found = True
@@ -138,7 +145,7 @@ def generate_changelogs(version: str, pull_requests: List[Dict], highlights: str
         
         # Include nickname if it's different from the login and is not empty
         nick = nick_data.get("nickname")
-        if nick and nick != login:
+        if nick and nick != login and nick != PENDING_PROFILE:
             user_link += f" ({nick})"
             
         entry = f"- {pr['title']} {pr_link} {user_link}"
@@ -166,7 +173,7 @@ def generate_changelogs(version: str, pull_requests: List[Dict], highlights: str
             for u in sorted(contributors):
                 nick = nicknames.get(u, {}).get('nickname')
                 link = f"[@{u}](https://github.com/{u})"
-                if nick and nick != u:
+                if nick and nick != u and nick != PENDING_PROFILE:
                     link += f" ({nick})"
                 c_links.append(link)
             thank_you = f"A huge thank you to {', '.join(c_links)} for their contributions to this update! <3"

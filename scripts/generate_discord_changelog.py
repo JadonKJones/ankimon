@@ -4,6 +4,10 @@ import json
 import sys
 import argparse
 
+# Contributors auto-added with an unreviewed profile carry this sentinel in their
+# nickname/discord_id; treat it as "no value" so it never renders as a real ping.
+PENDING_PROFILE = "PENDING_REVIEW"
+
 def main():
     # Force UTF-8 stdout encoding for Windows compatibility when printing emojis
     if hasattr(sys.stdout, 'reconfigure'):
@@ -66,7 +70,7 @@ def main():
     def replace_user(match):
         username = match.group(1)
         d_id = discord_ids.get(username)
-        if d_id:
+        if d_id and d_id != PENDING_PROFILE:
             return f"<@{d_id}>"
         return f"@{username}"
 
