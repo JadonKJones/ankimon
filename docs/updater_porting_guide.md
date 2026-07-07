@@ -330,6 +330,7 @@ Implement user-friendly prompts with complete style and night-mode integration.
 #### [NEW CODE] Prompt and Progress Dialog Classes
 Add the complete UI classes:
 
+{% raw %}
 ```python
 class BranchUpdatePromptDialog(QDialog):
     """Adaptive, dark-mode aware popup displaying commit logs & snooze checkbox."""
@@ -470,6 +471,7 @@ class BranchUpdateProgressDialog(QDialog):
             percent = int((current / total) * 100)
             mw.taskman.run_on_main(lambda: self.progress_bar.setValue(percent))
 ```
+{% endraw %}
 
 ---
 
