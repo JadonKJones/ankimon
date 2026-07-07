@@ -91,6 +91,7 @@ def main():
 
     # Write the resulting discord changelog to file
     discord_changelog_path = f"assets/changelogs/{version_no_v}-discord.md"
+    os.makedirs(os.path.dirname(discord_changelog_path), exist_ok=True)
     with open(discord_changelog_path, "w", encoding="utf-8") as f:
         f.write(content)
     print(f"Created Discord changelog at {discord_changelog_path}")

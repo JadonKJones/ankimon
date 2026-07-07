@@ -4,6 +4,7 @@ import subprocess
 import argparse
 import requests
 import re
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
 # Sentinel written into a contributor's nickname/discord_id when a profile entry is
@@ -26,6 +27,32 @@ _NOREPLY_EMAIL = re.compile(
 )
 _COAUTHOR_TRAILER = re.compile(r'^\s*co-authored-by:\s*.*<([^>]+)>', re.IGNORECASE)
 
+# A release version / tag: digits and dots, optional leading 'v', optional single
+# uppercase channel suffix (2.03, v2.03, 2.02-E). Used both to pick the previous tag
+# and to validate the --version input before it builds file paths (rejecting
+# malformed / path-traversal values early).
+_VERSION_RE = re.compile(r'^v?\d+(\.\d+)*(-[A-Z])?$')
+
+
+def _iso_to_utc(value: Optional[str]) -> Optional[datetime]:
+    """Parse a GitHub/git ISO-8601 timestamp into an aware UTC datetime, or None
+    for empty/invalid input. Git's ``%cI`` emits the committer's *local* offset
+    while the GitHub API emits UTC 'Z' — comparing the two as raw strings is wrong
+    (it can skip PRs merged just after the tag), so normalize both to real UTC
+    datetimes before comparing."""
+    if not value:
+        return None
+    try:
+        s = value.strip()
+        if s.endswith("Z"):  # older fromisoformat() rejects a trailing 'Z'
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
 
 def run_command(command: List[str], check: bool = True) -> str:
     result = subprocess.run(command, capture_output=True, text=True, check=check)
@@ -35,9 +62,14 @@ def get_previous_tag(current_version: str) -> Optional[str]:
     try:
         # Find all tags, sort by creation date
         tags = run_command(["git", "for-each-ref", "--sort=-creatordate", "--format=%(refname:short)", "refs/tags"]).split("\n")
-        # Filter for standard version tags (e.g. starts with digit, and is not the current version)
-        version_pattern = re.compile(r'^\d+(\.\d+)*(-[A-Z])?$')
-        version_tags = [t.strip() for t in tags if version_pattern.match(t.strip()) and t.strip() != current_version]
+        # Standard version tags only, excluding the current version. Tolerate a 'v'
+        # prefix on either side (tags or the passed-in version) so the exclusion stays
+        # accurate regardless of which one carries it.
+        current_clean = current_version.lstrip('v')
+        version_tags = [
+            t.strip() for t in tags
+            if _VERSION_RE.match(t.strip()) and t.strip().lstrip('v') != current_clean
+        ]
         return version_tags[0] if version_tags else None
     except Exception as e:
         print(f"Error finding previous tag: {e}")
@@ -45,8 +77,9 @@ def get_previous_tag(current_version: str) -> Optional[str]:
 
 
 def fetch_prs_since_tag(repo: str, previous_tag: str) -> List[Dict]:
-    # Get the date of the previous tag
-    tag_date = run_command(["git", "log", "-1", "--format=%cI", previous_tag])
+    # Date of the previous tag as a real UTC datetime (see _iso_to_utc for why a raw
+    # string compare against the API's UTC timestamps is unsafe).
+    tag_dt = _iso_to_utc(run_command(["git", "log", "-1", "--format=%cI", previous_tag]))
     headers = {"Accept": "application/vnd.github.v3+json"}
     token = os.getenv("GITHUB_TOKEN")
     if token:
@@ -65,8 +98,8 @@ def fetch_prs_since_tag(repo: str, previous_tag: str) -> List[Dict]:
             break
             
         for pr in prs:
-            merged_at = pr.get("merged_at")
-            if not merged_at or merged_at <= tag_date:
+            merged_dt = _iso_to_utc(pr.get("merged_at"))
+            if merged_dt is None or (tag_dt is not None and merged_dt <= tag_dt):
                 continue
                 
             # Filter out automated release PRs
@@ -77,9 +110,10 @@ def fetch_prs_since_tag(repo: str, previous_tag: str) -> List[Dict]:
                 
             pull_requests.append(pr)
                 
-        # Since PRs are sorted by 'updated_at', if the oldest PR in this page was updated
-        # before our tag_date, we can safely stop paginating.
-        if prs[-1].get("updated_at", "") < tag_date:
+        # PRs are sorted by 'updated_at'; once the oldest on a page predates the tag
+        # we can stop paginating (compared as UTC datetimes, not raw strings).
+        oldest_updated = _iso_to_utc(prs[-1].get("updated_at"))
+        if tag_dt is not None and oldest_updated is not None and oldest_updated < tag_dt:
             break
             
         page += 1
@@ -315,7 +349,14 @@ def main():
     parser.add_argument("--psa", default="")
     parser.add_argument("--repo", default="h0tp-ftw/ankimon")
     args = parser.parse_args()
-    
+
+    # Validate the version before it's ever used to build a file path (defensive,
+    # even though workflow_dispatch is maintainer-only).
+    if not _VERSION_RE.match(args.version.strip()):
+        raise SystemExit(
+            f"Error: invalid version {args.version!r}; expected e.g. 2.04 or 2.04-E."
+        )
+
     prev_tag = get_previous_tag(args.version)
     print(f"Previous tag: {prev_tag}")
     

@@ -17,6 +17,13 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    # Bind the workflow_dispatch inputs to env vars once, then reference them as
+    # "$VERSION" / "$HIGHLIGHTS" in every run: block. Expanding ${{ github.event.inputs.* }}
+    # straight into a shell script is a template-injection vector (a value containing
+    # quotes or $(...) would execute); a shell reading an env var is safe.
+    env:
+      VERSION: ${{ github.event.inputs.version }}
+      HIGHLIGHTS: ${{ github.event.inputs.highlights }}
 
     steps:
       - name: Checkout code
@@ -25,6 +32,16 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Verify release token
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "$GH_PAT" ]; then
+            echo "::error title=Missing GH_PAT secret::The release tag must be pushed with a Personal Access Token so the 'Create Add-on Release' workflow (main.yml) triggers and builds the .ankiaddon. Without GH_PAT the tag push falls back to GITHUB_TOKEN, which by design does NOT trigger other workflows — the version would bump but no release would ever be published. Add the GH_PAT repo secret (repo + workflow scope) and re-run."
+            exit 1
+          fi
+          echo "GH_PAT is present; the tag push will trigger the release build."
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -45,8 +62,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python scripts/prepare_release.py --version "${{ github.event.inputs.version }}" --highlights "${{ github.event.inputs.highlights }}"
-          python scripts/generate_discord_changelog.py --version "${{ github.event.inputs.version }}"
+          python scripts/prepare_release.py --version "$VERSION" --highlights "$HIGHLIGHTS"
+          python scripts/generate_discord_changelog.py --version "$VERSION"
 
       - name: Generate Contributors Table
         run: |
@@ -64,7 +81,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No release changes to commit (already up to date); skipping commit."
           else
-            git commit -m "chore: bump version and update changelog for ${{ github.event.inputs.version }}"
+            git commit -m "chore: bump version and update changelog for $VERSION"
             git push origin main
           fi
 
@@ -75,7 +92,6 @@ jobs:
       # two identical builds onto the same tag and asset.
       - name: Create and Push Tag
         run: |
-          VERSION="${{ github.event.inputs.version }}"
           if git ls-remote --exit-code origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
             echo "Tag ${VERSION} already exists on origin; skipping tag creation."
             echo "To (re)build an existing tag, run the 'Create Add-on Release' workflow manually."

@@ -14,8 +14,43 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 
 import prepare_release as pr  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 
 RS = "\x1e"  # record separator prepare_release uses between commits
+
+
+# --- version validation + timezone-aware date compare (release-review fixes) ---
+
+
+def test_version_regex_accepts_valid_incl_v_prefix():
+    for v in ("2.03", "v2.03", "2.02-E", "1.3962-E", "2", "10.0"):
+        assert pr._VERSION_RE.match(v), v
+
+
+def test_version_regex_rejects_malformed_and_traversal():
+    for v in ("", "sprites", "../etc/passwd", "2.03; rm -rf /", "v", "2.03-e", "2.0-EE"):
+        assert not pr._VERSION_RE.match(v), v
+
+
+def test_iso_to_utc_normalizes_z_and_offsets():
+    assert pr._iso_to_utc("2026-07-05T12:00:00Z") == pr._iso_to_utc("2026-07-05T12:00:00+00:00")
+    assert pr._iso_to_utc("2026-07-05T12:00:00+02:00") == datetime(2026, 7, 5, 10, 0, tzinfo=timezone.utc)
+
+
+def test_iso_to_utc_empty_and_invalid_are_none():
+    assert pr._iso_to_utc(None) is None
+    assert pr._iso_to_utc("") is None
+    assert pr._iso_to_utc("not-a-date") is None
+
+
+def test_iso_to_utc_fixes_cross_timezone_ordering():
+    # The exact bug: git '%cI' emits a local offset, the API emits UTC 'Z'. A PR
+    # merged AFTER the tag can sort BEFORE it as raw strings; as UTC datetimes it
+    # orders correctly, so the PR is no longer wrongly skipped.
+    tag_local = "2026-07-05T14:00:00+02:00"   # == 12:00 UTC
+    merged_api = "2026-07-05T13:00:00Z"       # 13:00 UTC — genuinely later
+    assert merged_api < tag_local                                 # raw-string compare is WRONG
+    assert pr._iso_to_utc(merged_api) > pr._iso_to_utc(tag_local)  # datetime compare is RIGHT
 
 
 def test_login_from_id_prefixed_noreply():
