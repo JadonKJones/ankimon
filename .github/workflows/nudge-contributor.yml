@@ -1,5 +1,10 @@
 name: Onboard New Contributors
 
+# SECURITY: this runs on `pull_request_target`, so it holds the base repo's write
+# token and secrets even for fork PRs. That is only safe because the job NEVER
+# executes code from the PR — it just reads/edits .all-contributorsrc with
+# first-party python + git. Do NOT add build / test / `npm install` / PR-script
+# steps here, or untrusted PR code would run with those privileges.
 on:
   pull_request_target:
     types: [opened]
@@ -22,12 +27,17 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          # Keep the token out of .git/config; the push below authenticates
+          # explicitly with a short-lived remote URL instead.
+          persist-credentials: false
 
       - name: Add placeholder profile for new contributors
         id: profile
         env:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          GIT_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -85,7 +95,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .all-contributorsrc
           git commit -m "chore: add placeholder contributor profile for @$PR_AUTHOR"
-          if git push origin "HEAD:$HEAD_REF"; then
+          if git push "https://x-access-token:${GIT_TOKEN}@github.com/${HEAD_REPO}.git" "HEAD:$HEAD_REF"; then
             echo "Pushed placeholder profile to $HEAD_REF"
             echo "status=pushed" >> "$GITHUB_OUTPUT"
           else

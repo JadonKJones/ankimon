@@ -11,6 +11,10 @@ on:
 jobs:
   check-profile:
     runs-on: ubuntu-latest
+    # Only reads the checked-out .all-contributorsrc; declare least privilege so the
+    # job doesn't inherit a broader default token scope.
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
