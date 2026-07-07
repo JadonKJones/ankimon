@@ -1,0 +1,113 @@
+name: Prepare and Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string (e.g., 2.04 or 2.04-E)"
+        required: true
+      highlights:
+        description: "Highlights/What's new summary (optional)"
+        required: false
+        type: string
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    # Bind the workflow_dispatch inputs to env vars once, then reference them as
+    # "$VERSION" / "$HIGHLIGHTS" in every run: block. Expanding ${{ github.event.inputs.* }}
+    # straight into a shell script is a template-injection vector (a value containing
+    # quotes or $(...) would execute); a shell reading an env var is safe.
+    env:
+      VERSION: ${{ github.event.inputs.version }}
+      HIGHLIGHTS: ${{ github.event.inputs.highlights }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          # Don't leave the token in .git/config while later steps run third-party
+          # code (pip / npx / the build). The pushes below authenticate explicitly
+          # with a short-lived remote URL instead, so the PAT is never persisted.
+          persist-credentials: false
+
+      - name: Verify release token
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "$GH_PAT" ]; then
+            echo "::error title=Missing GH_PAT secret::The release tag must be pushed with a Personal Access Token so the 'Create Add-on Release' workflow (main.yml) triggers and builds the .ankiaddon. Without GH_PAT the tag push falls back to GITHUB_TOKEN, which by design does NOT trigger other workflows — the version would bump but no release would ever be published. Add the GH_PAT repo secret (repo + workflow scope) and re-run."
+            exit 1
+          fi
+          echo "GH_PAT is present; the tag push will trigger the release build."
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pytest pytest-qt PyQt6 markdown
+
+      - name: Prepare Release Files
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/prepare_release.py --version "$VERSION" --highlights "$HIGHLIGHTS"
+          python scripts/generate_discord_changelog.py --version "$VERSION"
+
+      - name: Generate Contributors Table
+        run: |
+          npx -y all-contributors-cli generate
+
+      - name: Run Integrity Tests
+        run: |
+          pytest tests/test_addon_integrity.py
+
+      - name: Commit and Push Changes
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add src/Ankimon/manifest.json .all-contributorsrc README.md assets/changelogs/
+          if git diff --cached --quiet; then
+            echo "No release changes to commit (already up to date); skipping commit."
+          else
+            git commit -m "chore: bump version and update changelog for $VERSION"
+            # Explicit token-in-URL push (persist-credentials is off); GitHub masks
+            # the secret in logs, and the token is never written to git config.
+            git push "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+          fi
+
+      # Pushing the tag (with the PAT) triggers the existing "Create Add-on Release"
+      # workflow (main.yml), which checks out the tag *with submodules*, builds the
+      # .ankiaddon (injecting the poke_engine submodule), and publishes the GitHub
+      # Release. We intentionally do NOT build/publish here — doing both would race
+      # two identical builds onto the same tag and asset.
+      - name: Create and Push Tag
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          REMOTE="https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code "$REMOTE" "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "Tag ${VERSION} already exists on origin; skipping tag creation."
+            echo "To (re)build an existing tag, run the 'Create Add-on Release' workflow manually."
+          else
+            git tag "${VERSION}" -m "Release ${VERSION}"
+            git push "$REMOTE" "refs/tags/${VERSION}"
+            echo "Pushed tag ${VERSION}. The 'Create Add-on Release' workflow will now build and publish it."
+          fi

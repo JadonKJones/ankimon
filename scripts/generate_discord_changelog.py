@@ -4,6 +4,10 @@ import json
 import sys
 import argparse
 
+# Contributors auto-added with an unreviewed profile carry this sentinel in their
+# nickname/discord_id; treat it as "no value" so it never renders as a real ping.
+PENDING_PROFILE = "PENDING_REVIEW"
+
 def main():
     # Force UTF-8 stdout encoding for Windows compatibility when printing emojis
     if hasattr(sys.stdout, 'reconfigure'):
@@ -24,7 +28,13 @@ def main():
             print("Error: Could not find version in manifest.json and no --version argument was provided.")
             return
 
+    # Validate version format before using it in file paths
+    version_pattern = re.compile(r'^\d+(\.\d+)*(-[A-Z])?$')
     version_no_v = version.lstrip('v')
+    if not version_pattern.match(version_no_v):
+        print(f"Error: Invalid version format: {version_no_v}")
+        print("Expected format: X.Y or X.Y-Z (e.g., 2.04 or 2.04-E)")
+        sys.exit(1)
     changelog_path = f"assets/changelogs/{version_no_v}.md"
 
     if not os.path.exists(changelog_path):
@@ -52,6 +62,9 @@ def main():
     if full_changelog_marker in content:
         content = content.split(full_changelog_marker)[0].strip()
 
+    # Remove Discord invite section
+    content = re.sub(r'### 💬 Join the \[Discord\].*?\n\n(— h0tp 💖)', r'\1', content, flags=re.DOTALL)
+
     # Remove any trailing horizontal rules (*** or ---)
     content = re.sub(r'\s*\*\*\*+\s*$', '', content)
     content = re.sub(r'\s*---+\s*$', '', content)
@@ -63,7 +76,7 @@ def main():
     def replace_user(match):
         username = match.group(1)
         d_id = discord_ids.get(username)
-        if d_id:
+        if d_id and d_id != PENDING_PROFILE:
             return f"<@{d_id}>"
         return f"@{username}"
 
@@ -71,6 +84,17 @@ def main():
     content = re.sub(r'\[@([\w-]+)\]\([^)]+\)\s*\([^)]*\)', replace_user, content)
     # Replace Pattern 2
     content = re.sub(r'\[@([\w-]+)\]\([^)]+\)', replace_user, content)
+
+    # Append download link
+    download_link = f"\n\n***\n\n**Download**: https://github.com/h0tp-ftw/ankimon/releases/download/{version_no_v}/Ankimon.ankiaddon"
+    content += download_link
+
+    # Write the resulting discord changelog to file
+    discord_changelog_path = f"assets/changelogs/{version_no_v}-discord.md"
+    os.makedirs(os.path.dirname(discord_changelog_path), exist_ok=True)
+    with open(discord_changelog_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"Created Discord changelog at {discord_changelog_path}")
 
     # Print the resulting discord changelog
     print("\n================ DISCORD CHANGELOG ================\n")
