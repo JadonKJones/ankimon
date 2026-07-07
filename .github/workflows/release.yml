@@ -32,6 +32,10 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          # Don't leave the token in .git/config while later steps run third-party
+          # code (pip / npx / the build). The pushes below authenticate explicitly
+          # with a short-lived remote URL instead, so the PAT is never persisted.
+          persist-credentials: false
 
       - name: Verify release token
         env:
@@ -74,6 +78,8 @@ jobs:
           pytest tests/test_addon_integrity.py
 
       - name: Commit and Push Changes
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
@@ -82,7 +88,9 @@ jobs:
             echo "No release changes to commit (already up to date); skipping commit."
           else
             git commit -m "chore: bump version and update changelog for $VERSION"
-            git push origin main
+            # Explicit token-in-URL push (persist-credentials is off); GitHub masks
+            # the secret in logs, and the token is never written to git config.
+            git push "https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
           fi
 
       # Pushing the tag (with the PAT) triggers the existing "Create Add-on Release"
@@ -91,12 +99,15 @@ jobs:
       # Release. We intentionally do NOT build/publish here — doing both would race
       # two identical builds onto the same tag and asset.
       - name: Create and Push Tag
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          if git ls-remote --exit-code origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
+          REMOTE="https://x-access-token:${GH_PAT}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code "$REMOTE" "refs/tags/${VERSION}" >/dev/null 2>&1; then
             echo "Tag ${VERSION} already exists on origin; skipping tag creation."
             echo "To (re)build an existing tag, run the 'Create Add-on Release' workflow manually."
           else
             git tag "${VERSION}" -m "Release ${VERSION}"
-            git push origin "${VERSION}"
+            git push "$REMOTE" "refs/tags/${VERSION}"
             echo "Pushed tag ${VERSION}. The 'Create Add-on Release' workflow will now build and publish it."
           fi
