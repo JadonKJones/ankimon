@@ -266,6 +266,7 @@ def start_asynchronous_startup():
             settings_obj.get("controls.catch_key"),
             settings_obj.get("controls.defeat_key"),
             settings_obj.get("controls.pokemon_buttons"),
+            settings_obj.get("controls.team_cycle_key"),
         )
 
         # 5b. Developer hot-reload shortcut (Ctrl+Shift+R -> restart_ankimon).

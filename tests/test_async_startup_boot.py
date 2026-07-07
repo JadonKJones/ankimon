@@ -895,7 +895,7 @@ def test_reviewer_ui_called_with_base_three_arg_signature(boot_env):
     boot_env.exec_init()
 
     setup = _first(boot_env, "setup_reviewer_ui")
-    assert setup[1] == ("6", "5", True)
+    assert setup[1] == ("6", "5", True, None)
     assert setup[2] == {}
 
 
