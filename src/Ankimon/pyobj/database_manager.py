@@ -135,6 +135,8 @@ class AnkimonDB:
         self._wal = wal
         self._connection: Optional[ConnectionWrapper] = None       # GUI-thread connection
         self._local_conn = threading.local()                       # per-background-thread
+        self._all_conns = []                                       # tracking all connections for complete closure
+        self._conns_lock = threading.Lock()                        # lock for self._all_conns
         # When non-None, mark_mobile_battle_resolved defers the mirror-DB sync
         # (which commits on a separate connection, escaping any outer transaction)
         # and collects the revlog ids here to be flushed after the caller's bulk
@@ -189,7 +191,18 @@ class AnkimonDB:
         each thread keeps its own so they never share a cursor)."""
         if not _is_main_thread():
             local = self._local_conn
-            if (not hasattr(local, "conn") or local.conn is None
+
+            # Check if connection was closed by a global close() call
+            is_closed = False
+            if hasattr(local, "conn") and local.conn is not None:
+                try:
+                    # ConnectionWrapper delegates to sqlite3.Connection
+                    # If closed, this will raise sqlite3.ProgrammingError
+                    local.conn.execute("SELECT 1")
+                except Exception:
+                    is_closed = True
+
+            if (not hasattr(local, "conn") or local.conn is None or is_closed
                     or getattr(local, "db_path", None) != self.db_path):
                 if getattr(local, "conn", None) is not None:
                     try:
@@ -199,31 +212,41 @@ class AnkimonDB:
                 conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
                 local.conn = self._prepare_connection(conn)
                 local.db_path = self.db_path
+                with self._conns_lock:
+                    self._all_conns.append(local.conn)
             elif not isinstance(local.conn, ConnectionWrapper):
                 local.conn = ConnectionWrapper(local.conn)
                 local.db_path = self.db_path
             return local.conn
 
-        if self._connection is None:
+        is_closed = False
+        if self._connection is not None:
+            try:
+                self._connection.execute("SELECT 1")
+            except Exception:
+                is_closed = True
+
+        if self._connection is None or is_closed:
             conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self._connection = self._prepare_connection(conn)
+            with self._conns_lock:
+                self._all_conns.append(self._connection)
         elif not isinstance(self._connection, ConnectionWrapper):
             self._connection = ConnectionWrapper(self._connection)
         return self._connection
 
     def close(self):
-        """Closes the GUI-thread connection and this thread's background connection."""
-        if self._connection:
-            try:
-                self._connection.close()
-            except Exception:
-                pass
-            self._connection = None
-        if hasattr(self, "_local_conn") and getattr(self._local_conn, "conn", None):
-            try:
-                self._local_conn.conn.close()
-            except Exception:
-                pass
+        """Closes all active database connections across all threads."""
+        with self._conns_lock:
+            for conn in self._all_conns:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._all_conns.clear()
+
+        self._connection = None
+        if hasattr(self, "_local_conn"):
             self._local_conn.conn = None
 
     def switch_database(self, db_filename: str):
