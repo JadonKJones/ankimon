@@ -133,8 +133,24 @@ def find_experience_for_level(group_growth_rate, level, remove_levelcap=True):
 def shiny_chance():
     # Shiny Pokémon probability (1 in 4096 chance)
     SHINY_PROBABILITY = 4096
-    shiny = random.randint(1, SHINY_PROBABILITY) == 1
-    return shiny
+    db = services.db
+
+    rolls = 1
+    if db:
+        shiny_charm = db.get_item("shiny-charm")
+        if shiny_charm:
+            try:
+                quantity = shiny_charm["quantity"]
+            except (KeyError, TypeError, IndexError):
+                quantity = 0
+            if quantity > 0:
+                rolls = 3
+
+    for _ in range(rolls):
+        if random.randint(1, SHINY_PROBABILITY) == 1:
+            return True
+
+    return False
 
 # unused, archived
 # must fix missing fields if used
