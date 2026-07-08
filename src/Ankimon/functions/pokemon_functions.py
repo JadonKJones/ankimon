@@ -143,7 +143,8 @@ def shiny_chance():
                 quantity = shiny_charm["quantity"]
             except (KeyError, TypeError, IndexError):
                 quantity = 0
-            if quantity > 0:
+            # Ensure quantity is actually an int before comparing with > 0, to support mocks
+            if isinstance(quantity, int) and quantity > 0:
                 rolls = 3
 
     for _ in range(rolls):
