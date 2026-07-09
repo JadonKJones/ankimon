@@ -34,9 +34,11 @@ class Ankidex(QDialog):
         self.layout.addWidget(self.frame)
         self.setLayout(self.layout)
 
+        from ..ankimon_items_web.shop_obj import SafeWebEnginePage
+        from aqt.qt import QWebEngineProfile
+        self.profile = QWebEngineProfile(parent=self)
         self.webview = QWebEngineView()
-        # Enable remote debugging for development if needed
-        # self.webview.page().settings().setAttribute(QWebEngineSettings.WebAttribute.DeveloperExtrasEnabled, True)
+        self.webview.setPage(SafeWebEnginePage(self.profile, "ankidex_standalone", services.logger, self.webview))
 
         self.frame.setLayout(QVBoxLayout())
         self.frame.layout().setContentsMargins(0, 0, 0, 0)

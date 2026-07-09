@@ -14,8 +14,8 @@ import traceback
 import threading
 import base64
 from datetime import datetime
-from aqt import QDialog, QVBoxLayout, QWebEngineView, mw
-from aqt.qt import Qt, QUrl, QFrame
+from aqt import QDialog, QVBoxLayout, QWebEngineView, QWebEnginePage, mw
+from aqt.qt import Qt, QUrl, QFrame, QWebEngineProfile
 from PyQt6.QtCore import QObject, pyqtSlot, QTimer, QByteArray
 from PyQt6.QtGui import QColor
 from PyQt6.QtWebChannel import QWebChannel
@@ -32,6 +32,25 @@ except ImportError:  # dev helper not landed yet (thread-reload-and-misc-utils u
 
 
 from ..resources import items_path, csv_file_items_cost, csv_file_descriptions
+
+class SafeWebEnginePage(QWebEnginePage):
+    def __init__(self, profile, screen_name, logger, parent=None):
+        super().__init__(profile, parent)
+        self.screen_name = screen_name
+        self.logger = logger
+
+    def javaScriptConsoleMessage(self, level, message, line, source):
+        try:
+            if self.logger:
+                if level == 0:
+                    self.logger.info(f"[JS:{self.screen_name}] {message}")
+                elif level == 1:
+                    self.logger.warning(f"[JS:{self.screen_name}] {message}")
+                else:
+                    self.logger.error(f"[JS:{self.screen_name}] {message}")
+        except Exception:
+            pass
+
 from ..functions.pokedex_functions import (
     find_details_move,
     _load_pokedex_cache,
@@ -914,6 +933,11 @@ class AnkimonItemsWeb(QDialog):
         self.shop_manager = shop_manager
         self.item_window = item_window
         self.ankimon_tracker = ankimon_tracker
+
+        # Instantiate isolated, private browser profile to prevent Anki
+        # and other addons from injecting conflicting scripts/stylesheets
+        self.profile = QWebEngineProfile(parent=self)
+
         # Profile + Team are folded into this shell so all five screens share
         # one window and one dropdown. Their data lives in ProfileData.
         self.profile_data = ProfileData(addon_dir, trainer_card, settings_obj, logger)
@@ -966,12 +990,25 @@ class AnkimonItemsWeb(QDialog):
         frame.layout().addWidget(self.stack)
 
         self.webview_items = QWebEngineView()
+        self.webview_items.setPage(SafeWebEnginePage(self.profile, SCREEN_ITEMS, logger, self.webview_items))
+
         self.webview_ankidex = QWebEngineView()
+        self.webview_ankidex.setPage(SafeWebEnginePage(self.profile, SCREEN_ANKIDEX, logger, self.webview_ankidex))
+
         self.webview_settings = QWebEngineView()
+        self.webview_settings.setPage(SafeWebEnginePage(self.profile, SCREEN_SETTINGS, logger, self.webview_settings))
+
         self.webview_profile = QWebEngineView()
+        self.webview_profile.setPage(SafeWebEnginePage(self.profile, SCREEN_PROFILE, logger, self.webview_profile))
+
         self.webview_team = QWebEngineView()
+        self.webview_team.setPage(SafeWebEnginePage(self.profile, SCREEN_TEAM, logger, self.webview_team))
+
         self.webview_mobile = QWebEngineView()
+        self.webview_mobile.setPage(SafeWebEnginePage(self.profile, SCREEN_MOBILE, logger, self.webview_mobile))
+
         self.webview_history = QWebEngineView()
+        self.webview_history.setPage(SafeWebEnginePage(self.profile, SCREEN_HISTORY, logger, self.webview_history))
         self._views = {
             SCREEN_ITEMS: self.webview_items,
             SCREEN_ANKIDEX: self.webview_ankidex,
