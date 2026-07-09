@@ -135,6 +135,7 @@ class AnkimonDB:
         self._wal = wal
         self._connection: Optional[ConnectionWrapper] = None       # GUI-thread connection
         self._local_conn = threading.local()                       # per-background-thread
+        self._all_conns: list[sqlite3.Connection] = []             # all connections, for atomic replace on Windows
         # When non-None, mark_mobile_battle_resolved defers the mirror-DB sync
         # (which commits on a separate connection, escaping any outer transaction)
         # and collects the revlog ids here to be flushed after the caller's bulk
@@ -198,6 +199,7 @@ class AnkimonDB:
                         pass
                 conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
                 local.conn = self._prepare_connection(conn)
+                self._all_conns.append(local.conn)
                 local.db_path = self.db_path
             elif not isinstance(local.conn, ConnectionWrapper):
                 local.conn = ConnectionWrapper(local.conn)
@@ -212,19 +214,24 @@ class AnkimonDB:
         return self._connection
 
     def close(self):
-        """Closes the GUI-thread connection and this thread's background connection."""
+        """Closes the GUI-thread connection and ALL background connections."""
         if self._connection:
             try:
                 self._connection.close()
             except Exception:
                 pass
             self._connection = None
-        if hasattr(self, "_local_conn") and getattr(self._local_conn, "conn", None):
+
+        # Close all tracked background connections
+        for conn in self._all_conns:
             try:
-                self._local_conn.conn.close()
+                conn.close()
             except Exception:
                 pass
-            self._local_conn.conn = None
+        self._all_conns.clear()
+
+        # Also clear the thread-local state so threads don't reuse closed connections
+        self._local_conn = threading.local()
 
     def switch_database(self, db_filename: str):
         """Close current connections and reopen against a different profile DB file.
