@@ -146,40 +146,58 @@ class TestTypeCompatibilityMultiplier:
 
 
 class TestCalculatePresentPower:
-    def test_basic(self):
-        pp = calculate_present_power(100, 50, 1.0)
-        assert pp == 5000
+    def test_full_hp_neutral_equals_cp(self):
+        # BP is on the CP scale: full HP + neutral matchup → BP == CP
+        assert calculate_present_power(100, 50, 50, 1.0) == 100
+
+    def test_half_hp_halves_bp(self):
+        assert calculate_present_power(100, 25, 50, 1.0) == 50
 
     def test_with_multiplier(self):
-        pp = calculate_present_power(100, 50, 1.5)
-        assert pp == 7500
+        pp = calculate_present_power(100, 50, 50, 1.5)
+        assert pp == 150
 
     def test_zero_hp(self):
-        pp = calculate_present_power(100, 0, 1.5)
+        pp = calculate_present_power(100, 0, 50, 1.5)
         assert pp == 0
+
+    def test_negative_hp_clamps_to_zero(self):
+        # The current_hp clamp must run BEFORE the max_hp<=0 liveness check:
+        # a negative current_hp is dead, never "living = full health".
+        assert calculate_present_power(100, -5, 50, 1.0) == 0
+        assert calculate_present_power(100, -5, 0, 1.0) == 0
 
     def test_none_values(self):
-        pp = calculate_present_power(None, None, None)
+        pp = calculate_present_power(None, None, None, None)
         assert pp == 0
 
+    def test_unknown_max_hp_treats_living_as_unhurt(self):
+        # max_hp 0/None (stub data) → living Pokemon counts as full health
+        assert calculate_present_power(100, 50, 0, 1.0) == 100
+        assert calculate_present_power(100, 50, None, 1.0) == 100
+
+    def test_overheal_clamps_to_full(self):
+        # current_hp above max_hp must not push BP past CP
+        assert calculate_present_power(100, 80, 50, 1.0) == 100
+
     def test_atk_boost_increases_bp(self):
-        # +2 stage = 5/3, BP = 100 × 50 × 1 × 5/3 = 8333.33 → floor 8333
-        assert calculate_present_power(100, 50, 1.0, atk_stage=2, spa_stage=2) == 8333
+        # +2 stage = 5/3, BP = 100 × 1 × 1 × 5/3 = 166.66 → floor 166
+        assert calculate_present_power(100, 50, 50, 1.0, atk_stage=2, spa_stage=2) == 166
 
     def test_atk_drop_decreases_bp(self):
-        # -2 stage = 3/5 = 0.6, BP = 100 × 50 × 1 × 0.6 = 3000
-        assert calculate_present_power(100, 50, 1.0, atk_stage=-2, spa_stage=-2) == 3000
+        # -2 stage = 3/5 = 0.6, BP = 100 × 1 × 1 × 0.6 = 60
+        assert calculate_present_power(100, 50, 50, 1.0, atk_stage=-2, spa_stage=-2) == 60
 
     def test_mixed_atk_spa_stages_averaged(self):
-        # atk +2 (5/3), spa -2 (3/5), avg = 17/15, BP = 5000 × 17/15 = 5666.66 → floor 5666
-        assert calculate_present_power(100, 50, 1.0, atk_stage=2, spa_stage=-2) == 5666
+        # atk +2 (5/3), spa -2 (3/5), avg = 17/15, BP = 100 × 17/15 = 113.33 → floor 113
+        assert calculate_present_power(100, 50, 50, 1.0, atk_stage=2, spa_stage=-2) == 113
 
     def test_out_of_range_stage_neutral(self):
         # Stage 7 is invalid per get_multiplier_stats — should fall back to 1.0
-        assert calculate_present_power(100, 50, 1.0, atk_stage=7, spa_stage=7) == 5000
+        assert calculate_present_power(100, 50, 50, 1.0, atk_stage=7, spa_stage=7) == 100
 
     def test_none_stage_neutral(self):
-        assert calculate_present_power(100, 50, 1.0, atk_stage=None, spa_stage=None) == 5000
+        assert calculate_present_power(100, 50, 50, 1.0, atk_stage=None, spa_stage=None) == 100
 
 
 class TestCalculateCPFromDict:

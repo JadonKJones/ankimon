@@ -188,6 +188,7 @@ collected_ids_mock = set(range(1, 11000))
 sys.modules["addon.utils"].limit_ev_yield = lambda *args: None
 sys.modules["addon.utils"].play_effect_sound = lambda *args: None
 sys.modules["addon.utils"].get_ev_spread = lambda *args: {}
+sys.modules["addon.utils"].scale_ev_spread_to_level = lambda ev, level: ev
 sys.modules["addon.utils"].is_alive = lambda *args: True
 sys.modules["addon.utils"].load_collected_pokemon_ids = lambda: collected_ids_mock
 

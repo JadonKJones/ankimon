@@ -86,9 +86,17 @@ def restore_package_stubs():
                     sys.modules.pop("Ankimon.resources", None)
                 raise
 
-        # Also restore Ankimon.utils if it is a MagicMock
+        # Also restore Ankimon.utils if it is a MagicMock or a partial stub.
+        # The sentinel-attribute check mirrors the pokedex_path check above:
+        # some tests install a plain types.ModuleType stub carrying only the
+        # one function they fake (e.g. give_item), which would otherwise
+        # leak and break any later test that lazily imports real helpers.
         current_utils = sys.modules.get("Ankimon.utils")
-        if current_utils is None or isinstance(current_utils, MagicMock):
+        if (
+            current_utils is None
+            or isinstance(current_utils, MagicMock)
+            or not hasattr(current_utils, "get_ev_spread")
+        ):
             import importlib.util
 
             utils_spec = importlib.util.spec_from_file_location(
