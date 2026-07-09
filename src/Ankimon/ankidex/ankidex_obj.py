@@ -1,7 +1,7 @@
 import os
 import json
 from aqt import QDialog, QVBoxLayout, QWebEngineView
-from aqt.qt import Qt, QUrl, QFrame
+from aqt.qt import Qt, QUrl, QFrame, QWebEngineProfile
 from ..services import services
 
 
@@ -35,8 +35,7 @@ class Ankidex(QDialog):
         self.setLayout(self.layout)
 
         from ..ankimon_items_web.shop_obj import SafeWebEnginePage
-        from aqt.qt import QWebEngineProfile
-        self.profile = QWebEngineProfile(parent=self)
+        self.profile = QWebEngineProfile()
         self.webview = QWebEngineView()
         self.webview.setPage(SafeWebEnginePage(self.profile, "ankidex_standalone", services.logger, self.webview))
 

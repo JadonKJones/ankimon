@@ -42,12 +42,12 @@ class SafeWebEnginePage(QWebEnginePage):
     def javaScriptConsoleMessage(self, level, message, line, source):
         try:
             if self.logger:
-                if level == 0:
-                    self.logger.info(f"[JS:{self.screen_name}] {message}")
-                elif level == 1:
-                    self.logger.warning(f"[JS:{self.screen_name}] {message}")
+                if level == QWebEnginePage.JavaScriptConsoleMessageLevel.InfoMessageLevel:
+                    self.logger.log("info", f"[JS:{self.screen_name}] {message}")
+                elif level == QWebEnginePage.JavaScriptConsoleMessageLevel.WarningMessageLevel:
+                    self.logger.log("warning", f"[JS:{self.screen_name}] {message}")
                 else:
-                    self.logger.error(f"[JS:{self.screen_name}] {message}")
+                    self.logger.log("error", f"[JS:{self.screen_name}] {message}")
         except Exception:
             pass
 
@@ -936,7 +936,7 @@ class AnkimonItemsWeb(QDialog):
 
         # Instantiate isolated, private browser profile to prevent Anki
         # and other addons from injecting conflicting scripts/stylesheets
-        self.profile = QWebEngineProfile(parent=self)
+        self.profile = QWebEngineProfile()
 
         # Profile + Team are folded into this shell so all five screens share
         # one window and one dropdown. Their data lives in ProfileData.
