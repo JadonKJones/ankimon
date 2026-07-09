@@ -367,6 +367,8 @@ class SettingsWindow(QMainWindow):
                     "Always Catch: Regional Form",
                     "Cards per Round",
                     "Show Main Pokémon in Reviewer",
+                    "Show CP in Reviewer Bottom Bar",
+                    "Show Battle Power (BP) in Reviewer Bottom Bar",
                     "Hide HUD on Reviewer Startup",
                     "Show Pokémon Buttons",
                     "Pop-Up on Defeat",
@@ -772,6 +774,16 @@ class SettingsWindow(QMainWindow):
                 setup_reviewer_ui(catch_key, defeat_key, pokemon_buttons)
         except Exception as e:
             print(f"Ankimon: Failed to refresh hotkeys: {e}")
+
+        # Repaint the reviewer so display toggles (CP/BP bottom-bar readout,
+        # HUD options) apply immediately instead of on the next card flip.
+        try:
+            from ..services import services
+
+            if services.reviewer is not None:
+                services.reviewer.refresh_hud()
+        except Exception as e:
+            print(f"Ankimon: Failed to refresh reviewer HUD: {e}")
 
         # The rest is for showing the confirmation message
         excluded_patterns = {

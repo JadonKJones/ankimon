@@ -41,6 +41,8 @@ DEFAULT_CONFIG = {
     "gui.reviewer_text_message_box": True,
     "gui.reviewer_text_message_box_time": 3,
     "gui.show_mainpkmn_in_reviewer": 1,
+    "gui.show_cp_in_reviewer": False,
+    "gui.show_bp_in_reviewer": False,
     "gui.hud_hidden_on_startup": False,
     "gui.team_deck_view": True,
     "gui.view_main_front": True,

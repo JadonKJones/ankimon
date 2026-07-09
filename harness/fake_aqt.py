@@ -281,7 +281,11 @@ def _make_fake_mw(app, user_path):
             super().__init__()
             self.app = app
             self.col = _Col()
-            self.reviewer = SimpleNamespace(web=_Web(), card=None, mw=self)
+            # bottom mirrors real Anki's mw.reviewer.bottom (the native bottom
+            # toolbar webview) — Ankimon paints the CP/BP readout into it.
+            self.reviewer = SimpleNamespace(
+                web=_Web(), bottom=SimpleNamespace(web=_Web()), card=None, mw=self
+            )
             self.taskman = _Taskman()
             self.addonManager = _AddonManager()
             self.pm = SimpleNamespace(name="headless", profileFolder=lambda: str(user_path),

@@ -26,6 +26,11 @@ Main Pokemon in Reviewer:
 If `show_mainpkmn_in_reviewer` is set to 0, you will only see the wild Pokémon when reviewing cards. Setting it to 1 will display both your main Pokémon and the wild Pokémon in the reviewer, with the HP bar on the same height. If set to 2, you'll have a more "battle" look between your main Pokémon and the wild Pokémon.
 - `show_mainpkmn_in_reviewer` [0/1/2]
 
+CP and Battle Power in the Reviewer Bottom Bar:
+Show the Combat Power (CP) and/or the live Battle Power (BP = CP × current HP × type matchup) of the wild and your main Pokémon in the bottom bar of the Anki reviewer (next to the Edit button). Enable either one alone, or both together.
+- `show_cp_in_reviewer` [True/False]
+- `show_bp_in_reviewer` [True/False]
+
 Reviewer Text Message Box:
 Decide if you would like to see the colorful popup messages in the anki reviewer
 - `reviewer_text_message_box` [True/False]

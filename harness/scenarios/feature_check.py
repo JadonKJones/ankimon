@@ -172,7 +172,52 @@ def check_update_channel(d, app, db, pc, pool):
             app.processEvents()
 
 
-CHECKS = [check_rename, check_make_favorite, check_catch_grows_collection, check_update_channel]
+def check_cp_bp_bottom_bar(d, app, db, pc, pool):
+    """The CP/BP readout in the NATIVE reviewer bottom bar
+    (gui.show_cp_in_reviewer / gui.show_bp_in_reviewer): each toggle alone shows
+    only its value, both together show both, and both off clears the readout."""
+    import json as _json
+    from aqt import mw
+
+    settings, reviewer = d.services.settings, d.services.reviewer
+    bottom = mw.reviewer.bottom.web
+
+    def paint(cp, bp):
+        settings.set("gui.show_cp_in_reviewer", cp)
+        settings.set("gui.show_bp_in_reviewer", bp)
+        bottom.last_js = None
+        # The show-question repaint path (card_hooks.on_reviewer_did_show_question).
+        reviewer.update_life_bar(mw.reviewer, None, None)
+        return bottom.last_js or ""
+
+    def payload(js):
+        # _BOTTOM_CP_BP_JS ends with `})(<json-encoded text>);` — recover the text.
+        start = js.rindex("})(") + 3
+        return _json.loads(js[start:js.rindex(")")])
+
+    main_cp = int(d.services.main_pokemon.cp)
+    try:
+        both = payload(paint(True, True))
+        cp_only = payload(paint(True, False))
+        bp_only = payload(paint(False, True))
+        off = payload(paint(False, False))     # also leaves the session's settings clean
+    except ValueError:
+        return ("cp_bp_bottom_bar (toggles + readout)", False,
+                "no CP/BP JS was eval'd into the bottom-bar webview")
+
+    ok = (
+        ("CP %s" % format(main_cp, ",")) in both and " BP " in (" " + both)
+        and both.startswith("Wild: ") and " | Main: " in both
+        and "CP " in cp_only and "BP " not in cp_only
+        and "BP " in bp_only and "CP " not in bp_only
+        and off == ""
+    )
+    return ("cp_bp_bottom_bar (toggles + readout)", ok,
+            "both=%r cp_only=%r bp_only=%r off=%r" % (both, cp_only, bp_only, off))
+
+
+CHECKS = [check_rename, check_make_favorite, check_catch_grows_collection, check_update_channel,
+          check_cp_bp_bottom_bar]
 
 
 def _boot():

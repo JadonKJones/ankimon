@@ -128,6 +128,90 @@ class Reviewer_Manager:
         except Exception:
             pass
 
+    # Injected into the NATIVE reviewer bottom bar (mw.reviewer.bottom.web),
+    # not the card webview: creates/updates a small span next to the Edit
+    # button, or removes it when the readout is empty (both toggles off).
+    # textContent (never innerHTML) so the payload stays plain text.
+    _BOTTOM_CP_BP_JS = """
+    (function(txt){
+        var el = document.getElementById('ankimon-cp-bp');
+        if (!txt) { if (el && el.parentNode) el.parentNode.removeChild(el); return; }
+        if (!el) {
+            var cell = document.querySelector('td.stat');
+            if (!cell) return;
+            el = document.createElement('span');
+            el.id = 'ankimon-cp-bp';
+            el.className = 'stattxt';
+            el.style.marginLeft = '8px';
+            el.style.whiteSpace = 'nowrap';
+            cell.appendChild(el);
+        }
+        el.textContent = txt;
+    })(%s);
+    """
+
+    def _cp_bp_display_text(self, show_cp, show_bp):
+        """Plain-text CP/BP readout for the bottom bar, wild side then main side.
+
+        Same math as the battle window's ``_draw_cp_pp``: CP is the Pokémon GO
+        style Combat Power, BP the live Present Power (CP × current HP × type
+        matchup × attack stages), each side computed against the other's types.
+        """
+        # Lazy import keeps this module loadable with ``Ankimon.business``
+        # absent (the reviewer_obj unit tests stub only reviewer_obj's own
+        # top-level imports).
+        from ..business import calculate_present_power, type_compatibility_multiplier
+
+        try:
+            translator = getattr(services, "translator", None)
+            cp_lbl = translator.translate("cp_label") if translator else "CP"
+            bp_lbl = translator.translate("bp_label") if translator else "BP"
+        except Exception:
+            cp_lbl, bp_lbl = "CP", "BP"
+
+        def side(pkmn, opponent):
+            try:
+                cp_val = int(pkmn.cp)
+            except (AttributeError, TypeError, ValueError):
+                cp_val = 0
+            parts = []
+            if show_cp:
+                parts.append(f"{cp_lbl} {cp_val:,}")
+            if show_bp:
+                stages = getattr(pkmn, "stat_stages", None) or {}
+                bp_val = calculate_present_power(
+                    cp_val,
+                    getattr(pkmn, "hp", 0),
+                    type_compatibility_multiplier(
+                        getattr(pkmn, "type", None), getattr(opponent, "type", None)
+                    ),
+                    stages.get("atk", 0),
+                    stages.get("spa", 0),
+                )
+                parts.append(f"{bp_lbl} {bp_val:,}")
+            return " · ".join(parts)
+
+        wild = side(self.enemy_pokemon, self.main_pokemon)
+        mine = side(self.main_pokemon, self.enemy_pokemon)
+        return f"Wild: {wild} | Main: {mine}"
+
+    def _update_bottom_cp_bp(self):
+        """Paint (or clear) the CP/BP readout in the native reviewer bottom bar.
+
+        Runs on every repaint entry (question shown / refresh_hud), so the BP
+        tracks live HP and stat stages. Silently a no-op when the reviewer or
+        its bottom webview isn't available (harness, dialogs outside review).
+        """
+        try:
+            show_cp = bool(self.settings.get("gui.show_cp_in_reviewer"))
+            show_bp = bool(self.settings.get("gui.show_bp_in_reviewer"))
+            text = ""
+            if show_cp or show_bp:
+                text = self._cp_bp_display_text(show_cp, show_bp)
+            mw.reviewer.bottom.web.eval(self._BOTTOM_CP_BP_JS % json.dumps(text))
+        except Exception:
+            pass
+
     def _resolve_addon_package(self):
         """Return the add-on package name for building /_addons/ media URLs."""
         try:
@@ -155,6 +239,11 @@ class Reviewer_Manager:
             return  # Hook from reviewer_did_answer_card
         if card is not None and not isinstance(card, int):
             return  # Hook received a Card object
+
+        # The CP/BP readout lives in the NATIVE bottom bar, not the HUD
+        # overlay — paint it before the HUD-off early-return and the repaint
+        # dedup below so it stays available (and clearable) in every HUD mode.
+        self._update_bottom_cp_bp()
 
         if int(self.settings.get("gui.show_mainpkmn_in_reviewer")) == 3:
             reviewer.web.eval("if(window.__ankimonHud) window.__ankimonHud.clear();")

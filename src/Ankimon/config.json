@@ -29,6 +29,8 @@
     "gui.reviewer_text_message_box": true,
     "gui.reviewer_text_message_box_time": 3,
     "gui.show_mainpkmn_in_reviewer": 1,
+    "gui.show_cp_in_reviewer": false,
+    "gui.show_bp_in_reviewer": false,
     "gui.hud_hidden_on_startup": false,
     "gui.team_deck_view": true,
     "gui.view_main_front": true,
