@@ -140,6 +140,8 @@ class AnkimonDB:
         # and collects the revlog ids here to be flushed after the caller's bulk
         # transaction commits. See begin/flush/discard_deferred_mirror_sync.
         self._deferred_mirror_revlog_ids: Optional[list] = None
+        self._all_conns = []
+        self._all_conns_lock = threading.Lock()
         self._setup_database()
 
     def _prepare_connection(self, conn):
@@ -194,14 +196,25 @@ class AnkimonDB:
                 if getattr(local, "conn", None) is not None:
                     try:
                         local.conn.close()
+                        try:
+                            with self._all_conns_lock:
+                                if local.conn in self._all_conns:
+                                    self._all_conns.remove(local.conn)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                 conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
                 local.conn = self._prepare_connection(conn)
                 local.db_path = self.db_path
+                with self._all_conns_lock:
+                    self._all_conns.append(local.conn)
             elif not isinstance(local.conn, ConnectionWrapper):
                 local.conn = ConnectionWrapper(local.conn)
                 local.db_path = self.db_path
+                with self._all_conns_lock:
+                    if local.conn not in self._all_conns:
+                        self._all_conns.append(local.conn)
             return local.conn
 
         if self._connection is None:
@@ -212,7 +225,7 @@ class AnkimonDB:
         return self._connection
 
     def close(self):
-        """Closes the GUI-thread connection and this thread's background connection."""
+        """Closes the GUI-thread connection and ALL background connections across all threads."""
         if self._connection:
             try:
                 self._connection.close()
@@ -225,6 +238,14 @@ class AnkimonDB:
             except Exception:
                 pass
             self._local_conn.conn = None
+
+        with self._all_conns_lock:
+            for c in self._all_conns:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+            self._all_conns.clear()
 
     def switch_database(self, db_filename: str):
         """Close current connections and reopen against a different profile DB file.
