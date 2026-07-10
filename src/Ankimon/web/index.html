@@ -109,7 +109,7 @@
 		try {
         // Function to get URL parameters
 		function getUrlParameter(name) {
-			name = name.replace(/[[]/, '\\[').replace(/[\]]/, '\\]');
+			name = name.replace(/[[]/g, '\\[').replace(/[\]]/g, '\\]');
 			var regex = new RegExp('[\\?&]' + name + '=([^&#]*)');
 			var results = regex.exec(location.search);
 			return results === null ? '' : decodeURIComponent(results[1].replace(/\+/g, ' '));
@@ -164,23 +164,28 @@
 			}
 		}
 
-		// Function to convert gender variable to symbol
+		// Function to convert gender variable to symbol.
+		// Any value other than 'F'/'M' (incl. 'N', '', null, undefined) renders no
+		// symbol. Without the trailing default return, an unexpected gender would
+		// make the function return undefined and concatenate the literal string
+		// "undefined" onto the Pokemon name (e.g. "Charizardundefined").
 		function genderToSymbol(gender) {
 			if (gender === 'F') {
 				return '♀';
 			} else if (gender === 'M') {
 				return '♂';
-			} else if (gender === 'N') {
-				return '';
 			}
+			return '';
 		}
 
-		// Update HTML elements with Pokémon battle information
-		level_bottom.innerHTML = 'Lv: ' + levelBottom;
-		level_top.innerHTML = 'Lv: ' + levelTop;
-		nameTop.innerHTML = name_Top + genderToSymbol(genderTop);
-		nameBottom.innerHTML = name_Bottom + genderToSymbol(genderBottom);
-		health.innerHTML = current_health_bottom + '/' + max_hp_bottom;
+		// Update HTML elements with Pokémon battle information.
+		// Use textContent (not innerHTML): names come from user-controlled
+		// nicknames / traded Pokémon, so raw HTML here would be a stored-XSS sink.
+		level_bottom.textContent = 'Lv: ' + levelBottom;
+		level_top.textContent = 'Lv: ' + levelTop;
+		nameTop.textContent = name_Top + genderToSymbol(genderTop);
+		nameBottom.textContent = name_Bottom + genderToSymbol(genderBottom);
+		health.textContent = current_health_bottom + '/' + max_hp_bottom;
 
 		// Update health bar width and color
 		var bottomHealthPercentage = (current_health_bottom / max_hp_bottom) * 100;
@@ -197,8 +202,8 @@
 		var xp_bar = document.getElementById('XPBAR');
 		xp_bar.style.width = xppercent + '%';
 
-		// Update battle text
-		battleText.innerHTML = text;
+		// Update battle text (plain message; textContent keeps it inert)
+		battleText.textContent = text;
 
 		// Update Pokémon effects
 		//if (fx_bottom == 'None') {
@@ -222,8 +227,14 @@
 		topPoke.style.backgroundImage = 'url(' + topPokemonSprite + ')';
 
 		if (fontUrl) {
+			// fontUrl is written into a <style> element, whose textContent is
+			// parsed as live CSS -- so textContent alone does NOT make it inert.
+			// Strip the characters that could close url('...') / the rule and
+			// inject arbitrary CSS (CSS injection). The legitimate value is an
+			// app-controlled forward-slash path that never contains these.
+			var safeFontUrl = fontUrl.replace(/['"()\\;{}]/g, '');
 			var styleElement = document.createElement('style');
-			styleElement.innerHTML = "@font-face { font-family: 'pokemon'; src: url('" + fontUrl + "'); }";
+			styleElement.textContent = "@font-face { font-family: 'pokemon'; src: url('" + safeFontUrl + "'); }";
 			document.head.appendChild(styleElement);
 		}
 
