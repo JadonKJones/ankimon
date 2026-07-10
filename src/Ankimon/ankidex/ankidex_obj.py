@@ -1,12 +1,19 @@
 import os
 import json
 from aqt import QDialog, QVBoxLayout, QWebEngineView
-from aqt.qt import Qt, QUrl, QFrame
+from aqt.qt import Qt, QUrl, QFrame, QWebEngineProfile
 from ..services import services
 
 
 class Ankidex(QDialog):
     def __init__(self, addon_dir, ankimon_tracker):
+        """
+        Initialize the Ankidex dialog and configure its embedded web frontend.
+        
+        Parameters:
+            addon_dir: Directory containing the Ankidex frontend files.
+            ankimon_tracker: Tracker used to retrieve Ankidex data.
+        """
         super().__init__()
         self.addon_dir = addon_dir
         self.ankimon_tracker = ankimon_tracker
@@ -34,9 +41,10 @@ class Ankidex(QDialog):
         self.layout.addWidget(self.frame)
         self.setLayout(self.layout)
 
+        from ..ankimon_items_web.shop_obj import SafeWebEnginePage
+        self.profile = QWebEngineProfile()
         self.webview = QWebEngineView()
-        # Enable remote debugging for development if needed
-        # self.webview.page().settings().setAttribute(QWebEngineSettings.WebAttribute.DeveloperExtrasEnabled, True)
+        self.webview.setPage(SafeWebEnginePage(self.profile, "ankidex_standalone", services.logger, self.webview))
 
         self.frame.setLayout(QVBoxLayout())
         self.frame.layout().setContentsMargins(0, 0, 0, 0)
