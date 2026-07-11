@@ -1,9 +1,10 @@
-# ankimon_sync.py - Improved Ankimon data sync system with subfolder approach
 import base64
 import filecmp
+import gc
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -756,8 +757,30 @@ class AnkimonDataSync:
         tmp = source_file.with_name(source_file.name + ".synctmp")
         try:
             shutil.copy2(media_file, tmp)
+            
+            # Close connection registry completely to release all OS locks
+            try:
+                from ..services import services
+                if services.db:
+                    services.db.close()
+            except Exception:
+                pass
             self._close_live_db_connection(source_file)
-            os.replace(tmp, source_file)
+            
+            # Force collection of connection handles
+            gc.collect()
+            
+            # Retry loop to allow OS file lock release on Windows
+            for attempt in range(3):
+                try:
+                    os.replace(tmp, source_file)
+                    break
+                except PermissionError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(0.1)
+                    gc.collect()
+
             for sidecar in ("-wal", "-shm"):
                 stale = source_file.with_name(source_file.name + sidecar)
                 try:
