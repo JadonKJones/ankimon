@@ -22,6 +22,7 @@ from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWidgets import QStackedWidget
 import csv
 from ..utils import give_item
+from ..pyobj.settings import DEFAULT_CONFIG
 
 try:
     from ..utils import is_dev_mode
@@ -2079,11 +2080,12 @@ class AnkimonItemsWeb(QDialog):
     def _serialize_chip_group(chip_def, config):
         chips = []
         for key, chip_label in chip_def["keys"]:
+            val = config.get(key, DEFAULT_CONFIG[key])
             chips.append(
                 {
                     "key": key,
                     "label": chip_label,
-                    "value": bool(config.get(key, False)),
+                    "value": bool(val),
                 }
             )
         return {

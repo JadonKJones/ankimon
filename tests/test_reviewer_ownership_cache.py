@@ -66,13 +66,26 @@ class FakeDB:
         return self._pokemon
 
 
+from Ankimon.pyobj.settings import DEFAULT_CONFIG
+
 class FakeSettings:
     def __init__(self, overrides=None):
         self.values = {
             "gui.show_mainpkmn_in_reviewer": 0,
             "gui.reviewer_image_gif": False,
-            "gui.hp_bar_config": False,
-            "gui.xp_bar_config": False,
+            "gui.hud_player_sprite": True,
+            "gui.hud_enemy_sprite": True,
+            "gui.hud_xp_bar": True,
+            "gui.hud_hp_bars": True,
+            "gui.hud_hp_text": True,
+            "gui.hud_pokemon_id": True,
+            "gui.hud_pokemon_gen": True,
+            "gui.hud_pokemon_lvl": True,
+            "gui.hud_pokemon_name": True,
+            "gui.hud_status_badge": True,
+            "gui.hud_owned_indicator": True,
+            "gui.hud_enemy_shiny_indicator": True,
+            "gui.hud_player_shiny_indicator": True,
             "misc.language": 9,
             "gui.review_hp_bar_thickness": 1,
             "gui.hud_hidden_on_startup": False,
@@ -84,7 +97,9 @@ class FakeSettings:
             self.values.update(overrides)
 
     def get(self, key, default=None):
-        return self.values.get(key, default)
+        if key in self.values:
+            return self.values[key]
+        return DEFAULT_CONFIG.get(key, default)
 
     def compute_special_variable(self, name):
         return 0
