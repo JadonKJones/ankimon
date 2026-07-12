@@ -41,6 +41,7 @@ from ..utils import (
     limit_ev_yield,
     load_collected_pokemon_ids,
     play_effect_sound,
+    scale_ev_spread_to_level,
 )
 from ..business import calc_experience, calculate_cp_from_dict
 from ..const import gen_ids
@@ -1032,7 +1033,13 @@ def generate_random_pokemon(
         if numeric_abilities:
             ability = random.choice(list(numeric_abilities.values()))
 
-    ev = get_ev_spread(random.choice(["random", "pair", "defense", "uniform"]))
+    # Full competitive spreads gave every wild Pokemon up to 510 EVs from
+    # level 1, dwarfing the player's slowly-earned EVs; scale the budget to
+    # the wild Pokemon's level so its "training" matches its experience.
+    ev = scale_ev_spread_to_level(
+        get_ev_spread(random.choice(["random", "pair", "defense", "uniform"])),
+        wild_pokemon_lvl,
+    )
     stat_names = ["hp", "atk", "def", "spa", "spd", "spe"]
     iv = {stat: random.randint(0, 31) for stat in stat_names}
     nature = random.choice(ALL_NATURES)

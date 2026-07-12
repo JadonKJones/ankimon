@@ -212,7 +212,9 @@ class TestWindow(QWidget):
     def _draw_cp_pp(self, painter):
         """Draw CP and Battle Power labels for both Pokemon.
 
-        Battle Power = CP * current_HP * type-matchup multiplier.
+        Battle Power = CP * (current_HP / max_HP) * type-matchup multiplier
+        * attack-stage factor — same scale as CP, so the two Pokemon's BP
+        values are directly comparable.
 
         The player box has an empty bottom-left column, so its two lines sit
         inside the box, sharing the HP numbers' font and baseline grid. The
@@ -256,6 +258,7 @@ class TestWindow(QWidget):
         enemy_bp = calculate_present_power(
             enemy_cp,
             getattr(self.enemy_pokemon, "hp", 0),
+            getattr(self.enemy_pokemon, "max_hp", 0),
             enemy_vs_main,
             enemy_stages.get("atk", 0),
             enemy_stages.get("spa", 0),
@@ -263,6 +266,7 @@ class TestWindow(QWidget):
         main_bp = calculate_present_power(
             main_cp,
             getattr(self.main_pokemon, "hp", 0),
+            getattr(self.main_pokemon, "max_hp", 0),
             main_vs_enemy,
             main_stages.get("atk", 0),
             main_stages.get("spa", 0),

@@ -196,21 +196,33 @@ def type_compatibility_multiplier(attacker_types, defender_types) -> float:
 def calculate_present_power(
     cp: int,
     current_hp: int,
+    max_hp: int,
     compatibility_multiplier: float = 1.0,
     atk_stage: int = 0,
     spa_stage: int = 0,
 ) -> int:
-    """Present Power = CP × current HP × type multiplier × avg(atk, spa) stage.
+    """Present Power = CP × (current HP ÷ max HP) × type multiplier × avg(atk, spa) stage.
 
-    A live threat indicator: baseline power (CP), durability remaining
-    (current HP), type matchup, and in-battle attack-stage changes
-    (Swords Dance, Intimidate, etc.). Atk and Spa stages are averaged
-    to match the CP formula's averaging of physical and special. Drops
-    below neutral shrink BP; boosts grow it. Rounded down to an int.
+    A live threat indicator on the same scale as CP: at full HP with a
+    neutral matchup and no boosts, BP equals CP, so the two Pokemon's BP
+    readouts are directly comparable. Health is a *fraction* rather than
+    an absolute HP count — multiplying by raw HP double-counted stamina
+    (already inside CP) and blew BP up to a scale where the numbers meant
+    nothing. Atk and Spa stages are averaged to match the CP formula's
+    averaging of physical and special. Drops below neutral shrink BP;
+    boosts grow it. Rounded down to an int.
     """
     cp = max(int(cp if cp is not None else 0), 0)
     current_hp = max(int(current_hp if current_hp is not None else 0), 0)
+    max_hp = max(int(max_hp if max_hp is not None else 0), 0)
     compat = float(compatibility_multiplier if compatibility_multiplier is not None else 1.0)
+
+    if max_hp <= 0:
+        # Unknown max HP (stub/corrupt data): treat a living Pokemon as
+        # unhurt rather than zeroing its power.
+        hp_fraction = 1.0 if current_hp > 0 else 0.0
+    else:
+        hp_fraction = min(current_hp / max_hp, 1.0)
 
     def _stage_mult(stage) -> float:
         if stage is None:
@@ -222,7 +234,7 @@ def calculate_present_power(
         return float(val) if isinstance(val, (int, float)) else 1.0
 
     stage_factor = (_stage_mult(atk_stage) + _stage_mult(spa_stage)) / 2
-    return int(math.floor(cp * current_hp * compat * stage_factor))
+    return int(math.floor(cp * hp_fraction * compat * stage_factor))
 
 
 def format_compact_number(value) -> str:

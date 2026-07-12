@@ -880,6 +880,29 @@ def get_ev_spread(mode: str = "random") -> dict[str, int]:
     raise ValueError(f"Received unknown value for 'mode': {mode}")
 
 
+def scale_ev_spread_to_level(ev: dict[str, int], level: int) -> dict[str, int]:
+    """Scale an EV spread down to a budget appropriate for ``level``.
+
+    ``get_ev_spread`` hands out full competitive budgets (up to 510 EVs),
+    which made every wild Pokemon stat-inflated relative to the player's,
+    whose Pokemon earns EVs a few points per defeat. A wild Pokemon has
+    only "trained" as long as its level implies, so its budget ramps
+    linearly with level — ``min(510, level × 5.1)`` — reaching the full
+    510 exactly at level 100. The spread's *shape* (which stats it
+    favours) is preserved; each stat stays within the per-stat 252 cap.
+    """
+    try:
+        level = int(level)
+    except (TypeError, ValueError):
+        level = 1
+    budget = min(510, max(0, round(level * 5.1)))
+    total = sum(max(0, int(v)) for v in ev.values())
+    if total <= budget:
+        return {k: min(252, max(0, int(v))) for k, v in ev.items()}
+    scale = budget / total
+    return {k: min(252, int(max(0, int(v)) * scale)) for k, v in ev.items()}
+
+
 def get_tier_by_id(pokemon_id: int) -> Optional[str]:
     """
     Determines the tier category of a Pokémon based on its ID.
