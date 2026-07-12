@@ -17,7 +17,7 @@ from aqt.qt import (
 
 from aqt.utils import showWarning
 
-from PyQt6.QtGui import QIcon, QColor, QPainterPath
+from PyQt6.QtGui import QIcon, QColor, QFontMetrics, QPainterPath
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -48,7 +48,11 @@ from ..pyobj.translator import Translator
 
 from .error_handler import show_warning_with_traceback
 
-from ..business import calculate_present_power, type_compatibility_multiplier
+from ..business import (
+    calculate_present_power,
+    format_compact_number,
+    type_compatibility_multiplier,
+)
 
 from ..resources import (
     pkmnimgfolder,
@@ -184,14 +188,52 @@ class TestWindow(QWidget):
             self.first_start = True
             self.pkmn_window = True
 
+    # Palette of the info boxes baked into the battle-scene backgrounds —
+    # the CP/BP tag must be drawn in exactly these colors to blend in.
+    _BOX_FILL = QColor(240, 240, 208)
+    _BOX_INK = QColor(31, 31, 39)
+
+    def _draw_info_tag(self, painter, x, y, w, h):
+        """A small pixel-art plaque matching the baked-in info boxes.
+
+        Ink border with 2px stepped (chunky, not smooth) corners and a cream
+        fill — the same language as the background boxes, so the tag reads as
+        part of the scene art.
+        """
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._BOX_INK)
+        painter.drawRect(x + 2, y, w - 4, h)
+        painter.drawRect(x, y + 2, w, h - 4)
+        painter.setBrush(self._BOX_FILL)
+        painter.drawRect(x + 3, y + 3, w - 6, h - 6)
+        painter.restore()
+
     def _draw_cp_pp(self, painter):
         """Draw CP and Battle Power labels for both Pokemon.
 
         Battle Power = CP * current_HP * type-matchup multiplier.
+
+        The player box has an empty bottom-left column, so its two lines sit
+        inside the box, sharing the HP numbers' font and baseline grid. The
+        enemy box has no free interior space, so its values go on a slim tag
+        fused to the box's bottom border (see _draw_info_tag). Values are
+        compacted ("367K") so they can never overflow either box.
         """
-        cp_font = load_custom_font(18, int(self.settings_obj.get("misc.language")))
+        lang = int(self.settings_obj.get("misc.language"))
+        # The player lines live on the box's baked 11px baseline grid (HP bar
+        # bottom y=216, baselines y=227/238, box interior floor y=240). The
+        # language fonts differ in height at the same size — shrink until the
+        # ascent fits the pitch (Early GameBoy fits at 18, PKMN Western at 16).
+        size = 18
+        cp_font = load_custom_font(size, lang)
+        metrics = QFontMetrics(cp_font)
+        while size > 10 and metrics.ascent() > 10:
+            size -= 2
+            cp_font = load_custom_font(size, lang)
+            metrics = QFontMetrics(cp_font)
         painter.setFont(cp_font)
-        painter.setPen(QColor(31, 31, 39))
+        painter.setPen(self._BOX_INK)
         try:
             enemy_cp = int(self.enemy_pokemon.cp)
         except (AttributeError, TypeError, ValueError):
@@ -228,10 +270,25 @@ class TestWindow(QWidget):
 
         cp_lbl = self.translator.translate("cp_label")
         bp_lbl = self.translator.translate("bp_label")
-        painter.drawText(48, 104, f"{cp_lbl} {enemy_cp:,}")
-        painter.drawText(48, 118, f"{bp_lbl} {enemy_bp:,}")
-        painter.drawText(326, 216, f"{cp_lbl} {main_cp:,}")
-        painter.drawText(326, 230, f"{bp_lbl} {main_bp:,}")
+        enemy_cp_text = f"{cp_lbl} {format_compact_number(enemy_cp)}"
+        enemy_bp_text = f"{bp_lbl} {format_compact_number(enemy_bp)}"
+
+        # Enemy: slim one-line tag hanging under the box. Its top border
+        # (y=92..94) lands exactly on the box's bottom border, so the two
+        # fuse; width follows the measured text so any language/value fits.
+        gap = 14
+        cp_w = metrics.horizontalAdvance(enemy_cp_text)
+        bp_w = metrics.horizontalAdvance(enemy_bp_text)
+        tag_x, tag_y, pad = 39, 92, 7
+        tag_w = cp_w + gap + bp_w + 2 * pad
+        self._draw_info_tag(painter, tag_x, tag_y, tag_w, 20)
+        painter.drawText(tag_x + pad, tag_y + 13, enemy_cp_text)
+        painter.drawText(tag_x + pad + cp_w + gap, tag_y + 13, enemy_bp_text)
+
+        # Player: the box's bottom-left column is empty — two lines there,
+        # the lower one sharing its baseline with the HP numbers row.
+        painter.drawText(326, 227, f"{cp_lbl} {format_compact_number(main_cp)}")
+        painter.drawText(326, 238, f"{bp_lbl} {format_compact_number(main_bp)}")
 
     def _get_display_name(self, pokemon):
         """Helper to safely get localized or pretty name for normal and special forms."""

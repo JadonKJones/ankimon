@@ -225,6 +225,35 @@ def calculate_present_power(
     return int(math.floor(cp * current_hp * compat * stage_factor))
 
 
+def format_compact_number(value) -> str:
+    """Format a stat for the battle window's fixed-width pixel-art boxes.
+
+    Values under 10,000 keep the full thousands-separated form ("2,564");
+    anything larger is compacted to a bounded width ("54.1K", "367K",
+    "4.3M" — at most ~5 glyphs) so Battle Power — a product of CP × HP
+    that routinely reaches 6-7 digits — can never overflow its box.
+    Non-numeric or negative input renders as "0".
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError, OverflowError):  # OverflowError: float inf
+        n = 0
+    n = max(n, 0)
+    if n < 10_000:
+        return f"{n:,}"
+    for divisor, suffix in ((10**9, "B"), (10**6, "M"), (10**3, "K")):
+        scaled = n / divisor
+        # Enter this tier once the next-smaller tier's display would round
+        # past three digits: 999,400 stays "999K", 999,500 becomes "1M".
+        if scaled < 0.9995:
+            continue
+        text = f"{scaled:.1f}" if scaled < 99.95 else f"{scaled:.0f}"
+        if text.endswith(".0"):
+            text = text[:-2]
+        return text + suffix
+    return f"{n:,}"  # unreachable for n >= 10,000, defensive fallback
+
+
 def cp_breakdown_tooltip(pokemon_dict: dict) -> str:
     """Human-readable CP breakdown for Qt tooltips.
 

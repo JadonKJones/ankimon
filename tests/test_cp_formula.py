@@ -31,6 +31,7 @@ from Ankimon.business import (
     calculate_cpm,
     calculate_pokemon_go_cp,
     calculate_present_power,
+    format_compact_number,
     pokemon_go_raw_stats,
     type_compatibility_multiplier,
     calculate_cp_from_dict,
@@ -302,3 +303,40 @@ class TestCPBreakdownTooltip:
     def test_handles_missing_level(self):
         tip = cp_breakdown_tooltip({"base_stats": self.BASE})
         assert "CP at Level 100" in tip
+
+
+class TestFormatCompactNumber:
+    """format_compact_number keeps battle-window CP/BP inside their boxes."""
+
+    def test_small_values_keep_thousands_separator(self):
+        assert format_compact_number(0) == "0"
+        assert format_compact_number(10) == "10"
+        assert format_compact_number(2564) == "2,564"
+        assert format_compact_number(9999) == "9,999"
+
+    def test_thousands_compact(self):
+        assert format_compact_number(10_000) == "10K"
+        assert format_compact_number(54_120) == "54.1K"
+        assert format_compact_number(301_344) == "301K"
+        assert format_compact_number(366_652) == "367K"
+        assert format_compact_number(999_400) == "999K"
+
+    def test_millions_compact(self):
+        assert format_compact_number(1_000_000) == "1M"
+        assert format_compact_number(4_323_910) == "4.3M"
+        assert format_compact_number(43_000_000) == "43M"
+
+    def test_tier_boundary_promotes_instead_of_1000K(self):
+        assert format_compact_number(999_500) == "1M"
+        assert format_compact_number(999_950) == "1M"
+        assert format_compact_number(999_500_000) == "1B"
+
+    def test_garbage_and_negatives_render_zero(self):
+        assert format_compact_number(None) == "0"
+        assert format_compact_number("junk") == "0"
+        assert format_compact_number(-5) == "0"
+        assert format_compact_number(float("inf")) == "0"
+        assert format_compact_number(float("nan")) == "0"
+
+    def test_float_input_truncates_like_int(self):
+        assert format_compact_number(2564.9) == "2,564"
