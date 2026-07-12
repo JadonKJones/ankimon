@@ -613,8 +613,11 @@ class AnkimonDataSync:
                     if not dest_file.is_file():
                         shutil.copy2(source_file, dest_file)
                         synced_files.append(filename)
-                    elif os.path.getmtime(source_file) > os.path.getmtime(dest_file):
-                        # Source is strictly newer, upload it to AnkiWeb
+                    elif os.path.getmtime(source_file) >= os.path.getmtime(dest_file):
+                        # Source is at least as new as the cloud copy (an exact
+                        # mtime tie can't be ordered, so it falls through here
+                        # rather than being silently skipped — a genuinely
+                        # older source is still correctly excluded below).
                         if not filecmp.cmp(source_file, dest_file, shallow=False):
                             os.remove(dest_file)
                             shutil.copy2(source_file, dest_file)
@@ -829,10 +832,14 @@ class AnkimonDataSync:
                     if source_file.is_file() and filecmp.cmp(source_file, media_file, shallow=False):
                         continue
 
-                    # Don't let an older cloud copy clobber a newer local file —
-                    # only proceed if the media file is strictly newer (or there's
-                    # no local file yet to compare against).
-                    if source_file.is_file() and os.path.getmtime(media_file) <= os.path.getmtime(source_file):
+                    # Don't let a STRICTLY OLDER cloud copy clobber local content
+                    # that changed since. An exact mtime tie (e.g. two files
+                    # written back-to-back within the filesystem's timestamp
+                    # resolution) can't be ordered, so it falls through to the
+                    # pre-existing content-differs check below rather than being
+                    # silently skipped — still strictly safer than no mtime check
+                    # at all, since a genuine age gap is still caught.
+                    if source_file.is_file() and os.path.getmtime(media_file) < os.path.getmtime(source_file):
                         continue
 
                     is_db = filename.endswith(".db")
