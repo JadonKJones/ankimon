@@ -613,11 +613,12 @@ class AnkimonDataSync:
                     if not dest_file.is_file():
                         shutil.copy2(source_file, dest_file)
                         synced_files.append(filename)
-                    elif not filecmp.cmp(source_file, dest_file, shallow=False):
-                        # Remove old file and copy new one to trigger sync
-                        os.remove(dest_file)
-                        shutil.copy2(source_file, dest_file)
-                        synced_files.append(filename)
+                    elif os.path.getmtime(source_file) > os.path.getmtime(dest_file):
+                        # Source is strictly newer, upload it to AnkiWeb
+                        if not filecmp.cmp(source_file, dest_file, shallow=False):
+                            os.remove(dest_file)
+                            shutil.copy2(source_file, dest_file)
+                            synced_files.append(filename)
 
                 except Exception as e:
                     show_warning_with_traceback(parent=mw, exception=e, message=f"Failed to sync {filename}")
@@ -828,6 +829,12 @@ class AnkimonDataSync:
                     if source_file.is_file() and filecmp.cmp(source_file, media_file, shallow=False):
                         continue
 
+                    # Don't let an older cloud copy clobber a newer local file —
+                    # only proceed if the media file is strictly newer (or there's
+                    # no local file yet to compare against).
+                    if source_file.is_file() and os.path.getmtime(media_file) <= os.path.getmtime(source_file):
+                        continue
+
                     is_db = filename.endswith(".db")
 
                     # SAFETY 1 — never overwrite the live save with a corrupt /
@@ -901,10 +908,11 @@ class AnkimonDataSync:
                     'media_data': None
                 }
 
-                # Legacy: Load and compare JSON data if both exist
-                # Now we only do binary comparison for the DB and OBF files
+                # Check if the media file (from AnkiWeb) is strictly newer than the local file
+                # If the local file is newer, it just means we haven't synced yet, which is not a conflict.
                 if file_diff['local_exists'] and file_diff['media_exists']:
-                    file_diff['files_differ'] = not filecmp.cmp(source_file, media_file, shallow=False)
+                    if os.path.getmtime(media_file) > os.path.getmtime(source_file):
+                        file_diff['files_differ'] = not filecmp.cmp(source_file, media_file, shallow=False)
                 elif file_diff['local_exists'] or file_diff['media_exists']:
                     file_diff['files_differ'] = True
 
