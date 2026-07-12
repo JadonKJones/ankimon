@@ -2191,8 +2191,9 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
         if levels_gained >= 10:
             if is_active and not in_bulk:
                 try:
-                    if services.logger:
-                        services.logger.log("error", f"Mobile sync level-up loop exceeded safety cap of 10 for {pkmndata.get('name')}")
+                    active_logger = logger or (services.logger if (services and getattr(services, "logger", None)) else None)
+                    if active_logger:
+                        active_logger.log("error", f"Mobile sync level-up loop exceeded safety cap of 10 for {pkmndata.get('name')}")
                 except Exception:
                     pass
             next_level_cost = int(find_experience_for_level(growth_rate, level, remove_cap))

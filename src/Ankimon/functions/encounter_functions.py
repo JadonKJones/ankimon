@@ -1273,7 +1273,7 @@ def save_main_pokemon_progress(
         )
     ) < int(main_pokemon.xp) and (level_cap is None or main_pokemon.level < level_cap):
         if levels_gained >= 10:
-            services.logger.log("error", f"Level-up loop exceeded safety cap of 10 for {main_pokemon.name}")
+            logger.log("error", f"Level-up loop exceeded safety cap of 10 for {main_pokemon.name}")
             next_level_cost = int(find_experience_for_level(
                 main_pokemon.growth_rate,
                 main_pokemon.level,
