@@ -648,6 +648,10 @@ class ItemWindow(QWidget):
                         if item_id:
                             evolution_item_ids.add(item_id)
 
+            # Manually inject the linking cord (ID 2160) because plain trade evolutions
+            # lack a trigger item in the upstream vanilla data files.
+            evolution_item_ids.add('2160')
+
             with open(csv_file_items_cost, mode='r', newline='', encoding='utf-8') as items_file:
                 reader = csv.DictReader(items_file)
                 for row in reader:
