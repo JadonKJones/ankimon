@@ -580,3 +580,50 @@ def test_check_evolution_for_pokemon_none_window_skips_cleanly(monkeypatch):
     # "no offer" without crashing or warning.
     assert _PF.check_evolution_for_pokemon("iid", 90401, 20, None) is None
     _PF.show_warning_with_traceback.assert_not_called()
+
+def test_plain_trade_evolutions_require_linking_cord(monkeypatch):
+    """
+    Plain trade evolutions (like Machoke -> Machamp) specify evoType="trade"
+    but no evoItem. These must inherently require a 'linkingcord' (item 2160)
+    rather than nothing. Held-item trades (like Onix -> Steelix) should still
+    require their respective evoItem (Metal Coat, item 210).
+    """
+    class DummyEvoWin:
+        pass
+
+    _install_synthetic_pokedex(
+        monkeypatch,
+        {
+            "machoke": {
+                "species_id": 67,
+                "actual_id": 67,
+                "evos": ["Machamp"],
+            },
+            "machamp": {
+                "species_id": 68,
+                "actual_id": 68,
+                "evoType": "trade"
+            },
+            "onix": {
+                "species_id": 95,
+                "actual_id": 95,
+                "evos": ["Steelix"]
+            },
+            "steelix": {
+                "species_id": 208,
+                "actual_id": 208,
+                "evoType": "trade",
+                "evoItem": "Metal Coat"
+            }
+        },
+    )
+
+    # linking cord
+    assert _PF.check_evolution_by_item(67, 2160) == 68
+    # machoke with metal coat should fail
+    assert _PF.check_evolution_by_item(67, 210) is None
+
+    # steelix requires metal coat
+    assert _PF.check_evolution_by_item(95, 210) == 208
+    # steelix with linking cord should fail
+    assert _PF.check_evolution_by_item(95, 2160) is None
