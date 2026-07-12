@@ -864,13 +864,17 @@ def check_evolution_by_item(pokemon_id, item_id):
                             # apostrophes so pokedex.json display names (e.g.
                             # "King's Rock") match items.csv identifiers (e.g.
                             # "kings-rock"), which drop the apostrophe.
-                            required_item = (
-                                (target_data.get("evoItem") or "")
-                                .lower()
-                                .replace(" ", "")
-                                .replace("-", "")
-                                .replace("'", "")
-                            )
+                            # Plain trade evolutions require a Linking Cord in Ankimon.
+                            if target_data.get("evoType") == "trade" and not target_data.get("evoItem"):
+                                required_item = "linkingcord"
+                            else:
+                                required_item = (
+                                    (target_data.get("evoItem") or "")
+                                    .lower()
+                                    .replace(" ", "")
+                                    .replace("-", "")
+                                    .replace("'", "")
+                                )
                             normalized_item_name = (
                                 (item_name or "")
                                 .lower()
@@ -911,15 +915,18 @@ def check_evolution_by_item(pokemon_id, item_id):
                                             and sib_data.get("evoRegion").lower()
                                             == active_region.lower()
                                         ):
+                                            sib_req_item = sib_data.get("evoItem") or ""
+                                            target_req_item = target_data.get("evoItem") or ""
+                                            if sib_data.get("evoType") == "trade" and not sib_req_item:
+                                                sib_req_item = "linkingcord"
+                                            if target_data.get("evoType") == "trade" and not target_req_item:
+                                                target_req_item = "linkingcord"
+
                                             if (
                                                 sib_data.get("evoType")
                                                 == target_data.get("evoType")
-                                                and (
-                                                    sib_data.get("evoItem") or ""
-                                                ).lower()
-                                                == (
-                                                    target_data.get("evoItem") or ""
-                                                ).lower()
+                                                and sib_req_item.lower().replace(" ", "").replace("-", "").replace("'", "")
+                                                == target_req_item.lower().replace(" ", "").replace("-", "").replace("'", "")
                                             ):
                                                 has_matching_regional_sibling = True
                                                 break
