@@ -2185,8 +2185,20 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
     
     color = "#6A4DAC"
 
+    levels_gained = 0
     # level-ups
     while int(find_experience_for_level(growth_rate, level, remove_cap)) < xp and (level_cap is None or level < level_cap):
+        if levels_gained >= 10:
+            if is_active and not in_bulk:
+                try:
+                    if services.logger:
+                        services.logger.log("error", f"Mobile sync level-up loop exceeded safety cap of 10 for {pkmndata.get('name')}")
+                except Exception:
+                    pass
+            next_level_cost = int(find_experience_for_level(growth_rate, level, remove_cap))
+            xp = max(0, next_level_cost - 1)
+            break
+        levels_gained += 1
         level += 1
         msg = f"Your {pkmndata.get('name', 'Pokemon')} is now level {level} !"
         
