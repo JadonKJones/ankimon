@@ -41,6 +41,13 @@ class SafeWebEnginePage(QWebEnginePage):
         self.screen_name = screen_name
         self.logger = logger
 
+        try:
+            from aqt.webview import _bridge_script
+            if not profile.scripts().contains(_bridge_script):
+                profile.scripts().insert(_bridge_script)
+        except ImportError:
+            pass
+
     def javaScriptConsoleMessage(self, level, message, line, source):
         """
         Forward JavaScript console messages to the configured logger with a severity level and screen identifier.

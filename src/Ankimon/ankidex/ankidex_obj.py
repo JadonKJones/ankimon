@@ -43,6 +43,13 @@ class Ankidex(QDialog):
 
         from ..ankimon_items_web.shop_obj import SafeWebEnginePage
         self.profile = QWebEngineProfile()
+
+        try:
+            from aqt.webview import _bridge_script
+            if not self.profile.scripts().contains(_bridge_script):
+                self.profile.scripts().insert(_bridge_script)
+        except ImportError:
+            pass
         self.webview = QWebEngineView()
         self.webview.setPage(SafeWebEnginePage(self.profile, "ankidex_standalone", services.logger, self.webview))
 
