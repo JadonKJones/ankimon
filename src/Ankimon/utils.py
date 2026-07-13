@@ -336,33 +336,37 @@ USELESS_ITEMS = {
 def random_item():
     item_names: list[str] = []
 
-    # Iterate over each file in the directory
-    for file in os.listdir(items_path):
-        # Check if the file is a .png file
-        if not file.endswith(".png"):
-            continue
+    if Path(items_path).exists():
+        # Iterate over each file in the directory
+        for file in os.listdir(items_path):
+            # Check if the file is a .png file
+            if not file.endswith(".png"):
+                continue
 
-        # File name without the .png extension to the list
-        name = file[:-4]
+            # File name without the .png extension to the list
+            name = file[:-4]
 
-        if name in USELESS_ITEMS:
-            continue
-        if name.endswith("-ball"):
-            continue
-        if name.endswith("-repel"):
-            continue
-        if name.endswith("-incense"):
-            continue
-        if name.endswith("-fang"):
-            continue
-        if name.endswith("dust"):
-            continue
-        if name.endswith("-piece"):
-            continue
-        if name.endswith("-nugget"):
-            continue
+            if name in USELESS_ITEMS:
+                continue
+            if name.endswith("-ball"):
+                continue
+            if name.endswith("-repel"):
+                continue
+            if name.endswith("-incense"):
+                continue
+            if name.endswith("-fang"):
+                continue
+            if name.endswith("dust"):
+                continue
+            if name.endswith("-piece"):
+                continue
+            if name.endswith("-nugget"):
+                continue
 
-        item_names.append(name)
+            item_names.append(name)
+
+    if not item_names:
+        item_names = ["potion", "antidote", "paralyzeheal", "awakening", "burnheal", "iceheal"]
 
     item_name = random.choice(item_names)
     # add item to item list
