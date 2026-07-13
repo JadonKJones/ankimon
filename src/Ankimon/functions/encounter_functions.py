@@ -618,7 +618,7 @@ def check_min_generate_level(name):
     if evoLevel:
         min_level = safe_int(evoLevel)
     elif evoType != []:
-        min_level = 100
+        min_level = 1
     else:
         min_level = 1
 
