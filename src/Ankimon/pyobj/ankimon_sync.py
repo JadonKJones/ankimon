@@ -915,13 +915,14 @@ class AnkimonDataSync:
                     'media_data': None
                 }
 
-                # Check if the media file (from AnkiWeb) is strictly newer than the local file
-                # If the local file is newer, it just means we haven't synced yet, which is not a conflict.
+                # Check if files differ, and track which is newer for auto-prompt logic
                 if file_diff['local_exists'] and file_diff['media_exists']:
-                    if os.path.getmtime(media_file) > os.path.getmtime(source_file):
-                        file_diff['files_differ'] = not filecmp.cmp(source_file, media_file, shallow=False)
+                    file_diff['files_differ'] = not filecmp.cmp(source_file, media_file, shallow=False)
+                    if file_diff['files_differ']:
+                        file_diff['media_newer'] = os.path.getmtime(media_file) > os.path.getmtime(source_file)
                 elif file_diff['local_exists'] or file_diff['media_exists']:
                     file_diff['files_differ'] = True
+                    file_diff['media_newer'] = file_diff['media_exists']  # If only media exists, it's "newer"
 
                 if file_diff['files_differ'] or file_diff.get('error'):
                     differences[filename] = file_diff
@@ -958,6 +959,15 @@ class AnkimonDataSync:
 
             showInfo(f"Exported {len(synced_files)} files to AnkiWeb: {', '.join(synced_files)}")
             return True
+        except PermissionError as e:
+            msg = (
+                "Access Denied: Ankimon could not export to the media folder.\n\n"
+                "This usually happens if another program is locking the file. If you use "
+                "OneDrive, Google Drive, or an Antivirus that scans the Anki folder, "
+                "please temporarily pause it and try again."
+            )
+            showWarning(msg)
+            return False
         except Exception as e:
             show_warning_with_traceback(parent=mw, exception=e, message="Failed to export to AnkiWeb")
             return False
@@ -1027,6 +1037,15 @@ class AnkimonDataSync:
 
             showInfo(f"Imported {len(updated_files)} files from AnkiWeb: {', '.join(updated_files)}\n\nAnki will now close. Please reopen Anki to apply changes!")
             return True
+        except PermissionError as e:
+            msg = (
+                "Access Denied: Ankimon could not overwrite the local database.\n\n"
+                "This usually happens if another program is locking the file. If you use "
+                "OneDrive, Google Drive, or an Antivirus that scans the Anki folder, "
+                "please temporarily pause it and try again."
+            )
+            showWarning(msg)
+            return False
         except Exception as e:
             show_warning_with_traceback(parent=mw, exception=e, message="Failed to import from AnkiWeb")
             return False
@@ -1083,10 +1102,17 @@ def check_and_sync_pokemon_data(settings_obj, logger):
         differences = sync_handler.get_file_differences()
 
         if differences:
-            # Show the sync dialog only if there are differences
-            dialog = ImprovedPokemonDataSync(settings_obj, logger)
-            dialog.show() # Show immediately
-            return dialog
+            # On startup, only prompt if there is newer data on AnkiWeb that needs importing.
+            # If the local data is newer, it just means it hasn't been exported yet (not a conflict).
+            needs_prompt = any(diff.get('media_newer', False) for diff in differences.values())
+            if needs_prompt:
+                dialog = ImprovedPokemonDataSync(settings_obj, logger)
+                dialog.show() # Show immediately
+                return dialog
+            else:
+                enable_automatic_sync()
+                logger.log("info", "Local data is newer or differs but no incoming remote changes - automatic sync enabled")
+                return None
         else:
             # No differences found - enable automatic sync
             enable_automatic_sync()
