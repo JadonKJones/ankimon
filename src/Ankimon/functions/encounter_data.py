@@ -1163,7 +1163,6 @@ MEGA_AND_SPECIAL = [
     10308,  # staraptormega          (species=398)
     10309,  # garchompmegaz          (species=445)
     10310,  # lucariomegaz           (species=448)
-    10311,  # heatranmega            (species=485)  [Sub-Legendary tag — still Mega]
     10312,  # darkraimega            (species=491)  [Mythical tag — still Mega]
     10313,  # golurkmega             (species=623)
     10315,  # crabominablemega       (species=740)
