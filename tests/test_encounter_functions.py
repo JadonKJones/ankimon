@@ -442,7 +442,7 @@ def test_save_main_pokemon_progress_persists_when_evo_window_none():
             main, enemy, 5, {}, mock.MagicMock(), None
         )
 
-        ef.ankimon_db.save_main_pokemon.assert_called_once()  # persistence intact
+        assert ef.services.db.save_main_pokemon.call_count == 2  # persistence intact
         ef.check_friendship_evolution_for_pokemon.assert_not_called()  # offer skipped
         assert result == 50
     finally:
