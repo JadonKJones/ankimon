@@ -33,15 +33,36 @@ def trigger_database_diagnostics():
         """)
         duplicate_count = cursor.fetchone()[0]
 
+        def is_valid_base_stats(b):
+            if not b or not isinstance(b, dict):
+                return False
+            for k in ("hp", "atk", "def", "spa", "spd", "spe"):
+                if k not in b:
+                    return False
+                try:
+                    int(b[k])
+                except (TypeError, ValueError):
+                    return False
+            return True
+
+        cursor.execute("SELECT data FROM captured_pokemon")
+        missing_base_stats_count = 0
+        for row in cursor.fetchall():
+            pkmn = db._deobfuscate(row[0])
+            if pkmn:
+                base_stats = pkmn.get("base_stats")
+                if not is_valid_base_stats(base_stats):
+                    missing_base_stats_count += 1
+
     except Exception as e:
         showWarning(f"Failed to run diagnostics: {e}")
         return
 
     # Scenario A: Database is completely healthy
-    if not is_corrupt and duplicate_count == 0:
+    if not is_corrupt and duplicate_count == 0 and missing_base_stats_count == 0:
         showInfo(
             "Database Integrity: Healthy\n\n"
-            "No index corruption or duplicate Pokemon records were detected. Your database is fully healthy!"
+            "No index corruption, duplicate Pokemon, or legacy schema records were detected. Your database is fully healthy!"
         )
         return
 
@@ -49,13 +70,15 @@ def trigger_database_diagnostics():
     issue_desc = ""
     if duplicate_count > 0:
         issue_desc += f"• {duplicate_count} duplicate Pokemon sharing unique IDs\n"
+    if missing_base_stats_count > 0:
+        issue_desc += f"• {missing_base_stats_count} Pokémon missing base stats information (legacy database format)\n"
     if is_corrupt:
         issue_desc += f"• Database index pages are malformed/corrupted (integrity status: {integrity_result})\n"
 
     msg = (
         "Issues Detected in Database\n\n"
         f"We found the following issues in your database:\n{issue_desc}\n"
-        "Would you like to repair your database now? This will rebuild indexes and merge duplicates "
+        "Would you like to repair your database now? This will rebuild indexes, normalize legacy Pokémon records, and merge duplicates "
         "by keeping the copy with the highest level/XP progress."
     )
 
@@ -80,10 +103,19 @@ def trigger_database_diagnostics():
         """)
         new_dup_count = cursor.fetchone()[0]
         
-        if check_res == "ok" and new_dup_count == 0:
+        cursor.execute("SELECT data FROM captured_pokemon")
+        new_missing_stats_count = 0
+        for row in cursor.fetchall():
+            pkmn = db._deobfuscate(row[0])
+            if pkmn:
+                base_stats = pkmn.get("base_stats")
+                if not is_valid_base_stats(base_stats):
+                    new_missing_stats_count += 1
+        
+        if check_res == "ok" and new_dup_count == 0 and new_missing_stats_count == 0:
             showInfo(
                 "Repair Successful\n\n"
-                "Database has been successfully recovered and re-indexed. Duplicates have been pruned.\n\n"
+                "Database has been successfully recovered, re-indexed, and normalized. Duplicates have been pruned.\n\n"
                 "Anki will now reload your profile to apply changes."
             )
             # Reload profile to safely reinitialize connections (handles both old and new Anki versions)
@@ -98,7 +130,7 @@ def trigger_database_diagnostics():
         else:
             showWarning(
                 "Repair Completed with Warnings\n\n"
-                f"The repair script finished but some issues might remain. (Integrity check: {check_res}, duplicates: {new_dup_count})"
+                f"The repair script finished but some issues might remain. (Integrity check: {check_res}, duplicates: {new_dup_count}, unresolved base stats: {new_missing_stats_count})"
             )
     except PermissionError:
         showWarning(

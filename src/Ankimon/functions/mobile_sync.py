@@ -2241,6 +2241,19 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
         pkmndata["ev"] = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
     else:
         pkmndata["ev"] = _normalize_ev_yield(pkmndata["ev"])
+
+    # IV Updates/Defaults
+    def normalize_iv(value):
+        try:
+            return max(0, min(31, int(value)))
+        except (TypeError, ValueError):
+            return 0
+
+    if "iv" not in pkmndata or not isinstance(pkmndata["iv"], dict):
+        pkmndata["iv"] = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+    else:
+        # Ensure all keys exist and are valid integers between 0 and 31
+        pkmndata["iv"] = {k: normalize_iv(pkmndata["iv"].get(k, 0)) for k in ("hp", "atk", "def", "spa", "spd", "spe")}
         
     normalized_yield = {
         "hp": ev_yield_gained.get("hp", 0),
@@ -2277,9 +2290,29 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
     pkmndata["ev"]["spe"] += ev_yield["speed"]
 
     # Recompute stats
+    base_stats = pkmndata.get("base_stats")
+    
+    def is_valid_base_stats(b):
+        if not b or not isinstance(b, dict):
+            return False
+        for k in ("hp", "atk", "def", "spa", "spd", "spe"):
+            if k not in b:
+                return False
+            try:
+                int(b[k])
+            except (TypeError, ValueError):
+                return False
+        return True
+
+    if not is_valid_base_stats(base_stats):
+        from .pokedex_functions import search_pokedex
+        base_stats = search_pokedex(pkmndata.get("name", ""), "baseStats") or {}
+        if is_valid_base_stats(base_stats):
+            pkmndata["base_stats"] = base_stats
+
     pkmndata["stats"] = {
         k: PokemonObject.calc_stat(k, val, level, pkmndata["iv"][k], pkmndata["ev"][k], pkmndata.get("nature", "serious"))
-        for k, val in pkmndata["base_stats"].items()
+        for k, val in base_stats.items()
         if k in ("hp", "atk", "def", "spa", "spd", "spe")
     }
     pkmndata["current_hp"] = pkmndata["stats"].get("hp", 15)

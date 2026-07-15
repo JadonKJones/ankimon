@@ -264,3 +264,46 @@ def test_database_corruption_self_healing(temp_env):
     # Confirm unique constraint is back by verifying that inserting a duplicate now raises IntegrityError
     with pytest.raises(sqlite3.IntegrityError):
         cursor.execute("INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES ('duplicate-uuid', 0, '{}')")
+
+
+def test_legacy_base_stats_normalization(temp_env):
+    """Verify that old database entries without 'base_stats' key are normalized on repair and startup."""
+    db, _ = temp_env
+    # Create a pokemon with 'stats' but no 'base_stats'
+    legacy_pk = {
+        "individual_id": "legacy-uuid",
+        "name": "pikachu",
+        "id": 25,
+        "level": 5,
+        "xp": 100,
+        "stats": {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90},
+        "iv": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+    }
+    
+    # Save manually to bypass the save_pokemon normalization/check
+    obfuscated_data = db._obfuscate(legacy_pk)
+    conn = db._get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 0, ?)",
+        ("legacy-uuid", obfuscated_data)
+    )
+    conn.commit()
+    
+    # Check that it starts without base_stats
+    pk_loaded = db.get_pokemon("legacy-uuid")
+    assert "base_stats" not in pk_loaded
+    
+    # Trigger repair with mocked search_pokedex
+    from unittest.mock import patch
+    mock_base_stats = {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90}
+    with patch("Ankimon.functions.pokedex_functions.search_pokedex", return_value=mock_base_stats) as mock_search:
+        db.repair_database()
+    mock_search.assert_called_once_with("pikachu", "baseStats")
+    
+    # Check that base_stats was populated from pokedex lookup
+    pk_repaired = db.get_pokemon("legacy-uuid")
+    assert "base_stats" in pk_repaired
+    assert pk_repaired["base_stats"]["hp"] == 35
+    assert pk_repaired["base_stats"]["spe"] == 90
