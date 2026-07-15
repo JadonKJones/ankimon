@@ -1519,7 +1519,7 @@ def save_main_pokemon_progress(
             mainpkmndata["is_favorite"] = main_pokemon.is_favorite
 
         # Save to database (replaces JSON file I/O for performance)
-        ankimon_db.save_main_pokemon(mainpkmndata)
+        services.db.save_main_pokemon(mainpkmndata)
 
     return main_pokemon.level
 
@@ -1679,7 +1679,7 @@ def save_caught_pokemon(
     caught_pokemon["cp"] = calculate_cp_from_dict(caught_pokemon)
 
     # Save to database (replaces JSON file I/O for performance)
-    ankimon_db.save_pokemon(caught_pokemon)
+    services.db.save_pokemon(caught_pokemon)
 
     try:
         from ..singletons import notify_stats_changed
