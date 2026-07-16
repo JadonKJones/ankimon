@@ -603,6 +603,28 @@ def test_force_export_writes_media_atomically(tmp_path, monkeypatch):
     assert created and all(not t.exists() for t in created)   # temp cleaned
 
 
+def test_force_export_returns_false_when_no_local_data(tmp_path, monkeypatch):
+    """No local source file => nothing to export: force_sync_to_media must return
+    False (not a false 'Exported 0 files' success), so export_to_ankiweb doesn't
+    enable auto-sync and close the dialog. Symmetric with the import side."""
+    src = tmp_path / "ankimon.db"          # deliberately NOT created
+    dest = tmp_path / "media_ankimon.db"
+
+    ds = AnkimonDataSync()
+    monkeypatch.setattr(ds, "_ensure_sync_folder_exists", lambda: True)
+    monkeypatch.setattr(ds, "_get_source_path", lambda fn: src)
+    monkeypatch.setattr(ds, "_get_media_path", lambda fn: dest)
+
+    prev = services.db
+    services.db = None
+    try:
+        assert ds.force_sync_to_media() is False   # not a false success
+    finally:
+        services.db = prev
+
+    assert not dest.exists()                        # nothing was exported
+
+
 def test_force_export_persistent_lock_shows_warning_not_traceback(tmp_path, monkeypatch):
     """MANUAL export: a persisting lock returns False + one friendly modal, never
     a raw traceback (and no leftover temp)."""

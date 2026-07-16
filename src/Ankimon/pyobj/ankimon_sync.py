@@ -1147,6 +1147,15 @@ class AnkimonDataSync:
                     _atomic_write_over(source_file, dest_file)
                     synced_files.append(filename)
 
+            # Report success ONLY if something was actually exported. With no
+            # local source file present nothing is copied; returning True here
+            # would make the caller (export_to_ankiweb) claim success, enable
+            # auto-sync, and close the dialog despite a zero-file export.
+            # Symmetric with force_sync_from_media's empty-updated_files guard.
+            if not synced_files:
+                showInfo("No local Ankimon data was found to export.")
+                return False
+
             showInfo(f"Exported {len(synced_files)} files to AnkiWeb: {', '.join(synced_files)}")
             return True
         except Exception as e:
