@@ -374,11 +374,33 @@ def _raise_permission_error(*a, **k):
 
 
 def _no_sleep(monkeypatch):
-    """Make the bounded backoff instant so lock tests don't actually wait."""
+    """Make the bounded backoff instant, and pretend we're on Windows so the
+    lock classification (gated on ``os.name == "nt"``) exercises the real
+    Windows path even on Linux/CI."""
     monkeypatch.setattr(aksync.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(aksync.os, "name", "nt")
 
 
-def test_is_lock_error_classification():
+def _spy_synctmp(monkeypatch):
+    """Record the ACTUAL temp paths ``_synctmp_path`` hands out, so a test can
+    assert they were cleaned up. The real path is a randomized system-temp file
+    on the same volume, so a hard-coded sibling ``.synctmp`` assertion would be
+    vacuously true — this checks the path actually used."""
+    created = []
+    real = aksync._synctmp_path
+
+    def spy(target):
+        t = Path(real(target))
+        created.append(t)
+        return t
+
+    monkeypatch.setattr(aksync, "_synctmp_path", spy)
+    return created
+
+
+def test_is_lock_error_classification(monkeypatch):
+    # On Windows, a PermissionError / sharing-violation is a transient lock.
+    monkeypatch.setattr(aksync.os, "name", "nt")
     assert aksync._is_lock_error(PermissionError()) is True
     for code in (5, 32, 33):
         e = OSError()
@@ -390,6 +412,13 @@ def test_is_lock_error_classification():
     enoent.winerror = 2
     assert aksync._is_lock_error(enoent) is False
     assert aksync._is_lock_error(ValueError()) is False
+
+    # On POSIX, os.replace does not fail on open handles, so a PermissionError is
+    # a GENUINE permission problem (not a lock) and must fall through to the
+    # traceback handler rather than the misleading "pause OneDrive" message.
+    monkeypatch.setattr(aksync.os, "name", "posix")
+    assert aksync._is_lock_error(PermissionError()) is False
+    assert aksync._is_lock_error(PermissionError(5, "denied")) is False
 
 
 def test_retry_on_lock_propagates_non_lock_error_without_retrying(monkeypatch):
@@ -438,6 +467,7 @@ def test_atomic_replace_recovers_from_transient_lock(tmp_path, monkeypatch):
     prev = services.db
     services.db = None
     _no_sleep(monkeypatch)
+    created = _spy_synctmp(monkeypatch)
     try:
         src = tmp_path / "ankimon.db"
         src.write_bytes(b"OLD" + b"\x00" * 600)
@@ -459,7 +489,7 @@ def test_atomic_replace_recovers_from_transient_lock(tmp_path, monkeypatch):
 
         assert src.read_bytes().startswith(b"NEW")   # swap eventually succeeded
         assert calls["n"] == 3
-        assert not (tmp_path / "ankimon.db.synctmp").exists()
+        assert created and all(not t.exists() for t in created)   # temp cleaned
     finally:
         services.db = prev
 
@@ -539,6 +569,7 @@ def test_force_export_writes_media_atomically(tmp_path, monkeypatch):
     monkeypatch.setattr(ds, "_ensure_sync_folder_exists", lambda: True)
     monkeypatch.setattr(ds, "_get_source_path", lambda fn: src)
     monkeypatch.setattr(ds, "_get_media_path", lambda fn: dest)
+    created = _spy_synctmp(monkeypatch)
 
     prev = services.db
     services.db = None
@@ -548,7 +579,7 @@ def test_force_export_writes_media_atomically(tmp_path, monkeypatch):
         services.db = prev
 
     assert dest.read_bytes().startswith(b"LOCAL")
-    assert not (tmp_path / "media_ankimon.db.synctmp").exists()
+    assert created and all(not t.exists() for t in created)   # temp cleaned
 
 
 def test_force_export_persistent_lock_shows_warning_not_traceback(tmp_path, monkeypatch):
@@ -563,6 +594,7 @@ def test_force_export_persistent_lock_shows_warning_not_traceback(tmp_path, monk
     monkeypatch.setattr(ds, "_get_source_path", lambda fn: src)
     monkeypatch.setattr(ds, "_get_media_path", lambda fn: dest)
     _no_sleep(monkeypatch)
+    created = _spy_synctmp(monkeypatch)
     monkeypatch.setattr(aksync.os, "replace", _raise_permission_error)
 
     warnings, tracebacks = [], []
@@ -578,7 +610,8 @@ def test_force_export_persistent_lock_shows_warning_not_traceback(tmp_path, monk
 
     assert len(warnings) == 1
     assert tracebacks == []
-    assert not dest.exists()                         # nothing half-written landed
+    assert not dest.exists()                          # nothing half-written landed
+    assert created and all(not t.exists() for t in created)   # temp cleaned on failure
 
 
 def test_save_configs_writes_media_atomically(tmp_path, monkeypatch):

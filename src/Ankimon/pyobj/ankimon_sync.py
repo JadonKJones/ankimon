@@ -55,11 +55,18 @@ SYNC_LOCK_MESSAGE = (
 
 def _is_lock_error(exc: BaseException) -> bool:
     """True if ``exc`` is a transient Windows file-lock error (another process
-    holding the file open). ``PermissionError`` covers the common WinError 5;
-    the winerror set also catches the sharing/lock-violation variants. A non-lock
-    ``OSError`` (e.g. cross-device link, file-not-found) returns False so it still
-    propagates to the normal traceback handler instead of being mistaken for a
-    lock."""
+    such as OneDrive/antivirus holding the file open).
+
+    Gated on Windows (``os.name == "nt"``): on POSIX, ``os.replace`` succeeds
+    over open handles, so a ``PermissionError`` there is a GENUINE permission
+    problem (read-only dir, bad ACL) that must NOT be retried for ~2.5 s or
+    blamed on a sync client — it falls through to the normal traceback handler
+    instead. On Windows, ``PermissionError`` covers the common WinError 5 and the
+    winerror set also catches the sharing/lock-violation variants (32/33). A
+    non-lock ``OSError`` (e.g. cross-device link, file-not-found) always returns
+    False."""
+    if os.name != "nt":
+        return False
     if isinstance(exc, PermissionError):
         return True
     return isinstance(exc, OSError) and getattr(exc, "winerror", None) in _SYNC_LOCK_WINERRORS
