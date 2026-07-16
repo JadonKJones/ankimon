@@ -158,9 +158,13 @@ def test_integrity_rejects_db_without_core_table(tmp_path):
     assert AnkimonDataSync._verify_sqlite_integrity(p) is False
 
 
-def test_atomic_replace_swaps_file_and_clears_stale_sidecars(tmp_path):
+def test_atomic_replace_swaps_file_and_clears_stale_sidecars(tmp_path, monkeypatch):
     prev = services.db
     services.db = None  # so _close_live_db_connection is a no-op
+    # Capture the ACTUAL temp path used: _synctmp_path prefers a randomized
+    # system-temp file on the same volume, so a hard-coded sibling ".synctmp"
+    # assertion would be vacuously true — this checks the path actually used.
+    created = _spy_synctmp(monkeypatch)
     try:
         src = tmp_path / "ankimon.db"
         src.write_bytes(b"OLD" + b"\x00" * 600)
@@ -176,7 +180,7 @@ def test_atomic_replace_swaps_file_and_clears_stale_sidecars(tmp_path):
         assert src.read_bytes().startswith(b"NEW")
         assert not (tmp_path / "ankimon.db-wal").exists()
         assert not (tmp_path / "ankimon.db-shm").exists()
-        assert not (tmp_path / "ankimon.db.synctmp").exists()
+        assert created and all(not t.exists() for t in created)   # temp cleaned
     finally:
         services.db = prev
 
@@ -374,11 +378,28 @@ def _raise_permission_error(*a, **k):
 
 
 def _no_sleep(monkeypatch):
-    """Make the bounded backoff instant, and pretend we're on Windows so the
-    lock classification (gated on ``os.name == "nt"``) exercises the real
-    Windows path even on Linux/CI."""
+    """Make the bounded backoff instant, and force the lock classification to the
+    Windows answer (PermissionError / sharing-violation => transient lock) so the
+    retry + friendly-message paths run even on Linux/CI.
+
+    This patches ``_is_lock_error`` directly rather than flipping ``os.name`` to
+    ``"nt"``: mutating the process-global ``os.name`` also flips ``pathlib.Path``
+    to ``WindowsPath`` on POSIX, which mangles the system temp path
+    (``/tmp`` -> ``\\tmp``) so ``os.stat`` fails and ``_synctmp_path`` silently
+    falls back to a sibling — the system-temp branch (the actual issue-#636 fix)
+    would then never be exercised, and the ``_spy_synctmp`` re-wrap would write a
+    backslash-named temp into the repo CWD. ``test_is_lock_error_classification``
+    keeps the real ``os.name``-gated coverage of ``_is_lock_error`` itself."""
     monkeypatch.setattr(aksync.time, "sleep", lambda *_a, **_k: None)
-    monkeypatch.setattr(aksync.os, "name", "nt")
+    monkeypatch.setattr(
+        aksync,
+        "_is_lock_error",
+        lambda exc: isinstance(exc, PermissionError)
+        or (
+            isinstance(exc, OSError)
+            and getattr(exc, "winerror", None) in aksync._SYNC_LOCK_WINERRORS
+        ),
+    )
 
 
 def _spy_synctmp(monkeypatch):

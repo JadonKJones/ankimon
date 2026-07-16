@@ -1,4 +1,5 @@
 import base64
+import errno
 import filecmp
 import gc
 import json
@@ -76,8 +77,12 @@ def _retry_on_lock(op: Callable[[], Any], delays=None) -> Any:
     """Run ``op()``, retrying while it fails with a transient file-lock error,
     with a bounded backoff between tries. A non-lock error propagates
     immediately; if every attempt is exhausted the last lock error is re-raised
-    for the caller to translate into a friendly message. ``gc.collect()`` between
-    tries drops any lingering handle of our own before the next attempt."""
+    for the caller to translate into a friendly message.
+
+    A blocking lock is held by ANOTHER process (OneDrive/antivirus), so there is
+    no handle of ours to reclaim here — callers that need to drop their own live
+    DB handle (``_atomic_replace``) do the one ``gc.collect()`` that matters
+    before calling in, rather than paying a full-heap scan on every retry."""
     if delays is None:
         delays = _SYNC_LOCK_RETRY_DELAYS
     attempts = len(delays) + 1
@@ -87,7 +92,6 @@ def _retry_on_lock(op: Callable[[], Any], delays=None) -> Any:
         except OSError as e:
             if not _is_lock_error(e) or i == attempts - 1:
                 raise
-            gc.collect()
             time.sleep(delays[i])
 
 
@@ -110,6 +114,91 @@ def _synctmp_path(target_file: Path) -> Path:
     except Exception:
         pass
     return fallback
+
+
+def _is_cross_device_error(exc: BaseException) -> bool:
+    """True if ``exc`` is an OS 'not on the same filesystem' error (POSIX EXDEV /
+    Windows ERROR_NOT_SAME_DEVICE 17): ``os.replace`` can't rename across
+    volumes. This is NOT a lock — it means ``_synctmp_path`` put the temp on a
+    different volume than the destination (an ``st_dev`` value it couldn't foresee
+    as lying: cloned disks, junctions, some overlay/network mounts)."""
+    return isinstance(exc, OSError) and (
+        getattr(exc, "errno", None) == errno.EXDEV
+        or getattr(exc, "winerror", None) == 17
+    )
+
+
+def _atomic_write_over(src: Path, dest: Path, before_replace: Callable[[], Any] = None) -> None:
+    """Copy ``src`` over ``dest`` atomically: write a temp on the same volume as
+    ``dest`` (``_synctmp_path`` prefers the system temp dir, else a sibling), then
+    ``os.replace`` it into place, retrying a transient OneDrive/antivirus lock so
+    a lock or interruption can't leave a half-written destination (issue #636).
+    ``before_replace``, if given, runs once after the copy and just before the
+    replace (e.g. to close a live DB handle on ``dest`` first).
+
+    If the chosen temp turns out to be cross-device — an ``st_dev`` match that
+    ``_synctmp_path`` trusted but ``os.replace`` rejects with EXDEV / WinError 17
+    — retry once via a guaranteed same-directory sibling temp, so the atomic
+    replace still completes instead of surfacing a spurious traceback (the old
+    plain ``shutil.copy2`` never hit this because it wrote straight to ``dest``)."""
+    # Reap a same-named sibling orphaned by an earlier crash between copy and
+    # replace, so a stray '<dest>.synctmp' can't accumulate in — and, for an
+    # export into collection.media, be uploaded to AnkiWeb from — the dest dir.
+    sibling = dest.with_name(dest.name + ".synctmp")
+    try:
+        sibling.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    tmp = _synctmp_path(dest)
+    try:
+        shutil.copy2(src, tmp)
+        if before_replace is not None:
+            before_replace()
+        try:
+            _retry_on_lock(lambda: os.replace(tmp, dest))
+        except OSError as e:
+            if not _is_cross_device_error(e) or tmp == sibling:
+                raise
+            try:
+                shutil.copy2(src, sibling)
+                _retry_on_lock(lambda: os.replace(sibling, dest))
+            finally:
+                try:
+                    sibling.unlink(missing_ok=True)
+                except Exception:
+                    pass
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _lock_tooltip(action: str, unchanged: bool = False) -> None:
+    """Non-blocking tooltip for a transient file lock on an AUTOMATIC sync path
+    (it self-heals on the next sync, so this never becomes a traceback dialog).
+    Shares one sync-client list with ``SYNC_LOCK_MESSAGE`` so the guidance can't
+    drift between the manual and automatic paths."""
+    tail = "Your local data is unchanged; it" if unchanged else "It"
+    tooltip(
+        f"Ankimon: couldn't {action} right now — a program such as OneDrive, "
+        "Google Drive, Dropbox, or an antivirus is holding the file open. "
+        f"{tail} will retry on the next sync."
+    )
+
+
+def _handle_manual_sync_error(exc: BaseException, message: str) -> bool:
+    """Present a MANUAL (modal) sync failure and return False. A transient file
+    lock (OneDrive/antivirus) that survived the retry gets the single friendly,
+    actionable ``SYNC_LOCK_MESSAGE``; a genuine error gets the raw traceback. The
+    caller early-returns on False, so neither is stacked with a second dialog."""
+    if _is_lock_error(exc):
+        showWarning(SYNC_LOCK_MESSAGE)
+    else:
+        show_warning_with_traceback(parent=mw, exception=exc, message=message)
+    return False
+
 
 class ImprovedPokemonDataSync(QDialog):
     """
@@ -723,16 +812,7 @@ class AnkimonDataSync:
                         # or interruption can't leave a half-written media DB, and
                         # so this automatic pre-sync export tolerates the same
                         # locks the import side does (issue #636).
-                        tmp = _synctmp_path(dest_file)
-                        try:
-                            shutil.copy2(source_file, tmp)
-                            _retry_on_lock(lambda: os.replace(tmp, dest_file))
-                        finally:
-                            try:
-                                if tmp.exists():
-                                    tmp.unlink()
-                            except Exception:
-                                pass
+                        _atomic_write_over(source_file, dest_file)
                         synced_files.append(filename)
 
                 except Exception as e:
@@ -741,12 +821,7 @@ class AnkimonDataSync:
                     # rather than a raw traceback dialog that would pop on every
                     # sync. Genuine errors still get the traceback.
                     if _is_lock_error(e):
-                        tooltip(
-                            f"Ankimon: couldn't stage {filename} for AnkiWeb right "
-                            "now — a program such as OneDrive, Google Drive, or "
-                            "antivirus is holding the file open. It will retry on "
-                            "the next sync."
-                        )
+                        _lock_tooltip(f"stage {filename} for AnkiWeb")
                         continue
                     show_warning_with_traceback(parent=mw, exception=e, message=f"Failed to sync {filename}")
                     continue
@@ -862,10 +937,13 @@ class AnkimonDataSync:
             return False
 
     def _atomic_replace(self, media_file: Path, source_file: Path) -> None:
-        """Overwrite ``source_file`` with ``media_file`` atomically: copy to a
-        temp file in the SAME directory (so ``os.replace`` is an atomic
-        same-filesystem rename, never a half-written destination), after closing
-        the GUI-thread connection to ``source_file``.
+        """Overwrite ``source_file`` with ``media_file`` atomically via
+        ``_atomic_write_over`` (temp on the same volume + ``os.replace``, retrying
+        a transient OneDrive/antivirus lock), after closing the live connection to
+        ``source_file`` so the OS releases its handle before the rename. A
+        persisting lock re-raises for the caller to surface as a friendly message;
+        a non-lock error propagates unchanged. (``_atomic_write_over`` prefers the
+        system temp dir, falling back to a same-directory sibling.)
 
         The media file is a single-file export (no WAL sidecar), so any stale
         ``-wal`` / ``-shm`` belonging to the OLD ``source_file`` must be removed
@@ -882,11 +960,10 @@ class AnkimonDataSync:
         (opt-in file-sync overlapping a live resolve); left documented rather than
         pulling the multi-profile connection model into a hardening pass."""
         source_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _synctmp_path(source_file)
-        try:
-            shutil.copy2(media_file, tmp)
 
-            # Close connection registry completely to release all OS locks
+        def _release_handles():
+            # Close the connection registry completely to release all OS locks,
+            # then force collection of connection handles, before the rename.
             try:
                 from ..services import services
                 if services.db:
@@ -894,29 +971,14 @@ class AnkimonDataSync:
             except Exception:
                 pass
             self._close_live_db_connection(source_file)
-
-            # Force collection of connection handles
             gc.collect()
 
-            # Retry over a bounded backoff so a transient OneDrive/antivirus lock
-            # on the source temp or the destination clears on its own (issue
-            # #636); a persisting lock re-raises for the caller to surface as a
-            # friendly message, and a non-lock error propagates unchanged.
-            _retry_on_lock(lambda: os.replace(tmp, source_file))
+        _atomic_write_over(media_file, source_file, before_replace=_release_handles)
 
-            for sidecar in ("-wal", "-shm"):
-                stale = source_file.with_name(source_file.name + sidecar)
-                try:
-                    if stale.exists():
-                        stale.unlink()
-                except Exception:
-                    pass
-        finally:
-            # Clean up the temp file if os.replace never consumed it (an error
-            # between copy and replace), so a stale .synctmp can't linger.
+        for sidecar in ("-wal", "-shm"):
+            stale = source_file.with_name(source_file.name + sidecar)
             try:
-                if tmp.exists():
-                    tmp.unlink()
+                stale.unlink(missing_ok=True)
             except Exception:
                 pass
 
@@ -1006,12 +1068,7 @@ class AnkimonDataSync:
                     # sync. The live save is untouched (the atomic replace aborts
                     # before overwriting). Genuine errors still get the traceback.
                     if _is_lock_error(e):
-                        tooltip(
-                            f"Ankimon: couldn't import {filename} from AnkiWeb right "
-                            "now — a program such as OneDrive, Google Drive, or "
-                            "antivirus is holding the file open. Your local data is "
-                            "unchanged; it will retry on the next sync."
-                        )
+                        _lock_tooltip(f"import {filename} from AnkiWeb", unchanged=True)
                         continue
                     show_warning_with_traceback(parent=mw, exception=e, message=f"Failed to read {filename}")
                     continue
@@ -1087,30 +1144,17 @@ class AnkimonDataSync:
                     # both tolerates the lock (issue #636) and removes the old
                     # non-atomic remove-then-copy window that could leave a
                     # half-written media DB for Anki to upload.
-                    tmp = _synctmp_path(dest_file)
-                    try:
-                        shutil.copy2(source_file, tmp)
-                        _retry_on_lock(lambda: os.replace(tmp, dest_file))
-                    finally:
-                        try:
-                            if tmp.exists():
-                                tmp.unlink()
-                        except Exception:
-                            pass
+                    _atomic_write_over(source_file, dest_file)
                     synced_files.append(filename)
 
             showInfo(f"Exported {len(synced_files)} files to AnkiWeb: {', '.join(synced_files)}")
             return True
         except Exception as e:
-            # A locked media file (OneDrive/antivirus) that survived the retry:
-            # show the single friendly, actionable message instead of a raw
+            # A locked media file (OneDrive/antivirus) that survived the retry
+            # gets the single friendly message; a genuine error gets the
             # traceback. The caller (export_to_ankiweb) early-returns on False,
             # so this is NOT stacked with a second dialog.
-            if _is_lock_error(e):
-                showWarning(SYNC_LOCK_MESSAGE)
-                return False
-            show_warning_with_traceback(parent=mw, exception=e, message="Failed to export to AnkiWeb")
-            return False
+            return _handle_manual_sync_error(e, "Failed to export to AnkiWeb")
 
     def force_sync_from_media(self) -> bool:
         """Force sync all MEDIA files FROM subfolder to local folder (Import from AnkiWeb)."""
@@ -1178,16 +1222,12 @@ class AnkimonDataSync:
             showInfo(f"Imported {len(updated_files)} files from AnkiWeb: {', '.join(updated_files)}\n\nAnki will now close. Please reopen Anki to apply changes!")
             return True
         except Exception as e:
-            # A locked local DB (OneDrive/antivirus) that survived the retry:
-            # show the single friendly, actionable message instead of a raw
-            # traceback. The live save is untouched — the atomic replace aborts
-            # before overwriting. Returning False keeps import_from_ankiweb from
+            # A locked local DB (OneDrive/antivirus) that survived the retry gets
+            # the single friendly message; a genuine error gets the traceback.
+            # The live save is untouched — the atomic replace aborts before
+            # overwriting — and returning False keeps import_from_ankiweb from
             # enabling auto-sync or closing Anki.
-            if _is_lock_error(e):
-                showWarning(SYNC_LOCK_MESSAGE)
-                return False
-            show_warning_with_traceback(parent=mw, exception=e, message="Failed to import from AnkiWeb")
-            return False
+            return _handle_manual_sync_error(e, "Failed to import from AnkiWeb")
 
     def get_sync_folder_info(self) -> Dict[str, str]:
         """Get information about the sync folder for debugging."""
