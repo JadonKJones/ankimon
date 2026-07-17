@@ -22,7 +22,6 @@ GROUPS = [
                     "SSH Access",
                     "Prevent Ankimon News on Startup",
                     "AnkiWeb Sync",
-                    "Ankimon Leaderboard",
                     "Developer Mode",
                 ],
             },
@@ -201,6 +200,14 @@ GROUPS = [
                     {"value": "auto", "label": "Auto-Resolve"}
                 ]
             }
+        ]
+    },
+    {
+        "label": "Leaderboard",
+        "settings": [
+            "Enable Leaderboard Sync",
+            "Username",
+            "API Key"
         ]
     }
 ]
