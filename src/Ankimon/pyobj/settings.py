@@ -97,6 +97,8 @@ DEFAULT_CONFIG = {
     "mobile.enabled": True,
     "mobile.resolution_mode": "manual",
     "mobile.inactive_companions": [],
+    "leaderboard.username": "",
+    "leaderboard.api_key": "",
 }
 
 
