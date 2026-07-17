@@ -342,7 +342,6 @@ class SettingsWindow(QMainWindow):
                             "SSH Access",
                             "Prevent Ankimon News on Startup",
                             "AnkiWeb Sync",
-                            "Ankimon Leaderboard",
                             "Developer Mode",
                         ]
                     },
@@ -457,6 +456,13 @@ class SettingsWindow(QMainWindow):
                     "Generation 7",
                     "Generation 8",
                     "Generation 9",
+                ]
+            },
+            "Leaderboard": {
+                "settings": [
+                    "Enable Leaderboard Sync",
+                    "Username",
+                    "API Key",
                 ]
             },
         }
