@@ -52,6 +52,7 @@ atexit.register(shutil.rmtree, _USER_DIR, ignore_errors=True)
 from Ankimon.services import services  # noqa: E402
 from Ankimon.pyobj.database_manager import AnkimonDB  # noqa: E402
 from Ankimon.pyobj.ankimon_sync import AnkimonDataSync  # noqa: E402
+import Ankimon.pyobj.ankimon_sync as aksync  # noqa: E402
 from Ankimon.functions import mobile_sync as ms  # noqa: E402
 
 # backup_manager imports askUser at module top; another test module late in a
@@ -157,9 +158,13 @@ def test_integrity_rejects_db_without_core_table(tmp_path):
     assert AnkimonDataSync._verify_sqlite_integrity(p) is False
 
 
-def test_atomic_replace_swaps_file_and_clears_stale_sidecars(tmp_path):
+def test_atomic_replace_swaps_file_and_clears_stale_sidecars(tmp_path, monkeypatch):
     prev = services.db
     services.db = None  # so _close_live_db_connection is a no-op
+    # Capture the ACTUAL temp path used: _synctmp_path prefers a randomized
+    # system-temp file on the same volume, so a hard-coded sibling ".synctmp"
+    # assertion would be vacuously true — this checks the path actually used.
+    created = _spy_synctmp(monkeypatch)
     try:
         src = tmp_path / "ankimon.db"
         src.write_bytes(b"OLD" + b"\x00" * 600)
@@ -175,7 +180,7 @@ def test_atomic_replace_swaps_file_and_clears_stale_sidecars(tmp_path):
         assert src.read_bytes().startswith(b"NEW")
         assert not (tmp_path / "ankimon.db-wal").exists()
         assert not (tmp_path / "ankimon.db-shm").exists()
-        assert not (tmp_path / "ankimon.db.synctmp").exists()
+        assert created and all(not t.exists() for t in created)   # temp cleaned
     finally:
         services.db = prev
 
@@ -361,3 +366,346 @@ def test_backup_returns_false_when_required_file_not_backed_up(tmp_path, monkeyp
         services.db = prev
 
     assert ok is False   # the file we needed protected never landed in the backup
+
+
+# --------------------------------------------------------------------------
+# File-lock tolerance (issue #636): OneDrive/antivirus holding ankimon.db open
+# --------------------------------------------------------------------------
+def _raise_permission_error(*a, **k):
+    """A stand-in for a file op that Windows blocks with PermissionError while
+    another process (OneDrive/antivirus) holds the file open (WinError 5)."""
+    raise PermissionError(5, "Access is denied")
+
+
+def _no_sleep(monkeypatch):
+    """Make the bounded backoff instant, and force the lock classification to the
+    Windows answer (PermissionError / sharing-violation => transient lock) so the
+    retry + friendly-message paths run even on Linux/CI.
+
+    This patches ``_is_lock_error`` directly rather than flipping ``os.name`` to
+    ``"nt"``: mutating the process-global ``os.name`` also flips ``pathlib.Path``
+    to ``WindowsPath`` on POSIX, which mangles the system temp path
+    (``/tmp`` -> ``\\tmp``) so ``os.stat`` fails and ``_synctmp_path`` silently
+    falls back to a sibling — the system-temp branch (the actual issue-#636 fix)
+    would then never be exercised, and the ``_spy_synctmp`` re-wrap would write a
+    backslash-named temp into the repo CWD. ``test_is_lock_error_classification``
+    keeps the real ``os.name``-gated coverage of ``_is_lock_error`` itself."""
+    monkeypatch.setattr(aksync.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        aksync,
+        "_is_lock_error",
+        lambda exc: isinstance(exc, PermissionError)
+        or (
+            isinstance(exc, OSError)
+            and getattr(exc, "winerror", None) in aksync._SYNC_LOCK_WINERRORS
+        ),
+    )
+
+
+def _spy_synctmp(monkeypatch):
+    """Record the ACTUAL temp paths ``_synctmp_path`` hands out, so a test can
+    assert they were cleaned up. The real path is a randomized system-temp file
+    on the same volume, so a hard-coded sibling ``.synctmp`` assertion would be
+    vacuously true — this checks the path actually used."""
+    created = []
+    real = aksync._synctmp_path
+
+    def spy(target):
+        t = Path(real(target))
+        created.append(t)
+        return t
+
+    monkeypatch.setattr(aksync, "_synctmp_path", spy)
+    return created
+
+
+def test_is_lock_error_classification(monkeypatch):
+    # On Windows, a PermissionError / sharing-violation is a transient lock.
+    monkeypatch.setattr(aksync.os, "name", "nt")
+    assert aksync._is_lock_error(PermissionError()) is True
+    for code in (5, 32, 33):
+        e = OSError()
+        e.winerror = code
+        assert aksync._is_lock_error(e) is True, code
+    # A non-lock OSError (e.g. file-not-found, winerror 2) must NOT be treated as
+    # a lock — it should still reach the normal traceback handler.
+    enoent = OSError()
+    enoent.winerror = 2
+    assert aksync._is_lock_error(enoent) is False
+    assert aksync._is_lock_error(ValueError()) is False
+
+    # On POSIX, os.replace does not fail on open handles, so a PermissionError is
+    # a GENUINE permission problem (not a lock) and must fall through to the
+    # traceback handler rather than the misleading "pause OneDrive" message.
+    monkeypatch.setattr(aksync.os, "name", "posix")
+    assert aksync._is_lock_error(PermissionError()) is False
+    assert aksync._is_lock_error(PermissionError(5, "denied")) is False
+
+
+def test_retry_on_lock_propagates_non_lock_error_without_retrying(monkeypatch):
+    _no_sleep(monkeypatch)
+    calls = {"n": 0}
+
+    def op():
+        calls["n"] += 1
+        raise FileNotFoundError(2, "missing")   # not a lock
+
+    with pytest.raises(FileNotFoundError):
+        aksync._retry_on_lock(op)
+    assert calls["n"] == 1                       # propagated immediately, no retry
+
+
+def test_retry_on_lock_recovers_after_transient_failures(monkeypatch):
+    _no_sleep(monkeypatch)
+    calls = {"n": 0}
+
+    def op():
+        calls["n"] += 1
+        if calls["n"] < 3:                       # locked twice, then released
+            raise PermissionError(5, "Access is denied")
+        return "ok"
+
+    assert aksync._retry_on_lock(op) == "ok"
+    assert calls["n"] == 3
+
+
+def test_retry_on_lock_gives_up_after_exhausting_attempts(monkeypatch):
+    _no_sleep(monkeypatch)
+    calls = {"n": 0}
+
+    def op():
+        calls["n"] += 1
+        raise PermissionError(5, "Access is denied")
+
+    with pytest.raises(PermissionError):
+        aksync._retry_on_lock(op)
+    assert calls["n"] == len(aksync._SYNC_LOCK_RETRY_DELAYS) + 1
+
+
+def test_atomic_replace_recovers_from_transient_lock(tmp_path, monkeypatch):
+    """A transient OneDrive/AV lock on os.replace must be retried into a success,
+    not surfaced as an error — the whole point of issue #636's fix."""
+    prev = services.db
+    services.db = None
+    _no_sleep(monkeypatch)
+    created = _spy_synctmp(monkeypatch)
+    try:
+        src = tmp_path / "ankimon.db"
+        src.write_bytes(b"OLD" + b"\x00" * 600)
+        media = tmp_path / "media.db"
+        media.write_bytes(b"NEW" + b"\x00" * 600)
+
+        real_replace = os.replace
+        calls = {"n": 0}
+
+        def flaky_replace(a, b, *ar, **k):
+            calls["n"] += 1
+            if calls["n"] < 3:                   # locked twice, then released
+                raise PermissionError(5, "Access is denied")
+            return real_replace(a, b, *ar, **k)
+
+        monkeypatch.setattr(aksync.os, "replace", flaky_replace)
+
+        AnkimonDataSync()._atomic_replace(media, src)
+
+        assert src.read_bytes().startswith(b"NEW")   # swap eventually succeeded
+        assert calls["n"] == 3
+        assert created and all(not t.exists() for t in created)   # temp cleaned
+    finally:
+        services.db = prev
+
+
+def test_import_persistent_lock_shows_tooltip_not_traceback(tmp_path, monkeypatch):
+    """AUTOMATIC path (read_configs): a persisting lock must surface as a
+    NON-blocking tooltip (self-heals next sync), never a raw traceback dialog,
+    and must leave the local save untouched."""
+    src = tmp_path / "ankimon.db"
+    src.write_bytes(b"LOCAL" + b"\x00" * 600)
+    media = tmp_path / "media.db"
+    media.write_bytes(b"REMOTE" + b"\x00" * 600)
+
+    ds = AnkimonDataSync()
+    _wire_read_configs(ds, monkeypatch, src, media)
+    monkeypatch.setattr(ds, "_verify_sqlite_integrity", lambda p: True)
+    monkeypatch.setattr(ds, "_backup_before_overwrite", lambda *a: True)
+    _no_sleep(monkeypatch)
+    monkeypatch.setattr(aksync.os, "replace", _raise_permission_error)
+
+    tips, tracebacks = [], []
+    monkeypatch.setattr(aksync, "tooltip", lambda *a, **k: tips.append(a))
+    monkeypatch.setattr(aksync, "show_warning_with_traceback", lambda *a, **k: tracebacks.append(a))
+
+    prev = services.db
+    services.db = None
+    try:
+        updated = ds.read_configs(media_sync_status=False)
+    finally:
+        services.db = prev
+
+    assert updated == []                             # nothing imported
+    assert src.read_bytes().startswith(b"LOCAL")     # local save untouched
+    assert len(tips) == 1                            # one friendly tooltip
+    assert tracebacks == []                          # NO raw traceback dialog
+
+
+def test_force_import_persistent_lock_shows_warning_not_traceback(tmp_path, monkeypatch):
+    """MANUAL import: a persisting lock returns False + a single friendly modal,
+    never a raw traceback, with the local save untouched."""
+    src = tmp_path / "ankimon.db"
+    src.write_bytes(b"LOCAL" + b"\x00" * 600)
+    media = tmp_path / "media.db"
+    media.write_bytes(b"REMOTE" + b"\x00" * 600)
+
+    ds = AnkimonDataSync()
+    monkeypatch.setattr(ds, "_get_source_path", lambda fn: src)
+    monkeypatch.setattr(ds, "_get_media_path", lambda fn: media)
+    monkeypatch.setattr(ds, "_verify_sqlite_integrity", lambda p: True)
+    monkeypatch.setattr(ds, "_backup_before_overwrite", lambda *a: True)
+    _no_sleep(monkeypatch)
+    monkeypatch.setattr(aksync.os, "replace", _raise_permission_error)
+
+    warnings, tracebacks = [], []
+    monkeypatch.setattr(aksync, "showWarning", lambda *a, **k: warnings.append(a))
+    monkeypatch.setattr(aksync, "show_warning_with_traceback", lambda *a, **k: tracebacks.append(a))
+
+    prev = services.db
+    services.db = None
+    try:
+        assert ds.force_sync_from_media() is False
+    finally:
+        services.db = prev
+
+    assert src.read_bytes().startswith(b"LOCAL")     # local save untouched
+    assert len(warnings) == 1
+    assert tracebacks == []
+
+
+def test_force_export_writes_media_atomically(tmp_path, monkeypatch):
+    """Happy-path export lands the file (via the new atomic temp+replace)."""
+    src = tmp_path / "ankimon.db"
+    src.write_bytes(b"LOCAL" + b"\x00" * 600)
+    dest = tmp_path / "media_ankimon.db"            # parent (tmp_path) exists
+
+    ds = AnkimonDataSync()
+    monkeypatch.setattr(ds, "_ensure_sync_folder_exists", lambda: True)
+    monkeypatch.setattr(ds, "_get_source_path", lambda fn: src)
+    monkeypatch.setattr(ds, "_get_media_path", lambda fn: dest)
+    created = _spy_synctmp(monkeypatch)
+
+    prev = services.db
+    services.db = None
+    try:
+        assert ds.force_sync_to_media() is True
+    finally:
+        services.db = prev
+
+    assert dest.read_bytes().startswith(b"LOCAL")
+    assert created and all(not t.exists() for t in created)   # temp cleaned
+
+
+def test_force_export_returns_false_when_no_local_data(tmp_path, monkeypatch):
+    """No local source file => nothing to export: force_sync_to_media must return
+    False (not a false 'Exported 0 files' success), so export_to_ankiweb doesn't
+    enable auto-sync and close the dialog. Symmetric with the import side."""
+    src = tmp_path / "ankimon.db"          # deliberately NOT created
+    dest = tmp_path / "media_ankimon.db"
+
+    ds = AnkimonDataSync()
+    monkeypatch.setattr(ds, "_ensure_sync_folder_exists", lambda: True)
+    monkeypatch.setattr(ds, "_get_source_path", lambda fn: src)
+    monkeypatch.setattr(ds, "_get_media_path", lambda fn: dest)
+
+    prev = services.db
+    services.db = None
+    try:
+        assert ds.force_sync_to_media() is False   # not a false success
+    finally:
+        services.db = prev
+
+    assert not dest.exists()                        # nothing was exported
+
+
+def test_force_export_persistent_lock_shows_warning_not_traceback(tmp_path, monkeypatch):
+    """MANUAL export: a persisting lock returns False + one friendly modal, never
+    a raw traceback (and no leftover temp)."""
+    src = tmp_path / "ankimon.db"
+    src.write_bytes(b"LOCAL" + b"\x00" * 600)
+    dest = tmp_path / "media_ankimon.db"
+
+    ds = AnkimonDataSync()
+    monkeypatch.setattr(ds, "_ensure_sync_folder_exists", lambda: True)
+    monkeypatch.setattr(ds, "_get_source_path", lambda fn: src)
+    monkeypatch.setattr(ds, "_get_media_path", lambda fn: dest)
+    _no_sleep(monkeypatch)
+    created = _spy_synctmp(monkeypatch)
+    monkeypatch.setattr(aksync.os, "replace", _raise_permission_error)
+
+    warnings, tracebacks = [], []
+    monkeypatch.setattr(aksync, "showWarning", lambda *a, **k: warnings.append(a))
+    monkeypatch.setattr(aksync, "show_warning_with_traceback", lambda *a, **k: tracebacks.append(a))
+
+    prev = services.db
+    services.db = None
+    try:
+        assert ds.force_sync_to_media() is False
+    finally:
+        services.db = prev
+
+    assert len(warnings) == 1
+    assert tracebacks == []
+    assert not dest.exists()                          # nothing half-written landed
+    assert created and all(not t.exists() for t in created)   # temp cleaned on failure
+
+
+def test_save_configs_writes_media_atomically(tmp_path, monkeypatch):
+    """Automatic pre-sync export (save_configs) stages the file atomically."""
+    src = tmp_path / "ankimon.db"
+    src.write_bytes(b"LOCAL" + b"\x00" * 600)
+    dest = tmp_path / "media_ankimon.db"             # does not exist yet
+
+    ds = AnkimonDataSync()
+    monkeypatch.setattr(ds, "_migrate_legacy_files", lambda: [])
+    monkeypatch.setattr(ds, "_ensure_sync_folder_exists", lambda: True)
+    monkeypatch.setattr(ds, "_get_source_path", lambda fn: src)
+    monkeypatch.setattr(ds, "_get_media_path", lambda fn: dest)
+
+    prev = services.db
+    services.db = None
+    try:
+        synced = ds.save_configs()
+    finally:
+        services.db = prev
+
+    assert synced == ["ankimon.db"]
+    assert dest.read_bytes().startswith(b"LOCAL")
+
+
+def test_save_configs_persistent_lock_shows_tooltip_not_traceback(tmp_path, monkeypatch):
+    """AUTOMATIC pre-sync export: a persisting lock is a non-blocking tooltip and
+    stages nothing — never a raw traceback on every sync."""
+    src = tmp_path / "ankimon.db"
+    src.write_bytes(b"LOCAL" + b"\x00" * 600)
+    dest = tmp_path / "media_ankimon.db"
+
+    ds = AnkimonDataSync()
+    monkeypatch.setattr(ds, "_migrate_legacy_files", lambda: [])
+    monkeypatch.setattr(ds, "_ensure_sync_folder_exists", lambda: True)
+    monkeypatch.setattr(ds, "_get_source_path", lambda fn: src)
+    monkeypatch.setattr(ds, "_get_media_path", lambda fn: dest)
+    _no_sleep(monkeypatch)
+    monkeypatch.setattr(aksync.os, "replace", _raise_permission_error)
+
+    tips, tracebacks = [], []
+    monkeypatch.setattr(aksync, "tooltip", lambda *a, **k: tips.append(a))
+    monkeypatch.setattr(aksync, "show_warning_with_traceback", lambda *a, **k: tracebacks.append(a))
+
+    prev = services.db
+    services.db = None
+    try:
+        synced = ds.save_configs()
+    finally:
+        services.db = prev
+
+    assert synced == []
+    assert len(tips) == 1
+    assert tracebacks == []
