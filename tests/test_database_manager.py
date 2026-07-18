@@ -264,3 +264,20 @@ def test_database_corruption_self_healing(temp_env):
     # Confirm unique constraint is back by verifying that inserting a duplicate now raises IntegrityError
     with pytest.raises(sqlite3.IntegrityError):
         cursor.execute("INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES ('duplicate-uuid', 0, '{}')")
+
+def test_database_manager_caught_methods(temp_env):
+    db, _ = temp_env
+    # Initially empty
+    assert db.get_caught_ids() == set()
+
+    # Mark Weedle as caught
+    db.mark_as_caught(13)
+    assert db.get_caught_ids() == {13}
+
+    # Mark Kakuna as caught
+    db.mark_as_caught(14)
+    assert db.get_caught_ids() == {13, 14}
+
+    # Duplicate mark should be handled safely
+    db.mark_as_caught(13)
+    assert db.get_caught_ids() == {13, 14}

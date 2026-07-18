@@ -1162,6 +1162,21 @@ class AnkimonDB:
                 return val
         return default
 
+    def mark_as_caught(self, pokedex_id: int):
+        """Explicitly marks a Pokedex ID as caught in user_data."""
+        caught_ids = set(self.get_user_data("pokedex_caught", []))
+        if pokedex_id not in caught_ids:
+            caught_ids.add(pokedex_id)
+            seen_ids = set(self.get_user_data("pokedex_seen", []))
+            if pokedex_id not in seen_ids:
+                seen_ids.add(pokedex_id)
+                self.set_user_data("pokedex_seen", list(seen_ids))
+            self.set_user_data("pokedex_caught", list(caught_ids))
+
+    def get_caught_ids(self) -> set:
+        """Returns a set of explicitly caught Pokedex IDs from user_data."""
+        return set(self.get_user_data("pokedex_caught", []))
+
     def get_all_user_data(self) -> Dict[str, Any]:
         """Retrieves all user data as a dictionary."""
         cursor = self.execute("SELECT key, value FROM user_data")
