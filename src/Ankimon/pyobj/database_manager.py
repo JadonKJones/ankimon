@@ -64,10 +64,18 @@ class CursorWrapper:
         return False
 
     def execute(self, *args, **kwargs):
-        return self._cursor.execute(*args, **kwargs)
+        self._cursor.execute(*args, **kwargs)
+        return self
 
     def executemany(self, *args, **kwargs):
-        return self._cursor.executemany(*args, **kwargs)
+        self._cursor.executemany(*args, **kwargs)
+        return self
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._cursor)
 
     def __getattr__(self, name):
         return getattr(self._cursor, name)
@@ -101,19 +109,23 @@ class ConnectionWrapper:
     def commit(self):
         # NOTE: Direct raw cursor execution (conn.cursor().execute(...)) bypasses wrapper-level auto-healing.
         self.acquire_lease()
+        lease_released = False
         try:
             if not self._disable_commit:
                 try:
                     self._conn.commit()
                 except sqlite3.DatabaseError as e:
                     if self._db_mgr and ("malformed" in str(e).lower() or "disk image" in str(e).lower()) and not self._db_mgr._is_repairing:
+                        self.release_lease()
+                        lease_released = True
                         self._db_mgr.repair_database()
-                        self._conn = self._db_mgr._get_connection()._conn
-                        self._conn.commit()
+                        fresh_conn = self._db_mgr._get_connection()
+                        fresh_conn.commit()
                         return
                     raise
         finally:
-            self.release_lease()
+            if not lease_released:
+                self.release_lease()
 
     def rollback(self):
         self.acquire_lease()
@@ -131,34 +143,40 @@ class ConnectionWrapper:
     def execute(self, *args, **kwargs):
         # NOTE: Direct raw cursor execution (conn.cursor().execute(...)) bypasses wrapper-level auto-healing.
         self.acquire_lease()
+        lease_released = False
         try:
             res = self._conn.execute(*args, **kwargs)
             return CursorWrapper(res, self)
         except sqlite3.DatabaseError as e:
             if self._db_mgr and ("malformed" in str(e).lower() or "disk image" in str(e).lower()) and not self._db_mgr._is_repairing:
+                self.release_lease()
+                lease_released = True
                 self._db_mgr.repair_database()
-                self._conn = self._db_mgr._get_connection()._conn
-                res = self._conn.execute(*args, **kwargs)
-                return CursorWrapper(res, self)
+                fresh_conn = self._db_mgr._get_connection()
+                return fresh_conn.execute(*args, **kwargs)
             raise
         finally:
-            self.release_lease()
+            if not lease_released:
+                self.release_lease()
 
     def executemany(self, *args, **kwargs):
         # NOTE: Direct raw cursor execution (conn.cursor().execute(...)) bypasses wrapper-level auto-healing.
         self.acquire_lease()
+        lease_released = False
         try:
             res = self._conn.executemany(*args, **kwargs)
             return CursorWrapper(res, self)
         except sqlite3.DatabaseError as e:
             if self._db_mgr and ("malformed" in str(e).lower() or "disk image" in str(e).lower()) and not self._db_mgr._is_repairing:
+                self.release_lease()
+                lease_released = True
                 self._db_mgr.repair_database()
-                self._conn = self._db_mgr._get_connection()._conn
-                res = self._conn.executemany(*args, **kwargs)
-                return CursorWrapper(res, self)
+                fresh_conn = self._db_mgr._get_connection()
+                return fresh_conn.executemany(*args, **kwargs)
             raise
         finally:
-            self.release_lease()
+            if not lease_released:
+                self.release_lease()
 
     def cursor(self, *args, **kwargs):
         raw_cursor = self._conn.cursor(*args, **kwargs)
@@ -169,10 +187,14 @@ class ConnectionWrapper:
 
     def __enter__(self):
         self.acquire_lease()
-        if getattr(self, "_txn_depth", 0) == 0:
-            self._conn.execute("BEGIN")
-        self._txn_depth = getattr(self, "_txn_depth", 0) + 1
-        return self
+        try:
+            if getattr(self, "_txn_depth", 0) == 0:
+                self._conn.execute("BEGIN")
+            self._txn_depth = getattr(self, "_txn_depth", 0) + 1
+            return self
+        except Exception:
+            self.release_lease()
+            raise
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
