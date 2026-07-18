@@ -140,14 +140,14 @@ def sync_data_to_leaderboard(data):
                 )
 
                 if response.status_code == 200:
-                    showInfo("Ankimon: Data synced to leaderboard successfully")
+                    print("Ankimon: Data synced to leaderboard successfully")
                 else:
-                    showInfo(f"Ankimon: Failed to sync data - Status: {response.status_code}")
+                    print(f"Ankimon: Failed to sync data - Status: {response.status_code}")
                     
             except requests.exceptions.RequestException as e:
-                showInfo(f"Ankimon: Leaderboard sync network error: {e}")
+                print(f"Ankimon: Leaderboard sync network error: {e}")
             except Exception as e:
-                showInfo(f"Ankimon: Unexpected leaderboard error: {e}")
+                print(f"Ankimon: Unexpected leaderboard error: {e}")
 
         # Offload the network request to a background thread to prevent UI freezing
         threading.Thread(target=send_request, daemon=True).start()
@@ -224,7 +224,10 @@ def migrate_credentials_from_db():
         if username and api_key and (not settings_username or not settings_api_key):
             services.settings.set("leaderboard.username", username)
             services.settings.set("leaderboard.api_key", api_key)
-            showInfo("Ankimon: Migrated leaderboard credentials from database to settings")
+            # Clear legacy credentials from DB to prevent re-migration if settings are cleared
+            services.db.set_user_data("username", "")
+            services.db.set_user_data("api_key", "")
+            print("Ankimon: Migrated leaderboard credentials from database to settings")
             
     except Exception as e:
         showInfo(f"Ankimon: Error migrating leaderboard credentials: {e}")
