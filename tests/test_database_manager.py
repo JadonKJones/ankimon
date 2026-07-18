@@ -294,13 +294,14 @@ def test_thread_local_connection_closes_and_reopens(temp_env):
     t = threading.Thread(target=thread_func)
     t.start()
     
-    event_start.wait()
+    assert event_start.wait(timeout=5), "worker did not initialize"
     
     # Close database from main thread
     db.close()
     
     event_closed.set()
-    t.join()
+    t.join(timeout=5)
+    assert not t.is_alive(), "worker did not finish"
     
     assert results.get("success") is True
 
