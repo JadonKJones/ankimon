@@ -2154,6 +2154,12 @@ class AnkimonItemsWeb(QDialog):
                         names_dict[pid] = f"#{pid}"
             entry["names"] = names_dict
             return entry
+        
+        # Add 'dotted' case for API Key
+        if key == "leaderboard.api_key":
+            entry["type"] = "password"
+            return entry
+        
         if key == "misc.active_region":
             entry["type"] = "select"
             entry["options"] = settings_schema.ACTIVE_REGION_OPTIONS
