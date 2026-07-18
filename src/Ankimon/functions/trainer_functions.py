@@ -106,6 +106,12 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
         while exp + current_xp > experience_needed:
             if (remove_level_cap or current_level < 100):
                 current_level += 1
+
+                # update stats logic
+                if services.main_pokemon and getattr(services.main_pokemon, 'individual_id', None) == pokemon.get('individual_id'):
+                    services.main_pokemon.level = current_level
+                    services.main_pokemon.update_stats()
+
                 exp = exp + current_xp - experience_needed
                 current_xp = 0
                 experience_needed = int(find_experience_for_level(growth_rate, current_level, remove_level_cap))  # MODIFIED: Recalculate needed XP

@@ -1272,6 +1272,7 @@ def save_main_pokemon_progress(
         )
     ) < int(main_pokemon.xp) and (level_cap is None or main_pokemon.level < level_cap):
         main_pokemon.level += 1
+        main_pokemon.update_stats()
         events.emit("levelup", pokemon=main_pokemon.name, level=main_pokemon.level)
         msg = ""
         msg += f"Your {main_pokemon.name} is now level {main_pokemon.level} !"

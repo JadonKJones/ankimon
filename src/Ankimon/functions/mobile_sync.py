@@ -2188,6 +2188,9 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
     # level-ups
     while int(find_experience_for_level(growth_rate, level, remove_cap)) < xp and (level_cap is None or level < level_cap):
         level += 1
+        if is_active and main_pokemon_singleton:
+            main_pokemon_singleton.level = level
+            main_pokemon_singleton.update_stats()
         msg = f"Your {pkmndata.get('name', 'Pokemon')} is now level {level} !"
         
         if is_active and not in_bulk:
