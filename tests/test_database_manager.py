@@ -305,3 +305,65 @@ def test_thread_local_connection_closes_and_reopens(temp_env):
     
     assert results.get("success") is True
 
+def test_connection_lease_prevents_closure_during_inflight_operation(temp_env):
+    import threading
+    db, _ = temp_env
+    
+    event_paused = threading.Event()
+    event_close_done = threading.Event()
+    results = {}
+    
+    # Dynamically resolve the correct CursorWrapper class and module from the db instance
+    conn = db._get_connection()
+    cursor = conn.cursor()
+    actual_cursor_wrapper_class = cursor.__class__
+    db_module = sys.modules[db.__class__.__module__]
+    
+    original_cursor_execute = actual_cursor_wrapper_class.execute
+    original_is_main_thread = db_module._is_main_thread
+    
+    def patched_cursor_execute(cursor_self, sql, *args, **kwargs):
+        if "SELECT 'test_inflight'" in sql:
+            event_paused.set()
+            event_close_done.wait()
+        return original_cursor_execute(cursor_self, sql, *args, **kwargs)
+        
+    actual_cursor_wrapper_class.execute = patched_cursor_execute
+    db_module._is_main_thread = lambda: False
+    
+    def thread_func():
+        try:
+            try:
+                cursor_thread = db.execute("SELECT 'test_inflight'")
+                results["value"] = cursor_thread.fetchone()[0]
+            except Exception as e:
+                results["error"] = e
+        except Exception as e:
+            results["thread_error"] = str(e)
+            import traceback
+            results["traceback"] = traceback.format_exc()
+                
+    t = threading.Thread(target=thread_func)
+    t.start()
+    
+    try:
+        if not event_paused.wait(timeout=5):
+            print("Thread error:", results.get("thread_error"))
+            print("Traceback:", results.get("traceback"))
+            assert False, f"worker did not initialize: {results.get('thread_error')}"
+        
+        # Close database from main thread. Since background thread holds a lease,
+        # the connection closure should be deferred and the connection should stay alive.
+        db.close()
+        
+        event_close_done.set()
+        t.join(timeout=5)
+        assert not t.is_alive()
+        
+        assert results.get("value") == "test_inflight"
+        assert "error" not in results
+    finally:
+        actual_cursor_wrapper_class.execute = original_cursor_execute
+        db_module._is_main_thread = original_is_main_thread
+
+

@@ -12,6 +12,7 @@ import uuid
 import weakref
 import gc
 import time
+import contextlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -28,6 +29,50 @@ from ..resources import user_path, csv_file_items_cost, mypokemon_path, mainpoke
 # thread" when there is no QApplication). Backward compatible: on the GUI thread
 # callers get the same single shared connection they always did, now WAL-mode.
 
+class CursorWrapper:
+    """Wraps a sqlite3.Cursor, proxying everything, holding a connection lease
+    during its lifetime to prevent connection closure during in-flight operations."""
+
+    def __init__(self, cursor, conn_wrapper):
+        self._cursor = cursor
+        self._conn_wrapper = conn_wrapper
+        self._lease_released = False
+        self._conn_wrapper.acquire_lease()
+
+    def release_lease(self):
+        if not self._lease_released:
+            self._lease_released = True
+            try:
+                self._conn_wrapper.release_lease()
+            except Exception:
+                pass
+
+    def __del__(self):
+        self.release_lease()
+
+    def close(self):
+        try:
+            self._cursor.close()
+        finally:
+            self.release_lease()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+    def execute(self, *args, **kwargs):
+        return self._cursor.execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        return self._cursor.executemany(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
 class ConnectionWrapper:
     """Wraps a sqlite3.Connection, proxying everything, with a re-entrant
     ``with conn:`` transaction and an opt-out commit flag (used by bulk paths)."""
@@ -36,85 +81,128 @@ class ConnectionWrapper:
         self._conn = conn
         self._disable_commit = False
         self._db_mgr = db_mgr
+        self._lease_lock = threading.Lock()
+        self._lease_count = 0
+        self._close_pending = False
+
+    def acquire_lease(self):
+        with self._lease_lock:
+            self._lease_count += 1
+
+    def release_lease(self):
+        with self._lease_lock:
+            self._lease_count -= 1
+            if self._lease_count <= 0 and self._close_pending:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
 
     def commit(self):
         # NOTE: Direct raw cursor execution (conn.cursor().execute(...)) bypasses wrapper-level auto-healing.
-        if not self._disable_commit:
-            try:
-                self._conn.commit()
-            except sqlite3.DatabaseError as e:
-                if self._db_mgr and ("malformed" in str(e).lower() or "disk image" in str(e).lower()) and not self._db_mgr._is_repairing:
-                    self._db_mgr.repair_database()
-                    self._conn = self._db_mgr._get_connection()._conn
+        self.acquire_lease()
+        try:
+            if not self._disable_commit:
+                try:
                     self._conn.commit()
-                    return
-                raise
+                except sqlite3.DatabaseError as e:
+                    if self._db_mgr and ("malformed" in str(e).lower() or "disk image" in str(e).lower()) and not self._db_mgr._is_repairing:
+                        self._db_mgr.repair_database()
+                        self._conn = self._db_mgr._get_connection()._conn
+                        self._conn.commit()
+                        return
+                    raise
+        finally:
+            self.release_lease()
 
     def rollback(self):
-        self._conn.rollback()
+        self.acquire_lease()
+        try:
+            self._conn.rollback()
+        finally:
+            self.release_lease()
 
     def close(self):
-        self._conn.close()
+        with self._lease_lock:
+            self._close_pending = True
+            if self._lease_count <= 0:
+                self._conn.close()
 
     def execute(self, *args, **kwargs):
         # NOTE: Direct raw cursor execution (conn.cursor().execute(...)) bypasses wrapper-level auto-healing.
+        self.acquire_lease()
         try:
-            return self._conn.execute(*args, **kwargs)
+            res = self._conn.execute(*args, **kwargs)
+            return CursorWrapper(res, self)
         except sqlite3.DatabaseError as e:
             if self._db_mgr and ("malformed" in str(e).lower() or "disk image" in str(e).lower()) and not self._db_mgr._is_repairing:
                 self._db_mgr.repair_database()
                 self._conn = self._db_mgr._get_connection()._conn
-                return self._conn.execute(*args, **kwargs)
+                res = self._conn.execute(*args, **kwargs)
+                return CursorWrapper(res, self)
             raise
+        finally:
+            self.release_lease()
 
     def executemany(self, *args, **kwargs):
         # NOTE: Direct raw cursor execution (conn.cursor().execute(...)) bypasses wrapper-level auto-healing.
+        self.acquire_lease()
         try:
-            return self._conn.executemany(*args, **kwargs)
+            res = self._conn.executemany(*args, **kwargs)
+            return CursorWrapper(res, self)
         except sqlite3.DatabaseError as e:
             if self._db_mgr and ("malformed" in str(e).lower() or "disk image" in str(e).lower()) and not self._db_mgr._is_repairing:
                 self._db_mgr.repair_database()
                 self._conn = self._db_mgr._get_connection()._conn
-                return self._conn.executemany(*args, **kwargs)
+                res = self._conn.executemany(*args, **kwargs)
+                return CursorWrapper(res, self)
             raise
+        finally:
+            self.release_lease()
 
     def cursor(self, *args, **kwargs):
-        return self._conn.cursor(*args, **kwargs)
+        raw_cursor = self._conn.cursor(*args, **kwargs)
+        return CursorWrapper(raw_cursor, self)
 
     def __getattr__(self, name):
         return getattr(self._conn, name)
 
     def __enter__(self):
+        self.acquire_lease()
         if getattr(self, "_txn_depth", 0) == 0:
             self._conn.execute("BEGIN")
         self._txn_depth = getattr(self, "_txn_depth", 0) + 1
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._txn_depth = getattr(self, "_txn_depth", 1) - 1
-        if self._txn_depth == 0:
-            if exc_type is not None:
-                try:
-                    self._conn.rollback()
-                except Exception:
-                    pass
-            else:
-                # Do NOT swallow a commit failure: eating it here makes a lost
-                # write (disk full, or the busy_timeout expiring under write
-                # contention) look like success, so callers such as
-                # queue_mobile_battles / add_mobile_history_entries_batch /
-                # set_mobile_watermark return their success flag while nothing
-                # was persisted. Roll back and let the error propagate so the
-                # caller's error path (and the user) actually see it.
-                try:
-                    self._conn.commit()
-                except Exception:
+        try:
+            self._txn_depth = getattr(self, "_txn_depth", 1) - 1
+            if self._txn_depth == 0:
+                if exc_type is not None:
                     try:
                         self._conn.rollback()
                     except Exception:
                         pass
-                    raise
-        return False
+                else:
+                    # Do NOT swallow a commit failure: eating it here makes a lost
+                    # write (disk full, or the busy_timeout expiring under write
+                    # contention) look like success, so callers such as
+                    # queue_mobile_battles / add_mobile_history_entries_batch /
+                    # set_mobile_watermark return their success flag while nothing
+                    # was persisted. Roll back and let the error propagate so the
+                    # caller's error path (and the user) actually see it.
+                    try:
+                        self._conn.commit()
+                    except Exception:
+                        try:
+                            self._conn.rollback()
+                        except Exception:
+                            pass
+                        raise
+            return False
+        finally:
+            self.release_lease()
+
 
 
 def _is_main_thread() -> bool:
@@ -216,6 +304,16 @@ class AnkimonDB:
             print(f"[{level}] {message}")
 
     # --- Connection Management ---
+
+    @contextlib.contextmanager
+    def lease_connection(self):
+        """Lease a connection wrapper, ensuring it won't be closed until the lease is released."""
+        conn = self._get_connection()
+        conn.acquire_lease()
+        try:
+            yield conn
+        finally:
+            conn.release_lease()
 
     def _get_connection(self) -> ConnectionWrapper:
         """Gets or creates a database connection for the CURRENT thread.
@@ -823,18 +921,18 @@ class AnkimonDB:
         """Executes a custom SQL query and returns the cursor. 
         Useful for caller-specific fast-path queries without cluttering the manager."""
         try:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            cursor.execute(query, parameters)
-            return cursor
+            with self.lease_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, parameters)
+                return cursor
         except sqlite3.DatabaseError as e:
             if ("malformed" in str(e).lower() or "disk image" in str(e).lower()) and not self._is_repairing:
                 self.repair_database()
                 # Retry once after repair
-                conn = self._get_connection()
-                cursor = conn.cursor()
-                cursor.execute(query, parameters)
-                return cursor
+                with self.lease_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(query, parameters)
+                    return cursor
             raise e
 
     def get_pokemons_by_individual_ids(self, ids: List[str]) -> List[Dict[str, Any]]:
