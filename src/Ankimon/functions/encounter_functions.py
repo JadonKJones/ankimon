@@ -1163,6 +1163,7 @@ def new_pokemon(
             "accuracy": 0,
             "evasion": 0,
         },
+        "volatile_status": set(),
         "tier": tier,
         "ev_yield": ev_yield,
         "shiny": is_shiny,
