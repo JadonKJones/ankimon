@@ -260,10 +260,5 @@ def save_fossil_pokemon(pokemon_id):
     # Save to database
     db = services.db
     db.save_pokemon(caught_pokemon)
-    if hasattr(db, "mark_as_caught"):
-        try:
-            db.mark_as_caught(int(pokemon_id))
-        except Exception:
-            pass
 
 from .learnset_retrieval import get_levelup_move_for_pokemon  # noqa: F401,E303 — re-export for backwards compat
