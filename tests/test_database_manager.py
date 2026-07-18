@@ -277,19 +277,19 @@ def test_thread_local_connection_closes_and_reopens(temp_env):
         with patch("Ankimon.pyobj.database_manager._is_main_thread", return_value=False):
             # Get connection and verify it works
             conn = db._get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            assert cursor.fetchone()[0] == 1
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                assert cursor.fetchone()[0] == 1
             
             # Notify main thread
             event_start.set()
-            event_closed.wait()
+            assert event_closed.wait(timeout=5), "database close was not signaled"
             
             # Get connection again. It should be refreshed automatically
             conn2 = db._get_connection()
-            cursor2 = conn2.cursor()
-            cursor2.execute("SELECT 1")
-            results["success"] = (cursor2.fetchone()[0] == 1)
+            with conn2.cursor() as cursor2:
+                cursor2.execute("SELECT 1")
+                results["success"] = (cursor2.fetchone()[0] == 1)
             
     t = threading.Thread(target=thread_func)
     t.start()
@@ -315,8 +315,8 @@ def test_connection_lease_prevents_closure_during_inflight_operation(temp_env):
     
     # Dynamically resolve the correct CursorWrapper class and module from the db instance
     conn = db._get_connection()
-    cursor = conn.cursor()
-    actual_cursor_wrapper_class = cursor.__class__
+    with conn.cursor() as cursor:
+        actual_cursor_wrapper_class = cursor.__class__
     db_module = sys.modules[db.__class__.__module__]
     
     original_cursor_execute = actual_cursor_wrapper_class.execute
@@ -325,7 +325,7 @@ def test_connection_lease_prevents_closure_during_inflight_operation(temp_env):
     def patched_cursor_execute(cursor_self, sql, *args, **kwargs):
         if "SELECT 'test_inflight'" in sql:
             event_paused.set()
-            event_close_done.wait()
+            assert event_close_done.wait(timeout=5), "database close did not complete"
         return original_cursor_execute(cursor_self, sql, *args, **kwargs)
         
     actual_cursor_wrapper_class.execute = patched_cursor_execute
