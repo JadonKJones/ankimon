@@ -264,3 +264,43 @@ def test_database_corruption_self_healing(temp_env):
     # Confirm unique constraint is back by verifying that inserting a duplicate now raises IntegrityError
     with pytest.raises(sqlite3.IntegrityError):
         cursor.execute("INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES ('duplicate-uuid', 0, '{}')")
+
+def test_thread_local_connection_closes_and_reopens(temp_env):
+    import threading
+    db, _ = temp_env
+    
+    results = {}
+    event_start = threading.Event()
+    event_closed = threading.Event()
+    
+    def thread_func():
+        with patch("Ankimon.pyobj.database_manager._is_main_thread", return_value=False):
+            # Get connection and verify it works
+            conn = db._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            assert cursor.fetchone()[0] == 1
+            
+            # Notify main thread
+            event_start.set()
+            event_closed.wait()
+            
+            # Get connection again. It should be refreshed automatically
+            conn2 = db._get_connection()
+            cursor2 = conn2.cursor()
+            cursor2.execute("SELECT 1")
+            results["success"] = (cursor2.fetchone()[0] == 1)
+            
+    t = threading.Thread(target=thread_func)
+    t.start()
+    
+    event_start.wait()
+    
+    # Close database from main thread
+    db.close()
+    
+    event_closed.set()
+    t.join()
+    
+    assert results.get("success") is True
+

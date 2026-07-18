@@ -172,6 +172,8 @@ class AnkimonDB:
         # and collects the revlog ids here to be flushed after the caller's bulk
         # transaction commits. See begin/flush/discard_deferred_mirror_sync.
         self._deferred_mirror_revlog_ids: Optional[list] = None
+        self._connection_epoch = 0
+        self._connection_epoch_gui = -1
         self._setup_database()
 
     def _prepare_connection(self, conn):
@@ -225,7 +227,8 @@ class AnkimonDB:
         if not _is_main_thread():
             local = self._local_conn
             if (not hasattr(local, "conn") or local.conn is None
-                    or getattr(local, "db_path", None) != self.db_path):
+                    or getattr(local, "db_path", None) != self.db_path
+                    or getattr(local, "epoch", -1) != self._connection_epoch):
                 if getattr(local, "conn", None) is not None:
                     try:
                         local.conn.close()
@@ -234,14 +237,22 @@ class AnkimonDB:
                 conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
                 local.conn = self._prepare_connection(conn)
                 local.db_path = self.db_path
+                local.epoch = self._connection_epoch
             elif not isinstance(local.conn, ConnectionWrapper):
                 local.conn = ConnectionWrapper(local.conn, self)
                 local.db_path = self.db_path
+                local.epoch = self._connection_epoch
             return local.conn
 
-        if self._connection is None:
+        if self._connection is None or self._connection_epoch_gui != self._connection_epoch:
+            if self._connection:
+                try:
+                    self._connection.close()
+                except Exception:
+                    pass
             conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self._connection = self._prepare_connection(conn)
+            self._connection_epoch_gui = self._connection_epoch
         elif not isinstance(self._connection, ConnectionWrapper):
             self._connection = ConnectionWrapper(self._connection, self)
         return self._connection
@@ -249,6 +260,7 @@ class AnkimonDB:
     def close(self):
         """Closes all database connections across all threads."""
         with self._conn_lock:
+            self._connection_epoch += 1
             if self._connection:
                 try:
                     self._connection.close()
