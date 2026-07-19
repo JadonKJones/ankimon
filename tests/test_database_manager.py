@@ -367,3 +367,52 @@ def test_connection_lease_prevents_closure_during_inflight_operation(temp_env):
         db_module._is_main_thread = original_is_main_thread
 
 
+def test_epoch_double_read_race(temp_env):
+    db, _ = temp_env
+    original_prepare = db._prepare_connection
+    close_called = False
+    
+    def patched_prepare(conn):
+        nonlocal close_called
+        res = original_prepare(conn)
+        if not close_called:
+            close_called = True
+            db.close()
+        return res
+        
+    db._prepare_connection = patched_prepare
+    
+    import threading
+    results = {}
+    
+    def thread_func():
+        try:
+            with patch("Ankimon.pyobj.database_manager._is_main_thread", return_value=False):
+                conn1 = db._get_connection()
+                conn2 = db._get_connection()
+                with conn2.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                    results["success"] = (cursor.fetchone()[0] == 1)
+        except Exception as e:
+            results["error"] = str(e)
+            
+    t = threading.Thread(target=thread_func)
+    t.start()
+    t.join(timeout=5)
+    assert not t.is_alive()
+    assert results.get("success") is True
+    assert "error" not in results
+
+
+def test_retry_on_closed_database_error(temp_env):
+    db, _ = temp_env
+    conn = db._get_connection()
+    conn._conn.close()
+    db._connection_epoch += 1
+    
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT 1")
+        assert cursor.fetchone()[0] == 1
+
+
+

@@ -115,12 +115,19 @@ class ConnectionWrapper:
                 try:
                     self._conn.commit()
                 except sqlite3.DatabaseError as e:
-                    if self._db_mgr and ("malformed" in str(e).lower() or "disk image" in str(e).lower()) and not self._db_mgr._is_repairing:
+                    msg = str(e).lower()
+                    if self._db_mgr and isinstance(e, sqlite3.ProgrammingError) and "closed database" in msg:
+                        self.release_lease()
+                        lease_released = True
+                        fresh = self._db_mgr._get_connection()
+                        fresh._conn.commit()
+                        return
+                    if self._db_mgr and ("malformed" in msg or "disk image" in msg) and not self._db_mgr._is_repairing:
                         self.release_lease()
                         lease_released = True
                         self._db_mgr.repair_database()
-                        fresh_conn = self._db_mgr._get_connection()
-                        fresh_conn.commit()
+                        fresh = self._db_mgr._get_connection()
+                        fresh._conn.commit()
                         return
                     raise
         finally:
@@ -148,12 +155,18 @@ class ConnectionWrapper:
             res = self._conn.execute(*args, **kwargs)
             return CursorWrapper(res, self)
         except sqlite3.DatabaseError as e:
-            if self._db_mgr and ("malformed" in str(e).lower() or "disk image" in str(e).lower()) and not self._db_mgr._is_repairing:
+            msg = str(e).lower()
+            if self._db_mgr and isinstance(e, sqlite3.ProgrammingError) and "closed database" in msg:
+                self.release_lease()
+                lease_released = True
+                fresh = self._db_mgr._get_connection()
+                return CursorWrapper(fresh._conn.execute(*args, **kwargs), fresh)
+            if self._db_mgr and ("malformed" in msg or "disk image" in msg) and not self._db_mgr._is_repairing:
                 self.release_lease()
                 lease_released = True
                 self._db_mgr.repair_database()
-                fresh_conn = self._db_mgr._get_connection()
-                return fresh_conn.execute(*args, **kwargs)
+                fresh = self._db_mgr._get_connection()
+                return CursorWrapper(fresh._conn.execute(*args, **kwargs), fresh)
             raise
         finally:
             if not lease_released:
@@ -167,20 +180,37 @@ class ConnectionWrapper:
             res = self._conn.executemany(*args, **kwargs)
             return CursorWrapper(res, self)
         except sqlite3.DatabaseError as e:
-            if self._db_mgr and ("malformed" in str(e).lower() or "disk image" in str(e).lower()) and not self._db_mgr._is_repairing:
+            msg = str(e).lower()
+            if self._db_mgr and isinstance(e, sqlite3.ProgrammingError) and "closed database" in msg:
+                self.release_lease()
+                lease_released = True
+                fresh = self._db_mgr._get_connection()
+                return CursorWrapper(fresh._conn.executemany(*args, **kwargs), fresh)
+            if self._db_mgr and ("malformed" in msg or "disk image" in msg) and not self._db_mgr._is_repairing:
                 self.release_lease()
                 lease_released = True
                 self._db_mgr.repair_database()
-                fresh_conn = self._db_mgr._get_connection()
-                return fresh_conn.executemany(*args, **kwargs)
+                fresh = self._db_mgr._get_connection()
+                return CursorWrapper(fresh._conn.executemany(*args, **kwargs), fresh)
             raise
         finally:
             if not lease_released:
                 self.release_lease()
 
     def cursor(self, *args, **kwargs):
-        raw_cursor = self._conn.cursor(*args, **kwargs)
-        return CursorWrapper(raw_cursor, self)
+        try:
+            raw_cursor = self._conn.cursor(*args, **kwargs)
+            return CursorWrapper(raw_cursor, self)
+        except sqlite3.DatabaseError as e:
+            msg = str(e).lower()
+            if self._db_mgr and isinstance(e, sqlite3.ProgrammingError) and "closed database" in msg:
+                fresh = self._db_mgr._get_connection()
+                return CursorWrapper(fresh._conn.cursor(*args, **kwargs), fresh)
+            if self._db_mgr and ("malformed" in msg or "disk image" in msg) and not self._db_mgr._is_repairing:
+                self._db_mgr.repair_database()
+                fresh = self._db_mgr._get_connection()
+                return CursorWrapper(fresh._conn.cursor(*args, **kwargs), fresh)
+            raise
 
     def __getattr__(self, name):
         return getattr(self._conn, name)
@@ -344,11 +374,12 @@ class AnkimonDB:
         Background threads: a dedicated per-thread connection (``check_same_thread``
         is disabled so a connection may be created off the GUI thread safely, and
         each thread keeps its own so they never share a cursor)."""
+        epoch = self._connection_epoch
         if not _is_main_thread():
             local = self._local_conn
             if (not hasattr(local, "conn") or local.conn is None
                     or getattr(local, "db_path", None) != self.db_path
-                    or getattr(local, "epoch", -1) != self._connection_epoch):
+                    or getattr(local, "epoch", -1) != epoch):
                 if getattr(local, "conn", None) is not None:
                     try:
                         local.conn.close()
@@ -357,14 +388,14 @@ class AnkimonDB:
                 conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
                 local.conn = self._prepare_connection(conn)
                 local.db_path = self.db_path
-                local.epoch = self._connection_epoch
+                local.epoch = epoch
             elif not isinstance(local.conn, ConnectionWrapper):
                 local.conn = ConnectionWrapper(local.conn, self)
                 local.db_path = self.db_path
-                local.epoch = self._connection_epoch
+                local.epoch = epoch
             return local.conn
 
-        if self._connection is None or self._connection_epoch_gui != self._connection_epoch:
+        if self._connection is None or self._connection_epoch_gui != epoch:
             if self._connection:
                 try:
                     self._connection.close()
@@ -372,7 +403,7 @@ class AnkimonDB:
                     pass
             conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self._connection = self._prepare_connection(conn)
-            self._connection_epoch_gui = self._connection_epoch
+            self._connection_epoch_gui = epoch
         elif not isinstance(self._connection, ConnectionWrapper):
             self._connection = ConnectionWrapper(self._connection, self)
         return self._connection
