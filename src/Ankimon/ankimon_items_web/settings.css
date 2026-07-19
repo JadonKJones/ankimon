@@ -763,7 +763,7 @@
 
 .setting-input[type="password"]::placeholder {
     letter-spacing: 0px;
-    font-family: 'Outfit', sans-serif;
+    font-family: Outfit, sans-serif;
 }
 
 .setting-row[data-key="leaderboard.api_key"] .setting-label::before {
