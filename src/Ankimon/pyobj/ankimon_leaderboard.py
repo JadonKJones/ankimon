@@ -1,77 +1,8 @@
-import sys
-import json
 import threading
-from PyQt6.QtWidgets import QApplication, QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton
-from aqt.utils import showInfo
-from aqt.qt import QMessageBox
-from ..resources import user_path_credentials, mypokemon_path
 import requests
-from aqt import mw
 from ..services import services
 
 ANKIMON_LEADERBOARD_API_URL = "https://leaderboard-api.ankimon.com/update_stats"
-
-
-class ApiKeyDialog(QDialog):
-    """Legacy dialog - kept for backward compatibility but deprecated."""
-    
-    def __init__(self):
-        super().__init__()
-
-        self.setWindowTitle("Enter API Key and Username")
-        self.setGeometry(100, 100, 300, 200)
-
-        # Layout
-        layout = QVBoxLayout()
-
-        # Username input
-        self.username_label = QLabel("Username:")
-        self.username_input = QLineEdit(self)
-        self.username_input.setPlaceholderText("Enter your username")
-        layout.addWidget(self.username_label)
-        layout.addWidget(self.username_input)
-
-        # API Key input
-        self.api_key_label = QLabel("API Key:")
-        self.api_key_input = QLineEdit(self)
-        self.api_key_input.setPlaceholderText("Paste your API key")
-        layout.addWidget(self.api_key_label)
-        layout.addWidget(self.api_key_input)
-
-        # Submit button
-        self.submit_button = QPushButton("Submit", self)
-        self.submit_button.clicked.connect(self.submit)
-        layout.addWidget(self.submit_button)
-
-        # Set layout
-        self.setLayout(layout)
-
-    def submit(self):
-        """
-        Handle the submission of username and API key from the legacy dialog.
-        
-        Validates that both fields are filled, then saves the credentials to
-        the settings system rather than the legacy database. Enables leaderboard
-        sync automatically upon successful credential storage.
-        
-        Returns:
-            None: Displays appropriate info messages to the user via showInfo.
-        """
-        username = self.username_input.text()
-        api_key = self.api_key_input.text()
-
-        if username and api_key:
-            # Save to settings instead of database
-            if services.settings is not None:
-                services.settings.set("leaderboard.username", username)
-                services.settings.set("leaderboard.api_key", api_key)
-                services.settings.set("misc.leaderboard", True)
-                showInfo("Credentials saved successfully!")
-                self.accept()
-            else:
-                showInfo("Error: Settings not initialized.")
-        else:
-            showInfo("Both fields must be filled out.")
 
 
 def sync_data_to_leaderboard(data):
@@ -110,8 +41,8 @@ def sync_data_to_leaderboard(data):
 
         # Validate credentials
         if not username or not api_key:
-            # Silent fail - user will be notified through settings UI
-            showInfo("Ankimon: Leaderboard credentials missing in settings")
+            # Silent fail - user can configure credentials in Settings > Leaderboard
+            print("Ankimon: Leaderboard sync skipped - credentials missing in settings")
             return
 
         request_data = {
@@ -153,37 +84,7 @@ def sync_data_to_leaderboard(data):
         threading.Thread(target=send_request, daemon=True).start()
 
     except Exception as e:
-        showInfo(f"Ankimon: Unexpected error preparing leaderboard sync: {e}")
-
-
-def show_api_key_dialog():
-    """
-    Display a legacy dialog informing users about the new credential location.
-    
-    This function is a deprecated method that now shows an informational
-    message directing users to the new Settings UI for managing leaderboard
-    credentials. The legacy dialog is kept for backward compatibility but
-    no longer collects credentials directly.
-    
-    Returns:
-        None: Displays a QMessageBox with navigation instructions.
-    
-    Note:
-        This method is deprecated; credentials should be managed through
-        Ankimon → Ankimon Settings → Leaderboard.
-    """
-    # Show a dialog telling users where to find the new settings
-    msg = QMessageBox()
-    msg.setIcon(QMessageBox.Icon.Information)
-    msg.setWindowTitle("Leaderboard Credentials Moved")
-    msg.setText(
-        "Leaderboard credentials are now managed in Ankimon Settings.\n\n"
-        "Please go to:\n"
-        "Ankimon → Ankimon Settings → Leaderboard\n\n"
-        "Enter your username and API key there."
-    )
-    msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-    msg.exec()
+        print(f"Ankimon: Unexpected error preparing leaderboard sync: {e}")
 
 
 def migrate_credentials_from_db():
@@ -206,6 +107,8 @@ def migrate_credentials_from_db():
     Note:
         - Function exits early if database or settings services are unavailable
         - Only migrates if database has credentials AND settings don't
+        - After migration, the legacy database entries are cleared to prevent
+          the old credentials from ever resurrecting over future edits
         - The leaderboard enabled/disabled state is preserved automatically
     """
     if services.db is None or services.settings is None:
@@ -216,18 +119,26 @@ def migrate_credentials_from_db():
         username = services.db.get_user_data("username")
         api_key = services.db.get_user_data("api_key")
         
+        # Normalize None values to empty strings for comparison
+        username = "" if username is None else str(username)
+        api_key = "" if api_key is None else str(api_key)
+        
         # Check if we have them in settings already
         settings_username = services.settings.get("leaderboard.username", "")
         settings_api_key = services.settings.get("leaderboard.api_key", "")
         
-        # If db has credentials but settings don't, migrate them
-        if username and api_key and (not settings_username or not settings_api_key):
-            services.settings.set("leaderboard.username", username)
-            services.settings.set("leaderboard.api_key", api_key)
-            # Clear legacy credentials from DB to prevent re-migration if settings are cleared
-            services.db.set_user_data("username", "")
-            services.db.set_user_data("api_key", "")
-            print("Ankimon: Migrated leaderboard credentials from database to settings")
+        # If db has credentials, migrate them to settings (only if not already set)
+        if username and api_key:
+            if not settings_username:
+                services.settings.set("leaderboard.username", username)
+            if not settings_api_key:
+                services.settings.set("leaderboard.api_key", api_key)
+            
+            # Clear legacy database entries after successful migration
+            if (settings_username or username) and (settings_api_key or api_key):
+                services.db.set_user_data("username", "")
+                services.db.set_user_data("api_key", "")
+                print("Ankimon: Migrated and cleared legacy leaderboard credentials")
             
     except Exception as e:
-        showInfo(f"Ankimon: Error migrating leaderboard credentials: {e}")
+        print(f"Ankimon: Error migrating leaderboard credentials: {e}")
