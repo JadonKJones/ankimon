@@ -1680,6 +1680,11 @@ def save_caught_pokemon(
 
     # Save to database (replaces JSON file I/O for performance)
     ankimon_db.save_pokemon(caught_pokemon)
+    if hasattr(ankimon_db, "mark_as_caught"):
+        try:
+            ankimon_db.mark_as_caught(int(caught_pokemon["id"]))
+        except Exception:
+            pass
 
     try:
         from ..singletons import notify_stats_changed
