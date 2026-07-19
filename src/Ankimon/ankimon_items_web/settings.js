@@ -184,7 +184,6 @@
      * Builds a password input field for sensitive credential settings.
      * 
      * Creates a masked input field with placeholder text and change tracking.
-     * Clears validation errors when the user begins typing.
      * 
      * @param {Object} setting - The setting configuration object.
      * @returns {HTMLElement} The password input element.
@@ -199,8 +198,6 @@
             setEdit(setting.key, input.value);
             updateDirtyUI();
             markRowDirty(setting.key);
-            // Clear validation error when user types
-            clearValidationErrors();
         });
         return input;
     }
