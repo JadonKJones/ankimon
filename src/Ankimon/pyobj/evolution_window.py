@@ -473,6 +473,11 @@ class EvoWindow(QWidget):
 
             # Save to database
             db.save_pokemon(pokemon)
+            if hasattr(db, "mark_as_caught"):
+                try:
+                    db.mark_as_caught(int(evo_id))
+                except Exception:
+                    pass
             self.logger.log_and_showinfo(
                 "info",
                 self.translator.translate(
