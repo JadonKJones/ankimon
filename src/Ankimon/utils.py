@@ -741,7 +741,13 @@ def play_sound(enemy_pokemon_id: int, settings_obj: Settings):
 
 def load_collected_pokemon_ids() -> set:
     """Loads all captured pokemon IDs from the database."""
-    return services.db.get_all_pokemon_ids()
+    ids = services.db.get_all_pokemon_ids()
+    if hasattr(services.db, "get_caught_ids"):
+        try:
+            ids.update(services.db.get_caught_ids())
+        except Exception:
+            pass
+    return ids
 
 
 def limit_ev_yield(
