@@ -56,7 +56,11 @@ from .pyobj.error_handler import show_warning_with_traceback
 from .pyobj.backup_manager import BackupManager
 from .services import services
 from .events import events
-from .pyobj.ankimon_leaderboard import migrate_credentials_from_db
+
+# LEADERBOARD CREDENTIALS MIGRATION
+# Moved to build_core() in core.py - runs immediately after
+# services.populate() and BEFORE any TrainerCard construction.
+# This ensures migration completes before any sync can fire.
 
 # singletons.py already populated the service registry and mirrored these onto
 # mw (see services.py), so the previous mw.settings_ankimon/logger/settings_obj
@@ -66,24 +70,6 @@ from .pyobj.ankimon_leaderboard import migrate_credentials_from_db
 # instance to keep mw.translator identical to services.translator. Remove this
 # once menu_buttons stops building its own translator.
 mw.translator = translator
-
-# LEADERBOARD CREDENTIALS MIGRATION
-# This must run BEFORE TrainerCard is constructed (which happens during
-# the from .singletons import ... above and triggers the first sync attempt).
-# services.db and services.settings are already populated via build_core()
-# at import time, so this is the earliest safe point to migrate.
-#
-# Why this is the correct location:
-# 1. services.db and services.settings are fully initialized
-# 2. No TrainerCard/UI logic has run yet
-# 3. The migration completes before any sync can fire
-# 4. No dependency on the async startup QueryOp success callback
-
-try:
-    migrate_credentials_from_db()
-    print("Ankimon: Leaderboard credentials migration checked")
-except Exception as e:
-    print(f"Ankimon: Error during leaderboard credentials migration: {e}")
 
 # Deck-browser / deck-overview team grid (F19). Registration is gated on the
 # gui.team_deck_view setting and reload-safe (F31 registry-anchored record on
