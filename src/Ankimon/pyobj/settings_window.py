@@ -279,6 +279,9 @@ class SettingsWindow(QMainWindow):
             self.input_widgets[key] = button_group
         elif isinstance(value, (int, str, float)):
             line_edit = QLineEdit(str(value))
+            # Mask the API Key field if it's ever rendered in the legacy window
+            if key == "leaderboard.api_key":
+                line_edit.setEchoMode(QLineEdit.EchoMode.Password)
             layout.addWidget(line_edit)
             created_widgets.append(line_edit)
             self.input_widgets[key] = line_edit
