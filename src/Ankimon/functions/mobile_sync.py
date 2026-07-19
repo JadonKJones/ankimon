@@ -2291,18 +2291,7 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
 
     # Recompute stats
     base_stats = pkmndata.get("base_stats")
-    
-    def is_valid_base_stats(b):
-        if not b or not isinstance(b, dict):
-            return False
-        for k in ("hp", "atk", "def", "spa", "spd", "spe"):
-            if k not in b:
-                return False
-            try:
-                int(b[k])
-            except (TypeError, ValueError):
-                return False
-        return True
+    from .pokedex_functions import is_valid_base_stats
 
     if not is_valid_base_stats(base_stats):
         from .pokedex_functions import search_pokedex
@@ -2310,12 +2299,14 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
         if is_valid_base_stats(base_stats):
             pkmndata["base_stats"] = base_stats
 
-    pkmndata["stats"] = {
-        k: PokemonObject.calc_stat(k, val, level, pkmndata["iv"][k], pkmndata["ev"][k], pkmndata.get("nature", "serious"))
-        for k, val in base_stats.items()
-        if k in ("hp", "atk", "def", "spa", "spd", "spe")
-    }
-    pkmndata["current_hp"] = pkmndata["stats"].get("hp", 15)
+    if is_valid_base_stats(base_stats):
+        pkmndata["stats"] = {
+            k: PokemonObject.calc_stat(k, int(val), level, pkmndata["iv"][k], pkmndata["ev"][k], pkmndata.get("nature", "serious"))
+            for k, val in base_stats.items()
+            if k in ("hp", "atk", "def", "spa", "spd", "spe")
+        }
+        pkmndata["current_hp"] = pkmndata["stats"].get("hp", 15)
+
     
     friendship = int(pkmndata.get("friendship", 0))
     friendship += random.randint(5, 9)

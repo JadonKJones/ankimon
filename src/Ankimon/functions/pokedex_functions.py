@@ -63,6 +63,14 @@ def safe_int(value, default=0):
         return default
 
 
+def is_valid_base_stats(b) -> bool:
+    """Validates that a base_stats dictionary contains all six expected keys with numeric values (int/float)."""
+    if not b or not isinstance(b, dict):
+        return False
+    return all(isinstance(b.get(k), (int, float)) for k in ("hp", "atk", "def", "spa", "spd", "spe"))
+
+
+
 def _load_pokedex_cache():
     """Load pokedex JSON once and cache it in memory"""
     global _pokedex_cache

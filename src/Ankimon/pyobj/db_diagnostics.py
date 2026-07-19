@@ -33,17 +33,7 @@ def trigger_database_diagnostics():
         """)
         duplicate_count = cursor.fetchone()[0]
 
-        def is_valid_base_stats(b):
-            if not b or not isinstance(b, dict):
-                return False
-            for k in ("hp", "atk", "def", "spa", "spd", "spe"):
-                if k not in b:
-                    return False
-                try:
-                    int(b[k])
-                except (TypeError, ValueError):
-                    return False
-            return True
+        from ..functions.pokedex_functions import is_valid_base_stats
 
         cursor.execute("SELECT data FROM captured_pokemon")
         missing_base_stats_count = 0

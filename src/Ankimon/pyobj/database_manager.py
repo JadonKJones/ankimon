@@ -400,19 +400,7 @@ class AnkimonDB:
                         continue
                     
                     base_stats = pokemon_data.get("base_stats")
-                    
-                    def is_valid_base_stats(b):
-                        if not b or not isinstance(b, dict):
-                            return False
-                        for k in ("hp", "atk", "def", "spa", "spd", "spe"):
-                            if k not in b:
-                                return False
-                            try:
-                                int(b[k])
-                            except (TypeError, ValueError):
-                                return False
-                        return True
-
+                    from ..functions.pokedex_functions import is_valid_base_stats
                     if not is_valid_base_stats(base_stats):
                         from ..functions.pokedex_functions import search_pokedex
                         base_stats = search_pokedex(pokemon_data.get("name", ""), "baseStats") or {}
@@ -691,7 +679,9 @@ class AnkimonDB:
         conn.commit()
         self._log("info", "AnkimonDB: Database schema initialized.")
         try:
-            self._normalize_pokemon_base_stats()
+            if not self.get_config_value("base_stats_normalized", False):
+                self._normalize_pokemon_base_stats()
+                self.set_config_value("base_stats_normalized", True)
         except Exception as e:
             self._log("error", f"Failed to run base_stats normalization on startup: {e}")
 
@@ -702,6 +692,7 @@ class AnkimonDB:
         cursor.execute("SELECT individual_id, data FROM captured_pokemon")
         rows = cursor.fetchall()
         
+        from ..functions.pokedex_functions import is_valid_base_stats
         updates = []
         for row in rows:
             ind_id, obfuscated_data = row
@@ -710,18 +701,6 @@ class AnkimonDB:
                 continue
             
             base_stats = pokemon_data.get("base_stats")
-            
-            def is_valid_base_stats(b):
-                if not b or not isinstance(b, dict):
-                    return False
-                for k in ("hp", "atk", "def", "spa", "spd", "spe"):
-                    if k not in b:
-                        return False
-                    try:
-                        int(b[k])
-                    except (TypeError, ValueError):
-                        return False
-                return True
 
             # If base_stats is completely missing or empty/lacking stat keys or invalid values
             if not is_valid_base_stats(base_stats):

@@ -295,8 +295,6 @@ def test_legacy_base_stats_normalization(temp_env):
     pk_loaded = db.get_pokemon("legacy-uuid")
     assert "base_stats" not in pk_loaded
     
-    # Trigger repair with mocked search_pokedex
-    from unittest.mock import patch
     mock_base_stats = {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90}
     with patch("Ankimon.functions.pokedex_functions.search_pokedex", return_value=mock_base_stats) as mock_search:
         db.repair_database()
@@ -307,3 +305,51 @@ def test_legacy_base_stats_normalization(temp_env):
     assert "base_stats" in pk_repaired
     assert pk_repaired["base_stats"]["hp"] == 35
     assert pk_repaired["base_stats"]["spe"] == 90
+
+
+def test_base_stats_normalization_startup_sweep(temp_env):
+    """The startup sweep heals legacy records without requiring a full repair."""
+    db, _ = temp_env
+    legacy_pk = {
+        "individual_id": "legacy-uuid-2",
+        "name": "pikachu",
+        "id": 25,
+        "level": 5,
+        "stats": {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90},
+    }
+    conn = db._get_connection()
+    conn.cursor().execute(
+        "INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 0, ?)",
+        ("legacy-uuid-2", db._obfuscate(legacy_pk))
+    )
+    conn.commit()
+
+    mock_base_stats = {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90}
+    with patch("Ankimon.functions.pokedex_functions.search_pokedex", return_value=mock_base_stats):
+        db._normalize_pokemon_base_stats()
+
+    assert db.get_pokemon("legacy-uuid-2")["base_stats"] == mock_base_stats
+
+
+def test_unresolvable_base_stats_record_left_untouched(temp_env):
+    """A record whose species is missing from the pokedex must not be modified."""
+    db, _ = temp_env
+    legacy_pk = {
+        "individual_id": "legacy-uuid-3",
+        "name": "not-a-real-species",
+        "id": 9999,
+        "level": 5,
+        "stats": {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90},
+    }
+    conn = db._get_connection()
+    conn.cursor().execute(
+        "INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 0, ?)",
+        ("legacy-uuid-3", db._obfuscate(legacy_pk))
+    )
+    conn.commit()
+
+    with patch("Ankimon.functions.pokedex_functions.search_pokedex", return_value=[]):
+        db._normalize_pokemon_base_stats()
+
+    assert db.get_pokemon("legacy-uuid-3") == legacy_pk
+
