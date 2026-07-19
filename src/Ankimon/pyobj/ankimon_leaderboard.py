@@ -135,10 +135,10 @@ def migrate_credentials_from_db():
                 services.settings.set("leaderboard.api_key", api_key)
             
             # Clear legacy database entries after successful migration
-            if (settings_username or username) and (settings_api_key or api_key):
-                services.db.set_user_data("username", "")
-                services.db.set_user_data("api_key", "")
-                print("Ankimon: Migrated and cleared legacy leaderboard credentials")
+            # The condition is guaranteed true here because we checked username and api_key above
+            services.db.set_user_data("username", "")
+            services.db.set_user_data("api_key", "")
+            print("Ankimon: Migrated and cleared legacy leaderboard credentials")
             
     except Exception as e:
         print(f"Ankimon: Error migrating leaderboard credentials: {e}")
