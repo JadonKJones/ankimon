@@ -67,7 +67,7 @@ def is_valid_base_stats(b) -> bool:
     """Validates that a base_stats dictionary contains all six expected keys with numeric values (int/float)."""
     if not b or not isinstance(b, dict):
         return False
-    return all(isinstance(b.get(k), (int, float)) for k in ("hp", "atk", "def", "spa", "spd", "spe"))
+    return all(isinstance(b.get(k), (int, float)) and not isinstance(b.get(k), bool) for k in ("hp", "atk", "def", "spa", "spd", "spe"))
 
 
 

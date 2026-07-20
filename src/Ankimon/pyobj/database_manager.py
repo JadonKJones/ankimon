@@ -390,6 +390,7 @@ class AnkimonDB:
 
             # Normalize base stats in the temp db during repair
             try:
+                from ..functions.pokedex_functions import is_valid_base_stats, search_pokedex
                 cursor.execute("SELECT individual_id, data FROM captured_pokemon")
                 rows = cursor.fetchall()
                 updates = []
@@ -400,9 +401,7 @@ class AnkimonDB:
                         continue
                     
                     base_stats = pokemon_data.get("base_stats")
-                    from ..functions.pokedex_functions import is_valid_base_stats
                     if not is_valid_base_stats(base_stats):
-                        from ..functions.pokedex_functions import search_pokedex
                         base_stats = search_pokedex(pokemon_data.get("name", ""), "baseStats") or {}
                         if is_valid_base_stats(base_stats):
                             pokemon_data["base_stats"] = base_stats
@@ -692,7 +691,7 @@ class AnkimonDB:
         cursor.execute("SELECT individual_id, data FROM captured_pokemon")
         rows = cursor.fetchall()
         
-        from ..functions.pokedex_functions import is_valid_base_stats
+        from ..functions.pokedex_functions import is_valid_base_stats, search_pokedex
         updates = []
         for row in rows:
             ind_id, obfuscated_data = row
@@ -704,7 +703,6 @@ class AnkimonDB:
 
             # If base_stats is completely missing or empty/lacking stat keys or invalid values
             if not is_valid_base_stats(base_stats):
-                from ..functions.pokedex_functions import search_pokedex
                 base_stats = search_pokedex(pokemon_data.get("name", ""), "baseStats") or {}
                 if is_valid_base_stats(base_stats):
                     pokemon_data["base_stats"] = base_stats

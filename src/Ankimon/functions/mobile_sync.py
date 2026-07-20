@@ -451,12 +451,6 @@ def load_active_team_clones(ankimon_db, settings_obj, main_pokemon_fallback) -> 
 
     def make_safe_clone(p):
         p_clone = copy.copy(p)
-        if hasattr(p, "stats") and isinstance(p.stats, dict):
-            try:
-                p_clone.stats = copy.deepcopy(p.stats)
-            except AttributeError:
-                if hasattr(p_clone, "__dict__"):
-                    p_clone.__dict__["stats"] = copy.deepcopy(p.stats)
         if hasattr(p, "base_stats") and isinstance(p.base_stats, dict):
             p_clone.base_stats = copy.deepcopy(p.base_stats)
         if hasattr(p, "ev") and isinstance(p.ev, dict):
@@ -2247,13 +2241,13 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
         try:
             return max(0, min(31, int(value)))
         except (TypeError, ValueError):
-            return 0
+            return 15
 
     if "iv" not in pkmndata or not isinstance(pkmndata["iv"], dict):
-        pkmndata["iv"] = {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+        pkmndata["iv"] = {"hp": 15, "atk": 15, "def": 15, "spa": 15, "spd": 15, "spe": 15}
     else:
         # Ensure all keys exist and are valid integers between 0 and 31
-        pkmndata["iv"] = {k: normalize_iv(pkmndata["iv"].get(k, 0)) for k in ("hp", "atk", "def", "spa", "spd", "spe")}
+        pkmndata["iv"] = {k: normalize_iv(pkmndata["iv"].get(k, 15)) for k in ("hp", "atk", "def", "spa", "spd", "spe")}
         
     normalized_yield = {
         "hp": ev_yield_gained.get("hp", 0),
@@ -2294,10 +2288,23 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
     from .pokedex_functions import is_valid_base_stats
 
     if not is_valid_base_stats(base_stats):
-        from .pokedex_functions import search_pokedex
-        base_stats = search_pokedex(pkmndata.get("name", ""), "baseStats") or {}
+        # Fall back to stats key if it contains original stats (before scaling/growth)
+        base_stats = base_stats or pkmndata.get("stats")
+        
+        # Fall back to pokedex search
+        if not is_valid_base_stats(base_stats):
+            from .pokedex_functions import search_pokedex
+            base_stats = search_pokedex(pkmndata.get("name", ""), "baseStats") or {}
+            
         if is_valid_base_stats(base_stats):
             pkmndata["base_stats"] = base_stats
+        else:
+            from ..services import services
+            services.logger.log(
+                "warning",
+                f"Could not resolve base_stats for {pkmndata.get('name')!r} "
+                f"({pkmndata.get('individual_id')}); stats left unscaled."
+            )
 
     if is_valid_base_stats(base_stats):
         pkmndata["stats"] = {
