@@ -845,7 +845,7 @@ class AnkimonDataSync:
             if db_path is None:
                 return
             if Path(db_path).resolve() == Path(target_file).resolve():
-                db.close()
+                db.close(2.0)
         except Exception:
             pass
 
@@ -967,7 +967,7 @@ class AnkimonDataSync:
             try:
                 from ..services import services
                 if services.db:
-                    services.db.close()
+                    services.db.close(2.0)
             except Exception:
                 pass
             self._close_live_db_connection(source_file)
