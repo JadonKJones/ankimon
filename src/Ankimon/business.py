@@ -310,8 +310,13 @@ def calculate_cp_from_dict(pokemon_dict):
 
     # Coerce level the same way cp_breakdown_tooltip does: rows restored
     # from JSON can carry it as a string, and calculate_cpm's max(level, 1)
-    # raises TypeError when comparing str/None against int.
-    level = int(pokemon_dict.get("level", 1) or 1)
+    # raises TypeError when comparing str/None against int. A level that is
+    # not a number at all is meaningless rather than merely mistyped, so it
+    # falls back to 1 instead of taking down every CP read on the row.
+    try:
+        level = int(pokemon_dict.get("level", 1) or 1)
+    except (TypeError, ValueError):
+        level = 1
     iv = pokemon_dict.get("iv") or {}
     ev = pokemon_dict.get("ev") or {}
 

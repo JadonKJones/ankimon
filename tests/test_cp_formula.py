@@ -3,6 +3,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 # Stub Ankimon packages so we can import business.py without triggering __init__.py
 _src = Path(__file__).parent.parent / "src"
 for _pkg in ("Ankimon", "Ankimon.functions", "Ankimon.pyobj"):
@@ -415,3 +417,17 @@ class TestLevelCoercion:
         as_none = calculate_cp_from_dict({**self._ROW, "level": None})
         as_one = calculate_cp_from_dict({**self._ROW, "level": 1})
         assert as_none == as_one
+
+    def test_non_numeric_level_falls_back_to_one(self):
+        # A level that is not a number at all is meaningless; it must not
+        # take down the CP read for every consumer of the row.
+        as_garbage = calculate_cp_from_dict({**self._ROW, "level": "???"})
+        as_one = calculate_cp_from_dict({**self._ROW, "level": 1})
+        assert as_garbage == as_one
+
+    def test_malformed_stats_still_raise(self):
+        # Deliberately NOT swallowed: callers that repair rows must be able
+        # to tell "cannot compute" from "computed the floor value", or the
+        # migration pass would overwrite good CP with the minimum clamp.
+        with pytest.raises(Exception):
+            calculate_cp_from_dict({**self._ROW, "level": 50, "stats": "corrupt"})
