@@ -65,22 +65,34 @@ class TrainerCard:
         self.cash = cash
 
         # Sync Data to ankimon leaderboard
-        data = {
-            "trainerRank": f"{league}",  # Example rank
-            "trainerName": trainer_name,  # Example trainer name
-            "level": max(1, int(settings_obj.get("trainer.level"))),
-            "pokedex": services.db.execute("SELECT COUNT(DISTINCT pokedex_id) FROM captured_pokemon WHERE pokedex_id IS NOT NULL").fetchone()[0],
-            "caughtPokemon": services.db.get_pokemon_count(),
-            "trainerLevel": self.level,  # Add a logic for trainer's level if applicable
-            "highestLevel": highest_pokemon_level,  # Example highest level
-            "shinies": f"{services.db.get_shiny_count()}",  # Example shinies
-            "cash": cash,  # Example cash,
-            "trainerSprite": f"{settings_obj.get('trainer.sprite') + '.png'}",
-        }
+        self.sync_to_leaderboard()
+
+    def sync_to_leaderboard(self):
+        """Extract data and sync to the leaderboard."""
         try:
+            from ..services import services
+            # Verify database is active before querying
+            if not services.db:
+                return
+
+            league = self.league
+            trainer_name = self.trainer_name
+            highest_pokemon_level = int(self.highest_pokemon_level())
+
+            data = {
+                "trainerRank": f"{league}",
+                "trainerName": trainer_name,
+                "level": max(1, int(self.settings_obj.get("trainer.level"))),
+                "pokedex": services.db.execute("SELECT COUNT(DISTINCT pokedex_id) FROM captured_pokemon WHERE pokedex_id IS NOT NULL").fetchone()[0],
+                "caughtPokemon": services.db.get_pokemon_count(),
+                "trainerLevel": self.level,
+                "highestLevel": highest_pokemon_level,
+                "shinies": f"{services.db.get_shiny_count()}",
+                "cash": self.cash,
+                "trainerSprite": f"{self.settings_obj.get('trainer.sprite') + '.png'}",
+            }
             # Lazy import: ankimon_leaderboard pulls in Qt/Anki, so importing it
-            # at module top would break the headless core. Imported here instead,
-            # and an ImportError simply means "no leaderboard available" (harness).
+            # at module top would break the headless core.
             from .ankimon_leaderboard import sync_data_to_leaderboard
             sync_data_to_leaderboard(data)
         except ImportError:
@@ -232,6 +244,7 @@ class TrainerCard:
         self.logger.log_and_showinfo(
             "game", f"Congratulations! You reached Level {self.level}!"
         )
+        self.sync_to_leaderboard()
 
     def gain_xp(self, tier, allow_to_choose_move=False):
         """Add XP based on defeated Pokémon's tier."""

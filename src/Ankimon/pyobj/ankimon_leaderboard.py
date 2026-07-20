@@ -68,11 +68,11 @@ class ApiKeyDialog(QDialog):
             showInfo(f"Error saving credentials: {e}")
 
 def sync_data_to_leaderboard(data):
+    # First check if leaderboard is enabled in config
+    if not services.settings or not services.settings.get("misc.leaderboard"):
+        return
 
-        # First check if leaderboard is enabled in config
-        if not services.settings or not services.settings.get("misc.leaderboard"):
-            return
-
+    def _sync_task():
         try:
             # Load credentials from the database
             if not services.db:
@@ -82,9 +82,9 @@ def sync_data_to_leaderboard(data):
 
             # Validate credentials
             if (not username or not api_key) and services.db.is_migrated():
-                showInfo("Error: Missing credentials for Ankimon leaderboard. Please set up leaderboard from Ankimon menu or turn off in Settings.")
+                # Don't show info popup here since this can trigger during reviews
+                print("Error: Missing credentials for Ankimon leaderboard.")
                 return
-
 
             # Check if both username and api_key are available
             if username and api_key:
@@ -97,23 +97,26 @@ def sync_data_to_leaderboard(data):
                 # Send a POST request to the leaderboard API
                 response = requests.post(
                     ANKIMON_LEADERBOARD_API_URL,
-                    json=request_data
+                    json=request_data,
+                    timeout=5
                 )
 
-                #showInfo(response.text)  # Show the response text for debugging
-
-                # Check if the request was successful
-                #if response.status_code == 200:
-                #    mw.logger.log("log","Data synced successfully to leaderboard!")
-                #else:
-                #    mw.logger.log("log",f"Failed to sync data to leaderboard. Status code: {response.status_code}")
-            #else:
-                #mw.logger.log("Credentials are missing (username or api_key)")
-
         except requests.exceptions.RequestException as e:
-            showInfo(f"Error: Missing credentials for Ankimon leaderboard. Please set up leaderboard from Ankimon menu or turn off in Settings.\n\n {e}")
+            print(f"Error syncing Ankimon leaderboard: {e}")
         except Exception as e:
-            showInfo(f"Error: Missing credentials for Ankimon leaderboard. Please set up leaderboard from Ankimon menu or turn off in Settings.\n\n {e}")
+            print(f"Error syncing Ankimon leaderboard: {e}")
+
+    # Run in background to avoid freezing the UI
+    try:
+        from aqt import mw
+        if getattr(mw, "taskman", None) is not None:
+            mw.taskman.run_in_background(_sync_task)
+        else:
+            _sync_task()
+    except ImportError:
+        _sync_task()
+    except Exception as e:
+        print(f"Failed to run leaderboard sync: {e}")
 
 
 

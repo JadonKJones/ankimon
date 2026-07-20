@@ -1288,6 +1288,12 @@ def save_main_pokemon_progress(
         if not _in_bulk_resolve():
             if settings_obj.get("gui.pop_up_dialog_message_on_defeat") is True:
                 logger.log_and_showinfo("info", f"{msg}")
+
+        try:
+            if trainer_card is not None:
+                trainer_card.sync_to_leaderboard()
+        except Exception:
+            pass
         main_pokemon.xp = int(max(0, int(main_pokemon.xp) - int(experience)))
 
         # Request to open the pokemon evo window
@@ -1684,6 +1690,14 @@ def save_caught_pokemon(
     try:
         from ..singletons import notify_stats_changed
         notify_stats_changed()
+    except Exception:
+        pass
+
+    try:
+        # Trigger leaderboard sync on catch
+        from ..services import services
+        if services.trainer_card:
+            services.trainer_card.sync_to_leaderboard()
     except Exception:
         pass
 
