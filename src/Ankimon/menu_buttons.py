@@ -197,6 +197,26 @@ def create_menu_actions(
         qconnect(export_main_to_showdown.triggered, export_to_pkmn_showdown)
         export_menu.addAction(export_main_to_showdown)
 
+        manual_sync_action = export_menu.addAction("AnkiWeb Data Sync")
+
+        def open_manual_sync_dialog():
+            from .singletons import settings_obj, logger
+            from .pyobj.ankimon_sync import show_manual_sync_dialog
+
+            # We need to keep a reference to the dialog so it doesn't get garbage collected
+            if not hasattr(mw, "ankimon_sync_dialog") or getattr(mw, "ankimon_sync_dialog") is None or not mw.ankimon_sync_dialog.isVisible():
+                mw.ankimon_sync_dialog = show_manual_sync_dialog(settings_obj, logger)
+            else:
+                mw.ankimon_sync_dialog.raise_()
+                mw.ankimon_sync_dialog.activateWindow()
+
+        try:
+            from aqt.utils import qconnect
+            qconnect(manual_sync_action.triggered, open_manual_sync_dialog)
+        except ImportError:
+            manual_sync_action.triggered.connect(open_manual_sync_dialog)
+
+
         export_all_to_showdown = QAction(mw.translator.translate("export_all_pokemon_button"), mw)
         export_all_to_showdown.setMenuRole(QAction.MenuRole.NoRole)
         qconnect(export_all_to_showdown.triggered, export_all_pkmn_showdown)

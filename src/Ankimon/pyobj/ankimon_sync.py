@@ -286,12 +286,12 @@ class ImprovedPokemonDataSync(QDialog):
             if not differences:
                 self.header_label.setText(
                     "Ankimon Data Sync:\n"
-                    "✅ All data is synchronized. No differences found."
+                    "✅ All data is synchronized, or your local data is newer. No incoming changes found."
                 )
-                self.local_text_area.setPlainText("No differences found.")
-                self.web_text_area.setPlainText("No differences found.")
-                self.export_button.setEnabled(False)
-                self.import_button.setEnabled(False)
+                self.local_text_area.setPlainText("No incoming differences found.")
+                self.web_text_area.setPlainText("No incoming differences found.")
+                self.export_button.setEnabled(True)  # Allow manual export
+                self.import_button.setEnabled(True)  # Allow manual import
                 return
 
             self.header_label.setText(
@@ -1272,6 +1272,19 @@ def get_sync_info():
         return get_ankimon_sync().get_sync_folder_info()
     except Exception as e:
         return {'error': str(e)}
+
+
+def show_manual_sync_dialog(settings_obj, logger):
+    """Force show the sync dialog, regardless of differences, for manual syncing."""
+    try:
+        dialog = ImprovedPokemonDataSync(settings_obj, logger)
+        dialog.show()
+        return dialog
+    except Exception as e:
+        logger.log("error", f"Failed to open manual sync dialog: {str(e)}")
+        from .error_handler import show_warning_with_traceback
+        show_warning_with_traceback(parent=None, exception=e, message="Error opening sync dialog")
+        return None
 
 def check_and_sync_pokemon_data(settings_obj, logger):
     """
