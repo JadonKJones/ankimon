@@ -563,6 +563,8 @@ def _find_src_prefix(names: list[str]) -> Optional[str]:
     for name in names:
         if "src/Ankimon/__init__.py" in name:
             return name.rsplit("src/Ankimon/__init__.py", 1)[0] + "src/Ankimon/"
+    if "__init__.py" in names:
+        return ""
     return None
 
 
@@ -579,6 +581,8 @@ def _collect_code_files(gitignore_patterns: list[str]) -> dict[str, Path]:
 
 def _extract_ref_from_prefix(src_prefix: str) -> str:
     # src_prefix is e.g. "ankimon-main/src/Ankimon/" or "h0tp-ftw-ankimon-a1b2c3d/src/Ankimon/"
+    if not src_prefix:
+        return "main"
     parts = src_prefix.strip("/").replace("\\", "/").split("/")
     if not parts:
         return "main"
@@ -703,7 +707,7 @@ def apply_update(
                 return False, "ZIP archive is empty."
 
             src_prefix = _find_src_prefix(names)
-            if not src_prefix:
+            if src_prefix is None:
                 return False, "Could not find src/Ankimon/ in the archive."
 
             new_files = {}

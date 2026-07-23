@@ -263,7 +263,15 @@ def show_warning_with_traceback(
         raise ValueError("An exception must be provided.")
 
     # Generate and sanitize traceback
-    tb_text = scrub_traceback(traceback.format_exc())
+    import sys
+    tb_text = ""
+    if exception and hasattr(exception, "__traceback__") and exception.__traceback__:
+        tb_text = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
+    elif sys.exc_info()[0] is not None:
+        tb_text = traceback.format_exc()
+    else:
+        tb_text = f"{type(exception).__name__}: {str(exception)}\n(No traceback available)"
+    tb_text = scrub_traceback(tb_text)
     env_info = get_environment_info()
 
     # Observable record (works everywhere).
