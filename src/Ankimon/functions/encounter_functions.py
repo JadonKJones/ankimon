@@ -1226,13 +1226,6 @@ def save_main_pokemon_progress(
     logger: ShowInfoLogger,
     evo_window: EvoWindow,
 ):
-    experience = int(
-        find_experience_for_level(
-            main_pokemon.growth_rate,
-            main_pokemon.level,
-            settings_obj.get("misc.remove_level_cap"),
-        )
-    )
     if settings_obj.get("misc.remove_level_cap") is True:
         main_pokemon.xp += exp
         level_cap = None
@@ -1409,12 +1402,19 @@ def save_main_pokemon_progress(
                                 "info", f"{new_attack} will be discarded."
                             )
                 mainpkmndata["attacks"] = attacks
+    experience_till_next_level = int(
+        find_experience_for_level(
+            main_pokemon.growth_rate,
+            main_pokemon.level,
+            settings_obj.get("misc.remove_level_cap"),
+        )
+    )
     msg = ""
     msg += translator.translate(
         "mainpokemon_gained_xp",
         main_pokemon_name=main_pokemon.name,
         exp=exp,
-        experience_till_next_level=experience,
+        experience_till_next_level=experience_till_next_level,
         main_pokemon_xp=main_pokemon.xp,
     )
     color = "#a17cf7"  # pokemon leveling info color for tooltip
