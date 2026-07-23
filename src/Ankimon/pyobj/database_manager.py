@@ -682,6 +682,9 @@ class AnkimonDB:
                 "INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 0, ?)",
                 (individual_id, obfuscated_data)
             )
+        pokedex_id = pokemon_data.get("id")
+        if pokedex_id:
+            self.mark_as_caught(int(pokedex_id))
         conn.commit()
         self._clear_reviewer_ownership_cache()
         return True
@@ -793,6 +796,9 @@ class AnkimonDB:
             (new_individual_id, is_main, obfuscated_data, old_individual_id)
         )
 
+        pokedex_id = pokemon_data.get("id")
+        if pokedex_id:
+            self.mark_as_caught(int(pokedex_id))
         conn.commit()
         self._clear_reviewer_ownership_cache()
         return cursor.rowcount > 0
@@ -864,6 +870,9 @@ class AnkimonDB:
             "INSERT OR REPLACE INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 1, ?)",
             (individual_id, obfuscated_data)
         )
+        pokedex_id = pokemon_data.get("id")
+        if pokedex_id:
+            self.mark_as_caught(int(pokedex_id))
         conn.commit()
         self._clear_reviewer_ownership_cache()
         return True
