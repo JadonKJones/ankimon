@@ -97,7 +97,7 @@ def test_save_main_pokemon_progress_caps_at_10_levelups():
     from Ankimon.functions import encounter_functions as ef
     ef.settings_obj = settings
     ef.translator = mock.MagicMock()
-    ef.translator.translate = lambda *a, **k: "msg"
+    ef.translator.translate = mock.MagicMock(return_value="msg")
     ef.ankimon_db = mock.MagicMock()
     
     from Ankimon.services import services
@@ -153,6 +153,13 @@ def test_save_main_pokemon_progress_caps_at_10_levelups():
     # Verify that remaining XP is capped to next level's threshold - 1
     next_level_cost = find_experience_for_level("erratic", 62)
     assert main.xp == next_level_cost - 1
+
+    gained_xp_call = next(
+        call
+        for call in ef.translator.translate.call_args_list
+        if call.args and call.args[0] == "mainpokemon_gained_xp"
+    )
+    assert gained_xp_call.kwargs["experience_till_next_level"] == next_level_cost
 
 def test_xp_share_gain_exp_caps_at_10_levelups():
     from Ankimon.functions.pokemon_functions import find_experience_for_level
