@@ -1595,6 +1595,16 @@ class AnkimonDB:
         keys = ["queue_id", "revlog_id", "card_id", "ease", "review_time", "review_type"]
         return [dict(zip(keys, r)) for r in rows]
 
+    def mark_as_caught(self, species_id: int) -> None:
+        pokedex = self.get_user_data("pokedex_caught", default=[])
+        if species_id not in pokedex:
+            pokedex.append(species_id)
+            self.set_user_data("pokedex_caught", pokedex)
+        seen = self.get_user_data("pokedex_seen", default=[])
+        if species_id not in seen:
+            seen.append(species_id)
+            self.set_user_data("pokedex_seen", seen)
+
     def mark_mobile_battle_resolved(self, queue_id: int) -> None:
         import time
         now = int(time.time() * 1000)

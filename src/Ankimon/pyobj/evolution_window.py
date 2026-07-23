@@ -351,8 +351,7 @@ class EvoWindow(QWidget):
                 return
 
             # Persist the pre-evolved species as caught before the id changes so
-            # the Pokédex keeps crediting the earlier form (no-op on stores that
-            # predate mark_as_caught — arrives with the PC-box/Pokédex leaf).
+            # the Pokédex keeps crediting the earlier form
             if hasattr(db, "mark_as_caught"):
                 try:
                     db.mark_as_caught(int(prevo_id))
