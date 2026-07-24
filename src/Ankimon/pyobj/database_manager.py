@@ -182,13 +182,13 @@ class ConnectionWrapper:
                 self.release_lease()
                 lease_released = True
                 fresh = self._db_mgr._get_connection()
-                return CursorWrapper(fresh._conn.execute(*args, **kwargs), fresh)
+                return fresh.execute(*args, **kwargs)
             if self._db_mgr and ("malformed" in msg or "disk image" in msg) and not self._db_mgr._is_repairing:
                 self.release_lease()
                 lease_released = True
                 self._db_mgr.repair_database()
                 fresh = self._db_mgr._get_connection()
-                return CursorWrapper(fresh._conn.execute(*args, **kwargs), fresh)
+                return fresh.execute(*args, **kwargs)
             raise
         finally:
             if not lease_released:
@@ -207,13 +207,13 @@ class ConnectionWrapper:
                 self.release_lease()
                 lease_released = True
                 fresh = self._db_mgr._get_connection()
-                return CursorWrapper(fresh._conn.executemany(*args, **kwargs), fresh)
+                return fresh.executemany(*args, **kwargs)
             if self._db_mgr and ("malformed" in msg or "disk image" in msg) and not self._db_mgr._is_repairing:
                 self.release_lease()
                 lease_released = True
                 self._db_mgr.repair_database()
                 fresh = self._db_mgr._get_connection()
-                return CursorWrapper(fresh._conn.executemany(*args, **kwargs), fresh)
+                return fresh.executemany(*args, **kwargs)
             raise
         finally:
             if not lease_released:

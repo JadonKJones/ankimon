@@ -632,6 +632,77 @@ def test_retry_on_closed_database_error(temp_env):
         assert cursor.fetchone()[0] == 1
 
 
+@pytest.mark.parametrize(
+    ("method_name", "operation_args", "expected"),
+    [
+        ("execute", ("SELECT 1",), 1),
+        (
+            "executemany",
+            (
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+                [("retry_handoff_a", "1"), ("retry_handoff_b", "2")],
+            ),
+            2,
+        ),
+    ],
+)
+def test_retry_handoff_holds_lease_before_cursor_wrapper(
+    temp_env, method_name, operation_args, expected
+):
+    import threading
+
+    db, _ = temp_env
+    stale = db._get_connection()
+    stale._conn.close()
+    db._connection_epoch += 1
+
+    entered_handoff = threading.Event()
+    resume_handoff = threading.Event()
+    result = {}
+    original_init = _db_mod.CursorWrapper.__init__
+    paused = False
+
+    def paused_init(cursor_self, raw_cursor, conn_wrapper, *, lease_acquired=False):
+        nonlocal paused
+        if conn_wrapper is not stale and not paused:
+            paused = True
+            entered_handoff.set()
+            assert resume_handoff.wait(timeout=5), "retry handoff was not resumed"
+        original_init(
+            cursor_self,
+            raw_cursor,
+            conn_wrapper,
+            lease_acquired=lease_acquired,
+        )
+
+    def worker():
+        try:
+            with patch.object(_db_mod, "_is_main_thread", return_value=False):
+                cursor = getattr(stale, method_name)(*operation_args)
+                try:
+                    result["value"] = (
+                        cursor.fetchone()[0]
+                        if method_name == "execute"
+                        else cursor.rowcount
+                    )
+                finally:
+                    cursor.close()
+        except Exception as exc:
+            result["error"] = exc
+
+    with patch.object(_db_mod.CursorWrapper, "__init__", paused_init):
+        thread = threading.Thread(target=worker)
+        thread.start()
+        assert entered_handoff.wait(timeout=5), "retry did not reach cursor handoff"
+        assert db.close(0.01) is False
+        resume_handoff.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert result.get("value") == expected
+    assert "error" not in result
+
+
 def test_repair_aborts_when_connections_do_not_drain(temp_env):
     import contextlib
 
