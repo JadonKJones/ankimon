@@ -93,6 +93,20 @@ def test_database_initialization(temp_env):
         cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'")
         assert cursor.fetchone() is not None, f"Table {table} should exist"
 
+
+def test_base_stats_normalization_marker_is_internal_metadata(temp_env):
+    """The startup marker must not make a virgin user-config table look populated."""
+    db, _ = temp_env
+    conn = db._get_connection()
+
+    marker = conn.execute(
+        "SELECT value FROM metadata WHERE key = 'base_stats_normalized'"
+    ).fetchone()
+
+    assert marker[0] == "true"
+    assert db.has_config() is False
+    assert db.get_all_config() == {}
+
 def test_item_save_and_smart_sync(temp_env):
     db, tmp_path = temp_env
     # 1. First add (uses CSV to discover metadata)
@@ -264,3 +278,533 @@ def test_database_corruption_self_healing(temp_env):
     # Confirm unique constraint is back by verifying that inserting a duplicate now raises IntegrityError
     with pytest.raises(sqlite3.IntegrityError):
         cursor.execute("INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES ('duplicate-uuid', 0, '{}')")
+
+def test_thread_local_connection_closes_and_reopens(temp_env):
+    import threading
+    db, _ = temp_env
+    
+    results = {}
+    event_start = threading.Event()
+    event_closed = threading.Event()
+    
+    def thread_func():
+        with patch("Ankimon.pyobj.database_manager._is_main_thread", return_value=False):
+            # Get connection and verify it works
+            conn = db._get_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                assert cursor.fetchone()[0] == 1
+            
+            # Notify main thread
+            event_start.set()
+            assert event_closed.wait(timeout=5), "database close was not signaled"
+            
+            # Get connection again. It should be refreshed automatically
+            conn2 = db._get_connection()
+            with conn2.cursor() as cursor2:
+                cursor2.execute("SELECT 1")
+                results["success"] = (cursor2.fetchone()[0] == 1)
+            
+    t = threading.Thread(target=thread_func)
+    t.start()
+    
+    assert event_start.wait(timeout=5), "worker did not initialize"
+    
+    # Close database from main thread
+    db.close()
+    
+    event_closed.set()
+    t.join(timeout=5)
+    assert not t.is_alive(), "worker did not finish"
+    
+    assert results.get("success") is True
+
+
+def test_close_reports_timeout_while_cursor_lease_is_active(temp_env):
+    db, _ = temp_env
+    conn = db._get_connection()
+    cursor = conn.cursor()
+    epoch = db._connection_epoch
+
+    assert db.close(0.01) is False
+    assert db._connection_epoch == epoch
+    assert db._get_connection() is conn
+    assert conn._close_pending is False
+
+    cursor.execute("SELECT 1")
+    assert cursor.fetchone()[0] == 1
+    cursor.close()
+
+    assert conn._closed is False
+    assert db.close(0.1) is True
+    assert db._connection_epoch == epoch + 1
+    assert conn._closed is True
+
+
+def test_failed_close_preserves_active_transaction_generation(temp_env):
+    db, _ = temp_env
+    conn = db._get_connection()
+    epoch = db._connection_epoch
+
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+            ("before_failed_close", "1"),
+        ).close()
+
+        assert db.close(0.0) is False
+        assert db._connection_epoch == epoch
+        assert db._get_connection() is conn
+
+        db.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+            ("after_failed_close", "2"),
+        ).close()
+
+    assert db.execute(
+        "SELECT value FROM metadata WHERE key = ?",
+        ("after_failed_close",),
+    ).fetchone()[0] == "2"
+
+
+def test_switch_database_aborts_when_connections_do_not_drain(temp_env):
+    import contextlib
+
+    db, _ = temp_env
+    original_path = db.db_path
+
+    @contextlib.contextmanager
+    def not_drained(wait_seconds=0.0):
+        assert wait_seconds == 2.0
+        yield False
+
+    with patch.object(db, "quiesce", not_drained):
+        with pytest.raises(RuntimeError, match="active operations did not finish"):
+            db.switch_database("ankimonDEV.db")
+
+    assert db.db_path == original_path
+
+
+def test_close_deduplicates_wrappers_and_shares_deadline(temp_env):
+    import weakref
+
+    db, _ = temp_env
+    if db._connection is not None:
+        db._connection.close()
+
+    clock = [100.0]
+
+    class FakeWrapper:
+        def __init__(self, advance):
+            self.advance = advance
+            self.calls = []
+
+        def close(self, wait_seconds):
+            self.calls.append(wait_seconds)
+            clock[0] += self.advance
+            return False
+
+    first = FakeWrapper(0.75)
+    second = FakeWrapper(0.50)
+    db._connection = first
+    db._all_connections = [
+        weakref.ref(first),
+        weakref.ref(first),
+        weakref.ref(second),
+    ]
+    db._local_conn.conn = second
+
+    with patch.object(_db_mod.time, "monotonic", side_effect=lambda: clock[0]):
+        assert db.close(2.0) is False
+
+    assert first.calls == [pytest.approx(2.0)]
+    assert second.calls == [pytest.approx(1.25)]
+
+
+def test_connection_lease_prevents_closure_during_inflight_operation(temp_env):
+    import threading
+
+    db, _ = temp_env
+    event_paused = threading.Event()
+    event_close_done = threading.Event()
+    results = {}
+
+    conn = db._get_connection()
+    with conn.cursor() as cursor:
+        cursor_wrapper_class = cursor.__class__
+    db_module = sys.modules[db.__class__.__module__]
+    original_execute = cursor_wrapper_class.execute
+
+    def patched_cursor_execute(cursor_self, sql, *args, **kwargs):
+        if "SELECT 'test_inflight'" in sql:
+            event_paused.set()
+            assert event_close_done.wait(timeout=5), "database close did not complete"
+        return original_execute(cursor_self, sql, *args, **kwargs)
+
+    def worker():
+        try:
+            with db.execute("SELECT 'test_inflight'") as cursor_thread:
+                results["value"] = cursor_thread.fetchone()[0]
+        except Exception as exc:
+            results["error"] = exc
+
+    with (
+        patch.object(cursor_wrapper_class, "execute", patched_cursor_execute),
+        patch.object(db_module, "_is_main_thread", return_value=False),
+    ):
+        thread = threading.Thread(target=worker)
+        thread.start()
+        try:
+            assert event_paused.wait(timeout=5), "worker did not initialize"
+            db.close()
+            event_close_done.set()
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "worker did not finish"
+        finally:
+            event_close_done.set()
+            thread.join(timeout=5)
+
+    assert results.get("value") == "test_inflight"
+    assert "error" not in results
+
+
+def test_cursor_handoff_holds_lease_before_close(temp_env):
+    """Closing during cursor wrapping must not invalidate the raw cursor."""
+    import threading
+
+    db, _ = temp_env
+    cursor_created = threading.Event()
+    continue_wrapping = threading.Event()
+    results = {}
+    original_init = _db_mod.CursorWrapper.__init__
+
+    def paused_init(cursor_self, raw_cursor, conn_wrapper, *, lease_acquired=False):
+        cursor_created.set()
+        assert continue_wrapping.wait(timeout=5), "cursor handoff was not resumed"
+        original_init(
+            cursor_self,
+            raw_cursor,
+            conn_wrapper,
+            lease_acquired=lease_acquired,
+        )
+
+    def worker():
+        try:
+            with patch.object(_db_mod, "_is_main_thread", return_value=False):
+                conn = db._get_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                    results["value"] = cursor.fetchone()[0]
+        except Exception as exc:
+            results["error"] = exc
+
+    with patch.object(_db_mod.CursorWrapper, "__init__", paused_init):
+        thread = threading.Thread(target=worker)
+        thread.start()
+        assert cursor_created.wait(timeout=5), "worker did not create its cursor"
+        db.close()
+        continue_wrapping.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "worker did not finish"
+
+    assert results.get("value") == 1
+    assert "error" not in results
+
+
+def test_close_waits_for_connection_registration(temp_env):
+    import threading
+    import time
+
+    db, _ = temp_env
+    entered_prepare = threading.Event()
+    resume_prepare = threading.Event()
+    result = {}
+    original_prepare = db._prepare_connection
+
+    def paused_prepare(raw_conn):
+        entered_prepare.set()
+        assert resume_prepare.wait(timeout=5), "connection registration was not resumed"
+        return original_prepare(raw_conn)
+
+    def create_connection():
+        with patch.object(_db_mod, "_is_main_thread", return_value=False):
+            result["conn"] = db._get_connection()
+
+    def close_database():
+        result["closed"] = db.close(1.0)
+
+    db._prepare_connection = paused_prepare
+    creator = threading.Thread(target=create_connection)
+    closer = threading.Thread(target=close_database)
+    creator.start()
+    assert entered_prepare.wait(timeout=5), "worker did not open its raw connection"
+
+    closer.start()
+    time.sleep(0.05)
+    assert closer.is_alive(), "close bypassed in-progress connection registration"
+
+    resume_prepare.set()
+    creator.join(timeout=5)
+    closer.join(timeout=5)
+    db._prepare_connection = original_prepare
+
+    assert not creator.is_alive()
+    assert not closer.is_alive()
+    assert result["closed"] is True
+    assert result["conn"]._closed is True
+    assert db._all_connections == []
+
+
+def test_quiesce_blocks_reopen_until_transition_finishes(temp_env):
+    import threading
+    import time
+
+    db, _ = temp_env
+    started = threading.Event()
+    acquired = threading.Event()
+    result = {}
+
+    def create_connection():
+        started.set()
+        with patch.object(_db_mod, "_is_main_thread", return_value=False):
+            result["conn"] = db._get_connection()
+        acquired.set()
+
+    with db.quiesce(0.1) as closed:
+        assert closed is True
+        worker = threading.Thread(target=create_connection)
+        worker.start()
+        assert started.wait(timeout=5)
+        time.sleep(0.05)
+        assert not acquired.is_set()
+
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert acquired.is_set()
+    assert result["conn"]._closed is False
+
+
+def test_epoch_double_read_race(temp_env):
+    db, _ = temp_env
+    original_prepare = db._prepare_connection
+    close_called = False
+    
+    def patched_prepare(conn):
+        nonlocal close_called
+        res = original_prepare(conn)
+        if not close_called:
+            close_called = True
+            db.close()
+        return res
+        
+    db._prepare_connection = patched_prepare
+    
+    import threading
+    results = {}
+    
+    def thread_func():
+        try:
+            with patch("Ankimon.pyobj.database_manager._is_main_thread", return_value=False):
+                conn1 = db._get_connection()
+                conn2 = db._get_connection()
+                with conn2.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                    results["success"] = (cursor.fetchone()[0] == 1)
+        except Exception as e:
+            results["error"] = str(e)
+            
+    t = threading.Thread(target=thread_func)
+    t.start()
+    t.join(timeout=5)
+    assert not t.is_alive()
+    assert results.get("success") is True
+    assert "error" not in results
+
+
+def test_retry_on_closed_database_error(temp_env):
+    db, _ = temp_env
+    conn = db._get_connection()
+    conn._conn.close()
+    db._connection_epoch += 1
+    
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT 1")
+        assert cursor.fetchone()[0] == 1
+
+
+@pytest.mark.parametrize(
+    ("method_name", "operation_args", "expected"),
+    [
+        ("execute", ("SELECT 1",), 1),
+        (
+            "executemany",
+            (
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+                [("retry_handoff_a", "1"), ("retry_handoff_b", "2")],
+            ),
+            2,
+        ),
+    ],
+)
+def test_retry_handoff_holds_lease_before_cursor_wrapper(
+    temp_env, method_name, operation_args, expected
+):
+    import threading
+
+    db, _ = temp_env
+    stale = db._get_connection()
+    stale._conn.close()
+    db._connection_epoch += 1
+
+    entered_handoff = threading.Event()
+    resume_handoff = threading.Event()
+    result = {}
+    original_init = _db_mod.CursorWrapper.__init__
+    paused = False
+
+    def paused_init(cursor_self, raw_cursor, conn_wrapper, *, lease_acquired=False):
+        nonlocal paused
+        if conn_wrapper is not stale and not paused:
+            paused = True
+            entered_handoff.set()
+            assert resume_handoff.wait(timeout=5), "retry handoff was not resumed"
+        original_init(
+            cursor_self,
+            raw_cursor,
+            conn_wrapper,
+            lease_acquired=lease_acquired,
+        )
+
+    def worker():
+        try:
+            with patch.object(_db_mod, "_is_main_thread", return_value=False):
+                cursor = getattr(stale, method_name)(*operation_args)
+                try:
+                    result["value"] = (
+                        cursor.fetchone()[0]
+                        if method_name == "execute"
+                        else cursor.rowcount
+                    )
+                finally:
+                    cursor.close()
+        except Exception as exc:
+            result["error"] = exc
+
+    with patch.object(_db_mod.CursorWrapper, "__init__", paused_init):
+        thread = threading.Thread(target=worker)
+        thread.start()
+        assert entered_handoff.wait(timeout=5), "retry did not reach cursor handoff"
+        assert db.close(0.01) is False
+        resume_handoff.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert result.get("value") == expected
+    assert "error" not in result
+
+
+def test_repair_aborts_when_connections_do_not_drain(temp_env):
+    import contextlib
+
+    db, _ = temp_env
+
+    @contextlib.contextmanager
+    def not_drained(wait_seconds=0.0):
+        assert wait_seconds == 2.0
+        yield False
+
+    with patch.object(db, "quiesce", not_drained):
+        with pytest.raises(RuntimeError, match="active operations did not finish"):
+            db.repair_database()
+
+    assert db.db_path.exists()
+    assert not db.db_path.with_name(db.db_path.name + ".tmp").exists()
+
+
+def test_legacy_base_stats_normalization(temp_env):
+    """Verify that old database entries without 'base_stats' key are normalized on repair and startup."""
+    db, _ = temp_env
+    # Create a pokemon with 'stats' but no 'base_stats'
+    legacy_pk = {
+        "individual_id": "legacy-uuid",
+        "name": "pikachu",
+        "id": 25,
+        "level": 5,
+        "xp": 100,
+        "stats": {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90},
+        "iv": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
+    }
+
+    # Save manually to bypass the save_pokemon normalization/check
+    obfuscated_data = db._obfuscate(legacy_pk)
+    conn = db._get_connection()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 0, ?)",
+            ("legacy-uuid", obfuscated_data),
+        )
+    conn.commit()
+
+    # Check that it starts without base_stats
+    pk_loaded = db.get_pokemon("legacy-uuid")
+    assert "base_stats" not in pk_loaded
+
+    mock_base_stats = {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90}
+    with patch("Ankimon.functions.pokedex_functions.search_pokedex", return_value=mock_base_stats) as mock_search:
+        db.repair_database()
+    mock_search.assert_called_once_with("pikachu", "baseStats")
+
+    # Check that base_stats was populated from pokedex lookup
+    pk_repaired = db.get_pokemon("legacy-uuid")
+    assert "base_stats" in pk_repaired
+    assert pk_repaired["base_stats"]["hp"] == 35
+    assert pk_repaired["base_stats"]["spe"] == 90
+
+
+def test_base_stats_normalization_startup_sweep(temp_env):
+    """The startup sweep heals legacy records without requiring a full repair."""
+    db, _ = temp_env
+    legacy_pk = {
+        "individual_id": "legacy-uuid-2",
+        "name": "pikachu",
+        "id": 25,
+        "level": 5,
+        "stats": {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90},
+    }
+    conn = db._get_connection()
+    conn.cursor().execute(
+        "INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 0, ?)",
+        ("legacy-uuid-2", db._obfuscate(legacy_pk))
+    )
+    conn.commit()
+
+    mock_base_stats = {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90}
+    with patch("Ankimon.functions.pokedex_functions.search_pokedex", return_value=mock_base_stats):
+        db._normalize_pokemon_base_stats()
+
+    assert db.get_pokemon("legacy-uuid-2")["base_stats"] == mock_base_stats
+
+
+def test_unresolvable_base_stats_record_left_untouched(temp_env):
+    """A record whose species is missing from the pokedex must not be modified."""
+    db, _ = temp_env
+    legacy_pk = {
+        "individual_id": "legacy-uuid-3",
+        "name": "not-a-real-species",
+        "id": 9999,
+        "level": 5,
+        "stats": {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90},
+    }
+    conn = db._get_connection()
+    conn.cursor().execute(
+        "INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 0, ?)",
+        ("legacy-uuid-3", db._obfuscate(legacy_pk))
+    )
+    conn.commit()
+
+    with patch("Ankimon.functions.pokedex_functions.search_pokedex", return_value=[]):
+        db._normalize_pokemon_base_stats()
+
+    assert db.get_pokemon("legacy-uuid-3") == legacy_pk
+

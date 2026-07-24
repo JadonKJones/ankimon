@@ -486,7 +486,7 @@ def create_menu_actions(
     file_check_action.triggered.connect(lambda: FileCheckerApp().exec())
     help_menu.addAction(file_check_action)
 
-    # Leaderboard credentials moved to Settings → Leaderboard
+    # Leaderboard credentials moved to Settings → Leaderboard.
     downloader_action = QAction(mw.translator.translate("download_resources_button"), mw)
     downloader_action.setMenuRole(QAction.MenuRole.NoRole)
     downloader_action.triggered.connect(show_agreement_and_download_dialog)

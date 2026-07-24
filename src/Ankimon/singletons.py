@@ -426,8 +426,14 @@ def swap_ankimon_account():
     from aqt.utils import tooltip
     from .functions.update_main_pokemon import update_main_pokemon
     from .functions.encounter_functions import new_pokemon, clear_encounter_cache
+    from .functions.mobile_sync import _mobile_sync_lock
 
+    mobile_lock_acquired = False
     try:
+        mobile_lock_acquired = _mobile_sync_lock.acquire(blocking=False)
+        if not mobile_lock_acquired:
+            tooltip("Cannot switch accounts while mobile battles are resolving.")
+            return
         # services.db (or its db_path) can be None during init / in headless
         # environments; read the active name inside the try so a missing DB
         # fails gracefully into the tooltip rather than raising an uncaught
@@ -519,6 +525,9 @@ def swap_ankimon_account():
         import traceback
 
         traceback.print_exc()
+    finally:
+        if mobile_lock_acquired:
+            _mobile_sync_lock.release()
 
 
 # DEFERRED seam points (do NOT add here in F31):
