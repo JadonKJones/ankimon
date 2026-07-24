@@ -182,9 +182,9 @@
 
     /**
      * Builds a password input field for sensitive credential settings.
-     * 
+     *
      * Creates a masked input field with placeholder text and change tracking.
-     * 
+     *
      * @param {Object} setting - The setting configuration object.
      * @returns {HTMLElement} The password input element.
      */

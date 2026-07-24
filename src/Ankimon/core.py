@@ -203,4 +203,3 @@ def bind_runtime_globals() -> None:
         module = importlib.import_module(real_module_path)
         for global_name, attr in mapping.items():
             setattr(module, global_name, getattr(services, attr))
-          

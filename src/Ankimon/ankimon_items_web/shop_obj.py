@@ -2154,11 +2154,11 @@ class AnkimonItemsWeb(QDialog):
                         names_dict[pid] = f"#{pid}"
             entry["names"] = names_dict
             return entry
-        
+
         if key == "leaderboard.api_key":
             entry.update(settings_schema.serialize_secret_setting(value))
             return entry
-        
+
         if key == "misc.active_region":
             entry["type"] = "select"
             entry["options"] = settings_schema.ACTIVE_REGION_OPTIONS
