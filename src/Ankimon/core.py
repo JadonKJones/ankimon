@@ -88,14 +88,11 @@ def build_core() -> SimpleNamespace:
     settings_obj = Settings()
     services.populate(settings=settings_obj)
 
-    # LEADERBOARD CREDENTIALS MIGRATION
-    # This runs immediately after services.populate(settings=settings_obj)
-    # and BEFORE any TrainerCard construction or sync attempt.
-  
-    from .pyobj.ankimon_leaderboard import migrate_credentials_from_db
+    # Run before TrainerCard construction, whose initializer can sync stats.
     try:
+        from .pyobj.ankimon_leaderboard import migrate_credentials_from_db
+
         migrate_credentials_from_db()
-        print("Ankimon: Leaderboard credentials migration checked")
     except Exception as e:
         print(f"Ankimon: Error during leaderboard credentials migration: {e}")
 

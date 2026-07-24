@@ -87,58 +87,28 @@ def sync_data_to_leaderboard(data):
         print(f"Ankimon: Unexpected error preparing leaderboard sync: {e}")
 
 
-def migrate_credentials_from_db():
-    """
-    Migrate leaderboard credentials from the legacy database to the settings system.
-    
-    This function performs a one-time migration of username and API key from
-    the old database storage to the new settings-based storage system. It
-    checks if credentials exist in the database and whether they have already
-    been migrated to settings to avoid overwriting existing settings data.
-    
-    The migration runs during Anki startup and ensures a smooth transition
-    for users who previously configured leaderboard credentials using the
-    legacy system.
-    
-    Returns:
-        None: Migration status is logged to console; failures are caught
-            and logged without interrupting the startup process.
-    
-    Note:
-        - Function exits early if database or settings services are unavailable
-        - Only migrates if database has credentials AND settings don't
-        - After migration, the legacy database entries are cleared to prevent
-          the old credentials from ever resurrecting over future edits
-        - The leaderboard enabled/disabled state is preserved automatically
+def migrate_credentials_from_db() -> bool:
+    """Atomically move legacy leaderboard credentials into Settings.
+
+    Existing Settings values win per field. The database transaction stores any
+    missing replacements and retires the corresponding legacy rows together, so
+    a write failure cannot destroy the user's original credentials.
     """
     if services.db is None or services.settings is None:
-        return
-    
-    try:
-        # Check if we have credentials in database
-        username = services.db.get_user_data("username")
-        api_key = services.db.get_user_data("api_key")
-        
-        # Normalize None values to empty strings for comparison
-        username = "" if username is None else str(username)
-        api_key = "" if api_key is None else str(api_key)
-        
-        # Check if we have them in settings already
-        settings_username = services.settings.get("leaderboard.username", "")
-        settings_api_key = services.settings.get("leaderboard.api_key", "")
-        
-        # If db has credentials, migrate them to settings (only if not already set)
-        if username and api_key:
-            if not settings_username:
-                services.settings.set("leaderboard.username", username)
-            if not settings_api_key:
-                services.settings.set("leaderboard.api_key", api_key)
-            
-            # Clear legacy database entries after successful migration
-            # The condition is guaranteed true here because we checked username and api_key above
-            services.db.set_user_data("username", "")
-            services.db.set_user_data("api_key", "")
-            print("Ankimon: Migrated and cleared legacy leaderboard credentials")
-            
-    except Exception as e:
-        print(f"Ankimon: Error migrating leaderboard credentials: {e}")
+        return False
+
+    migrated = services.db.migrate_user_data_to_config(
+        {
+            "username": "leaderboard.username",
+            "api_key": "leaderboard.api_key",
+        }
+    )
+    if not migrated:
+        return False
+
+    # The DB transaction has already persisted these values. Update the live
+    # Settings object in place without issuing a second, non-atomic write.
+    services.settings.config.update(migrated)
+    services.settings.compute_gui_config()
+    print("Ankimon: Migrated and cleared legacy leaderboard credentials")
+    return True
