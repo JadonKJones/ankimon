@@ -96,19 +96,30 @@ def test_online_connectivity(
 ):
     import socket
     from urllib.parse import urlparse
+
     try:
         parsed = urlparse(url)
-        host = parsed.hostname
-        if not host:
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             return False
-        port = parsed.port
-        if not port:
-            port = 80 if parsed.scheme == "http" else 443
-        with socket.create_connection((host, port), timeout=timeout):
-            pass
-        return True
-    except Exception:
+        port = parsed.port or (80 if parsed.scheme == "http" else 443)
+    except ValueError:
         return False
+
+    try:
+        with socket.create_connection((parsed.hostname, port), timeout=timeout):
+            return True
+    except OSError:
+        # Direct sockets can be blocked on proxy-only networks. Fall back to the
+        # configured requests transport without downloading the response body.
+        response = None
+        try:
+            response = requests.get(url, timeout=timeout, stream=True)
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
+        finally:
+            if response is not None:
+                response.close()
 
 
 # Define the hook function
