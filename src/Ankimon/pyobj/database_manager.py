@@ -387,6 +387,31 @@ class AnkimonDB:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_pokemon_pokedex_id ON captured_pokemon(pokedex_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_pokemon_shiny ON captured_pokemon(shiny)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_pokemon_level ON captured_pokemon(level)")
+
+            # Normalize base stats in the temp db during repair
+            try:
+                from ..functions.pokedex_functions import is_valid_base_stats, search_pokedex
+                cursor.execute("SELECT individual_id, data FROM captured_pokemon")
+                rows = cursor.fetchall()
+                updates = []
+                for row in rows:
+                    ind_id, obfuscated_data = row
+                    pokemon_data = self._deobfuscate(obfuscated_data)
+                    if not pokemon_data:
+                        continue
+                    
+                    base_stats = pokemon_data.get("base_stats")
+                    if not is_valid_base_stats(base_stats):
+                        base_stats = search_pokedex(pokemon_data.get("name", ""), "baseStats") or {}
+                        if is_valid_base_stats(base_stats):
+                            pokemon_data["base_stats"] = base_stats
+                            new_obfuscated = self._obfuscate(pokemon_data)
+                            updates.append((new_obfuscated, ind_id))
+                
+                if updates:
+                    cursor.executemany("UPDATE captured_pokemon SET data = ? WHERE individual_id = ?", updates)
+            except Exception as e:
+                self._log("error", f"Failed to normalize base_stats in repair: {e}")
             
             # Rebuild index and verify
             cursor.execute("REINDEX")
@@ -652,6 +677,51 @@ class AnkimonDB:
 
         conn.commit()
         self._log("info", "AnkimonDB: Database schema initialized.")
+        try:
+            cursor.execute(
+                "SELECT value FROM metadata WHERE key = 'base_stats_normalized'"
+            )
+            marker = cursor.fetchone()
+            if marker is None or marker[0] != "true":
+                self._normalize_pokemon_base_stats()
+                cursor.execute(
+                    "INSERT OR REPLACE INTO metadata (key, value) "
+                    "VALUES ('base_stats_normalized', 'true')"
+                )
+                conn.commit()
+        except Exception as e:
+            self._log("error", f"Failed to run base_stats normalization on startup: {e}")
+
+    def _normalize_pokemon_base_stats(self):
+        """Sweeps all captured pokemon to ensure base_stats is populated (for older databases)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT individual_id, data FROM captured_pokemon")
+        rows = cursor.fetchall()
+        
+        from ..functions.pokedex_functions import is_valid_base_stats, search_pokedex
+        updates = []
+        for row in rows:
+            ind_id, obfuscated_data = row
+            pokemon_data = self._deobfuscate(obfuscated_data)
+            if not pokemon_data:
+                continue
+            
+            base_stats = pokemon_data.get("base_stats")
+
+            # If base_stats is completely missing or empty/lacking stat keys or invalid values
+            if not is_valid_base_stats(base_stats):
+                base_stats = search_pokedex(pokemon_data.get("name", ""), "baseStats") or {}
+                if is_valid_base_stats(base_stats):
+                    pokemon_data["base_stats"] = base_stats
+                    new_obfuscated = self._obfuscate(pokemon_data)
+                    updates.append((new_obfuscated, ind_id))
+
+        if updates:
+            self._log("info", f"Normalizing base_stats for {len(updates)} legacy pokemon records...")
+            cursor.executemany("UPDATE captured_pokemon SET data = ? WHERE individual_id = ?", updates)
+            conn.commit()
+            self._clear_reviewer_ownership_cache()
 
     # --- Captured Pokemon Operations ---
 
