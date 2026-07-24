@@ -368,14 +368,20 @@ def test_failed_close_preserves_active_transaction_generation(temp_env):
 
 
 def test_switch_database_aborts_when_connections_do_not_drain(temp_env):
+    import contextlib
+
     db, _ = temp_env
     original_path = db.db_path
 
-    with patch.object(db, "close", return_value=False) as close:
+    @contextlib.contextmanager
+    def not_drained(wait_seconds=0.0):
+        assert wait_seconds == 2.0
+        yield False
+
+    with patch.object(db, "quiesce", not_drained):
         with pytest.raises(RuntimeError, match="active operations did not finish"):
             db.switch_database("ankimonDEV.db")
 
-    close.assert_called_once_with(2.0)
     assert db.db_path == original_path
 
 
@@ -505,6 +511,79 @@ def test_cursor_handoff_holds_lease_before_close(temp_env):
     assert "error" not in results
 
 
+def test_close_waits_for_connection_registration(temp_env):
+    import threading
+    import time
+
+    db, _ = temp_env
+    entered_prepare = threading.Event()
+    resume_prepare = threading.Event()
+    result = {}
+    original_prepare = db._prepare_connection
+
+    def paused_prepare(raw_conn):
+        entered_prepare.set()
+        assert resume_prepare.wait(timeout=5), "connection registration was not resumed"
+        return original_prepare(raw_conn)
+
+    def create_connection():
+        with patch.object(_db_mod, "_is_main_thread", return_value=False):
+            result["conn"] = db._get_connection()
+
+    def close_database():
+        result["closed"] = db.close(1.0)
+
+    db._prepare_connection = paused_prepare
+    creator = threading.Thread(target=create_connection)
+    closer = threading.Thread(target=close_database)
+    creator.start()
+    assert entered_prepare.wait(timeout=5), "worker did not open its raw connection"
+
+    closer.start()
+    time.sleep(0.05)
+    assert closer.is_alive(), "close bypassed in-progress connection registration"
+
+    resume_prepare.set()
+    creator.join(timeout=5)
+    closer.join(timeout=5)
+    db._prepare_connection = original_prepare
+
+    assert not creator.is_alive()
+    assert not closer.is_alive()
+    assert result["closed"] is True
+    assert result["conn"]._closed is True
+    assert db._all_connections == []
+
+
+def test_quiesce_blocks_reopen_until_transition_finishes(temp_env):
+    import threading
+    import time
+
+    db, _ = temp_env
+    started = threading.Event()
+    acquired = threading.Event()
+    result = {}
+
+    def create_connection():
+        started.set()
+        with patch.object(_db_mod, "_is_main_thread", return_value=False):
+            result["conn"] = db._get_connection()
+        acquired.set()
+
+    with db.quiesce(0.1) as closed:
+        assert closed is True
+        worker = threading.Thread(target=create_connection)
+        worker.start()
+        assert started.wait(timeout=5)
+        time.sleep(0.05)
+        assert not acquired.is_set()
+
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert acquired.is_set()
+    assert result["conn"]._closed is False
+
+
 def test_epoch_double_read_race(temp_env):
     db, _ = temp_env
     original_prepare = db._prepare_connection
@@ -554,9 +633,16 @@ def test_retry_on_closed_database_error(temp_env):
 
 
 def test_repair_aborts_when_connections_do_not_drain(temp_env):
+    import contextlib
+
     db, _ = temp_env
 
-    with patch.object(db, "close", return_value=False):
+    @contextlib.contextmanager
+    def not_drained(wait_seconds=0.0):
+        assert wait_seconds == 2.0
+        yield False
+
+    with patch.object(db, "quiesce", not_drained):
         with pytest.raises(RuntimeError, match="active operations did not finish"):
             db.repair_database()
 

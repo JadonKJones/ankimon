@@ -332,7 +332,7 @@ class AnkimonDB:
         self._connection: Optional[ConnectionWrapper] = None       # GUI-thread connection
         self._local_conn = threading.local()                       # per-background-thread
         self._all_connections = []
-        self._conn_lock = threading.Lock()
+        self._conn_lock = threading.RLock()
         self._is_repairing = False
         # When non-None, mark_mobile_battle_resolved defers the mirror-DB sync
         # (which commits on a separate connection, escaping any outer transaction)
@@ -397,54 +397,50 @@ class AnkimonDB:
     def _get_connection(self) -> ConnectionWrapper:
         """Gets or creates a database connection for the CURRENT thread.
 
-        GUI thread: the single shared ``self._connection`` (as before, now WAL).
-        Background threads: a dedicated per-thread connection (``check_same_thread``
-        is disabled so a connection may be created off the GUI thread safely, and
-        each thread keeps its own so they never share a cursor)."""
-        epoch = self._connection_epoch
-        if not _is_main_thread():
-            local = self._local_conn
-            if (not hasattr(local, "conn") or local.conn is None
-                    or getattr(local.conn, "_closed", False)
-                    or getattr(local, "db_path", None) != self.db_path
-                    or getattr(local, "epoch", -1) != epoch):
-                if getattr(local, "conn", None) is not None:
+        Connection creation and registration share the lifecycle lock with
+        shutdown, so a raw SQLite handle cannot appear between a close snapshot
+        and the file transition that follows it.
+        """
+        with self._conn_lock:
+            epoch = self._connection_epoch
+            if not _is_main_thread():
+                local = self._local_conn
+                if (not hasattr(local, "conn") or local.conn is None
+                        or getattr(local.conn, "_closed", False)
+                        or getattr(local, "db_path", None) != self.db_path
+                        or getattr(local, "epoch", -1) != epoch):
+                    if getattr(local, "conn", None) is not None:
+                        try:
+                            local.conn.close()
+                        except Exception:
+                            pass
+                    conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+                    local.conn = self._prepare_connection(conn)
+                    local.db_path = self.db_path
+                    local.epoch = epoch
+                elif not isinstance(local.conn, ConnectionWrapper):
+                    local.conn = ConnectionWrapper(local.conn, self)
+                    local.db_path = self.db_path
+                    local.epoch = epoch
+                return local.conn
+
+            if (self._connection is None
+                    or getattr(self._connection, "_closed", False)
+                    or self._connection_epoch_gui != epoch):
+                if self._connection:
                     try:
-                        local.conn.close()
+                        self._connection.close()
                     except Exception:
                         pass
                 conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-                local.conn = self._prepare_connection(conn)
-                local.db_path = self.db_path
-                local.epoch = epoch
-            elif not isinstance(local.conn, ConnectionWrapper):
-                local.conn = ConnectionWrapper(local.conn, self)
-                local.db_path = self.db_path
-                local.epoch = epoch
-            return local.conn
+                self._connection = self._prepare_connection(conn)
+                self._connection_epoch_gui = epoch
+            elif not isinstance(self._connection, ConnectionWrapper):
+                self._connection = ConnectionWrapper(self._connection, self)
+            return self._connection
 
-        if (self._connection is None
-                or getattr(self._connection, "_closed", False)
-                or self._connection_epoch_gui != epoch):
-            if self._connection:
-                try:
-                    self._connection.close()
-                except Exception:
-                    pass
-            conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-            self._connection = self._prepare_connection(conn)
-            self._connection_epoch_gui = epoch
-        elif not isinstance(self._connection, ConnectionWrapper):
-            self._connection = ConnectionWrapper(self._connection, self)
-        return self._connection
-
-    def close(self, wait_seconds: float = 0.0) -> bool:
-        """Close each registered wrapper once within one shared deadline.
-
-        A timed-out drain leaves the current generation intact. Callers may abort
-        their transition while the in-flight transaction continues on the same
-        connection instead of reopening mid-transaction against itself.
-        """
+    def _close_locked(self, wait_seconds: float) -> bool:
+        """Drain and invalidate the current generation with ``_conn_lock`` held."""
         deadline = time.monotonic() + max(0.0, wait_seconds)
         wrappers = []
         seen = set()
@@ -454,12 +450,11 @@ class AnkimonDB:
                 seen.add(id(conn))
                 wrappers.append(conn)
 
-        with self._conn_lock:
-            add_wrapper(self._connection)
-            for conn_ref in self._all_connections:
-                add_wrapper(conn_ref())
-            if hasattr(self, "_local_conn"):
-                add_wrapper(getattr(self._local_conn, "conn", None))
+        add_wrapper(self._connection)
+        for conn_ref in self._all_connections:
+            add_wrapper(conn_ref())
+        if hasattr(self, "_local_conn"):
+            add_wrapper(getattr(self._local_conn, "conn", None))
 
         closed_all = True
         for conn in wrappers:
@@ -477,20 +472,23 @@ class AnkimonDB:
                     pass
             return False
 
-        with self._conn_lock:
-            self._connection_epoch += 1
-            if self._connection is not None and id(self._connection) in seen:
-                self._connection = None
-            self._all_connections = [
-                conn_ref
-                for conn_ref in self._all_connections
-                if conn_ref() is not None and id(conn_ref()) not in seen
-            ]
-            if (hasattr(self, "_local_conn")
-                    and id(getattr(self._local_conn, "conn", None)) in seen):
-                self._local_conn.conn = None
-
+        self._connection_epoch += 1
+        self._connection = None
+        self._all_connections.clear()
+        if hasattr(self, "_local_conn"):
+            self._local_conn.conn = None
         return True
+
+    def close(self, wait_seconds: float = 0.0) -> bool:
+        """Close the current generation within one shared deadline."""
+        with self._conn_lock:
+            return self._close_locked(wait_seconds)
+
+    @contextlib.contextmanager
+    def quiesce(self, wait_seconds: float = 0.0):
+        """Hold the lifecycle barrier after draining all registered connections."""
+        with self._conn_lock:
+            yield self._close_locked(wait_seconds)
 
     def repair_database(self):
         """Repair a corrupted/malformed database out-of-place."""
@@ -641,58 +639,61 @@ class AnkimonDB:
                 dest_conn.commit()
                 dest_conn.close()
                 
-                # Close all connections completely to drop locks.
-                if not self.close(2.0):
-                    raise RuntimeError(
-                        "Database repair aborted because active operations did not finish"
-                    )
-                
-                # Clean up existing corrupted backup
-                if backup_db.exists():
+                # Keep connection creation blocked until the repaired file is in
+                # place; otherwise a new raw handle can appear after close() but
+                # before either rename.
+                with self.quiesce(2.0) as closed:
+                    if not closed:
+                        raise RuntimeError(
+                            "Database repair aborted because active operations did not finish"
+                        )
+
+                    # Clean up existing corrupted backup
+                    if backup_db.exists():
+                        try:
+                            backup_db.unlink()
+                        except Exception:
+                            pass
                     try:
-                        backup_db.unlink()
+                        for attempt in range(3):
+                            try:
+                                db_file.replace(backup_db)
+                                break
+                            except Exception as e:
+                                if attempt == 2:
+                                    self._log("warning", f"Failed to backup corrupt database: {e}")
+                                    break
+                                time.sleep(0.1)
+                                gc.collect()
                     except Exception:
                         pass
-                try:
-                    for attempt in range(3):
-                        try:
-                            db_file.replace(backup_db)
-                            break
-                        except Exception as e:
-                            if attempt == 2:
-                                self._log("warning", f"Failed to backup corrupt database: {e}")
+
+                    # Swap in repaired file and clean WAL/SHM sidecars
+                    try:
+                        for attempt in range(3):
+                            try:
+                                tmp_db.replace(db_file)
                                 break
-                            time.sleep(0.1)
-                            gc.collect()
-                except Exception:
-                    pass
-                    
-                # Swap in repaired file and clean WAL/SHM sidecars
-                try:
-                    for attempt in range(3):
-                        try:
-                            tmp_db.replace(db_file)
-                            break
-                        except Exception:
-                            if attempt == 2:
-                                raise
-                            time.sleep(0.1)
-                            gc.collect()
-                    for sidecar in ("-wal", "-shm"):
-                        sidecar_file = db_file.with_name(db_file.name + sidecar)
-                        try:
-                            if sidecar_file.exists():
-                                sidecar_file.unlink()
-                        except Exception:
-                            pass
-                    self._log("info", "SQLite self-healing completed successfully! Database index repaired.")
-                except Exception as e:
-                    self._log("error", f"Failed to swap repaired database: {e}")
-                    if backup_db.exists() and not db_file.exists():
-                        try:
-                            backup_db.replace(db_file)
-                        except Exception:
-                            pass
+                            except Exception:
+                                if attempt == 2:
+                                    raise
+                                time.sleep(0.1)
+                                gc.collect()
+                        for sidecar in ("-wal", "-shm"):
+                            sidecar_file = db_file.with_name(db_file.name + sidecar)
+                            try:
+                                if sidecar_file.exists():
+                                    sidecar_file.unlink()
+                            except Exception:
+                                pass
+                        self._log("info", "SQLite self-healing completed successfully! Database index repaired.")
+                    except Exception as e:
+                        self._log("error", f"Failed to swap repaired database: {e}")
+                        if backup_db.exists() and not db_file.exists():
+                            try:
+                                backup_db.replace(db_file)
+                            except Exception:
+                                pass
             else:
                 dest_conn.rollback()
                 dest_conn.close()
@@ -719,29 +720,30 @@ class AnkimonDB:
         partial switch can route one transaction's writes across two accounts.
         """
         old_path = self.db_path
-        if not self.close(wait_seconds):
-            raise RuntimeError(
-                "Database switch aborted because active operations did not finish"
-            )
+        with self.quiesce(wait_seconds) as closed:
+            if not closed:
+                raise RuntimeError(
+                    "Database switch aborted because active operations did not finish"
+                )
 
-        self.db_path = user_path / db_filename
-        self._connection = None
-        try:
-            self._setup_database()
-        except Exception:
-            self.db_path = old_path
+            self.db_path = user_path / db_filename
             self._connection = None
             try:
                 self._setup_database()
-            except Exception as restore_error:
-                self._log(
-                    "error",
-                    f"Failed to restore previous database after switch error: {restore_error}",
-                )
-            raise
+            except Exception:
+                self.db_path = old_path
+                self._connection = None
+                try:
+                    self._setup_database()
+                except Exception as restore_error:
+                    self._log(
+                        "error",
+                        f"Failed to restore previous database after switch error: {restore_error}",
+                    )
+                raise
 
-        self._log("info", f"Switched database to {db_filename}")
-        return True
+            self._log("info", f"Switched database to {db_filename}")
+            return True
 
     # --- Obfuscation / De-obfuscation ---
 
