@@ -712,16 +712,36 @@ class AnkimonDB:
             except Exception:
                 pass
 
-    def switch_database(self, db_filename: str):
-        """Close current connections and reopen against a different profile DB file.
+    def switch_database(self, db_filename: str, wait_seconds: float = 2.0) -> bool:
+        """Close the active profile and reopen against ``db_filename``.
 
-        The multi-profile / account-switch primitive (DB layer only). The
-        account-switch menu action that calls this is a deferred Stage-B leaf."""
-        self.close()
+        Refuse to mutate ``db_path`` while any operation still holds a lease; a
+        partial switch can route one transaction's writes across two accounts.
+        """
+        old_path = self.db_path
+        if not self.close(wait_seconds):
+            raise RuntimeError(
+                "Database switch aborted because active operations did not finish"
+            )
+
         self.db_path = user_path / db_filename
         self._connection = None
-        self._setup_database()
+        try:
+            self._setup_database()
+        except Exception:
+            self.db_path = old_path
+            self._connection = None
+            try:
+                self._setup_database()
+            except Exception as restore_error:
+                self._log(
+                    "error",
+                    f"Failed to restore previous database after switch error: {restore_error}",
+                )
+            raise
+
         self._log("info", f"Switched database to {db_filename}")
+        return True
 
     # --- Obfuscation / De-obfuscation ---
 

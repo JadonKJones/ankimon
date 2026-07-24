@@ -367,6 +367,18 @@ def test_failed_close_preserves_active_transaction_generation(temp_env):
     ).fetchone()[0] == "2"
 
 
+def test_switch_database_aborts_when_connections_do_not_drain(temp_env):
+    db, _ = temp_env
+    original_path = db.db_path
+
+    with patch.object(db, "close", return_value=False) as close:
+        with pytest.raises(RuntimeError, match="active operations did not finish"):
+            db.switch_database("ankimonDEV.db")
+
+    close.assert_called_once_with(2.0)
+    assert db.db_path == original_path
+
+
 def test_close_deduplicates_wrappers_and_shares_deadline(temp_env):
     import weakref
 
