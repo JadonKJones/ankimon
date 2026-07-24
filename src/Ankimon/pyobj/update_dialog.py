@@ -763,7 +763,7 @@ class UpdateDialog(QDialog):
                 self.sprites_deleted = result.get("deleted", [])
                 self.sprites_remote_sha = result.get("remote_sha")
                 
-                msg = f"A sprites update is available!\n\n"
+                msg = "A sprites update is available!\n\n"
                 msg += f"  • New sprites: {len(self.sprites_added)}\n"
                 msg += f"  • Modified sprites: {len(self.sprites_modified)}\n"
                 if self.sprites_deleted:
@@ -786,22 +786,15 @@ class UpdateDialog(QDialog):
         
         from .sprite_updater import SpriteUpdateDiffThread
         from ..resources import user_path_sprites
-        from .download_sprites import DownloadThread
         
         dest_dir = Path(user_path_sprites)
-        total_changes = len(self.sprites_added) + len(self.sprites_modified)
-        
-        if total_changes > 150:
-            self.sprites_status.setText("Massive update detected. Downloading full zip for efficiency...")
-            urls = [
-                "https://huggingface.co/datasets/h0tp/ankimon-sprites/resolve/main/sprites.zip",
-                "https://github.com/h0tp-ftw/ankimon-sprites/releases/download/latest/sprites.zip",
-            ]
-            self.sprites_thread = DownloadThread(urls, dest_dir, force_download=True)
-        else:
-            self.sprites_thread = SpriteUpdateDiffThread(
-                self.sprites_added, self.sprites_modified, self.sprites_deleted, self.sprites_remote_sha, dest_dir
-            )
+        self.sprites_thread = SpriteUpdateDiffThread(
+            self.sprites_added,
+            self.sprites_modified,
+            self.sprites_deleted,
+            self.sprites_remote_sha,
+            dest_dir,
+        )
             
         self.sprites_thread.progress_signal.connect(self.sprites_progress.setValue)
         self.sprites_thread.status_signal.connect(self.sprites_status.setText)
@@ -822,10 +815,7 @@ class UpdateDialog(QDialog):
             else:
                 self.sprites_status.setText("Update failed: " + message)
                 
-        if isinstance(self.sprites_thread, DownloadThread):
-            self.sprites_thread.download_finished_signal.connect(finished)
-        else:
-            self.sprites_thread.finished_signal.connect(finished)
+        self.sprites_thread.finished_signal.connect(finished)
             
         self.sprites_thread.start()
 
