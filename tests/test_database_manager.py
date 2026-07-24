@@ -333,6 +333,42 @@ def test_close_reports_timeout_while_cursor_lease_is_active(temp_env):
     assert conn._closed is True
 
 
+def test_close_deduplicates_wrappers_and_shares_deadline(temp_env):
+    import weakref
+
+    db, _ = temp_env
+    if db._connection is not None:
+        db._connection.close()
+
+    clock = [100.0]
+
+    class FakeWrapper:
+        def __init__(self, advance):
+            self.advance = advance
+            self.calls = []
+
+        def close(self, wait_seconds):
+            self.calls.append(wait_seconds)
+            clock[0] += self.advance
+            return False
+
+    first = FakeWrapper(0.75)
+    second = FakeWrapper(0.50)
+    db._connection = first
+    db._all_connections = [
+        weakref.ref(first),
+        weakref.ref(first),
+        weakref.ref(second),
+    ]
+    db._local_conn.conn = second
+
+    with patch.object(_db_mod.time, "monotonic", side_effect=lambda: clock[0]):
+        assert db.close(2.0) is False
+
+    assert first.calls == [pytest.approx(2.0)]
+    assert second.calls == [pytest.approx(1.25)]
+
+
 def test_connection_lease_prevents_closure_during_inflight_operation(temp_env):
     import threading
     db, _ = temp_env

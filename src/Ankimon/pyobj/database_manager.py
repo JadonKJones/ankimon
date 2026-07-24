@@ -430,35 +430,37 @@ class AnkimonDB:
         return self._connection
 
     def close(self, wait_seconds: float = 0.0) -> bool:
-        """Request closure of every connection and report whether all drained."""
-        closed_all = True
+        """Close each registered wrapper once within one shared deadline."""
+        deadline = time.monotonic() + max(0.0, wait_seconds)
+        wrappers = []
+        seen = set()
+
+        def add_wrapper(conn):
+            if conn is not None and id(conn) not in seen:
+                seen.add(id(conn))
+                wrappers.append(conn)
+
         with self._conn_lock:
             self._connection_epoch += 1
-            if self._connection:
-                try:
-                    closed_all = self._connection.close(wait_seconds) and closed_all
-                except Exception:
-                    closed_all = False
-                self._connection = None
+            add_wrapper(self._connection)
+            self._connection = None
 
             for conn_ref in self._all_connections:
-                conn = conn_ref()
-                if conn is not None:
-                    try:
-                        closed_all = conn.close(wait_seconds) and closed_all
-                    except Exception:
-                        closed_all = False
+                add_wrapper(conn_ref())
             self._all_connections.clear()
 
             if hasattr(self, "_local_conn"):
+                add_wrapper(getattr(self._local_conn, "conn", None))
+                self._local_conn.conn = None
+
+            closed_all = True
+            for conn in wrappers:
+                remaining = max(0.0, deadline - time.monotonic())
                 try:
-                    if getattr(self._local_conn, "conn", None) is not None:
-                        closed_all = (
-                            self._local_conn.conn.close(wait_seconds) and closed_all
-                        )
+                    closed_all = conn.close(remaining) and closed_all
                 except Exception:
                     closed_all = False
-                self._local_conn.conn = None
+
         return closed_all
 
     def repair_database(self):
