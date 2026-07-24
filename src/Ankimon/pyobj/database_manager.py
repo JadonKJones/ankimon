@@ -1070,9 +1070,8 @@ class AnkimonDB:
         cursor = self.execute("SELECT COUNT(*) FROM captured_pokemon WHERE shiny = 1")
         return cursor.fetchone()[0]
 
-    def execute(self, query: str, parameters: tuple = ()) -> sqlite3.Cursor:
-        """Executes a custom SQL query and returns the cursor. 
-        Useful for caller-specific fast-path queries without cluttering the manager."""
+    def execute(self, query: str, parameters: tuple = ()) -> "CursorWrapper":
+        """Execute custom SQL and return a lease-holding cursor wrapper."""
         try:
             with self.lease_connection() as conn:
                 cursor = conn.cursor()
