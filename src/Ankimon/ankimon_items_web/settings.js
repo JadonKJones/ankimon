@@ -190,10 +190,20 @@
      */
     function buildPasswordInput(setting) {
         const input = document.createElement('input');
+        const savedPlaceholder = setting.secret_placeholder || '';
         input.type = 'password';
         input.className = 'setting-input';
         input.value = currentValue(setting) ?? '';
-        input.placeholder = 'Enter your API key';
+        input.placeholder = setting.secret_configured
+            ? 'API key saved — type to replace it'
+            : 'Enter your API key';
+        input.autocomplete = 'new-password';
+        input.spellcheck = false;
+        input.addEventListener('focus', () => {
+            if (setting.secret_configured && input.value === savedPlaceholder) {
+                input.select();
+            }
+        });
         input.addEventListener('input', () => {
             setEdit(setting.key, input.value);
             updateDirtyUI();

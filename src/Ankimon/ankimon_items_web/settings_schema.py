@@ -213,6 +213,32 @@ GROUPS = [
 ]
 
 
+SECRET_SETTING_PLACEHOLDER = "********"
+
+
+def serialize_secret_setting(value):
+    """Return a browser-safe representation of a stored secret setting."""
+    configured = bool(value)
+    return {
+        "type": "password",
+        "value": SECRET_SETTING_PLACEHOLDER if configured else "",
+        "secret_configured": configured,
+        "secret_placeholder": SECRET_SETTING_PLACEHOLDER,
+    }
+
+
+def is_unchanged_secret_placeholder(value) -> bool:
+    """Whether a web-settings value means "leave the stored secret unchanged"."""
+    return value == SECRET_SETTING_PLACEHOLDER
+
+
+def display_setting_value(key, value):
+    """Redact secrets before rendering a settings-change summary."""
+    if key == "leaderboard.api_key" and value:
+        return SECRET_SETTING_PLACEHOLDER
+    return value
+
+
 # Active region dropdown options — preserved verbatim from the legacy window.
 ACTIVE_REGION_OPTIONS = [
     {"value": None, "label": "No Region"},

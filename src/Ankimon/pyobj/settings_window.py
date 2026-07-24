@@ -823,8 +823,11 @@ class SettingsWindow(QMainWindow):
         }
 
         if changed_settings:
+            from ..ankimon_items_web.settings_schema import display_setting_value
+
             friendly_changed = {
-                self.friendly_names.get(k, k): v for k, v in changed_settings.items()
+                self.friendly_names.get(k, k): display_setting_value(k, v)
+                for k, v in changed_settings.items()
             }
             changed_message = "\n".join(
                 [f"{key}: {value}" for key, value in friendly_changed.items()]
