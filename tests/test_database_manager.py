@@ -808,3 +808,54 @@ def test_unresolvable_base_stats_record_left_untouched(temp_env):
 
     assert db.get_pokemon("legacy-uuid-3") == legacy_pk
 
+
+def test_user_data_to_config_migration_preserves_existing_values(temp_env):
+    db, _ = temp_env
+    db.set_user_data("username", "legacy-user")
+    db.set_user_data("api_key", "legacy-key")
+    db.set_config_value("leaderboard.username", "settings-user")
+
+    migrated = db.migrate_user_data_to_config(
+        {
+            "username": "leaderboard.username",
+            "api_key": "leaderboard.api_key",
+        }
+    )
+
+    assert migrated == {"leaderboard.api_key": "legacy-key"}
+    assert db.get_config_value("leaderboard.username") == "settings-user"
+    assert db.get_config_value("leaderboard.api_key") == "legacy-key"
+    assert db.get_user_data("username") is None
+    assert db.get_user_data("api_key") is None
+
+
+def test_user_data_to_config_migration_rolls_back_on_write_failure(temp_env):
+    db, _ = temp_env
+    db.set_user_data("username", "legacy-user")
+    db.set_user_data("api_key", "legacy-key")
+    conn = db._get_connection()
+    conn.execute(
+        """
+        CREATE TRIGGER fail_leaderboard_api_key
+        BEFORE INSERT ON config
+        WHEN NEW.key = 'leaderboard.api_key'
+        BEGIN
+            SELECT RAISE(ABORT, 'injected migration failure');
+        END
+        """
+    )
+    conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="injected migration failure"):
+        db.migrate_user_data_to_config(
+            {
+                "username": "leaderboard.username",
+                "api_key": "leaderboard.api_key",
+            }
+        )
+
+    assert db.get_config_value("leaderboard.username") is None
+    assert db.get_config_value("leaderboard.api_key") is None
+    assert db.get_user_data("username") == "legacy-user"
+    assert db.get_user_data("api_key") == "legacy-key"
+

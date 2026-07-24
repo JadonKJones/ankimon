@@ -279,6 +279,9 @@ class SettingsWindow(QMainWindow):
             self.input_widgets[key] = button_group
         elif isinstance(value, (int, str, float)):
             line_edit = QLineEdit(str(value))
+            # Mask the API Key field if it's ever rendered in the legacy window
+            if key == "leaderboard.api_key":
+                line_edit.setEchoMode(QLineEdit.EchoMode.Password)
             layout.addWidget(line_edit)
             created_widgets.append(line_edit)
             self.input_widgets[key] = line_edit
@@ -342,7 +345,6 @@ class SettingsWindow(QMainWindow):
                             "SSH Access",
                             "Prevent Ankimon News on Startup",
                             "AnkiWeb Sync",
-                            "Ankimon Leaderboard",
                             "Developer Mode",
                         ]
                     },
@@ -457,6 +459,13 @@ class SettingsWindow(QMainWindow):
                     "Generation 7",
                     "Generation 8",
                     "Generation 9",
+                ]
+            },
+            "Leaderboard": {
+                "settings": [
+                    "Enable Leaderboard Sync",
+                    "Username",
+                    "API Key",
                 ]
             },
         }
@@ -814,8 +823,11 @@ class SettingsWindow(QMainWindow):
         }
 
         if changed_settings:
+            from ..ankimon_items_web.settings_schema import display_setting_value
+
             friendly_changed = {
-                self.friendly_names.get(k, k): v for k, v in changed_settings.items()
+                self.friendly_names.get(k, k): display_setting_value(k, v)
+                for k, v in changed_settings.items()
             }
             changed_message = "\n".join(
                 [f"{key}: {value}" for key, value in friendly_changed.items()]

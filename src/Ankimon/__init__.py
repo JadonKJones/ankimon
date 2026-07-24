@@ -57,6 +57,11 @@ from .pyobj.backup_manager import BackupManager
 from .services import services
 from .events import events
 
+# LEADERBOARD CREDENTIALS MIGRATION
+# Moved to build_core() in core.py - runs immediately after
+# services.populate() and BEFORE any TrainerCard construction.
+# This ensures migration completes before any sync can fire.
+
 # singletons.py already populated the service registry and mirrored these onto
 # mw (see services.py), so the previous mw.settings_ankimon/logger/settings_obj
 # writes here were pure duplication and are gone. The translator write stays:

@@ -1488,6 +1488,53 @@ class AnkimonDB:
                 result[key] = val
         return result
 
+    def migrate_user_data_to_config(self, key_map: Dict[str, str]) -> Dict[str, str]:
+        """Move legacy ``user_data`` values into empty config keys atomically.
+
+        Existing config values always win. Legacy rows are retired only in the
+        same transaction that persists any missing replacements, so a failed
+        config write cannot destroy the user's original value.
+        """
+        migrated: Dict[str, str] = {}
+        conn = self._get_connection()
+        with conn:
+            with conn.cursor() as cursor:
+                for legacy_key, config_key in key_map.items():
+                    cursor.execute(
+                        "SELECT value FROM user_data WHERE key = ?", (legacy_key,)
+                    )
+                    legacy_row = cursor.fetchone()
+                    legacy_value = (
+                        ""
+                        if legacy_row is None or legacy_row["value"] is None
+                        else str(legacy_row["value"])
+                    )
+
+                    cursor.execute(
+                        "SELECT value FROM config WHERE key = ?", (config_key,)
+                    )
+                    config_row = cursor.fetchone()
+                    config_value = (
+                        ""
+                        if config_row is None or config_row["value"] is None
+                        else str(config_row["value"])
+                    )
+
+                    if not config_value and legacy_value:
+                        cursor.execute(
+                            "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+                            (config_key, legacy_value),
+                        )
+                        config_value = legacy_value
+                        migrated[config_key] = legacy_value
+
+                    if legacy_value and config_value:
+                        cursor.execute(
+                            "DELETE FROM user_data WHERE key = ?", (legacy_key,)
+                        )
+
+        return migrated
+
     # --- Config Operations (replaces config.obf) ---
 
     def set_config_value(self, key: str, value: Any):
