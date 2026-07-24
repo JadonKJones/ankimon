@@ -109,6 +109,12 @@ class ConnectionWrapper:
                 except Exception:
                     pass
 
+    def cancel_close(self):
+        """Cancel a deferred close after the manager's drain attempt times out."""
+        with self._lease_lock:
+            if not self._closed:
+                self._close_pending = False
+
     def commit(self):
         # NOTE: Direct raw cursor execution (conn.cursor().execute(...)) bypasses wrapper-level auto-healing.
         self.acquire_lease()
@@ -399,6 +405,7 @@ class AnkimonDB:
         if not _is_main_thread():
             local = self._local_conn
             if (not hasattr(local, "conn") or local.conn is None
+                    or getattr(local.conn, "_closed", False)
                     or getattr(local, "db_path", None) != self.db_path
                     or getattr(local, "epoch", -1) != epoch):
                 if getattr(local, "conn", None) is not None:
@@ -416,7 +423,9 @@ class AnkimonDB:
                 local.epoch = epoch
             return local.conn
 
-        if self._connection is None or self._connection_epoch_gui != epoch:
+        if (self._connection is None
+                or getattr(self._connection, "_closed", False)
+                or self._connection_epoch_gui != epoch):
             if self._connection:
                 try:
                     self._connection.close()
@@ -430,7 +439,12 @@ class AnkimonDB:
         return self._connection
 
     def close(self, wait_seconds: float = 0.0) -> bool:
-        """Close each registered wrapper once within one shared deadline."""
+        """Close each registered wrapper once within one shared deadline.
+
+        A timed-out drain leaves the current generation intact. Callers may abort
+        their transition while the in-flight transaction continues on the same
+        connection instead of reopening mid-transaction against itself.
+        """
         deadline = time.monotonic() + max(0.0, wait_seconds)
         wrappers = []
         seen = set()
@@ -441,27 +455,42 @@ class AnkimonDB:
                 wrappers.append(conn)
 
         with self._conn_lock:
-            self._connection_epoch += 1
             add_wrapper(self._connection)
-            self._connection = None
-
             for conn_ref in self._all_connections:
                 add_wrapper(conn_ref())
-            self._all_connections.clear()
-
             if hasattr(self, "_local_conn"):
                 add_wrapper(getattr(self._local_conn, "conn", None))
+
+        closed_all = True
+        for conn in wrappers:
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                closed_all = conn.close(remaining) and closed_all
+            except Exception:
+                closed_all = False
+
+        if not closed_all:
+            for conn in wrappers:
+                try:
+                    conn.cancel_close()
+                except Exception:
+                    pass
+            return False
+
+        with self._conn_lock:
+            self._connection_epoch += 1
+            if self._connection is not None and id(self._connection) in seen:
+                self._connection = None
+            self._all_connections = [
+                conn_ref
+                for conn_ref in self._all_connections
+                if conn_ref() is not None and id(conn_ref()) not in seen
+            ]
+            if (hasattr(self, "_local_conn")
+                    and id(getattr(self._local_conn, "conn", None)) in seen):
                 self._local_conn.conn = None
 
-            closed_all = True
-            for conn in wrappers:
-                remaining = max(0.0, deadline - time.monotonic())
-                try:
-                    closed_all = conn.close(remaining) and closed_all
-                except Exception:
-                    closed_all = False
-
-        return closed_all
+        return True
 
     def repair_database(self):
         """Repair a corrupted/malformed database out-of-place."""

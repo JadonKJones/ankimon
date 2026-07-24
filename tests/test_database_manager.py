@@ -324,13 +324,47 @@ def test_close_reports_timeout_while_cursor_lease_is_active(temp_env):
     db, _ = temp_env
     conn = db._get_connection()
     cursor = conn.cursor()
+    epoch = db._connection_epoch
 
     assert db.close(0.01) is False
+    assert db._connection_epoch == epoch
+    assert db._connection is conn
+    assert conn._close_pending is False
+
     cursor.execute("SELECT 1")
     assert cursor.fetchone()[0] == 1
-
     cursor.close()
+
+    assert conn._closed is False
+    assert db.close(0.1) is True
+    assert db._connection_epoch == epoch + 1
     assert conn._closed is True
+
+
+def test_failed_close_preserves_active_transaction_generation(temp_env):
+    db, _ = temp_env
+    conn = db._get_connection()
+    epoch = db._connection_epoch
+
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+            ("before_failed_close", "1"),
+        ).close()
+
+        assert db.close(0.0) is False
+        assert db._connection_epoch == epoch
+        assert db._get_connection() is conn
+
+        db.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+            ("after_failed_close", "2"),
+        ).close()
+
+    assert db.execute(
+        "SELECT value FROM metadata WHERE key = ?",
+        ("after_failed_close",),
+    ).fetchone()[0] == "2"
 
 
 def test_close_deduplicates_wrappers_and_shares_deadline(temp_env):
