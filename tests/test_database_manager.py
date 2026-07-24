@@ -381,6 +381,49 @@ def test_connection_lease_prevents_closure_during_inflight_operation(temp_env):
         db_module._is_main_thread = original_is_main_thread
 
 
+def test_cursor_handoff_holds_lease_before_close(temp_env):
+    """Closing during cursor wrapping must not invalidate the raw cursor."""
+    import threading
+
+    db, _ = temp_env
+    cursor_created = threading.Event()
+    continue_wrapping = threading.Event()
+    results = {}
+    original_init = _db_mod.CursorWrapper.__init__
+
+    def paused_init(cursor_self, raw_cursor, conn_wrapper, *, lease_acquired=False):
+        cursor_created.set()
+        assert continue_wrapping.wait(timeout=5), "cursor handoff was not resumed"
+        original_init(
+            cursor_self,
+            raw_cursor,
+            conn_wrapper,
+            lease_acquired=lease_acquired,
+        )
+
+    def worker():
+        try:
+            with patch.object(_db_mod, "_is_main_thread", return_value=False):
+                conn = db._get_connection()
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                    results["value"] = cursor.fetchone()[0]
+        except Exception as exc:
+            results["error"] = exc
+
+    with patch.object(_db_mod.CursorWrapper, "__init__", paused_init):
+        thread = threading.Thread(target=worker)
+        thread.start()
+        assert cursor_created.wait(timeout=5), "worker did not create its cursor"
+        db.close()
+        continue_wrapping.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "worker did not finish"
+
+    assert results.get("value") == 1
+    assert "error" not in results
+
+
 def test_epoch_double_read_race(temp_env):
     db, _ = temp_env
     original_prepare = db._prepare_connection

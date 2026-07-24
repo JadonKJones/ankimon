@@ -33,11 +33,12 @@ class CursorWrapper:
     """Wraps a sqlite3.Cursor, proxying everything, holding a connection lease
     during its lifetime to prevent connection closure during in-flight operations."""
 
-    def __init__(self, cursor, conn_wrapper):
+    def __init__(self, cursor, conn_wrapper, *, lease_acquired=False):
         self._cursor = cursor
         self._conn_wrapper = conn_wrapper
         self._lease_released = False
-        self._conn_wrapper.acquire_lease()
+        if not lease_acquired:
+            self._conn_wrapper.acquire_lease()
 
     def release_lease(self):
         if not self._lease_released:
@@ -213,18 +214,23 @@ class ConnectionWrapper:
                 self.release_lease()
 
     def cursor(self, *args, **kwargs):
+        self.acquire_lease()
         try:
             raw_cursor = self._conn.cursor(*args, **kwargs)
-            return CursorWrapper(raw_cursor, self)
+            return CursorWrapper(raw_cursor, self, lease_acquired=True)
         except sqlite3.DatabaseError as e:
+            self.release_lease()
             msg = str(e).lower()
             if self._db_mgr and isinstance(e, sqlite3.ProgrammingError) and "closed database" in msg:
                 fresh = self._db_mgr._get_connection()
-                return CursorWrapper(fresh._conn.cursor(*args, **kwargs), fresh)
+                return fresh.cursor(*args, **kwargs)
             if self._db_mgr and ("malformed" in msg or "disk image" in msg) and not self._db_mgr._is_repairing:
                 self._db_mgr.repair_database()
                 fresh = self._db_mgr._get_connection()
-                return CursorWrapper(fresh._conn.cursor(*args, **kwargs), fresh)
+                return fresh.cursor(*args, **kwargs)
+            raise
+        except Exception:
+            self.release_lease()
             raise
 
     def __getattr__(self, name):
