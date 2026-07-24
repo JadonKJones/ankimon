@@ -610,6 +610,86 @@ def test_make_safe_clone_does_not_mask_stats_property(monkeypatch):
     assert p_clone.stats["hp"] > old_hp_stat
 
 
+def test_base_stats_validator_rejects_impossible_values():
+    from Ankimon.functions.pokedex_functions import is_valid_base_stats
+
+    valid = {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90}
+    assert is_valid_base_stats(valid)
+
+    for invalid_value in (True, -1, float("nan"), float("inf"), "35", None):
+        candidate = valid.copy()
+        candidate["hp"] = invalid_value
+        assert not is_valid_base_stats(candidate)
+
+    partial = valid.copy()
+    partial.pop("spe")
+    assert not is_valid_base_stats(partial)
+
+
+def test_diagnostics_uses_shared_base_stats_validator(mobile_db, monkeypatch):
+    db, _ = mobile_db
+    malformed = {
+        "individual_id": "BAD-STATS",
+        "name": "pikachu",
+        "base_stats": {
+            "hp": "35", "atk": "55", "def": "40",
+            "spa": "50", "spd": "50", "spe": "90",
+        },
+    }
+    db.save_pokemon(malformed)
+
+    import importlib
+    monkeypatch.delitem(sys.modules, "Ankimon.pyobj.db_diagnostics", raising=False)
+    diagnostics = importlib.import_module("Ankimon.pyobj.db_diagnostics")
+    cursor = db._get_connection().cursor()
+
+    assert diagnostics._count_invalid_base_stats(db, cursor) == 1
+
+    malformed["base_stats"] = {
+        "hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90,
+    }
+    db.save_pokemon(malformed)
+    assert diagnostics._count_invalid_base_stats(db, cursor) == 0
+
+
+def test_load_active_team_clones_normalizes_malformed_ivs(mobile_db):
+    db, _ = mobile_db
+    pokemon_data = {
+        "individual_id": "BAD-IV",
+        "name": "pikachu",
+        "id": 25,
+        "shiny": False,
+        "level": 5,
+        "ability": "Static",
+        "type": ["Electric"],
+        "gender": "M",
+        "growth_rate": "medium-fast",
+        "captured_date": None,
+        "tier": "Normal",
+        "base_stats": {
+            "hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90,
+        },
+        "ev": {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        "iv": {
+            "hp": None,
+            "atk": "unknown",
+            "def": -4,
+            "spa": 99,
+            "spd": "12",
+            "spe": 4.8,
+        },
+    }
+    db.save_pokemon(pokemon_data)
+    db.save_team([{"individual_id": "BAD-IV"}])
+
+    clones = ms.load_active_team_clones(db, _Settings(), None)
+
+    assert len(clones) == 1
+    assert clones[0].iv == {
+        "hp": 15, "atk": 15, "def": 0, "spa": 31, "spd": 12, "spe": 4,
+    }
+
+
 def test_attribute_xp_and_evs_defaults_missing_iv_to_15_and_ev_to_0(mobile_db, monkeypatch):
     """Verify that _attribute_xp_and_evs_to_companion defaults missing IVs to 15 and EVs to 0 instead of 0 for IVs."""
     db, _ = mobile_db

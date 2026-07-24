@@ -93,6 +93,20 @@ def test_database_initialization(temp_env):
         cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'")
         assert cursor.fetchone() is not None, f"Table {table} should exist"
 
+
+def test_base_stats_normalization_marker_is_internal_metadata(temp_env):
+    """The startup marker must not make a virgin user-config table look populated."""
+    db, _ = temp_env
+    conn = db._get_connection()
+
+    marker = conn.execute(
+        "SELECT value FROM metadata WHERE key = 'base_stats_normalized'"
+    ).fetchone()
+
+    assert marker[0] == "true"
+    assert db.has_config() is False
+    assert db.get_all_config() == {}
+
 def test_item_save_and_smart_sync(temp_env):
     db, tmp_path = temp_env
     # 1. First add (uses CSV to discover metadata)

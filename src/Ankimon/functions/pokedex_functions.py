@@ -19,6 +19,7 @@ try:
 except Exception:
     mw = None
 import json
+import math
 import random
 import csv
 from ..pyobj.error_handler import show_warning_with_traceback
@@ -63,11 +64,21 @@ def safe_int(value, default=0):
         return default
 
 
-def is_valid_base_stats(b) -> bool:
-    """Validates that a base_stats dictionary contains all six expected keys with numeric values (int/float)."""
-    if not b or not isinstance(b, dict):
+def is_valid_base_stats(base_stats) -> bool:
+    """Return whether all six base stats are finite, non-negative numbers."""
+    if not isinstance(base_stats, dict):
         return False
-    return all(isinstance(b.get(k), (int, float)) and not isinstance(b.get(k), bool) for k in ("hp", "atk", "def", "spa", "spd", "spe"))
+
+    for key in ("hp", "atk", "def", "spa", "spd", "spe"):
+        value = base_stats.get(key)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            return False
+    return True
 
 
 

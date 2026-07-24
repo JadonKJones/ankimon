@@ -1,6 +1,21 @@
-import sqlite3
 from aqt import mw
 from aqt.utils import showInfo, showWarning, askUser
+
+
+def _count_invalid_base_stats(db, cursor) -> int:
+    """Count records rejected by the shared base-stat validator."""
+    from ..functions.pokedex_functions import is_valid_base_stats
+
+    cursor.execute("SELECT data FROM captured_pokemon")
+    invalid_count = 0
+    for row in cursor.fetchall():
+        pokemon_data = db._deobfuscate(row[0])
+        if not pokemon_data or not is_valid_base_stats(
+            pokemon_data.get("base_stats")
+        ):
+            invalid_count += 1
+    return invalid_count
+
 
 def trigger_database_diagnostics():
     # 1. Safety Guard: Block if cards are being reviewed
@@ -34,17 +49,7 @@ def trigger_database_diagnostics():
         """)
         duplicate_count = cursor.fetchone()[0]
 
-        # Use SQLite JSON extension to pre-filter and scan for missing/incomplete base stats
-        cursor.execute("""
-            SELECT COUNT(*) FROM captured_pokemon
-            WHERE json_extract(data, '$.base_stats.hp') IS NULL
-               OR json_extract(data, '$.base_stats.atk') IS NULL
-               OR json_extract(data, '$.base_stats.def') IS NULL
-               OR json_extract(data, '$.base_stats.spa') IS NULL
-               OR json_extract(data, '$.base_stats.spd') IS NULL
-               OR json_extract(data, '$.base_stats.spe') IS NULL
-        """)
-        missing_base_stats_count = cursor.fetchone()[0]
+        missing_base_stats_count = _count_invalid_base_stats(db, cursor)
         
         return integrity_result, is_corrupt, duplicate_count, missing_base_stats_count
 
@@ -95,17 +100,7 @@ def trigger_database_diagnostics():
             """)
             new_dup_count = cursor.fetchone()[0]
             
-            # Recount remaining missing stats
-            cursor.execute("""
-                SELECT COUNT(*) FROM captured_pokemon
-                WHERE json_extract(data, '$.base_stats.hp') IS NULL
-                   OR json_extract(data, '$.base_stats.atk') IS NULL
-                   OR json_extract(data, '$.base_stats.def') IS NULL
-                   OR json_extract(data, '$.base_stats.spa') IS NULL
-                   OR json_extract(data, '$.base_stats.spd') IS NULL
-                   OR json_extract(data, '$.base_stats.spe') IS NULL
-            """)
-            new_missing_stats_count = cursor.fetchone()[0]
+            new_missing_stats_count = _count_invalid_base_stats(db, cursor)
             return check_res, new_dup_count, new_missing_stats_count
 
         def on_repair_done(repair_res):
