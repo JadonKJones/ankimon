@@ -19,6 +19,7 @@ try:
 except Exception:
     mw = None
 import json
+import math
 import random
 import csv
 from ..pyobj.error_handler import show_warning_with_traceback
@@ -61,6 +62,24 @@ def safe_int(value, default=0):
         return int(float(value))
     except (ValueError, TypeError):
         return default
+
+
+def is_valid_base_stats(base_stats) -> bool:
+    """Return whether all six base stats are finite, non-negative numbers."""
+    if not isinstance(base_stats, dict):
+        return False
+
+    for key in ("hp", "atk", "def", "spa", "spd", "spe"):
+        value = base_stats.get(key)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            return False
+    return True
+
 
 
 def _load_pokedex_cache():
