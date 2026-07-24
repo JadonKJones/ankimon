@@ -12,6 +12,7 @@ Run with a display wrapper on Linux:
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import sys
@@ -67,11 +68,45 @@ def _run_javascript(page, script, timeout_ms=10_000):
     return result.get("value")
 
 
+def _edit_and_save(page, key, value):
+    """Edit one rendered Settings input and click the real Save button."""
+    return _run_javascript(
+        page,
+        f"""
+        (() => {{
+            const row = document.querySelector(
+                '.setting-row[data-key=' + {json.dumps(json.dumps(key))} + ']'
+            );
+            const input = row && row.querySelector('input');
+            const save = document.getElementById('save-btn');
+            if (!input || !save) return {{ok: false}};
+            input.value = {json.dumps(value)};
+            input.dispatchEvent(new Event('input', {{bubbles: true}}));
+            const becameDirty = !save.disabled;
+            save.click();
+            return {{ok: true, becameDirty}};
+        }})()
+        """,
+    )
+
+
+def _wait_for_saved(page):
+    return _wait_until(
+        lambda: _run_javascript(
+            page, "document.getElementById('save-status')?.textContent"
+        ) == "All saved"
+    )
+
+
 def main() -> int:
     session = start_real_session(webengine=True, require_webengine=True)
 
     from Ankimon.ankimon_items_web.shop_obj import SCREEN_SETTINGS
     from Ankimon.singletons import get_items_window
+
+    original_secret = "webengine-original-api-secret"
+    session.services.settings.set("leaderboard.username", "WebEngineUser")
+    session.services.settings.set("leaderboard.api_key", original_secret)
 
     window = get_items_window()
     view = window.webview_settings
@@ -116,33 +151,51 @@ def main() -> int:
     assert page_state["hasQtTransport"] is True, page_state
     assert page_state["hasInput"] is True, page_state
 
-    expected_name = "WebEngine CI Trainer"
-    edit_state = _run_javascript(
+    credential_state = _run_javascript(
         page,
         f"""
         (() => {{
-            const row = document.querySelector('.setting-row[data-key="trainer.name"]');
+            const row = document.querySelector(
+                '.setting-row[data-key="leaderboard.api_key"]'
+            );
             const input = row && row.querySelector('input');
-            const save = document.getElementById('save-btn');
-            if (!input || !save) return {{ok: false}};
-            input.value = {expected_name!r};
-            input.dispatchEvent(new Event('input', {{bubbles: true}}));
-            const becameDirty = !save.disabled;
-            save.click();
-            return {{ok: true, becameDirty}};
+            const html = document.documentElement.innerHTML;
+            const inputValues = Array.from(document.querySelectorAll('input'))
+                .map((item) => item.value);
+            return {{
+                hasRow: Boolean(row),
+                type: input ? input.type : null,
+                value: input ? input.value : null,
+                placeholder: input ? input.placeholder : null,
+                secretInHtml: html.includes({json.dumps(original_secret)}),
+                secretInInputs: inputValues.some(
+                    (value) => value.includes({json.dumps(original_secret)})
+                ),
+            }};
         }})()
         """,
     )
+    assert credential_state == {
+        "hasRow": True,
+        "type": "password",
+        "value": "********",
+        "placeholder": "API key saved — type to replace it",
+        "secretInHtml": False,
+        "secretInInputs": False,
+    }, credential_state
+
+    # Saving an unrelated field leaves the masked API-key placeholder untouched.
+    expected_name = "WebEngine CI Trainer"
+    edit_state = _edit_and_save(page, "trainer.name", expected_name)
     assert edit_state == {"ok": True, "becameDirty": True}, edit_state
 
     assert _wait_until(
         lambda: session.services.settings.get("trainer.name") == expected_name
     ), "Clicking Save in the real Settings web page did not persist Trainer Name"
-    assert _wait_until(
-        lambda: _run_javascript(
-            page, "document.getElementById('save-status')?.textContent"
-        ) == "All saved"
-    ), "Settings persisted, but the browser never completed its saved-state refresh"
+    assert _wait_for_saved(page), (
+        "Settings persisted, but the browser never completed its saved-state refresh"
+    )
+    assert session.services.settings.get("leaderboard.api_key") == original_secret
 
     saved_state = _run_javascript(
         page,
@@ -164,9 +217,68 @@ def main() -> int:
         "saveDisabled": True,
     }, saved_state
 
+    replacement_secret = "webengine-replacement-api-secret"
+    replace_state = _edit_and_save(
+        page, "leaderboard.api_key", replacement_secret
+    )
+    assert replace_state == {"ok": True, "becameDirty": True}, replace_state
+    assert _wait_until(
+        lambda: session.services.settings.get("leaderboard.api_key")
+        == replacement_secret
+    ), "Replacing the API key through the real browser did not persist"
+    assert _wait_for_saved(page), "API-key replacement never completed its UI refresh"
+
+    replaced_dom = _run_javascript(
+        page,
+        f"""
+        (() => {{
+            const input = document.querySelector(
+                '.setting-row[data-key="leaderboard.api_key"] input'
+            );
+            return {{
+                value: input ? input.value : null,
+                secretInHtml: document.documentElement.innerHTML.includes(
+                    {json.dumps(replacement_secret)}
+                ),
+            }};
+        }})()
+        """,
+    )
+    assert replaced_dom == {
+        "value": "********",
+        "secretInHtml": False,
+    }, replaced_dom
+
+    clear_state = _edit_and_save(page, "leaderboard.api_key", "")
+    assert clear_state == {"ok": True, "becameDirty": True}, clear_state
+    assert _wait_until(
+        lambda: session.services.settings.get("leaderboard.api_key") == ""
+    ), "Clearing the API key through the real browser did not persist"
+    assert _wait_for_saved(page), "API-key clearing never completed its UI refresh"
+
+    cleared_dom = _run_javascript(
+        page,
+        """
+        (() => {
+            const input = document.querySelector(
+                '.setting-row[data-key="leaderboard.api_key"] input'
+            );
+            return {
+                value: input ? input.value : null,
+                placeholder: input ? input.placeholder : null,
+            };
+        })()
+        """,
+    )
+    assert cleared_dom == {
+        "value": "",
+        "placeholder": "Enter your API key",
+    }, cleared_dom
+
     print(
         "probe_real_webengine: OK "
-        f"({page_state['rowCount']} settings rows, real QWebEngine, DOM save persisted)"
+        f"({page_state['rowCount']} settings rows, real QWebEngine, "
+        "DOM save + API-key lifecycle persisted)"
     )
     window.close()
     return 0
