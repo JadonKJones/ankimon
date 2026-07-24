@@ -328,7 +328,7 @@ def test_close_reports_timeout_while_cursor_lease_is_active(temp_env):
 
     assert db.close(0.01) is False
     assert db._connection_epoch == epoch
-    assert db._connection is conn
+    assert db._get_connection() is conn
     assert conn._close_pending is False
 
     cursor.execute("SELECT 1")
