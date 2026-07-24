@@ -197,13 +197,16 @@ def test_atomic_replace_aborts_when_live_db_does_not_drain(tmp_path):
         def close(self, wait_seconds=0.0):
             return False
 
-    prev = services.db
-    services.db = BusyDB()
+    import importlib
+
+    runtime_services = importlib.import_module("Ankimon.services").services
+    prev = runtime_services.db
+    runtime_services.db = BusyDB()
     try:
         with pytest.raises(RuntimeError, match="active operations did not finish"):
             AnkimonDataSync()._atomic_replace(media, src)
     finally:
-        services.db = prev
+        runtime_services.db = prev
 
     assert src.read_bytes().startswith(b"LOCAL")
 
