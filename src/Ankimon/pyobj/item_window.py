@@ -518,6 +518,7 @@ class ItemWindow(QWidget):
         self.main_pokemon.hp += heal_points
         if self.main_pokemon.hp > (self.main_pokemon.max_hp):
             self.main_pokemon.hp = self.main_pokemon.max_hp
+        self.main_pokemon.current_hp = self.main_pokemon.hp
 
         # Save to database using the services registry
         from ..services import services
