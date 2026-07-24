@@ -93,6 +93,7 @@ class ConnectionWrapper:
         self._lease_lock = threading.Lock()
         self._lease_count = 0
         self._close_pending = False
+        self._closed = False
 
     def acquire_lease(self):
         with self._lease_lock:
@@ -100,10 +101,11 @@ class ConnectionWrapper:
 
     def release_lease(self):
         with self._lease_lock:
-            self._lease_count -= 1
-            if self._lease_count <= 0 and self._close_pending:
+            self._lease_count = max(0, self._lease_count - 1)
+            if self._lease_count == 0 and self._close_pending and not self._closed:
                 try:
                     self._conn.close()
+                    self._closed = True
                 except Exception:
                     pass
 
@@ -142,25 +144,23 @@ class ConnectionWrapper:
         finally:
             self.release_lease()
 
-    def close(self, wait_seconds: float = 0.0):
-        """Best-effort close. While another thread holds an operation lease this only
-        sets ``_close_pending``; the real ``sqlite3.close()`` -- and the OS file-handle
-        release -- happens later, in ``release_lease``.
-
-        Callers that must have the handle released before renaming or replacing the DB
-        file (``repair_database``, ``ankimon_sync._release_handles``) should pass
-        ``wait_seconds``. Note that ``gc.collect()`` cannot substitute for this: a
-        ``CursorWrapper`` still bound in a live caller frame is reachable, so no amount
-        of collection will drop its lease."""
-        deadline = time.monotonic() + wait_seconds
+    def close(self, wait_seconds: float = 0.0) -> bool:
+        """Close when leases drain; return ``False`` if the deadline expires."""
+        deadline = time.monotonic() + max(0.0, wait_seconds)
         while True:
             with self._lease_lock:
                 self._close_pending = True
-                if self._lease_count <= 0:
-                    self._conn.close()
-                    return
+                if self._closed:
+                    return True
+                if self._lease_count == 0:
+                    try:
+                        self._conn.close()
+                        self._closed = True
+                        return True
+                    except Exception:
+                        return False
             if time.monotonic() >= deadline:
-                return
+                return False
             time.sleep(0.01)
 
     def execute(self, *args, **kwargs):
@@ -429,33 +429,37 @@ class AnkimonDB:
             self._connection = ConnectionWrapper(self._connection, self)
         return self._connection
 
-    def close(self, wait_seconds: float = 0.0):
-        """Closes all database connections across all threads."""
+    def close(self, wait_seconds: float = 0.0) -> bool:
+        """Request closure of every connection and report whether all drained."""
+        closed_all = True
         with self._conn_lock:
             self._connection_epoch += 1
             if self._connection:
                 try:
-                    self._connection.close(wait_seconds)
+                    closed_all = self._connection.close(wait_seconds) and closed_all
                 except Exception:
-                    pass
+                    closed_all = False
                 self._connection = None
-            
+
             for conn_ref in self._all_connections:
                 conn = conn_ref()
                 if conn is not None:
                     try:
-                        conn.close(wait_seconds)
+                        closed_all = conn.close(wait_seconds) and closed_all
                     except Exception:
-                        pass
+                        closed_all = False
             self._all_connections.clear()
-            
+
             if hasattr(self, "_local_conn"):
                 try:
                     if getattr(self._local_conn, "conn", None) is not None:
-                        self._local_conn.conn.close(wait_seconds)
+                        closed_all = (
+                            self._local_conn.conn.close(wait_seconds) and closed_all
+                        )
                 except Exception:
-                    pass
+                    closed_all = False
                 self._local_conn.conn = None
+        return closed_all
 
     def repair_database(self):
         """Repair a corrupted/malformed database out-of-place."""
@@ -606,8 +610,11 @@ class AnkimonDB:
                 dest_conn.commit()
                 dest_conn.close()
                 
-                # Close all connections completely to drop locks
-                self.close(2.0)
+                # Close all connections completely to drop locks.
+                if not self.close(2.0):
+                    raise RuntimeError(
+                        "Database repair aborted because active operations did not finish"
+                    )
                 
                 # Clean up existing corrupted backup
                 if backup_db.exists():

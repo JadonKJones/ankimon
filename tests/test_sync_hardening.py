@@ -185,6 +185,29 @@ def test_atomic_replace_swaps_file_and_clears_stale_sidecars(tmp_path, monkeypat
         services.db = prev
 
 
+def test_atomic_replace_aborts_when_live_db_does_not_drain(tmp_path):
+    src = tmp_path / "ankimon.db"
+    src.write_bytes(b"LOCAL" + b"\x00" * 600)
+    media = tmp_path / "media.db"
+    media.write_bytes(b"REMOTE" + b"\x00" * 600)
+
+    class BusyDB:
+        db_path = src
+
+        def close(self, wait_seconds=0.0):
+            return False
+
+    prev = services.db
+    services.db = BusyDB()
+    try:
+        with pytest.raises(RuntimeError, match="active operations did not finish"):
+            AnkimonDataSync()._atomic_replace(media, src)
+    finally:
+        services.db = prev
+
+    assert src.read_bytes().startswith(b"LOCAL")
+
+
 def _wire_read_configs(ds, monkeypatch, src, media):
     monkeypatch.setattr(ds, "_migrate_legacy_files", lambda: [])
     monkeypatch.setattr(ds, "_get_source_path", lambda fn: src)

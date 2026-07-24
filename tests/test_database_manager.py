@@ -319,6 +319,20 @@ def test_thread_local_connection_closes_and_reopens(temp_env):
     
     assert results.get("success") is True
 
+
+def test_close_reports_timeout_while_cursor_lease_is_active(temp_env):
+    db, _ = temp_env
+    conn = db._get_connection()
+    cursor = conn.cursor()
+
+    assert db.close(0.01) is False
+    cursor.execute("SELECT 1")
+    assert cursor.fetchone()[0] == 1
+
+    cursor.close()
+    assert conn._closed is True
+
+
 def test_connection_lease_prevents_closure_during_inflight_operation(temp_env):
     import threading
     db, _ = temp_env
@@ -472,6 +486,16 @@ def test_retry_on_closed_database_error(temp_env):
         assert cursor.fetchone()[0] == 1
 
 
+def test_repair_aborts_when_connections_do_not_drain(temp_env):
+    db, _ = temp_env
+
+    with patch.object(db, "close", return_value=False):
+        with pytest.raises(RuntimeError, match="active operations did not finish"):
+            db.repair_database()
+
+    assert db.db_path.exists()
+    assert not db.db_path.with_name(db.db_path.name + ".tmp").exists()
+
 
 def test_legacy_base_stats_normalization(temp_env):
     """Verify that old database entries without 'base_stats' key are normalized on repair and startup."""
@@ -491,11 +515,11 @@ def test_legacy_base_stats_normalization(temp_env):
     # Save manually to bypass the save_pokemon normalization/check
     obfuscated_data = db._obfuscate(legacy_pk)
     conn = db._get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 0, ?)",
-        ("legacy-uuid", obfuscated_data)
-    )
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 0, ?)",
+            ("legacy-uuid", obfuscated_data),
+        )
     conn.commit()
 
     # Check that it starts without base_stats

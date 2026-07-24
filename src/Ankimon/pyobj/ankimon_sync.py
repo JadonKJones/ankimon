@@ -831,23 +831,34 @@ class AnkimonDataSync:
             # Profile not loaded yet
             return []
 
-    def _close_live_db_connection(self, target_file: Path) -> None:
-        """If ``target_file`` is the DB file that ``services.db`` currently holds
-        open, close that connection before it is overwritten on disk. The
-        connection reopens lazily against the new file on next use, so callers
-        need not reopen it. Best-effort: any failure is a benign no-op."""
+    def _close_live_db_connection(
+        self, target_file: Path, *, required: bool = False
+    ) -> bool:
+        """Close the live DB when it targets ``target_file``.
+
+        Best-effort callers receive ``False`` on failure. Atomic replacement passes
+        ``required=True`` so an active operation aborts the swap instead of writing
+        over a database that still has live users.
+        """
         try:
             from ..services import services
+
             db = services.db
             if db is None:
-                return
+                return True
             db_path = getattr(db, "db_path", None)
-            if db_path is None:
-                return
-            if Path(db_path).resolve() == Path(target_file).resolve():
-                db.close(2.0)
+            if db_path is None or Path(db_path).resolve() != Path(target_file).resolve():
+                return True
+            closed = bool(db.close(2.0))
+            if required and not closed:
+                raise RuntimeError(
+                    "Database replacement aborted because active operations did not finish"
+                )
+            return closed
         except Exception:
-            pass
+            if required:
+                raise
+            return False
 
     def _checkpoint_live_db(self, source_file: Path) -> None:
         """If ``services.db`` holds a live WAL connection to ``source_file``,
@@ -951,26 +962,14 @@ class AnkimonDataSync:
         an unrelated WAL over the new file and hit 'database disk image is
         malformed'.
 
-        KNOWN LIMITATION: ``_close_live_db_connection`` -> ``db.close()`` closes
-        only the GUI thread's connection, NOT a background thread's
-        ``threading.local`` connection. This import path is not serialized against
-        an in-flight background mobile-resolve (``_mobile_sync_lock``), so if an
-        (opt-in) file-sync import lands mid-resolve, that thread's writes to the
-        pre-replace inode can be orphaned. Pre-existing to this change and narrow
-        (opt-in file-sync overlapping a live resolve); left documented rather than
-        pulling the multi-profile connection model into a hardening pass."""
+        The connection registry requests closure from GUI and background wrappers.
+        If an in-flight operation does not release its lease within the bounded
+        wait, replacement aborts and the original database remains untouched."""
         source_file.parent.mkdir(parents=True, exist_ok=True)
 
         def _release_handles():
-            # Close the connection registry completely to release all OS locks,
-            # then force collection of connection handles, before the rename.
-            try:
-                from ..services import services
-                if services.db:
-                    services.db.close(2.0)
-            except Exception:
-                pass
-            self._close_live_db_connection(source_file)
+            # Refuse to replace a live database when any operation lease remains.
+            self._close_live_db_connection(source_file, required=True)
             gc.collect()
 
         _atomic_write_over(media_file, source_file, before_replace=_release_handles)
