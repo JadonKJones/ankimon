@@ -3,14 +3,82 @@ import hashlib
 import time
 import json
 import requests
-from pathlib import Path
-from typing import Optional
+from pathlib import Path, PurePosixPath
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QProgressBar, QLabel, QPushButton, QMessageBox, QHBoxLayout, QCheckBox
 
 from ..resources import user_path_sprites
-from ..pyobj.download_sprites import DownloadThread
+
+
+_EXCLUDED_ROOTS = {".github"}
+_EXCLUDED_NAMES = {
+    "LICENSE",
+    "download_complete.flag",
+    "sprites.zip",
+    "sprites_temp.zip",
+}
+
+
+def _is_managed_sprite_path(path: str) -> bool:
+    """Return whether a repository path belongs to the distributed sprite set."""
+    normalized = path.replace("\\", "/")
+    parts = PurePosixPath(normalized).parts
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or not parts
+        or any(part in {"", ".", ".."} or ":" in part for part in parts)
+    ):
+        return False
+    if parts[0] in _EXCLUDED_ROOTS:
+        return False
+    name = parts[-1]
+    return name not in _EXCLUDED_NAMES and not name.lower().endswith(".md")
+
+
+def _write_update_state(state_path: Path, commit_sha: str) -> None:
+    """Persist updater state atomically so partial writes are never accepted."""
+    temporary_path = state_path.with_name(f"{state_path.name}.tmp")
+    temporary_path.write_text(
+        json.dumps(
+            {
+                "commit_sha": commit_sha,
+                "updated_at": time.time(),
+                "snooze_until": 0,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    temporary_path.replace(state_path)
+
+
+def _fetch_remote_files(commit_sha: str) -> dict[str, str]:
+    tree_url = (
+        "https://api.github.com/repos/h0tp-ftw/ankimon-sprites/git/trees/"
+        f"{commit_sha}?recursive=1"
+    )
+    response = requests.get(tree_url, timeout=15)
+    response.raise_for_status()
+    tree_data = response.json()
+    if not isinstance(tree_data, dict):
+        raise ValueError("Invalid GitHub tree response.")
+    if tree_data.get("truncated"):
+        raise ValueError("GitHub Git Tree response was truncated.")
+    remote_tree = tree_data.get("tree")
+    if not isinstance(remote_tree, list):
+        raise ValueError("Invalid GitHub tree response.")
+
+    remote_files = {}
+    for item in remote_tree:
+        if not isinstance(item, dict) or item.get("type") != "blob":
+            continue
+        path = item.get("path")
+        sha = item.get("sha")
+        if isinstance(path, str) and isinstance(sha, str) and _is_managed_sprite_path(path):
+            remote_files[path] = sha
+    return remote_files
 
 
 class SpriteUpdateDiffThread(QThread):
@@ -48,6 +116,10 @@ class SpriteUpdateDiffThread(QThread):
                     self.finished_signal.emit(False, "Update cancelled.")
                     return
 
+                if not _is_managed_sprite_path(path):
+                    self.finished_signal.emit(False, f"Unsafe sprite path rejected: {path}")
+                    return
+
                 self.status_signal.emit(f"Downloading ({i + 1}/{total_files}): {path}")
                 url = f"https://raw.githubusercontent.com/h0tp-ftw/ankimon-sprites/{self.remote_sha}/{path}"
                 
@@ -73,31 +145,36 @@ class SpriteUpdateDiffThread(QThread):
                 downloaded_count += 1
                 self.progress_signal.emit(int((downloaded_count / total_files) * 100))
 
-        # 2. Clean up deleted files
+        # 2. Clean up files confirmed obsolete by the previous remote revision.
         for path in self.deleted:
             if self._is_cancelled:
-                break
+                self.finished_signal.emit(False, "Update cancelled.")
+                return
+            if not _is_managed_sprite_path(path):
+                self.finished_signal.emit(False, f"Unsafe sprite path rejected: {path}")
+                return
             file_path = self.dest_dir / path
             if file_path.exists():
                 try:
                     file_path.unlink()
-                except Exception:
-                    pass
+                except OSError as exc:
+                    self.finished_signal.emit(
+                        False, f"Failed to remove obsolete sprite {path}: {exc}"
+                    )
+                    return
 
-        # 3. Save new state
-        if not self._is_cancelled:
-            try:
-                state_path = self.dest_dir.parent / "sprites_update_state.json"
-                state_path.write_text(json.dumps({
-                    "commit_sha": self.remote_sha,
-                    "updated_at": time.time(),
-                    "snooze_until": 0
-                }, indent=2), encoding="utf-8")
-            except Exception:
-                pass
-            self.finished_signal.emit(True, f"Successfully updated {total_files} sprites!")
-        else:
+        # 3. Record success only after every file operation completed.
+        if self._is_cancelled:
             self.finished_signal.emit(False, "Update cancelled.")
+            return
+        try:
+            _write_update_state(
+                self.dest_dir.parent / "sprites_update_state.json", self.remote_sha
+            )
+        except OSError as exc:
+            self.finished_signal.emit(False, f"Failed to save sprite update state: {exc}")
+            return
+        self.finished_signal.emit(True, f"Successfully updated {total_files} sprites!")
 
 
 class SpriteUpdateDialog(QDialog):
@@ -179,7 +256,7 @@ class SpriteUpdateDialog(QDialog):
             self.modified = modified
             self.deleted = deleted
 
-            msg = f"A sprites update is available!\n\n"
+            msg = "A sprites update is available!\n\n"
             msg += f"  • New sprites: {len(added)}\n"
             msg += f"  • Modified sprites: {len(modified)}\n"
             if deleted:
@@ -234,28 +311,12 @@ class SpriteUpdateDialog(QDialog):
         self.cancel_button.clicked.connect(self.cancel_download)
         self.cancel_button.setVisible(True)
 
-        total_changes = len(self.added) + len(self.modified)
-
-        # Fallback to full download if changes are massive (> 150 files)
-        if total_changes > 150:
-            self.status_label.setText("Massive update detected. Downloading full zip for efficiency...")
-            urls = [
-                "https://huggingface.co/datasets/h0tp/ankimon-sprites/resolve/main/sprites.zip",
-                "https://github.com/h0tp-ftw/ankimon-sprites/releases/download/latest/sprites.zip",
-            ]
-            self.update_thread = DownloadThread(urls, self.dest_dir, force_download=True)
-        else:
-            self.update_thread = SpriteUpdateDiffThread(
-                self.added, self.modified, self.deleted, self.remote_sha, self.dest_dir
-            )
-
+        self.update_thread = SpriteUpdateDiffThread(
+            self.added, self.modified, self.deleted, self.remote_sha, self.dest_dir
+        )
         self.update_thread.progress_signal.connect(self.progress_bar.setValue)
         self.update_thread.status_signal.connect(self.status_label.setText)
-        
-        if isinstance(self.update_thread, DownloadThread):
-            self.update_thread.download_finished_signal.connect(self.on_download_finished)
-        else:
-            self.update_thread.finished_signal.connect(self.on_download_finished)
+        self.update_thread.finished_signal.connect(self.on_download_finished)
 
         self.update_thread.start()
 
@@ -297,7 +358,9 @@ def get_local_sprites_manifest(dest_dir: Path) -> dict:
             for f in files:
                 full_path = Path(root) / f
                 rel_path = str(full_path.relative_to(dest_dir)).replace("\\", "/")
-                
+                if not _is_managed_sprite_path(rel_path):
+                    continue
+
                 try:
                     stat_info = full_path.stat()
                     mtime = stat_info.st_mtime
@@ -343,16 +406,17 @@ def get_local_sprites_manifest(dest_dir: Path) -> dict:
 def calculate_sprite_diff(dest_dir: Path, silent: bool = False, ignore_snooze: bool = False) -> dict:
     """Calculates local file Git SHA-1 hashes and diffs them against the remote repository tree."""
     try:
-        # Read local state first to check for active snooze
+        # Read local state first to check for active snooze.
         local_sha = None
         snooze_until = None
         state_path = dest_dir.parent / "sprites_update_state.json"
         if state_path.exists():
             try:
                 state_data = json.loads(state_path.read_text(encoding="utf-8"))
-                local_sha = state_data.get("commit_sha")
-                snooze_until = state_data.get("snooze_until")
-            except Exception:
+                if isinstance(state_data, dict):
+                    local_sha = state_data.get("commit_sha")
+                    snooze_until = state_data.get("snooze_until")
+            except (OSError, ValueError):
                 pass
 
         # Check if update prompts are currently snoozed and exit early without network requests
@@ -362,8 +426,9 @@ def calculate_sprite_diff(dest_dir: Path, silent: bool = False, ignore_snooze: b
         # 1. Fetch latest remote commit SHA
         res = requests.get("https://api.github.com/repos/h0tp-ftw/ankimon-sprites/commits/main", timeout=10)
         res.raise_for_status()
-        remote_sha = res.json().get("sha")
-        if not remote_sha:
+        commit_data = res.json()
+        remote_sha = commit_data.get("sha") if isinstance(commit_data, dict) else None
+        if not isinstance(remote_sha, str) or not remote_sha:
             return {"status": "error", "error": "Invalid API response for latest commit."}
 
         # If SHA matches and sprites exist, we are up to date.
@@ -371,37 +436,35 @@ def calculate_sprite_diff(dest_dir: Path, silent: bool = False, ignore_snooze: b
         if not ignore_snooze and local_sha == remote_sha:
             return {"status": "up_to_date", "remote_sha": remote_sha}
 
-        # 2. Fetch remote Git Tree
-        tree_url = f"https://api.github.com/repos/h0tp-ftw/ankimon-sprites/git/trees/{remote_sha}?recursive=1"
-        res = requests.get(tree_url, timeout=15)
-        res.raise_for_status()
-        tree_data = res.json()
-        if tree_data.get("truncated"):
-            return {"status": "error", "error": "GitHub Git Tree response was truncated. Differential update aborted."}
-        remote_tree = tree_data.get("tree", [])
+        # 2. Fetch the current managed sprite set.
+        remote_files = _fetch_remote_files(remote_sha)
 
-        # Remote files map: path -> sha
-        remote_files = {}
-        for item in remote_tree:
-            if item.get("type") == "blob":
-                remote_files[item["path"]] = item["sha"]
-
-        # Fetch local file SHA mappings using cache
+        # Fetch local file SHA mappings using cache.
         local_files = get_local_sprites_manifest(dest_dir)
 
-        added = []
-        modified = []
-        deleted = []
+        added = sorted(path for path in remote_files if path not in local_files)
+        modified = sorted(
+            path
+            for path, remote_file_sha in remote_files.items()
+            if path in local_files and local_files[path] != remote_file_sha
+        )
 
-        for path, r_sha in remote_files.items():
-            if path not in local_files:
-                added.append(path)
-            elif local_files[path] != r_sha:
-                modified.append(path)
-
-        for path in local_files:
-            if path not in remote_files:
-                deleted.append(path)
+        # Delete only files proven to belong to the previously installed revision.
+        # Unknown local files are user data and must not be inferred as obsolete.
+        previous_remote_files = {}
+        if isinstance(local_sha, str) and local_sha:
+            if local_sha == remote_sha:
+                previous_remote_files = remote_files
+            else:
+                try:
+                    previous_remote_files = _fetch_remote_files(local_sha)
+                except Exception:
+                    previous_remote_files = {}
+        deleted = sorted(
+            path
+            for path in previous_remote_files
+            if path not in remote_files and path in local_files
+        )
 
         if not added and not modified and not deleted:
             return {"status": "up_to_date", "remote_sha": remote_sha}

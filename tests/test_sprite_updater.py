@@ -1,12 +1,10 @@
 import requests
 import json
 import hashlib
-import os
 import sys
 import types
 import importlib.util
 from pathlib import Path
-import pytest
 
 _SRC = Path(__file__).parent.parent / "src"
 
@@ -99,41 +97,63 @@ class MockResponse:
 def test_sprite_diff_logic(tmp_path, monkeypatch):
     dest_dir = tmp_path / "sprites"
     dest_dir.mkdir()
-    
+
     (dest_dir / "a.png").write_bytes(b"content_a")
     (dest_dir / "b.png").write_bytes(b"content_b")
     (dest_dir / "c.png").write_bytes(b"content_c")
+    (dest_dir / "custom.png").write_bytes(b"user_custom")
+    (dest_dir / "download_complete.flag").touch()
+    (tmp_path / "sprites_update_state.json").write_text(
+        json.dumps({"commit_sha": "old_remote_sha", "snooze_until": 0}),
+        encoding="utf-8",
+    )
 
     sha_a = hashlib.sha1(b"blob 9\0content_a").hexdigest()
     sha_b_new = hashlib.sha1(b"blob 13\0new_content_b").hexdigest()
     sha_d = hashlib.sha1(b"blob 9\0content_d").hexdigest()
 
-    mock_commits_api = {"sha": "mock_remote_commit_sha12345"}
-    mock_tree_api = {
+    mock_commits_api = {"sha": "new_remote_sha"}
+    current_tree = {
         "tree": [
             {"path": "a.png", "type": "blob", "sha": sha_a},
             {"path": "b.png", "type": "blob", "sha": sha_b_new},
             {"path": "d.png", "type": "blob", "sha": sha_d},
+            {"path": ".github/workflows/build.yml", "type": "blob", "sha": "x"},
+            {"path": "README.md", "type": "blob", "sha": "y"},
+            {"path": "LICENSE", "type": "blob", "sha": "z"},
+        ]
+    }
+    previous_tree = {
+        "tree": [
+            {"path": "a.png", "type": "blob", "sha": sha_a},
+            {"path": "b.png", "type": "blob", "sha": "old_b"},
+            {"path": "c.png", "type": "blob", "sha": "old_c"},
         ]
     }
 
     def mock_get(url, *args, **kwargs):
         if "commits/main" in url:
             return MockResponse(mock_commits_api)
-        elif "git/trees" in url:
-            return MockResponse(mock_tree_api)
+        if "git/trees/old_remote_sha" in url:
+            return MockResponse(previous_tree)
+        if "git/trees/new_remote_sha" in url:
+            return MockResponse(current_tree)
         return MockResponse({}, 404)
 
-    import requests
     monkeypatch.setattr(requests, "get", mock_get)
 
-    res = su.calculate_sprite_diff(dest_dir)
+    result = su.calculate_sprite_diff(dest_dir)
 
-    assert res["status"] == "update_available"
-    assert res["remote_sha"] == "mock_remote_commit_sha12345"
-    assert "d.png" in res["added"]
-    assert "b.png" in res["modified"]
-    assert "c.png" in res["deleted"]
+    assert result["status"] == "update_available"
+    assert result["remote_sha"] == "new_remote_sha"
+    assert result["added"] == ["d.png"]
+    assert result["modified"] == ["b.png"]
+    assert result["deleted"] == ["c.png"]
+    assert "custom.png" not in result["deleted"]
+    assert ".github/workflows/build.yml" not in result["added"]
+    assert "README.md" not in result["added"]
+    assert "LICENSE" not in result["added"]
+    assert "download_complete.flag" not in su.get_local_sprites_manifest(dest_dir)
 
 
 def test_sprite_updater_snooze(tmp_path, monkeypatch):
@@ -176,3 +196,39 @@ def test_sprite_updater_snooze(tmp_path, monkeypatch):
     res_ignored = su.calculate_sprite_diff(dest_dir, silent=True, ignore_snooze=True)
     assert res_ignored["status"] == "update_available"
     assert res_ignored["added"] == ["a.png"]
+
+
+def test_failed_deletion_does_not_record_success(tmp_path, monkeypatch):
+    dest_dir = tmp_path / "sprites"
+    dest_dir.mkdir()
+    obsolete = dest_dir / "obsolete.png"
+    obsolete.write_bytes(b"old")
+
+    original_unlink = Path.unlink
+
+    def fail_obsolete_unlink(path, *args, **kwargs):
+        if path == obsolete:
+            raise OSError("file is locked")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_obsolete_unlink)
+    results = []
+    thread = su.SpriteUpdateDiffThread(
+        [], [], ["obsolete.png"], "new_remote_sha", dest_dir
+    )
+    thread.finished_signal.connect(
+        lambda success, message: results.append((success, message))
+    )
+
+    thread.run()
+
+    assert results and results[-1][0] is False
+    assert "Failed to remove obsolete sprite" in results[-1][1]
+    assert not (tmp_path / "sprites_update_state.json").exists()
+
+
+def test_unsafe_paths_are_not_managed():
+    assert not su._is_managed_sprite_path("../outside.png")
+    assert not su._is_managed_sprite_path("C:/outside.png")
+    assert not su._is_managed_sprite_path(".github/workflows/build.yml")
+    assert su._is_managed_sprite_path("front_default/25.png")
