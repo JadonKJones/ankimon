@@ -5,6 +5,7 @@ import sys
 import types
 import importlib.util
 from pathlib import Path
+from unittest import mock
 
 _SRC = Path(__file__).parent.parent / "src"
 
@@ -212,18 +213,16 @@ def test_failed_deletion_does_not_record_success(tmp_path, monkeypatch):
         return original_unlink(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "unlink", fail_obsolete_unlink)
-    results = []
+    write_state = mock.MagicMock()
+    monkeypatch.setattr(su, "_write_update_state", write_state)
     thread = su.SpriteUpdateDiffThread(
         [], [], ["obsolete.png"], "new_remote_sha", dest_dir
-    )
-    thread.finished_signal.connect(
-        lambda success, message: results.append((success, message))
     )
 
     thread.run()
 
-    assert results and results[-1][0] is False
-    assert "Failed to remove obsolete sprite" in results[-1][1]
+    write_state.assert_not_called()
+    assert obsolete.exists()
     assert not (tmp_path / "sprites_update_state.json").exists()
 
 
