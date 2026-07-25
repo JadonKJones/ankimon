@@ -106,6 +106,11 @@ from .card_hooks import register_card_hooks
 
 register_card_hooks()
 
+# --- Browser hooks for card suspension > unsuspension and leech tagged > leech tag removed detection ---
+from .functions.browser_hooks import register_browser_hooks
+
+register_browser_hooks()
+
 setupHooks(None, ankimon_tracker_obj)
 
 # --- Changelog check ---
