@@ -195,6 +195,8 @@ def start_asynchronous_startup():
     from aqt.operations import QueryOp
     from .startup import run_startup_background_checks, run_startup_ui_callbacks
 
+    services._startup_in_progress = True
+
     def on_startup_complete(results):
         # 1. Qt half of the startup sequence (migration dialog, sprite
         #    downloader, first-enemy stat application, starter window, rate
@@ -311,6 +313,9 @@ def start_asynchronous_startup():
             except Exception:
                 pass
 
+        services._startup_in_progress = False
+        services._is_reloading = False
+
     def on_startup_failed(exc):
         # QueryOp offers no automatic recovery: if the background half raises
         # (e.g. a locked/corrupt ankimon.db in one of the unguarded is_migrated /
@@ -330,6 +335,9 @@ def start_asynchronous_startup():
             )
         except Exception:
             pass
+
+        services._startup_in_progress = False
+        services._is_reloading = False
 
     QueryOp(
         parent=mw,
