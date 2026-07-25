@@ -1,5 +1,5 @@
 import json
-from typing import List
+from typing import List, Set, Dict
 
 from ..resources import badgebag_path
 from ..services import services
@@ -69,3 +69,191 @@ def handle_review_count_achievement(review_count, achievements):
         achievements = receive_badge(badge_to_award, achievements)
 
     return achievements
+
+def get_pending_badge_11_candidates(db) -> Set[str]:
+    """
+    Retrieves stored note IDs that are candidates for Badge 11.
+    These are cards that have been either:
+    - Unsuspended (was suspended before)
+    - Untagged (had 'leech' tag removed)
+    But haven't been reviewed yet.
+    """
+    try:
+        row = db.execute("SELECT value FROM metadata WHERE key = 'badge_11_candidates'").fetchone()
+        if row and row[0]:
+            return set(json.loads(row[0]))
+    except Exception:
+        pass
+    return set()
+
+
+def save_pending_badge_11_candidates(db, candidates: Set[str]):
+    """Saves pending Badge 11 candidates to metadata."""
+    try:
+        value_str = json.dumps(list(candidates))
+        conn = db._get_connection()
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('badge_11_candidates', ?)",
+            (value_str,),
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
+def check_unleeched_cards(col, db, achievements):
+    """
+    Tracks cards that were previously leeches or suspended.
+    
+    Badge 11 is awarded when EITHER condition is met:
+    1. A suspended card was unsuspended
+    OR
+    2. A card with the 'leech' tag had the tag removed
+    
+    AND the card is reviewed at least once after the change.
+    
+    Cards that meet condition 1 or 2 are stored as "candidates"
+    until they are reviewed.
+    """
+    if not col or not db or not achievements:
+        return
+
+    # Skip if badge already awarded
+    if check_for_badge(achievements, 11):
+        return
+
+    try:
+        # Get current suspended card IDs
+        suspended_cids = set()
+        for cid in col.db.list("SELECT id FROM cards WHERE queue = -1"):
+            suspended_cids.add(str(cid))
+
+        # Get the note ID for each suspended card
+        suspended_nids = set()
+        for cid in suspended_cids:
+            note_id = col.db.scalar("SELECT nid FROM cards WHERE id = ?", int(cid))
+            if note_id:
+                suspended_nids.add(str(note_id))
+
+        # Get current cards with leech tag
+        current_leech_nids = {str(nid) for nid in col.find_notes("tag:leech")}
+
+        # Load stored tracking data
+        stored_candidates = get_pending_badge_11_candidates(db)
+
+        # --- Check for newly unsuspended cards (Condition 1) ---
+        # We need to compare with previously stored suspended cards
+        # Load previously suspended cards from metadata
+        prev_suspended_nids = set()
+        try:
+            row = db.execute("SELECT value FROM metadata WHERE key = 'prev_suspended_nids'").fetchone()
+            if row and row[0]:
+                prev_suspended_nids = set(json.loads(row[0]))
+        except Exception:
+            pass
+
+        # Find cards that WERE suspended but ARE NOT suspended anymore
+        newly_unsuspended = prev_suspended_nids - suspended_nids
+
+        # Add these as candidates (unless they already are)
+        for nid in newly_unsuspended:
+            # Verify the card still exists
+            if col.db.scalar("SELECT id FROM notes WHERE id = ?", int(nid)):
+                stored_candidates.add(str(nid))
+
+        # Save current suspended IDs for next comparison
+        try:
+            value_str = json.dumps(list(suspended_nids))
+            conn = db._get_connection()
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('prev_suspended_nids', ?)",
+                (value_str,),
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+        # --- Check for newly untagged cards (Condition 2) ---
+        # Load previously leeched cards from metadata
+        prev_leech_nids = set()
+        try:
+            row = db.execute("SELECT value FROM metadata WHERE key = 'prev_leech_nids'").fetchone()
+            if row and row[0]:
+                prev_leech_nids = set(json.loads(row[0]))
+        except Exception:
+            pass
+
+        # Find cards that WERE leeched but ARE NOT leeched anymore
+        newly_untagged = prev_leech_nids - current_leech_nids
+
+        # Add these as candidates (unless they already are)
+        for nid in newly_untagged:
+            # Verify the card still exists
+            if col.db.scalar("SELECT id FROM notes WHERE id = ?", int(nid)):
+                stored_candidates.add(str(nid))
+
+        # Save current leech IDs for next comparison
+        try:
+            value_str = json.dumps(list(current_leech_nids))
+            conn = db._get_connection()
+            conn.execute(
+                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('prev_leech_nids', ?)",
+                (value_str,),
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+        # Save updated candidates
+        save_pending_badge_11_candidates(db, stored_candidates)
+
+        # Note: Badge 11 is NOT awarded here.
+        # It will be awarded when the card is reviewed
+        # (see check_and_award_badge_11_on_review below)
+
+    except Exception:
+        # Silent fail - don't break Anki functionality
+        pass
+
+
+def check_and_award_badge_11_on_review(col, db, achievements, card_id):
+    """
+    Called when a card is reviewed.
+    If the card is in the candidates list, award Badge 11.
+    """
+    if not col or not db or not achievements:
+        return
+
+    if check_for_badge(achievements, 11):
+        return
+
+    try:
+        # Get the note ID for this card
+        note_id = col.db.scalar("SELECT nid FROM cards WHERE id = ?", card_id)
+        if not note_id:
+            return
+
+        note_id_str = str(note_id)
+
+        # Get pending candidates
+        candidates = get_pending_badge_11_candidates(db)
+
+        # If this card is a candidate, award the badge
+        if note_id_str in candidates:
+            # Remove from candidates (cleanup)
+            candidates.remove(note_id_str)
+            save_pending_badge_11_candidates(db, candidates)
+
+            # Award Badge 11
+            receive_badge(11, achievements)
+
+    except Exception:
+        pass
+
+
+def update_leech_tracking_on_review(col, db, achievements, card_id):
+    """
+    Called after a card is reviewed to check if it qualifies for Badge 11.
+    This should be called from answerCard_after in card_hooks.py.
+    """
+    check_and_award_badge_11_on_review(col, db, achievements, card_id)
