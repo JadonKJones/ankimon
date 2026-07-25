@@ -49,7 +49,21 @@ def answerCard_after(rev, card, ease):
         record_desktop_review(revlog_id, card_id=card.id)
     except Exception:
         pass
-
+    
+    # Check for Badge 11 on card review
+    # If this card was previously unsuspended OR had its leech tag removed,
+    # and is now being reviewed, award Badge 11
+    try:
+        from .functions.badges_functions import update_leech_tracking_on_review
+        update_leech_tracking_on_review(
+            rev.mw.col if hasattr(rev, 'mw') and hasattr(rev.mw, 'col') else services.col,
+            services.db,
+            getattr(services, 'achievements', None),
+            card.id
+        )
+    except Exception as e:
+        # Silent fail - don't break Anki functionality
+        pass
 
 # Reload safety (F31): a second boot in the same session must not leave the
 # reviewer hooks registered twice, or every review would be double-counted.
