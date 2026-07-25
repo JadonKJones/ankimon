@@ -2518,11 +2518,22 @@ class PokemonPC(QDialog):
             "cp",
         }
 
+        # Imported here rather than at module scope: this is the only call
+        # site, and pc_box's module-level import of ``business`` is widely
+        # stubbed by the test-suite, so a new top-level name would break
+        # unrelated modules that never reach this method.
+        from ..business import pokemon_cp_is_stale
+
+        # A row needs repair if a default field is missing *or* its persisted
+        # ``cp`` no longer matches the current formula. Without the staleness
+        # arm, a save whose fields are all present short-circuits here and
+        # never reaches the "Always recalculate CP" pass below — which is
+        # exactly the population carrying pre-retune CP values.
         is_migration_needed = any(
-            key not in pokemon
+            any(key not in pokemon for key in default_keys)
+            or pokemon_cp_is_stale(pokemon)
             for pokemon in pokemon_list
             if isinstance(pokemon, dict)
-            for key in default_keys
         )
 
         if not is_migration_needed:
@@ -2557,9 +2568,14 @@ class PokemonPC(QDialog):
             if not isinstance(pokemon, dict):
                 continue
 
-            # Always recalculate CP to ensure it matches the current formula in business.py
+            # Always recalculate CP to ensure it matches the current formula in business.py.
+            # This runs for every row on PC-box open, so a single malformed
+            # legacy row must not take the whole window down with it.
             old_cp = pokemon.get("cp")
-            new_cp = calculate_cp_from_dict(pokemon)
+            try:
+                new_cp = calculate_cp_from_dict(pokemon)
+            except Exception:
+                new_cp = old_cp
             if old_cp != new_cp:
                 needs_update = True
                 pokemon_list[i]["cp"] = new_cp
