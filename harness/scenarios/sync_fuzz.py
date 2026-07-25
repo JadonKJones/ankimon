@@ -127,6 +127,7 @@ def _apply_scenario(local, cloud, rng, local_exists, same_content, corrupt_cloud
         _make_db(local, rng.randint(0, 1_000_000_000))
         local_mtime = BASE_EPOCH + rng.uniform(-1e6, 1e6)
         os.utime(local, (local_mtime, local_mtime))
+        local_mtime = os.path.getmtime(local)
 
     if same_content and local_exists and not corrupt_cloud:
         shutil.copy2(local, cloud)
@@ -135,6 +136,7 @@ def _apply_scenario(local, cloud, rng, local_exists, same_content, corrupt_cloud
 
     cloud_mtime = (local_mtime if local_mtime is not None else BASE_EPOCH) + _mtime_delta(rng)
     os.utime(cloud, (cloud_mtime, cloud_mtime))
+    cloud_mtime = os.path.getmtime(cloud)
     return local_mtime, cloud_mtime
 
 
@@ -218,12 +220,14 @@ def one(seed, verbose=False):
         _make_db(local2, rng.randint(0, 1_000_000_000))
         local_mtime2 = BASE_EPOCH + rng.uniform(-1e6, 1e6)
         os.utime(local2, (local_mtime2, local_mtime2))
+        local_mtime2 = os.path.getmtime(local2)
         if same_content2:
             shutil.copy2(local2, cloud2)
         else:
             _make_db(cloud2, rng.randint(0, 1_000_000_000))
         cloud_mtime2 = local_mtime2 + _mtime_delta(rng)
         os.utime(cloud2, (cloud_mtime2, cloud_mtime2))
+        cloud_mtime2 = os.path.getmtime(cloud2)
         if verbose:
             print(f"seed {seed} [save_configs]\n"
                   f"  same_content={same_content2}\n"
