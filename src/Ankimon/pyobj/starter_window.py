@@ -223,10 +223,6 @@ class StarterWindow(QWidget):
         self.show()
         self.starter = True
         self.logger.log_and_showinfo("info","You have chosen your Starter Pokemon ! \n You can now close this window ! \n Please restart your Anki to restart your Pokemon Journey!")
-        #global achievments
-        #check = check_for_badge(achievements, 7)
-        #if check is False:
-        #    receive_badge(7, achievements)
 
     def display_fossil_pokemon(self, fossil_id, fossil_name):
         self.clear_layout(self.layout())
