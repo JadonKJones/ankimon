@@ -47,12 +47,19 @@ def split_japanese_string_by_length(input_string, max_length):
         yield current_line
 
 def resize_pixmap_img(pixmap, max_width):
+    """Scale a pixmap proportionally without crashing on a failed image load.
+
+    Qt represents a missing or unreadable image as a null pixmap whose width and
+    height are both zero. Returning it unchanged lets callers render an empty
+    image or apply their own fallback instead of dividing by zero.
+    """
     original_width = pixmap.width()
     original_height = pixmap.height()
+    if original_width <= 0 or original_height <= 0:
+        return pixmap
     new_width = max_width
     new_height = (original_height * max_width) // original_width
-    pixmap2 = pixmap.scaled(new_width, new_height)
-    return pixmap2
+    return pixmap.scaled(new_width, new_height)
 
 def calc_experience(base_experience, enemy_level):
     exp = base_experience * enemy_level / 7
