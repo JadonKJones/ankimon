@@ -1085,10 +1085,14 @@ class TestWindow(QWidget):
         Receive_Window.show()
 
     def display_item(self):
+        item_name = random_item()
+        if item_name is None:
+            return
+
         Receive_Window = QDialog(mw)
         layout = QHBoxLayout()
 
-        item_widget = self.pokemon_display_item(random_item())
+        item_widget = self.pokemon_display_item(item_name)
 
         layout.addWidget(item_widget)
 
