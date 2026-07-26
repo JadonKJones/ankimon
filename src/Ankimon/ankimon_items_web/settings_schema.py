@@ -110,6 +110,7 @@ GROUPS = [
             "View Main Pokémon Front",
             "XP Bar Location",
             "Pop-Up on Defeat",
+            "Pop-Up on Item Receive",
         ],
         "chip_group": {
             "label": "HUD Element Toggles",
