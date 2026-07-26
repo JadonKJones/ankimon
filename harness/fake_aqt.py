@@ -146,6 +146,9 @@ def _make_query_op():
         def without_collection(self):
             return self
 
+        def with_backend_semantics(self):
+            return self
+
         def with_progress(self, *a, **k):
             return self
 
