@@ -2,7 +2,7 @@ from aqt import gui_hooks, mw, utils
 from aqt.utils import tooltip
 
 from .services import services
-from .singletons import ankimon_tracker_obj, reviewer_obj
+from .singletons import ankimon_tracker_obj, reviewer_obj, logger
 
 
 def on_show_question(Card):
@@ -56,14 +56,14 @@ def answerCard_after(rev, card, ease):
     try:
         from .functions.badges_functions import update_leech_tracking_on_review
         update_leech_tracking_on_review(
-            rev.mw.col if hasattr(rev, 'mw') and hasattr(rev.mw, 'col') else services.col,
+            rev.mw.col,
             services.db,
             getattr(services, 'achievements', None),
             card.id
         )
     except Exception as e:
-        # Silent fail - don't break Anki functionality
-        pass
+        # Log the error for diagnosability without breaking Anki functionality
+        logger.log("error", f"Failed to update leech tracking for card {card.id}: {e}")
 
 # Reload safety (F31): a second boot in the same session must not leave the
 # reviewer hooks registered twice, or every review would be double-counted.
