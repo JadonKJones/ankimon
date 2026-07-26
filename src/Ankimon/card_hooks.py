@@ -2,8 +2,8 @@ from aqt import gui_hooks, mw, utils
 from aqt.utils import tooltip
 
 from .services import services
-from .singletons import ankimon_tracker_obj, reviewer_obj, logger
-
+from .singletons import ankimon_tracker_obj, reviewer_obj
+from .singletons import logger
 
 def on_show_question(Card):
     ankimon_tracker_obj.start_card_timer()
