@@ -48,9 +48,21 @@ from aqt import gui_hooks, mw
 
 def restart_ankimon():
     """Tear the add-on down and re-import it in place (developer hot-reload)."""
+    import time
+
     from aqt.utils import tooltip
 
+    from .services import services
+
+    # Wait for the active startup QueryOp before purging modules. Otherwise its
+    # worker can hold a database connection lock while waiting for Python's
+    # import lock, as teardown waits for that same database lock.
+    while getattr(services, "_startup_in_progress", False):
+        QApplication.processEvents()
+        time.sleep(0.02)
+
     addon_package = __name__.split(".")[0]
+    services._is_reloading = True
     try:
         teardown_ankimon(addon_package)
         importlib.import_module(addon_package)

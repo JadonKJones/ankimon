@@ -78,23 +78,29 @@ def run_startup_background_checks(backup_manager=None):
     logger.log_and_showinfo("game", translator.translate("startup"))
     logger.log_and_showinfo("game", translator.translate("backing_up_files"))
 
-    # 1. Run the legacy file backup; report failures on the main thread.
+    # 1. Run backups unless this startup was triggered by a developer hot-reload.
     backup_error = None
-    try:
-        run_backup()
-    except Exception as e:
-        backup_error = e
+    from .services import services
 
-    # Dev-mode auto-backup (disk copy — background work). __init__ passes its
-    # module-level BackupManager so profile hooks and the menu share the same
-    # instance; constructing one here keeps this function standalone-callable.
-    if backup_manager is None:
-        backup_manager = BackupManager(logger, settings_obj)
-    try:
-        if settings_obj.get("misc.developer_mode"):
-            backup_manager.create_backup(manual=False)
-    except Exception as e:
-        logger.log("error", f"Error in background backup creation: {e}")
+    is_reloading = getattr(services, "_is_reloading", False)
+    if not is_reloading:
+        try:
+            run_backup()
+        except Exception as e:
+            backup_error = e
+
+        # Dev-mode auto-backup (disk copy — background work). __init__ passes its
+        # module-level BackupManager so profile hooks and the menu share the same
+        # instance; constructing one here keeps this function standalone-callable.
+        if backup_manager is None:
+            backup_manager = BackupManager(logger, settings_obj)
+        try:
+            if settings_obj.get("misc.developer_mode"):
+                backup_manager.create_backup(manual=False)
+        except Exception as e:
+            logger.log("error", f"Error in background backup creation: {e}")
+    else:
+        logger.log("info", "Skipping background backups during hot-reload.")
 
     # 2. Read-only DB checks.
     is_migrated = ankimon_db.is_migrated()

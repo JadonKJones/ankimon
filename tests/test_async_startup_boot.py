@@ -478,6 +478,28 @@ def test_dev_mode_auto_backup_uses_passed_manager(startup_env):
     assert FakeBackupManager.instances == [manager]
 
 
+def test_hot_reload_skips_both_background_backups(startup_env, monkeypatch):
+    env = startup_env
+    env.settings.config["misc.developer_mode"] = True
+    services = sys.modules["Ankimon.services"].services
+    monkeypatch.setattr(services, "_is_reloading", True, raising=False)
+
+    manager = FakeBackupManager(env.logger, env.settings)
+    results = env.mod.run_startup_background_checks(manager)
+
+    assert results["backup_manager"] is manager
+    assert _called(env, "run_backup") == []
+    assert manager.create_calls == []
+    assert (
+        "log",
+        "info",
+        "Skipping background backups during hot-reload.",
+    ) in env.calls
+    # The remainder of startup still runs normally.
+    assert _called(env, "generate_random_pokemon")
+    assert _called(env, "count_items_and_rewrite")
+
+
 def test_auto_catch_migration_folds_legacy_key_once(startup_env):
     env = startup_env
     env.settings.config["battle.automatic_catch_special"] = False
@@ -860,6 +882,27 @@ def test_boot_ordering_background_then_ui_then_menu(boot_env):
     # The QueryOp ran collection-free.
     assert len(SyncQueryOp.instances) == 1
     assert SyncQueryOp.instances[0].without_collection_called is True
+    assert boot_env.services._startup_in_progress is False
+    assert boot_env.services._is_reloading is False
+
+
+def test_startup_failure_clears_reload_lifecycle_flags(boot_env):
+    observed_startup_flags = []
+
+    def fail_background_startup(backup_manager=None):
+        observed_startup_flags.append(boot_env.services._startup_in_progress)
+        raise RuntimeError("startup boom")
+
+    sys.modules[
+        "Ankimon.startup"
+    ].run_startup_background_checks = fail_background_startup
+    boot_env.services._is_reloading = True
+
+    boot_env.exec_init()
+
+    assert observed_startup_flags == [True]
+    assert boot_env.services._startup_in_progress is False
+    assert boot_env.services._is_reloading is False
 
 
 def test_changelog_keeps_real_connectivity(boot_env):
