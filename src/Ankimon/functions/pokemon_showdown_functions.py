@@ -85,6 +85,16 @@ def export_all_pkmn_showdown():
     info = "Pokemon Infos have been Copied to your Clipboard! \nNow simply paste this text into Teambuilder in PokemonShowdown. \nNote: Fight in the [Gen 7] Anything Goes - Battle Mode"
     info_label = QLabel(info)
 
+    # Build the dialog even for an empty collection. Previously these widgets
+    # were created only inside the Pokémon loop, leaving local variables unbound.
+    layout = QVBoxLayout()
+    layout.addWidget(info_label)
+    error_code_input = QLineEdit()
+    error_code_input.setPlaceholderText("Enter Error Code")
+    save_button = QPushButton("Fix Pokemon Export Code")
+    layout.addWidget(error_code_input)
+    layout.addWidget(save_button)
+
     # Get all pokemon data
     pokemon_info_complete_text = ""
     try:
@@ -182,6 +192,8 @@ def flex_pokemon_collection():
     # Information label
     info = "Pokemon Infos have been Copied to your Clipboard! \nNow simply paste this text into https://pokepast.es/.\nAfter pasting the infos in your clipboard and submitting the needed infos on the right,\n you will receive a link to send friends to flex."
     info_label = QLabel(info)
+    layout = QVBoxLayout()
+    layout.addWidget(info_label)
 
     # Get all pokemon data
     pokemon_info_complete_text = ""
