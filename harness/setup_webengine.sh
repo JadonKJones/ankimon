@@ -10,7 +10,7 @@
 #   source .tier2/env.sh
 #   export LD_LIBRARY_PATH="$PWD/.tier2/we-libs/extract/usr/lib/$(uname -m)-linux-gnu:$LD_LIBRARY_PATH"
 #   export QTWEBENGINE_DISABLE_SANDBOX=1
-#   export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-gpu --disable-dev-shm-usage --in-process-gpu --single-process"
+#   export QTWEBENGINE_CHROMIUM_FLAGS="--no-sandbox --disable-gpu --disable-dev-shm-usage"
 #   python3 -m harness.checks.probe_real_webengine
 #   python3 harness/scenarios/hud_render.py 150
 #
@@ -34,10 +34,22 @@ cd "$WE/debs"
 # libs reported missing by `ldd libQt6WebEngineCore.so` (+ their transitive deps).
 PKGS="libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxtst6 liblcms2-2 \
       libopus0 libsnappy1v5 libwebp7 libwebpdemux2 libwebpmux3 libxcb-dri3-0 \
-      libxkbfile1 libasound2t64 libminizip1t64 libxrender1 libsharpyuv0"
+      libxkbfile1 libasound2t64 libminizip1t64 libxrender1 libsharpyuv0 \
+      libnspr4 libnss3"
 
 for p in $PKGS; do
-  apt-get download "$p" 2>/dev/null || echo "warn: could not fetch $p (name may differ on your release)"
+  if apt-get download "$p" 2>/dev/null; then
+    continue
+  fi
+
+  # A stale, unprivileged apt index may point at an update revision already
+  # removed from the mirror. Fall back to the oldest indexed release version.
+  base_version="$(apt-cache madison "$p" 2>/dev/null | tail -n 1 | awk '{print $3}')"
+  if [ -n "$base_version" ] && apt-get download "$p=$base_version" 2>/dev/null; then
+    echo "    got $p base release ($base_version)"
+  else
+    echo "warn: could not fetch $p (name may differ on your release)"
+  fi
 done
 
 n=0

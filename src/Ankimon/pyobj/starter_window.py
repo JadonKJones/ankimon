@@ -34,9 +34,10 @@ from ..functions.badges_functions import check_for_badge, receive_badge
 from ..functions.battle_functions import calculate_hp
 from ..functions.pokedex_functions import get_base_experience, get_growth_rate, search_pokedex
 from ..functions.pokemon_functions import get_random_moves_for_pokemon, pick_random_gender
+from ..functions.sprite_functions import get_sprite_path
 from ..services import services
 from ..utils import load_custom_font, close_anki, is_alive
-from ..resources import addon_dir, frontdefault
+from ..resources import addon_dir
 from ..const import total_generations
 from .error_handler import show_warning_with_traceback
 
@@ -279,36 +280,21 @@ class StarterWindow(QWidget):
         pixmap_bckg = QPixmap()
         pixmap_bckg.load(str(bckgimage_path))
 
-        # Display the Pokémon image
-        water_path = frontdefault / f"{water_id}.png"
-        water_label = QLabel()
-        water_pixmap = QPixmap()
-        water_pixmap.load(str(water_path))
+        # Resolve through the shared sprite fallback so a partial/corrupt sprite
+        # download cannot crash the first-run window.
+        water_pixmap = QPixmap(get_sprite_path(
+            "front", "png", water_id, False, "N", pokemon_name=water_start
+        ))
+        fire_pixmap = QPixmap(get_sprite_path(
+            "front", "png", fire_id, False, "N", pokemon_name=fire_start
+        ))
+        grass_pixmap = QPixmap(get_sprite_path(
+            "front", "png", grass_id, False, "N", pokemon_name=grass_start
+        ))
 
-        # Display the Pokémon image
-        fire_path = frontdefault / f"{fire_id}.png"
-        fire_label = QLabel()
-        fire_pixmap = QPixmap()
-        fire_pixmap.load(str(fire_path))
-
-        # Display the Pokémon image
-        grass_path = frontdefault / f"{grass_id}.png"
-        grass_label = QLabel()
-        grass_pixmap = QPixmap()
-        grass_pixmap.load(str(grass_path))
-
-        def resize_pixmap_img(pixmap):
-            max_width = 150
-            original_width = pixmap.width()
-            original_height = pixmap.height()
-            new_width = max_width
-            new_height = (original_height * max_width) // original_width
-            pixmap2 = pixmap.scaled(new_width, new_height)
-            return pixmap2
-
-        water_pixmap = resize_pixmap_img(water_pixmap)
-        fire_pixmap = resize_pixmap_img(fire_pixmap)
-        grass_pixmap = resize_pixmap_img(grass_pixmap)
+        water_pixmap = resize_pixmap_img(water_pixmap, 150)
+        fire_pixmap = resize_pixmap_img(fire_pixmap, 150)
+        grass_pixmap = resize_pixmap_img(grass_pixmap, 150)
 
         # Merge the background image and the Pokémon image
         merged_pixmap = QPixmap(pixmap_bckg.size())
@@ -350,11 +336,11 @@ class StarterWindow(QWidget):
         pixmap_bckg = QPixmap()
         pixmap_bckg.load(str(bckgimage_path))
 
-        # Display the Pokémon image
-        image_path = frontdefault / f"{id}.png"
-        image_label = QLabel()
-        image_pixmap = QPixmap()
-        image_pixmap.load(str(image_path))
+        # Display the Pokémon image, falling back to the substitute sprite if the
+        # chosen starter asset is missing or unreadable.
+        image_pixmap = QPixmap(get_sprite_path(
+            "front", "png", id, False, "N", pokemon_name=starter_name
+        ))
         image_pixmap = resize_pixmap_img(image_pixmap, 250)
 
         # Merge the background image and the Pokémon image
@@ -390,11 +376,11 @@ class StarterWindow(QWidget):
         pixmap_bckg = QPixmap()
         pixmap_bckg.load(str(bckgimage_path))
 
-        # Display the Pokémon image
-        image_path = frontdefault / f"{id}.png"
-        image_label = QLabel()
-        image_pixmap = QPixmap()
-        image_pixmap.load(str(image_path))
+        # Display the Pokémon image, falling back to the substitute sprite if the
+        # restored fossil asset is missing or unreadable.
+        image_pixmap = QPixmap(get_sprite_path(
+            "front", "png", id, False, "N", pokemon_name=fossil_name
+        ))
         image_pixmap = resize_pixmap_img(image_pixmap, 250)
 
         # Merge the background image and the Pokémon image
