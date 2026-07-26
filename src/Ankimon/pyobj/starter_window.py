@@ -240,10 +240,6 @@ class StarterWindow(QWidget):
         self.show()
         self.starter = True
         self.logger.log_and_showinfo("info","You have received your Fossil Pokemon ! \n You can now close this window !")
-        global achievments
-        #check = check_for_badge(achievements, 19)
-        #if check is False:
-        #    receive_badge(19, achievements)
 
     def pokemon_display_starter_buttons(self, water_start, fire_start, grass_start):
         # Create buttons for catching and killing the Pokémon
