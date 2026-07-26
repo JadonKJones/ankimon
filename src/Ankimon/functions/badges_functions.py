@@ -89,16 +89,32 @@ def get_pending_badge_11_candidates(db) -> Set[str]:
 
 def save_pending_badge_11_candidates(db, candidates: Set[str]):
     """Saves pending Badge 11 candidates to metadata."""
+    _save_metadata(db, 'badge_11_candidates', list(candidates))
+
+
+def _save_metadata(db, key: str, value):
+    """Helper to upsert a key-value pair into the metadata table."""
     try:
-        value_str = json.dumps(list(candidates))
+        value_str = json.dumps(value) if not isinstance(value, str) else value
         conn = db._get_connection()
         conn.execute(
-            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('badge_11_candidates', ?)",
-            (value_str,),
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+            (key, value_str),
         )
         conn.commit()
     except Exception:
         pass
+
+
+def _get_metadata(db, key: str, default=None):
+    """Helper to retrieve a value from the metadata table."""
+    try:
+        row = db.execute("SELECT value FROM metadata WHERE key = ?", (key,)).fetchone()
+        if row and row[0]:
+            return json.loads(row[0])
+    except Exception:
+        pass
+    return default
 
 
 def check_unleeched_cards(col, db, achievements):
@@ -143,14 +159,7 @@ def check_unleeched_cards(col, db, achievements):
 
         # --- Check for newly unsuspended cards (Condition 1) ---
         # We need to compare with previously stored suspended cards
-        # Load previously suspended cards from metadata
-        prev_suspended_nids = set()
-        try:
-            row = db.execute("SELECT value FROM metadata WHERE key = 'prev_suspended_nids'").fetchone()
-            if row and row[0]:
-                prev_suspended_nids = set(json.loads(row[0]))
-        except Exception:
-            pass
+        prev_suspended_nids = _get_metadata(db, 'prev_suspended_nids', set())
 
         # Find cards that WERE suspended but ARE NOT suspended anymore
         newly_unsuspended = prev_suspended_nids - suspended_nids
@@ -162,26 +171,11 @@ def check_unleeched_cards(col, db, achievements):
                 stored_candidates.add(str(nid))
 
         # Save current suspended IDs for next comparison
-        try:
-            value_str = json.dumps(list(suspended_nids))
-            conn = db._get_connection()
-            conn.execute(
-                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('prev_suspended_nids', ?)",
-                (value_str,),
-            )
-            conn.commit()
-        except Exception:
-            pass
+        _save_metadata(db, 'prev_suspended_nids', list(suspended_nids))
 
         # --- Check for newly untagged cards (Condition 2) ---
         # Load previously leeched cards from metadata
-        prev_leech_nids = set()
-        try:
-            row = db.execute("SELECT value FROM metadata WHERE key = 'prev_leech_nids'").fetchone()
-            if row and row[0]:
-                prev_leech_nids = set(json.loads(row[0]))
-        except Exception:
-            pass
+        prev_leech_nids = _get_metadata(db, 'prev_leech_nids', set())
 
         # Find cards that WERE leeched but ARE NOT leeched anymore
         newly_untagged = prev_leech_nids - current_leech_nids
@@ -193,16 +187,7 @@ def check_unleeched_cards(col, db, achievements):
                 stored_candidates.add(str(nid))
 
         # Save current leech IDs for next comparison
-        try:
-            value_str = json.dumps(list(current_leech_nids))
-            conn = db._get_connection()
-            conn.execute(
-                "INSERT OR REPLACE INTO metadata (key, value) VALUES ('prev_leech_nids', ?)",
-                (value_str,),
-            )
-            conn.commit()
-        except Exception:
-            pass
+        _save_metadata(db, 'prev_leech_nids', list(current_leech_nids))
 
         # Save updated candidates
         save_pending_badge_11_candidates(db, stored_candidates)
