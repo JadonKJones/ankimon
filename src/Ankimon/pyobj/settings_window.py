@@ -297,6 +297,9 @@ class SettingsWindow(QMainWindow):
         return button
 
     def setup_ui(self):
+        """
+        Builds the settings window interface, including the logo, search bar, hierarchical settings sections, and save control.
+        """
         self.setMinimumSize(450, 600)
         central_widget = QWidget()
         self.setCentralWidget(central_widget)

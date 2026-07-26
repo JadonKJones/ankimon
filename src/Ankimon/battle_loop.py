@@ -85,6 +85,12 @@ def on_review_card(*args):
     # the seam — ``__init__``'s ``_on_review_card_gated`` forwards to this
     # function only once ``services.startup_finished`` is True (F32) — so this
     # body always runs against a fully-booted registry.
+    """
+    Process a review event by updating rewards, advancing battle state, and refreshing the battle display.
+    
+    Parameters:
+    	args: Event arguments forwarded by the review hook.
+    """
     global _state
     s = _state
 

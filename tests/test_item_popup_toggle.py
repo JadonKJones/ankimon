@@ -72,7 +72,15 @@ def _subrun(body):
 
 
 def _scenario(popup_enabled):
-    """Fire the item trigger exactly once with the setting on/off."""
+    """
+    Run the item-reward scenario with the pop-up setting enabled or disabled.
+    
+    Parameters:
+        popup_enabled (bool): Whether the item pop-up dialog is enabled.
+    
+    Returns:
+        dict: Scenario results, including dialog call count, item quantities, and error details.
+    """
     return _subrun(
         _SPY_WINDOW
         + "from harness.driver import Driver\n"
@@ -113,7 +121,9 @@ def _scenario(popup_enabled):
 
 
 def test_item_popup_disabled_still_grants_item():
-    """Setting OFF: no QDialog is painted, but the item is still awarded."""
+    """
+    Verify that disabling the item pop-up still awards the item without displaying the dialog.
+    """
     r = _scenario(popup_enabled=False)
     assert r["errors"] == 0, "item branch raised: %s" % r["first_error"]
     assert r["display_item_calls"] == 0, (
