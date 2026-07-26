@@ -72,15 +72,7 @@ def _subrun(body):
 
 
 def _scenario(popup_enabled):
-    """
-    Run the item-reward scenario with the pop-up setting enabled or disabled.
-    
-    Parameters:
-        popup_enabled (bool): Whether the item pop-up dialog is enabled.
-    
-    Returns:
-        dict: Scenario results, including dialog call count, item quantities, and error details.
-    """
+    """Run the item-reward scenario with the popup enabled or disabled."""
     return _subrun(
         _SPY_WINDOW
         + "from harness.driver import Driver\n"

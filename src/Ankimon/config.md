@@ -37,9 +37,6 @@ Reviewer Pop Up Messages:
 Decide if you would like to see the anki popup messages in the anki reviewer when your pokemon levels up or when a wild pokemon is defeated
 - `pop_up_dialog_message_on_defeat` [True/False]
 
-Decide if you would like to see the pop-up window when you receive an item. Turning this off still awards the item, it just does not interrupt your reviews.
-- `pop_up_dialog_message_on_item` [True/False]
-
 Sounds:
 You can decide if you want Pokemon Battle Cries in the anki reviewer once a pokemon appears.
 - `sounds` [True/False]
