@@ -131,7 +131,8 @@ def check_unleeched_cards(col, db, achievements):
     Cards that meet condition 1 or 2 are stored as "candidates"
     until they are reviewed.
     """
-    if not col or not db or not achievements:
+    # Use explicit None checks so empty achievements dict ({}) doesn't cause early return
+    if col is None or db is None or achievements is None:
         return
 
     # Skip if badge already awarded
@@ -139,17 +140,12 @@ def check_unleeched_cards(col, db, achievements):
         return
 
     try:
-        # Get current suspended card IDs
-        suspended_cids = set()
-        for cid in col.db.list("SELECT id FROM cards WHERE queue = -1"):
-            suspended_cids.add(str(cid))
-
-        # Get the note ID for each suspended card
-        suspended_nids = set()
-        for cid in suspended_cids:
-            note_id = col.db.scalar("SELECT nid FROM cards WHERE id = ?", int(cid))
-            if note_id:
-                suspended_nids.add(str(note_id))
+        # Get suspended card IDs with their note IDs in a single query
+        # This replaces the N+1 pattern of listing all cids then querying each nid
+        suspended_rows = col.db.all(
+            "SELECT id, nid FROM cards WHERE queue = -1"
+        )
+        suspended_nids = {str(row[1]) for row in suspended_rows if row[1] is not None}
 
         # Get current cards with leech tag
         current_leech_nids = {str(nid) for nid in col.find_notes("tag:leech")}
@@ -165,10 +161,18 @@ def check_unleeched_cards(col, db, achievements):
         newly_unsuspended = prev_suspended_nids - suspended_nids
 
         # Add these as candidates (unless they already are)
-        for nid in newly_unsuspended:
-            # Verify the card still exists
-            if col.db.scalar("SELECT id FROM notes WHERE id = ?", int(nid)):
-                stored_candidates.add(str(nid))
+        if newly_unsuspended:
+            # Verify notes still exist with a single query
+            nid_list = [int(nid) for nid in newly_unsuspended]
+            placeholders = ','.join('?' * len(nid_list))
+            existing_rows = col.db.all(
+                f"SELECT id FROM notes WHERE id IN ({placeholders})", *nid_list
+            ) if nid_list else []
+            existing_nids = {str(row[0]) for row in existing_rows}
+            
+            for nid in newly_unsuspended:
+                if nid in existing_nids:
+                    stored_candidates.add(str(nid))
 
         # Save current suspended IDs for next comparison
         _save_metadata(db, 'prev_suspended_nids', list(suspended_nids))
@@ -181,10 +185,18 @@ def check_unleeched_cards(col, db, achievements):
         newly_untagged = prev_leech_nids - current_leech_nids
 
         # Add these as candidates (unless they already are)
-        for nid in newly_untagged:
-            # Verify the card still exists
-            if col.db.scalar("SELECT id FROM notes WHERE id = ?", int(nid)):
-                stored_candidates.add(str(nid))
+        if newly_untagged:
+            # Verify notes still exist with a single query
+            nid_list = [int(nid) for nid in newly_untagged]
+            placeholders = ','.join('?' * len(nid_list))
+            existing_rows = col.db.all(
+                f"SELECT id FROM notes WHERE id IN ({placeholders})", *nid_list
+            ) if nid_list else []
+            existing_nids = {str(row[0]) for row in existing_rows}
+            
+            for nid in newly_untagged:
+                if nid in existing_nids:
+                    stored_candidates.add(str(nid))
 
         # Save current leech IDs for next comparison
         _save_metadata(db, 'prev_leech_nids', list(current_leech_nids))
@@ -206,7 +218,8 @@ def check_and_award_badge_11_on_review(col, db, achievements, card_id):
     Called when a card is reviewed.
     If the card is in the candidates list, award Badge 11.
     """
-    if not col or not db or not achievements:
+    # Use explicit None checks so empty achievements dict ({}) doesn't cause early return
+    if col is None or db is None or achievements is None:
         return
 
     if check_for_badge(achievements, 11):
