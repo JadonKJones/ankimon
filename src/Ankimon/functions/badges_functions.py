@@ -155,7 +155,9 @@ def check_unleeched_cards(col, db, achievements):
 
         # --- Check for newly unsuspended cards (Condition 1) ---
         # We need to compare with previously stored suspended cards
-        prev_suspended_nids = _get_metadata(db, 'prev_suspended_nids', set())
+        # Ensure we always work with sets by coercing the result
+        prev_suspended = _get_metadata(db, 'prev_suspended_nids', set())
+        prev_suspended_nids = set(prev_suspended) if isinstance(prev_suspended, (list, set)) else set()
 
         # Find cards that WERE suspended but ARE NOT suspended anymore
         newly_unsuspended = prev_suspended_nids - suspended_nids
@@ -179,7 +181,9 @@ def check_unleeched_cards(col, db, achievements):
 
         # --- Check for newly untagged cards (Condition 2) ---
         # Load previously leeched cards from metadata
-        prev_leech_nids = _get_metadata(db, 'prev_leech_nids', set())
+        # Ensure we always work with sets by coercing the result
+        prev_leech = _get_metadata(db, 'prev_leech_nids', set())
+        prev_leech_nids = set(prev_leech) if isinstance(prev_leech, (list, set)) else set()
 
         # Find cards that WERE leeched but ARE NOT leeched anymore
         newly_untagged = prev_leech_nids - current_leech_nids
