@@ -106,10 +106,19 @@ from .card_hooks import register_card_hooks
 
 register_card_hooks()
 
-# --- Browser hooks for card suspension > unsuspension and leech tagged > leech tag removed detection ---
-from .functions.browser_hooks import register_browser_hooks
-
-register_browser_hooks()
+# Browser hooks for card suspension > unsuspension and leech tagged > leech tag removed detection
+# Guarded so an import failure (e.g., aqt.browser in older Anki versions) cannot
+# abort add-on load. All other integration points in this file are similarly
+# guarded; this aligns with that pattern.
+try:
+    from .functions.browser_hooks import register_browser_hooks
+    register_browser_hooks()
+except Exception as e:
+    # Log the error but continue loading - badge 11 browser hooks will be disabled
+    try:
+        logger.log("error", f"Failed to register browser hooks for Badge 11: {e}")
+    except Exception:
+        pass
 
 setupHooks(None, ankimon_tracker_obj)
 
