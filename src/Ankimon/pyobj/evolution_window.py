@@ -329,6 +329,7 @@ class EvoWindow(QWidget):
     ):
         """Evolve a pokemon and save to database."""
         db = services.db
+        evolution_succeeded = False
 
         try:
             pokemon = db.get_pokemon(individual_id)
@@ -471,14 +472,9 @@ class EvoWindow(QWidget):
             # the auto prompt resumes for the new form's future evolutions.
             pokemon["evolution_rejected"] = False
 
-            # Save to database
+            # Save to database - mark success only after this completes
             db.save_pokemon(pokemon)
-            self.logger.log_and_showinfo(
-                "info",
-                self.translator.translate(
-                    "mainpokemon_has_evolved", prevo_name=prevo_name, evo_name=evo_name
-                ),
-            )
+            evolution_succeeded = True
 
             # Consume the evolution stone (if this evolution was item-triggered)
             # and refresh any open item windows so the count updates live.
@@ -493,11 +489,20 @@ class EvoWindow(QWidget):
                 web_item_w = get_items_window()
                 if web_item_w is not None and is_alive(web_item_w):
                     web_item_w.update_ui_data()
+
+            self.logger.log_and_showinfo(
+                "info",
+                self.translator.translate(
+                    "mainpokemon_has_evolved", prevo_name=prevo_name, evo_name=evo_name
+                ),
+            )
+
         except Exception as e:
             show_warning_with_traceback(
                 parent=mw, exception=e, message=f"Error occured in evolving pokemon"
             )
             self.logger.log("error", f"{e}")
+            return
 
         try:  # Update Main Pokemon Object and sync with file
             if main_pokemon is not None and main_pokemon.individual_id == individual_id:
@@ -524,15 +529,17 @@ class EvoWindow(QWidget):
         if check is False:
             receive_badge(16, self.achievements)
 
-        try:
-            from ..resources import POKEMON_TIERS
-            if int(evo_id) in POKEMON_TIERS.get("Fossil", []):
-                check_fossil = check_for_badge(self.achievements, 19)
-                if check_fossil is False:
-                    receive_badge(19, self.achievements)
-        except Exception as e:
-            self.logger.log("error", f"Error checking Badge 19 (Fossil): {e}")
-        
+        # Award Badge 19 (Fossil) only if the evolution was successfully saved
+        if evolution_succeeded:
+            try:
+                from ..resources import POKEMON_TIERS
+                if int(evo_id) in POKEMON_TIERS.get("Fossil", []):
+                    check_fossil = check_for_badge(self.achievements, 19)
+                    if check_fossil is False:
+                        receive_badge(19, self.achievements)
+            except Exception as e:
+                self.logger.log("error", f"Error checking Badge 19 (Fossil): {e}")
+
         from ..singletons import pokemon_pc
 
         pokemon_pc.refresh_pokemon_grid()
