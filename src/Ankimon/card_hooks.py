@@ -1,8 +1,13 @@
 from aqt import gui_hooks, mw, utils
 from aqt.utils import tooltip
+import logging
 
 from .services import services
 from .singletons import ankimon_tracker_obj, reviewer_obj
+
+# Set up logger for this module
+logger = logging.getLogger(__name__)
+
 
 def on_show_question(Card):
     ankimon_tracker_obj.start_card_timer()
@@ -60,10 +65,13 @@ def answerCard_after(rev, card, ease):
             getattr(services, 'achievements', None),
             card.id
         )
-    except Exception:
-        # `pass` to not break Anki functionality
-        # Future note: add logging for diagnosability
-        pass
+    except Exception as e:
+        # Preserve review-flow protection by not raising exceptions
+        # Log the error for diagnosability
+        logger.error(
+            f"Failed to update leech tracking for card {card.id}: {e}",
+            exc_info=True
+        )
 
 # Reload safety (F31): a second boot in the same session must not leave the
 # reviewer hooks registered twice, or every review would be double-counted.
