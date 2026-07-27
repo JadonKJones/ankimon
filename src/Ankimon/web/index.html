@@ -178,6 +178,25 @@
 			return '';
 		}
 
+		// Restrict sprite URLs to expected schemes/relative paths and encode
+		// characters that could break out of CSS url("...") context.
+		function toSafeCssImageUrl(rawUrl) {
+			if (!rawUrl) {
+				return '';
+			}
+			var value = rawUrl.trim();
+			var hasScheme = /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(value);
+			var isAllowedAbsolute = /^(https?:|file:|data:image\/)/i.test(value);
+			var isRelative = !hasScheme;
+			if (!(isAllowedAbsolute || isRelative)) {
+				return '';
+			}
+			var encoded = encodeURI(value);
+			return encoded.replace(/['"()\\\r\n\f]/g, function(ch) {
+				return '%' + ch.charCodeAt(0).toString(16).toUpperCase();
+			});
+		}
+
 		// Update HTML elements with Pokémon battle information.
 		// Use textContent (not innerHTML): names come from user-controlled
 		// nicknames / traded Pokémon, so raw HTML here would be a stored-XSS sink.
@@ -223,8 +242,10 @@
 		//}
 
 		// Update Pokémon images and font dynamically
-		bottomPokemon.style.backgroundImage = 'url(' + bottomPokemonSprite + ')';
-		topPoke.style.backgroundImage = 'url(' + topPokemonSprite + ')';
+		var safeBottomPokemonSprite = toSafeCssImageUrl(bottomPokemonSprite);
+		var safeTopPokemonSprite = toSafeCssImageUrl(topPokemonSprite);
+		bottomPokemon.style.backgroundImage = safeBottomPokemonSprite ? 'url("' + safeBottomPokemonSprite + '")' : 'none';
+		topPoke.style.backgroundImage = safeTopPokemonSprite ? 'url("' + safeTopPokemonSprite + '")' : 'none';
 
 		if (fontUrl) {
 			// fontUrl is written into a <style> element, whose textContent is
