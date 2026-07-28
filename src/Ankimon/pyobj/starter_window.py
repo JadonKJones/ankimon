@@ -279,27 +279,34 @@ class StarterWindow(QWidget):
         pixmap_bckg = QPixmap()
         pixmap_bckg.load(str(bckgimage_path))
 
+        def load_starter_sprite(path):
+            """Load a starter sprite, falling back to the substitute.
+
+            ``QPixmap.load`` returns False for a missing file rather than
+            raising, so a sprite that never downloaded would otherwise be
+            drawn blank — and used to crash the screen outright in the
+            aspect-ratio maths below (issue #101).
+            """
+            pixmap = QPixmap()
+            if not pixmap.load(str(path)):
+                pixmap.load(str(frontdefault / "substitute.png"))
+            return pixmap
+
         # Display the Pokémon image
-        water_path = frontdefault / f"{water_id}.png"
         water_label = QLabel()
-        water_pixmap = QPixmap()
-        water_pixmap.load(str(water_path))
+        water_pixmap = load_starter_sprite(frontdefault / f"{water_id}.png")
 
         # Display the Pokémon image
-        fire_path = frontdefault / f"{fire_id}.png"
         fire_label = QLabel()
-        fire_pixmap = QPixmap()
-        fire_pixmap.load(str(fire_path))
+        fire_pixmap = load_starter_sprite(frontdefault / f"{fire_id}.png")
 
         # Display the Pokémon image
-        grass_path = frontdefault / f"{grass_id}.png"
         grass_label = QLabel()
-        grass_pixmap = QPixmap()
-        grass_pixmap.load(str(grass_path))
+        grass_pixmap = load_starter_sprite(frontdefault / f"{grass_id}.png")
 
-        # Use the shared helper: this local copy shadowed it and lacked its
-        # null-pixmap guard, so a starter sprite that never downloaded crashed
-        # the starter screen with a division by zero (issue #101).
+        # Use the shared helper: the local copy that lived here shadowed it and
+        # lacked its null-pixmap guard, so a starter sprite that never
+        # downloaded crashed the starter screen (issue #101).
         water_pixmap = resize_pixmap_img(water_pixmap, 150)
         fire_pixmap = resize_pixmap_img(fire_pixmap, 150)
         grass_pixmap = resize_pixmap_img(grass_pixmap, 150)

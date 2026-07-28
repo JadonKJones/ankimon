@@ -439,17 +439,18 @@ def test_death_buttons_route_through_hook_registry_seam(make_window, monkeypatch
 # The reporter hit it whenever Scatterbug (id 664) was their main Pokemon —
 # only the main's *back* sprite was absent.
 
-_MISSING_SPRITE = (
-    _SRC / "Ankimon" / "user_files" / "sprites" / "back_default" / "664.png"
-)
 
+@pytest.fixture
+def missing_sprite(tmp_path):
+    """A sprite path guaranteed not to exist.
 
-@pytest.fixture(autouse=True)
-def _missing_sprite_is_really_missing():
-    assert not _MISSING_SPRITE.exists(), (
-        f"{_MISSING_SPRITE} now exists — pick another absent path so these "
-        "tests still model a sprite that failed to download"
-    )
+    Deliberately NOT a path under ``user_files/sprites/`` — that directory is
+    gitignored and gets populated by the real sprite download, so a developer
+    who has fetched sprites would silently be testing a sprite that IS there.
+    """
+    path = tmp_path / "back_default" / "664.png"
+    assert not path.exists()
+    return path
 
 
 @pytest.mark.parametrize(
@@ -457,20 +458,20 @@ def _missing_sprite_is_really_missing():
 )
 @pytest.mark.parametrize("missing", ["main", "enemy", "both"])
 def test_missing_sprite_renders_instead_of_dividing_by_zero(
-    make_window, render, missing
+    make_window, missing_sprite, render, missing
 ):
     """Both battle renders survive a sprite file that isn't on disk."""
     main = _FakePokemon(
         "scatterbug",
         664,
         type=["bug"],
-        sprite_path=_MISSING_SPRITE if missing in ("main", "both") else _REAL_SPRITE,
+        sprite_path=missing_sprite if missing in ("main", "both") else _REAL_SPRITE,
     )
     enemy = _FakePokemon(
         "charizard",
         6,
         type=["fire", "flying"],
-        sprite_path=_MISSING_SPRITE if missing in ("enemy", "both") else _REAL_SPRITE,
+        sprite_path=missing_sprite if missing in ("enemy", "both") else _REAL_SPRITE,
     )
 
     win = make_window(main=main, enemy=enemy)
@@ -479,7 +480,9 @@ def test_missing_sprite_renders_instead_of_dividing_by_zero(
     assert label is not None
 
 
-def test_missing_sprite_falls_back_to_the_substitute_pixmap(make_window):
+def test_missing_sprite_falls_back_to_the_substitute_pixmap(
+    make_window, missing_sprite
+):
     """The fallback actually loads — the user sees a substitute, not a blank.
 
     The old ``try/except`` around ``QPixmap.load`` never fired, so the
@@ -487,7 +490,7 @@ def test_missing_sprite_falls_back_to_the_substitute_pixmap(make_window):
     here because the shipped substitute.png only lands in ``user_files`` after
     the runtime sprite download.
     """
-    main = _FakePokemon("scatterbug", 664, sprite_path=_MISSING_SPRITE)
+    main = _FakePokemon("scatterbug", 664, sprite_path=missing_sprite)
     win = make_window(main=main)
     win.default_path = _REAL_SPRITE
 
