@@ -182,8 +182,9 @@ class TrainerCard:
         self.team = self.get_team()
 
     def sync_leaderboard(self):
-        \"\"\"Sync TrainerCard data to the Ankimon leaderboard.\"\"\"
+        """Sync TrainerCard data to the Ankimon leaderboard."""
         try:
+            settings_obj = self.settings_obj
             data = {
                 "trainerRank": f"{self.league}",
                 "trainerName": self.trainer_name,
@@ -194,16 +195,15 @@ class TrainerCard:
                 "highestLevel": int(self.highest_pokemon_level()),
                 "shinies": f"{services.db.get_shiny_count()}",
                 "cash": self.cash,
-                "trainerSprite": f"{self.settings_obj.get('trainer.sprite') + '.png'}",
+                "trainerSprite": f"{settings_obj.get('trainer.sprite', 'default') + '.png'}",
             }
             from .ankimon_leaderboard import sync_data_to_leaderboard
             sync_data_to_leaderboard(data)
         except ImportError:
             pass
         except Exception as e:
-            self.logger.log_and_showinfo(
-                "error", f"Error in syncing data to leaderboard {e}"
-            )
+            # Silently handle errors to prevent UI spam during gameplay syncs
+            pass
 
     def display_card_data(self):
         """Method to return trainer card data as a dictionary"""

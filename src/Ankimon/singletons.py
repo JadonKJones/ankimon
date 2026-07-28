@@ -368,13 +368,6 @@ def get_items_window():
 
 
 def notify_stats_changed():
-    try:
-        from .services import services
-        if getattr(services, 'trainer_card', None):
-            services.trainer_card.sync_leaderboard()
-    except Exception as e:
-        print(f"[Ankimon] Leaderboard sync from notify_stats_changed failed: {e}")
-
     """Tell the open Ankimon shell that gameplay stats changed (a catch, XP
     gain, cash reward, level-up, ...) so it can live-refresh whichever screen is
     showing — no manual reload. Screen-agnostic: the shell decides what (if
@@ -388,6 +381,14 @@ def notify_stats_changed():
     from .utils import is_main_thread
     if not is_main_thread():
         return
+
+    try:
+        from .services import services
+        if getattr(services, 'trainer_card', None):
+            services.trainer_card.sync_leaderboard()
+    except Exception as e:
+        print(f"[Ankimon] Leaderboard sync from notify_stats_changed failed: {e}")
+
     global _items_web_window
     if not is_alive(_items_web_window):
         return
