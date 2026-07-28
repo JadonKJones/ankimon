@@ -1,0 +1,25 @@
+--- singletons.py
++++ singletons.py
+@@ -382,10 +382,15 @@
+     from .utils import is_main_thread
+     if not is_main_thread():
+         return
+-    global _items_web_window
+-    if not is_alive(_items_web_window):
+-        return
+-    try:
+-        _items_web_window.refresh_live_screen()
+-    except Exception as e:
+-        print(f"[Ankimon] notify_stats_changed failed: {e}")
++
++    try:
++        from .services import services
++        if getattr(services, 'trainer_card', None):
++            data = services.trainer_card.display_card_data()
++            data['caughtPokemon'] = services.db.get_pokemon_count()
++            data['shinies'] = str(services.db.get_shiny_count())
++            data['pokedex'] = services.db.execute("SELECT COUNT(DISTINCT pokedex_id) FROM captured_pokemon WHERE pokedex_id IS NOT NULL").fetchone()[0]
++            data['trainerSprite'] = f"{services.settings.get('trainer.sprite', 'default')}.png"
++            from .pyobj.ankimon_leaderboard import sync_data_to_leaderboard
++            sync_data_to_leaderboard(data)
++    except ImportError:

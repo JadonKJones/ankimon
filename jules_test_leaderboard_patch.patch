@@ -1,0 +1,31 @@
+--- src/Ankimon/singletons.py
++++ src/Ankimon/singletons.py
+@@ -377,6 +377,21 @@
+     with gameplay. Call it from gameplay write chokepoints via a deferred
+     ``from .singletons import notify_stats_changed`` wrapped in try/except."""
+     from .utils import is_main_thread
++    try:
++        from .services import services
++        if getattr(services, 'trainer_card', None):
++            tc = services.trainer_card
++            data = {
++                "trainerRank": f"{tc.league}",
++                "trainerName": tc.trainer_name,
++                "level": max(1, tc.level),
++                "pokedex": services.db.execute("SELECT COUNT(DISTINCT pokedex_id) FROM captured_pokemon WHERE pokedex_id IS NOT NULL").fetchone()[0],
++                "caughtPokemon": services.db.get_pokemon_count(),
++                "trainerLevel": tc.level,
++                "highestLevel": int(tc.highest_pokemon_level()),
++                "shinies": f"{services.db.get_shiny_count()}",
++                "cash": tc.cash,
++                "trainerSprite": f"{services.settings.get('trainer.sprite') + '.png'}",
++            }
++            from .pyobj.ankimon_leaderboard import sync_data_to_leaderboard
++            sync_data_to_leaderboard(data)
++    except Exception as e:
++        print(f"[Ankimon] Leaderboard sync from notify_stats_changed failed: {e}")
++        pass
++
+     if not is_main_thread():
+         return
+     global _items_web_window
