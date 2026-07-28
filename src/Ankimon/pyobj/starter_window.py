@@ -297,18 +297,12 @@ class StarterWindow(QWidget):
         grass_pixmap = QPixmap()
         grass_pixmap.load(str(grass_path))
 
-        def resize_pixmap_img(pixmap):
-            max_width = 150
-            original_width = pixmap.width()
-            original_height = pixmap.height()
-            new_width = max_width
-            new_height = (original_height * max_width) // original_width
-            pixmap2 = pixmap.scaled(new_width, new_height)
-            return pixmap2
-
-        water_pixmap = resize_pixmap_img(water_pixmap)
-        fire_pixmap = resize_pixmap_img(fire_pixmap)
-        grass_pixmap = resize_pixmap_img(grass_pixmap)
+        # Use the shared helper: this local copy shadowed it and lacked its
+        # null-pixmap guard, so a starter sprite that never downloaded crashed
+        # the starter screen with a division by zero (issue #101).
+        water_pixmap = resize_pixmap_img(water_pixmap, 150)
+        fire_pixmap = resize_pixmap_img(fire_pixmap, 150)
+        grass_pixmap = resize_pixmap_img(grass_pixmap, 150)
 
         # Merge the background image and the Pokémon image
         merged_pixmap = QPixmap(pixmap_bckg.size())

@@ -80,9 +80,12 @@ class _FakePokemon:
         self.xp = kw.get("xp", 0)
         self.growth_rate = kw.get("growth_rate", "medium")
         self.cp = kw.get("cp", 345)
+        # Point at a file that does not exist to model a sprite the user never
+        # downloaded (issue #101).
+        self.sprite_path = kw.get("sprite_path", _REAL_SPRITE)
 
     def get_sprite_path(self, side, ext):
-        return _REAL_SPRITE
+        return self.sprite_path
 
 
 class _FakeClock:
@@ -426,3 +429,110 @@ def test_death_buttons_route_through_hook_registry_seam(make_window, monkeypatch
     calls.clear()
     win.catch_button.click()
     assert calls == [("catch", {6, 25})]
+
+
+# --- issue #101: a missing sprite must not take the window down -------------
+#
+# `QPixmap.load` reports a missing/corrupt file by returning False rather than
+# raising, so a sprite the user never downloaded left a NULL pixmap (width 0)
+# and the aspect-ratio maths blew up with "integer division or modulo by zero".
+# The reporter hit it whenever Scatterbug (id 664) was their main Pokemon —
+# only the main's *back* sprite was absent.
+
+_MISSING_SPRITE = (
+    _SRC / "Ankimon" / "user_files" / "sprites" / "back_default" / "664.png"
+)
+
+
+@pytest.fixture(autouse=True)
+def _missing_sprite_is_really_missing():
+    assert not _MISSING_SPRITE.exists(), (
+        f"{_MISSING_SPRITE} now exists — pick another absent path so these "
+        "tests still model a sprite that failed to download"
+    )
+
+
+@pytest.mark.parametrize(
+    "render", ["pokemon_display_first_encounter", "pokemon_display_battle"]
+)
+@pytest.mark.parametrize("missing", ["main", "enemy", "both"])
+def test_missing_sprite_renders_instead_of_dividing_by_zero(
+    make_window, render, missing
+):
+    """Both battle renders survive a sprite file that isn't on disk."""
+    main = _FakePokemon(
+        "scatterbug",
+        664,
+        type=["bug"],
+        sprite_path=_MISSING_SPRITE if missing in ("main", "both") else _REAL_SPRITE,
+    )
+    enemy = _FakePokemon(
+        "charizard",
+        6,
+        type=["fire", "flying"],
+        sprite_path=_MISSING_SPRITE if missing in ("enemy", "both") else _REAL_SPRITE,
+    )
+
+    win = make_window(main=main, enemy=enemy)
+
+    label = getattr(win, render)()  # used to raise ZeroDivisionError
+    assert label is not None
+
+
+def test_missing_sprite_falls_back_to_the_substitute_pixmap(make_window):
+    """The fallback actually loads — the user sees a substitute, not a blank.
+
+    The old ``try/except`` around ``QPixmap.load`` never fired, so the
+    substitute was never reached. ``default_path`` is pointed at a real PNG
+    here because the shipped substitute.png only lands in ``user_files`` after
+    the runtime sprite download.
+    """
+    main = _FakePokemon("scatterbug", 664, sprite_path=_MISSING_SPRITE)
+    win = make_window(main=main)
+    win.default_path = _REAL_SPRITE
+
+    pixmap = win._load_sprite(main, "back")
+
+    assert not pixmap.isNull()
+    assert pixmap.width() > 0
+
+
+def test_raising_sprite_lookup_still_reaches_the_substitute(make_window):
+    """A ``get_sprite_path`` that blows up must fall back, as it always did."""
+
+    class _Exploding(_FakePokemon):
+        def get_sprite_path(self, side, ext):
+            raise RuntimeError("pokedex lookup failed")
+
+    main = _Exploding("scatterbug", 664)
+    win = make_window(main=main)
+    win.default_path = _REAL_SPRITE
+
+    assert not win._load_sprite(main, "back").isNull()
+
+
+def test_zero_max_hp_does_not_crash_the_hp_bar(make_window, tw_module):
+    """A corrupt save carrying max_hp = 0 draws an empty bar, not a traceback."""
+    from PyQt6.QtGui import QPainter, QPixmap
+
+    win = make_window()
+    canvas = QPixmap(100, 100)
+    painter = QPainter(canvas)
+    try:
+        assert win.draw_hp_bar(0, 0, 8, 116, 0, 0, painter) is painter
+    finally:
+        painter.end()
+
+
+def test_unknown_growth_rate_does_not_crash_the_xp_bar(make_window):
+    """``find_experience_for_level`` returns 0 for a growth rate it can't map.
+
+    ``mobile_sync`` writes a capitalized "Medium", which misses the lowercase
+    exp-table column and yields 0 — the XP-bar divisor.
+    """
+    from Ankimon.functions.pokemon_functions import find_experience_for_level
+
+    assert int(find_experience_for_level("Medium", 4, False)) == 0  # the divisor
+
+    win = make_window(main=_FakePokemon("scatterbug", 664, growth_rate="Medium", xp=10))
+    assert win.pokemon_display_battle() is not None
