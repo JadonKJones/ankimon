@@ -47,13 +47,25 @@ def save_badges(badges_collection: List[int]):
 
 
 def receive_badge(badge_num, achievements):
-    """Awards a badge and saves to database."""
-    achievements[str(badge_num)] = True
+    """Awards a badge and saves to database (transactional)."""
+    # Build the collection FIRST
     badges_collection = []
     for num in range(1, 69):
         if achievements.get(str(num)) is True:
             badges_collection.append(int(num))
-    save_badges(badges_collection)
+    badges_collection.append(badge_num)
+    
+    # Save to database FIRST - if this fails, memory stays clean
+    try:
+        save_badges(badges_collection)
+    except Exception as e:
+        # Log the error but don't mark badge as awarded
+        import logging
+        logging.error(f"Failed to save badge {badge_num}: {e}")
+        return achievements  # No memory change, allows retry
+    
+    # ONLY mark as awarded AFTER successful database save
+    achievements[str(badge_num)] = True
     return achievements
 
 
