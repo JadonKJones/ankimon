@@ -274,14 +274,14 @@ def check_and_award_badge_11_on_review(col, db, achievements, card_id):
         # Get pending candidates
         candidates = get_pending_badge_11_candidates(db)
 
-        # If this card is a candidate, award the badge
+        # If this card is a candidate, award the badge first. Persistence can
+        # fail without marking the achievement, so only remove the candidate
+        # after success; otherwise a later review must be able to retry.
         if note_id_str in candidates:
-            # Remove from candidates (cleanup)
-            candidates.remove(note_id_str)
-            save_pending_badge_11_candidates(db, candidates)
-
-            # Award Badge 11
             receive_badge(11, achievements)
+            if check_for_badge(achievements, 11):
+                candidates.remove(note_id_str)
+                save_pending_badge_11_candidates(db, candidates)
 
     except Exception:
         pass
