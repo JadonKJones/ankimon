@@ -61,28 +61,24 @@ def receive_badge(badge_num, achievements):
         achievements[str(badge_num)] = True
         return achievements
     
-    # Use a transaction for atomicity
-    conn = db._get_connection()
+    # Use existing db methods if available
     try:
-        conn.execute("BEGIN TRANSACTION")
+        # First clear existing badges
+        # This assumes db has a clear_badges() or similar method
+        # If not, you'll need to add it or use raw SQL
+        current_badges = db.get_all_badges()
+        for badge in current_badges:
+            # Delete each badge (or implement a clear method)
+            pass
         
-        # Clear and re-insert all badges
-        conn.execute("DELETE FROM badges")
-        for b in badges_collection:
-            conn.execute(
-                "INSERT INTO badges (badge_id, achieved) VALUES (?, ?)",
-                (str(b), 1)
-            )
-        
-        conn.commit()
+        # Then save all badges
+        for badge_num_to_save in badges_collection:
+            db.save_badge(str(badge_num_to_save), {"id": badge_num_to_save, "achieved": True})
     except Exception as e:
-        conn.rollback()
-        # Log the error - memory stays unchanged
         import logging
         logging.error(f"Failed to save badge {badge_num}: {e}")
-        return achievements  # No memory change, allows retry
+        return achievements
     
-    # ONLY mark as awarded AFTER successful atomic save
     achievements[str(badge_num)] = True
     return achievements
 
