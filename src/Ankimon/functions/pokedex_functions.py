@@ -1029,6 +1029,7 @@ def check_evolution_for_pokemon(
     evo_window,
     everstone=False,
     evolution_rejected=False,
+    current_attacks=None,
 ):
     """
     Check if a Pokémon evolves by a level (or move-based level-up) condition.
@@ -1132,13 +1133,19 @@ def check_evolution_for_pokemon(
                             required_move = target_data.get("evoMove")
                             knows_move = False
 
-                            pkmn_data = None
-                            try:
-                                pkmn_data = services.db.get_pokemon(individual_id)
-                            except Exception:
+                            p_attacks = None
+                            if current_attacks is not None:
+                                p_attacks = current_attacks
+                            else:
                                 pkmn_data = None
-                            if pkmn_data and "attacks" in pkmn_data:
-                                p_attacks = pkmn_data["attacks"]
+                                try:
+                                    pkmn_data = services.db.get_pokemon(individual_id)
+                                except Exception:
+                                    pkmn_data = None
+                                if pkmn_data and "attacks" in pkmn_data:
+                                    p_attacks = pkmn_data["attacks"]
+
+                            if p_attacks is not None:
                                 if required_move and any(
                                     isinstance(a, str)
                                     and a.lower().replace(" ", "").replace("-", "")
