@@ -47,24 +47,42 @@ def save_badges(badges_collection: List[int]):
 
 
 def receive_badge(badge_num, achievements):
-    """Awards a badge and saves to database (transactional)."""
-    # Build the collection FIRST
+    """Awards a badge and saves to database atomically."""
+    # Build the collection
     badges_collection = []
     for num in range(1, 69):
         if achievements.get(str(num)) is True:
             badges_collection.append(int(num))
     badges_collection.append(badge_num)
     
-    # Save to database FIRST - if this fails, memory stays clean
+    db = services.db
+    if db is None:
+        # No database - just update memory (fallback)
+        achievements[str(badge_num)] = True
+        return achievements
+    
+    # Use a transaction for atomicity
+    conn = db._get_connection()
     try:
-        save_badges(badges_collection)
+        conn.execute("BEGIN TRANSACTION")
+        
+        # Clear and re-insert all badges
+        conn.execute("DELETE FROM badges")
+        for b in badges_collection:
+            conn.execute(
+                "INSERT INTO badges (badge_id, achieved) VALUES (?, ?)",
+                (str(b), 1)
+            )
+        
+        conn.commit()
     except Exception as e:
-        # Log the error but don't mark badge as awarded
+        conn.rollback()
+        # Log the error - memory stays unchanged
         import logging
         logging.error(f"Failed to save badge {badge_num}: {e}")
         return achievements  # No memory change, allows retry
     
-    # ONLY mark as awarded AFTER successful database save
+    # ONLY mark as awarded AFTER successful atomic save
     achievements[str(badge_num)] = True
     return achievements
 
