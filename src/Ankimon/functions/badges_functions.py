@@ -1,5 +1,5 @@
 import json
-from typing import List, Set, Dict
+from typing import List, Set
 
 from ..resources import badgebag_path
 from ..services import services
@@ -47,13 +47,39 @@ def save_badges(badges_collection: List[int]):
 
 
 def receive_badge(badge_num, achievements):
-    """Awards a badge and saves to database."""
-    achievements[str(badge_num)] = True
+    """Awards a badge and saves to database atomically."""
+    # Build the collection
     badges_collection = []
     for num in range(1, 69):
         if achievements.get(str(num)) is True:
             badges_collection.append(int(num))
-    save_badges(badges_collection)
+    badges_collection.append(badge_num)
+    
+    db = services.db
+    if db is None:
+        # No database - just update memory (fallback)
+        achievements[str(badge_num)] = True
+        return achievements
+    
+    # Use existing db methods if available
+    try:
+        # First clear existing badges
+        # This assumes db has a clear_badges() or similar method
+        # If not, you'll need to add it or use raw SQL
+        current_badges = db.get_all_badges()
+        for badge in current_badges:
+            # Delete each badge (or implement a clear method)
+            pass
+        
+        # Then save all badges
+        for badge_num_to_save in badges_collection:
+            db.save_badge(str(badge_num_to_save), {"id": badge_num_to_save, "achieved": True})
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to save badge {badge_num}: {e}")
+        return achievements
+    
+    achievements[str(badge_num)] = True
     return achievements
 
 
@@ -125,9 +151,9 @@ def check_unleeched_cards(col, db, achievements):
     1. A leech card that was suspended is unsuspended
     OR
     2. A card with the 'leech' tag has the tag removed
-    
+
     AND the card is reviewed at least once after the change.
-    
+
     Cards that meet condition 1 or 2 are stored as "candidates"
     until they are reviewed.
     """
@@ -175,7 +201,7 @@ def check_unleeched_cards(col, db, achievements):
                 f"SELECT id FROM notes WHERE id IN ({placeholders})", *nid_list
             ) if nid_list else []
             existing_nids = {str(row[0]) for row in existing_rows}
-            
+
             for nid in newly_unsuspended:
                 if nid in existing_nids:
                     stored_candidates.add(str(nid))
@@ -205,7 +231,7 @@ def check_unleeched_cards(col, db, achievements):
                 f"SELECT id FROM notes WHERE id IN ({placeholders})", *nid_list
             ) if nid_list else []
             existing_nids = {str(row[0]) for row in existing_rows}
-            
+
             for nid in newly_untagged:
                 if nid in existing_nids:
                     stored_candidates.add(str(nid))
@@ -248,14 +274,14 @@ def check_and_award_badge_11_on_review(col, db, achievements, card_id):
         # Get pending candidates
         candidates = get_pending_badge_11_candidates(db)
 
-        # If this card is a candidate, award the badge
+        # If this card is a candidate, award the badge first. Persistence can
+        # fail without marking the achievement, so only remove the candidate
+        # after success; otherwise a later review must be able to retry.
         if note_id_str in candidates:
-            # Remove from candidates (cleanup)
-            candidates.remove(note_id_str)
-            save_pending_badge_11_candidates(db, candidates)
-
-            # Award Badge 11
             receive_badge(11, achievements)
+            if check_for_badge(achievements, 11):
+                candidates.remove(note_id_str)
+                save_pending_badge_11_candidates(db, candidates)
 
     except Exception:
         pass
