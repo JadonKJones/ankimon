@@ -13,80 +13,32 @@ hook registrations during add-on reloads.
 """
 
 from aqt import gui_hooks, mw
-from .badges_functions import check_unleeched_cards
+
 from ..services import services
+from .badges_functions import check_unleeched_cards
 
-# Use a string type annotation to avoid runtime import of aqt.browser
-# This prevents ModuleNotFoundError on Anki versions where aqt.browser doesn't exist
-try:
-    from aqt.browser import Browser  # noqa: F401
-    HAS_BROWSER_IMPORT = True
-except ImportError:
-    HAS_BROWSER_IMPORT = False
-
-# Reload safety (F31): track registered handlers on services to prevent duplicate registration
+# Reload safety (F31): track registered handlers on services to prevent duplicate registration.
 _HANDLER_RECORD = "_browser_hook_handlers"
 
-# Operation types that can affect Badge 11 candidates
-# These operations change suspension status or tags, which may create candidates
-# for Badge 11 (cards that were previously suspended or leeched)
-_RELEVANT_OPERATIONS = {
-    'suspend_cards',
-    'unsuspend_cards',
-    'add_tags',
-    'remove_tags',
-    'set_tags',
-    'clear_tags',
-}
 
+def on_operation_did_execute(changes, _handler):
+    """Refresh Badge 11 snapshots after card or note state changes.
 
-def on_browser_will_remove_selected(browser):
+    Anki's public hook supplies an ``OpChanges`` object rather than an operation
+    name. Suspension changes set ``card``; tag edits set ``note_text``. Ignore
+    unrelated operations so ordinary UI refreshes do not scan the collection.
     """
-    Fallback hook called before cards are removed from the browser.
-    
-    This is a less efficient alternative to browser_operation_did_execute,
-    triggered on every removal operation. It checks for Badge 11 candidates
-    by scanning all cards for state changes.
-    
-    Args:
-        browser: The browser instance performing the removal operation.
-    """
-    try:
-        check_unleeched_cards(
-            services.col if services.col is not None else mw.col,
-            services.db,
-            getattr(services, 'achievements', None),
-        )
-    except Exception:
-        # Silently fail to preserve Anki functionality
-        pass
-
-
-def on_operation_did_execute(operation_name, *args, **kwargs):
-    """
-    Hook called after any browser operation executes.
-    
-    Only runs the badge eligibility check for operations that affect
-    suspension status or tags (which impact Badge 11 eligibility).
-    This provides a more efficient mechanism than checking on every
-    selection or removal, as it triggers only on relevant state changes.
-    
-    Args:
-        operation_name: The name of the executed operation (e.g., 'unsuspend_cards').
-        *args, **kwargs: Additional arguments passed by the hook.
-    """
-    # Skip if this operation doesn't affect Badge 11 candidates
-    if operation_name not in _RELEVANT_OPERATIONS:
+    if not (getattr(changes, "card", False) or getattr(changes, "note_text", False)):
         return
-    
+
     try:
         check_unleeched_cards(
             services.col if services.col is not None else mw.col,
             services.db,
-            getattr(services, 'achievements', None),
+            getattr(services, "achievements", None),
         )
     except Exception:
-        # Silently fail to preserve Anki functionality
+        # Badge tracking must never interrupt Anki's operation-completion path.
         pass
 
 
@@ -94,10 +46,8 @@ def register_browser_hooks():
     """
     Register browser hooks for Badge 11 detection.
     
-    This function sets up the browser hooks needed to track card state changes
-    that could make cards eligible for Badge 11. It prioritizes the more
-    efficient browser_operation_did_execute hook when available, falling back
-    to browser_will_remove_selected for older Anki versions.
+    This function uses Anki's public ``operation_did_execute`` hook so card
+    suspension and note-tag changes are observed immediately in the same session.
     
     Implements reload safety (F31) by removing previously registered hooks
     before appending new ones. This prevents duplicate processing when the
@@ -115,14 +65,9 @@ def register_browser_hooks():
             pass
 
     handlers = []
-
-    # Use operation_did_execute for efficient Badge 11 checking
-    # This only runs on actual state-changing operations, not on every selection
-    if hasattr(gui_hooks, 'browser_operation_did_execute'):
-        handlers.append((gui_hooks.browser_operation_did_execute, on_operation_did_execute))
-    elif hasattr(gui_hooks, 'browser_will_remove_selected'):
-        # Fallback: only check on removal if operation hook isn't available
-        handlers.append((gui_hooks.browser_will_remove_selected, on_browser_will_remove_selected))
+    operation_hook = getattr(gui_hooks, "operation_did_execute", None)
+    if operation_hook is not None:
+        handlers.append((operation_hook, on_operation_did_execute))
 
     # Register all handlers
     for hook, handler in handlers:

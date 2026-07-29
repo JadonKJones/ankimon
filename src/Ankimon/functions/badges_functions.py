@@ -119,12 +119,12 @@ def _get_metadata(db, key: str, default=None):
 
 def check_unleeched_cards(col, db, achievements):
     """
-    Tracks cards that were previously leeches or suspended.
-    
+    Tracks cards that were previously leeches.
+
     Badge 11 is awarded when EITHER condition is met:
-    1. A suspended card was unsuspended
+    1. A leech card that was suspended is unsuspended
     OR
-    2. A card with the 'leech' tag had the tag removed
+    2. A card with the 'leech' tag has the tag removed
     
     AND the card is reviewed at least once after the change.
     
@@ -153,14 +153,18 @@ def check_unleeched_cards(col, db, achievements):
         # Load stored tracking data
         stored_candidates = get_pending_badge_11_candidates(db)
 
-        # --- Check for newly unsuspended cards (Condition 1) ---
-        # We need to compare with previously stored suspended cards
-        # Ensure we always work with sets by coercing the result
-        prev_suspended = _get_metadata(db, 'prev_suspended_nids', set())
-        prev_suspended_nids = set(prev_suspended) if isinstance(prev_suspended, (list, set)) else set()
+        # --- Check for newly unsuspended leech cards (Condition 1) ---
+        # Only a note that was both tagged as a leech and suspended at the
+        # previous snapshot qualifies. Tracking every suspended card would let
+        # an unrelated manual suspension earn the leech achievement.
+        prev_suspended = _get_metadata(db, "prev_suspended_leech_nids", set())
+        prev_suspended_leech_nids = (
+            set(prev_suspended)
+            if isinstance(prev_suspended, (list, set))
+            else set()
+        )
 
-        # Find cards that WERE suspended but ARE NOT suspended anymore
-        newly_unsuspended = prev_suspended_nids - suspended_nids
+        newly_unsuspended = prev_suspended_leech_nids - suspended_nids
 
         # Add these as candidates (unless they already are)
         if newly_unsuspended:
@@ -176,8 +180,12 @@ def check_unleeched_cards(col, db, achievements):
                 if nid in existing_nids:
                     stored_candidates.add(str(nid))
 
-        # Save current suspended IDs for next comparison
-        _save_metadata(db, 'prev_suspended_nids', list(suspended_nids))
+        # Save only currently suspended leech notes for the next comparison.
+        _save_metadata(
+            db,
+            "prev_suspended_leech_nids",
+            list(suspended_nids & current_leech_nids),
+        )
 
         # --- Check for newly untagged cards (Condition 2) ---
         # Load previously leeched cards from metadata
