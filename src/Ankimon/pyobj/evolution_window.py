@@ -1,4 +1,3 @@
-import json
 import random
 from typing import Optional
 
@@ -329,7 +328,6 @@ class EvoWindow(QWidget):
     ):
         """Evolve a pokemon and save to database."""
         db = services.db
-        evolution_succeeded = False
 
         try:
             pokemon = db.get_pokemon(individual_id)
@@ -472,11 +470,8 @@ class EvoWindow(QWidget):
             # the auto prompt resumes for the new form's future evolutions.
             pokemon["evolution_rejected"] = False
 
-            # Save to database - mark success only after this completes
-            save_result = db.save_pokemon(pokemon)
-            if save_result:
-                evolution_succeeded = True
-            else:
+            # Save to database before awarding any evolution achievements.
+            if not db.save_pokemon(pokemon):
                 self.logger.log("error", f"Failed to save evolved pokemon {individual_id}")
                 return
 
@@ -518,7 +513,7 @@ class EvoWindow(QWidget):
 
         except Exception as e:
             show_warning_with_traceback(
-                parent=mw, exception=e, message=f"Error occured in evolving pokemon"
+                parent=mw, exception=e, message="Error occured in evolving pokemon"
             )
             self.logger.log("error", f"{e}")
             return
@@ -541,7 +536,7 @@ class EvoWindow(QWidget):
             show_warning_with_traceback(
                 parent=mw,
                 exception=e,
-                message=f"Error occured in updating main_pokemon obj",
+                message="Error occured in updating main_pokemon obj",
             )
         self.display_evo_complete(prevo_id, evo_id)
         check = check_for_badge(self.achievements, 16)

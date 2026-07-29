@@ -25,6 +25,7 @@
     "gui.gif_in_collection": "Show animated sprites (GIFs) instead of static sprites in the collection view.",
     "gui.styling_in_reviewer": "Apply custom CSS styles to enhance reviewer visuals.",
     "gui.pop_up_dialog_message_on_defeat": "Show a pop-up message when a wild Pokémon is defeated.",
+    "gui.pop_up_dialog_message_on_item": "Show a pop-up window when you receive an item. Turning this off still awards the item, it just does not interrupt your reviews.",
     "gui.review_hp_bar_thickness": "Set the HP bar thickness for reviews [2: 8px, 3: 12px, 4: 16px, 5: 20px].",
     "gui.reviewer_image_gif": "Display Pokémon GIFs in the reviewer window.",
     "gui.reviewer_text_message_box": "Enable colorful pop-up messages in the reviewer.",
