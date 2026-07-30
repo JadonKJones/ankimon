@@ -297,6 +297,9 @@ class SettingsWindow(QMainWindow):
         return button
 
     def setup_ui(self):
+        """
+        Builds the settings window interface, including the logo, search bar, hierarchical settings sections, and save control.
+        """
         self.setMinimumSize(450, 600)
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -409,6 +412,7 @@ class SettingsWindow(QMainWindow):
                     "View Main Pokémon Front",
                     "XP Bar Location",
                     "Pop-Up on Defeat",
+                    "Pop-Up on Item Receive",
                 ],
                 "subgroups": {
                     "HUD Element Toggles": {

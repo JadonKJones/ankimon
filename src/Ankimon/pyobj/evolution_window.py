@@ -1,4 +1,3 @@
-import json
 import random
 from typing import Optional
 
@@ -471,14 +470,10 @@ class EvoWindow(QWidget):
             # the auto prompt resumes for the new form's future evolutions.
             pokemon["evolution_rejected"] = False
 
-            # Save to database
-            db.save_pokemon(pokemon)
-            self.logger.log_and_showinfo(
-                "info",
-                self.translator.translate(
-                    "mainpokemon_has_evolved", prevo_name=prevo_name, evo_name=evo_name
-                ),
-            )
+            # Save to database before awarding any evolution achievements.
+            if not db.save_pokemon(pokemon):
+                self.logger.log("error", f"Failed to save evolved pokemon {individual_id}")
+                return
 
             # Consume the evolution stone (if this evolution was item-triggered)
             # and refresh any open item windows so the count updates live.
@@ -493,11 +488,35 @@ class EvoWindow(QWidget):
                 web_item_w = get_items_window()
                 if web_item_w is not None and is_alive(web_item_w):
                     web_item_w.update_ui_data()
+
+            # Award Badge 19 (Fossil) immediately after successful persistence
+            # and item consumption, before any UI notifications that could fail
+            # and skip the achievement.
+            try:
+                from ..resources import POKEMON_TIERS
+                if int(evo_id) in POKEMON_TIERS.get("Fossil", []):
+                    check_fossil = check_for_badge(self.achievements, 19)
+                    if check_fossil is False:
+                        # receive_badge sets the in-memory achievement only after
+                        # save_badges succeeds, so a persistence failure will not
+                        # leave achievements marked as awarded.
+                        receive_badge(19, self.achievements)
+            except Exception as e:
+                self.logger.log("error", f"Error checking Badge 19 (Fossil): {e}")
+
+            self.logger.log_and_showinfo(
+                "info",
+                self.translator.translate(
+                    "mainpokemon_has_evolved", prevo_name=prevo_name, evo_name=evo_name
+                ),
+            )
+
         except Exception as e:
             show_warning_with_traceback(
-                parent=mw, exception=e, message=f"Error occured in evolving pokemon"
+                parent=mw, exception=e, message="Error occured in evolving pokemon"
             )
             self.logger.log("error", f"{e}")
+            return
 
         try:  # Update Main Pokemon Object and sync with file
             if main_pokemon is not None and main_pokemon.individual_id == individual_id:
@@ -517,7 +536,7 @@ class EvoWindow(QWidget):
             show_warning_with_traceback(
                 parent=mw,
                 exception=e,
-                message=f"Error occured in updating main_pokemon obj",
+                message="Error occured in updating main_pokemon obj",
             )
         self.display_evo_complete(prevo_id, evo_id)
         check = check_for_badge(self.achievements, 16)
