@@ -545,6 +545,8 @@ def test_zero_experience_does_not_crash_the_xp_bar(
     """
     monkeypatch.setattr(tw_module, "find_experience_for_level", lambda *a, **kw: 0)
 
-    win = make_window(main=_FakePokemon("scatterbug", 664, growth_rate="Medium", xp=10))
+    # The growth rate is deliberately left at the default: the patch above makes
+    # it irrelevant, and that is the point — the divisor is what is under test.
+    win = make_window(main=_FakePokemon("scatterbug", 664, xp=10))
 
     assert getattr(win, render)() is not None
