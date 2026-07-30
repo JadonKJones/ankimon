@@ -387,7 +387,7 @@ def notify_stats_changed():
         if getattr(services, 'trainer_card', None):
             services.trainer_card.sync_leaderboard()
     except Exception as e:
-        print(f"[Ankimon] Leaderboard sync from notify_stats_changed failed: {e}")
+        pass # Ignore errors in background stat changes
 
     global _items_web_window
     if not is_alive(_items_web_window):

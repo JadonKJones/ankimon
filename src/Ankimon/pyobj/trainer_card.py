@@ -181,6 +181,7 @@ class TrainerCard:
         """Reload the team data from the file"""
         self.team = self.get_team()
 
+
     def sync_leaderboard(self):
         """Sync TrainerCard data to the Ankimon leaderboard."""
         try:
@@ -202,8 +203,7 @@ class TrainerCard:
         except ImportError:
             pass
         except Exception as e:
-            # Silently handle errors to prevent UI spam during gameplay syncs
-            pass
+            pass  # Do not block UI with popups on background errors
 
     def display_card_data(self):
         """Method to return trainer card data as a dictionary"""
