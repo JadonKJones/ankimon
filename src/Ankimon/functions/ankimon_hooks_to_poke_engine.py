@@ -5,6 +5,7 @@ import traceback
 from typing import Union
 
 from ..poke_engine import constants
+from ..poke_engine.constants import CONTACT, FLAGS, HEAL, HEAL_TARGET, NORMAL, MUTATOR_HEAL
 from ..services import services
 import math
 
@@ -13,6 +14,65 @@ from ..poke_engine.objects import Pokemon, State, StateMutator, Side
 from ..poke_engine.helpers import normalize_name
 from ..poke_engine.find_state_instructions import get_all_state_instructions
 from ..poke_engine import instruction_generator
+from ..poke_engine.special_effects.items import modify_attack_against
+
+# Monkey-patch Rocky Helmet
+def _rockyhelmet_patch(attacking_move, attacking_pokemon, defending_pokemon):
+    if CONTACT in attacking_move[FLAGS]:
+        attacking_move = attacking_move.copy()
+        attacking_move[HEAL] = [-1, 6]
+        attacking_move[HEAL_TARGET] = constants.SELF
+    return attacking_move
+
+modify_attack_against.rockyhelmet = _rockyhelmet_patch
+modify_attack_against.item_lookup['rockyhelmet'] = _rockyhelmet_patch
+
+# Monkey-patch negative heal clamping in get_instructions_from_attacker_recovery
+_orig_get_instructions_from_attacker_recovery = instruction_generator.get_instructions_from_attacker_recovery
+
+def _get_instructions_from_attacker_recovery_patch(mutator, attacker_string, move, instruction):
+    if instruction.frozen:
+        return [instruction]
+
+    mutator.apply(instruction.instructions)
+
+    target = move.get(HEAL_TARGET)
+    if target in instruction_generator.opposing_side_strings:
+        side_string = instruction_generator.opposite_side[attacker_string]
+    else:
+        side_string = attacker_string
+
+    from ..poke_engine.instruction_generator import get_side_from_state
+    pkmn = get_side_from_state(mutator.state, side_string).active
+    if HEAL in move:
+        health_recovered = float(move[HEAL][0] / move[HEAL][1]) * pkmn.maxhp
+    else:
+        health_recovered = 0
+
+    if health_recovered == 0:
+        mutator.reverse(instruction.instructions)
+        return [instruction]
+
+    final_health = pkmn.hp + health_recovered
+    if health_recovered > 0 and final_health > pkmn.maxhp:
+        health_recovered -= (final_health - pkmn.maxhp)
+    elif health_recovered < 0 and final_health < 0:
+        health_recovered -= final_health
+
+    heal_instruction = (
+        MUTATOR_HEAL,
+        side_string,
+        health_recovered
+    )
+
+    mutator.reverse(instruction.instructions)
+
+    if health_recovered:
+        instruction.add_instruction(heal_instruction)
+
+    return [instruction]
+
+instruction_generator.get_instructions_from_attacker_recovery = _get_instructions_from_attacker_recovery_patch
 from ..pyobj.error_handler import show_warning_with_traceback
 
 # Shared state used as bare module globals below; bound to the live registry
