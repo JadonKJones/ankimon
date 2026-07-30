@@ -346,6 +346,8 @@ USELESS_ITEMS = {
     "max-ether",
     "elixir",
     "ether",
+    # Deprecated / Functional as UI mechanic instead
+    "exp-share",
 }
 
 
