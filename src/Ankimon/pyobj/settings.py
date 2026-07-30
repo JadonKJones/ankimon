@@ -35,6 +35,7 @@ DEFAULT_CONFIG = {
     "gui.gif_in_collection": True,
     "gui.styling_in_reviewer": True,
     "gui.pop_up_dialog_message_on_defeat": False,
+    "gui.pop_up_dialog_message_on_item": True,
     "gui.review_hp_bar_thickness": 2,
     "gui.reviewer_image_gif": False,
     "gui.reviewer_text_message_box": True,
@@ -97,6 +98,8 @@ DEFAULT_CONFIG = {
     "mobile.enabled": True,
     "mobile.resolution_mode": "manual",
     "mobile.inactive_companions": [],
+    "leaderboard.username": "",
+    "leaderboard.api_key": "",
 }
 
 

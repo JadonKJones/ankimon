@@ -299,6 +299,15 @@ class DownloadThread(QThread):
             self.status_signal.emit(f"Error creating completion flag file: {e}")
             # Non-critical, but report issue.
 
+        # A moving ZIP URL cannot be tied safely to a Git commit SHA. Clear the
+        # cache and let the differential updater establish verified state later.
+        try:
+            manifest_path = self.dest_dir_path.parent / "sprites_local_manifest.json"
+            if manifest_path.exists():
+                manifest_path.unlink()
+        except OSError:
+            pass
+
         self.download_finished_signal.emit(True, "Sprites download and extraction complete!")
 
 

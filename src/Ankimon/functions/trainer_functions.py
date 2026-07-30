@@ -99,12 +99,19 @@ def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp
     experience_needed = int(find_experience_for_level(growth_rate, current_level, remove_level_cap))  # MODIFIED: Pre-calculate needed XP
     evo_id = None # Initialize variable
 
+    levels_gained = 0
     logger.log("info", "Running XP share function")
     if experience_needed > exp + current_xp:
         pokemon["xp"] = current_xp + exp
     else:
         while exp + current_xp > experience_needed:
             if (remove_level_cap or current_level < 100):
+                if levels_gained >= 10:
+                    logger.log("error", f"XP Share level-up loop exceeded safety cap of 10 for {pokemon['name']}")
+                    exp = max(0, experience_needed - 1)
+                    current_xp = 0
+                    break
+                levels_gained += 1
                 current_level += 1
                 exp = exp + current_xp - experience_needed
                 current_xp = 0

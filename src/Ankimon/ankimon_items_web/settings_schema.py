@@ -22,7 +22,6 @@ GROUPS = [
                     "SSH Access",
                     "Prevent Ankimon News on Startup",
                     "AnkiWeb Sync",
-                    "Ankimon Leaderboard",
                     "Developer Mode",
                 ],
             },
@@ -111,6 +110,7 @@ GROUPS = [
             "View Main Pokémon Front",
             "XP Bar Location",
             "Pop-Up on Defeat",
+            "Pop-Up on Item Receive",
         ],
         "chip_group": {
             "label": "HUD Element Toggles",
@@ -202,8 +202,42 @@ GROUPS = [
                 ]
             }
         ]
+    },
+    {
+        "label": "Leaderboard",
+        "settings": [
+            "Enable Leaderboard Sync",
+            "Username",
+            "API Key"
+        ]
     }
 ]
+
+
+SECRET_SETTING_PLACEHOLDER = "********"
+
+
+def serialize_secret_setting(value):
+    """Return a browser-safe representation of a stored secret setting."""
+    configured = bool(value)
+    return {
+        "type": "password",
+        "value": SECRET_SETTING_PLACEHOLDER if configured else "",
+        "secret_configured": configured,
+        "secret_placeholder": SECRET_SETTING_PLACEHOLDER,
+    }
+
+
+def is_unchanged_secret_placeholder(value) -> bool:
+    """Whether a web-settings value means "leave the stored secret unchanged"."""
+    return value == SECRET_SETTING_PLACEHOLDER
+
+
+def display_setting_value(key, value):
+    """Redact secrets before rendering a settings-change summary."""
+    if key == "leaderboard.api_key" and value:
+        return SECRET_SETTING_PLACEHOLDER
+    return value
 
 
 # Active region dropdown options — preserved verbatim from the legacy window.

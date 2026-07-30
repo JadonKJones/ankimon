@@ -1226,13 +1226,6 @@ def save_main_pokemon_progress(
     logger: ShowInfoLogger,
     evo_window: EvoWindow,
 ):
-    experience = int(
-        find_experience_for_level(
-            main_pokemon.growth_rate,
-            main_pokemon.level,
-            settings_obj.get("misc.remove_level_cap"),
-        )
-    )
     if settings_obj.get("misc.remove_level_cap") is True:
         main_pokemon.xp += exp
         level_cap = None
@@ -1264,6 +1257,7 @@ def save_main_pokemon_progress(
         )
         return
     evolution_prompted = False
+    levels_gained = 0
     while int(
         find_experience_for_level(
             main_pokemon.growth_rate,
@@ -1271,6 +1265,21 @@ def save_main_pokemon_progress(
             settings_obj.get("misc.remove_level_cap"),
         )
     ) < int(main_pokemon.xp) and (level_cap is None or main_pokemon.level < level_cap):
+        if levels_gained >= 10:
+            logger.log("error", f"Level-up loop exceeded safety cap of 10 for {main_pokemon.name}")
+            next_level_cost = int(find_experience_for_level(
+                main_pokemon.growth_rate,
+                main_pokemon.level,
+                settings_obj.get("misc.remove_level_cap"),
+            ))
+            main_pokemon.xp = max(0, next_level_cost - 1)
+            break
+        levels_gained += 1
+        current_lvl_xp_cost = int(find_experience_for_level(
+            main_pokemon.growth_rate,
+            main_pokemon.level,
+            settings_obj.get("misc.remove_level_cap"),
+        ))
         main_pokemon.level += 1
         events.emit("levelup", pokemon=main_pokemon.name, level=main_pokemon.level)
         msg = ""
@@ -1288,7 +1297,7 @@ def save_main_pokemon_progress(
         if not _in_bulk_resolve():
             if settings_obj.get("gui.pop_up_dialog_message_on_defeat") is True:
                 logger.log_and_showinfo("info", f"{msg}")
-        main_pokemon.xp = int(max(0, int(main_pokemon.xp) - int(experience)))
+        main_pokemon.xp = int(max(0, int(main_pokemon.xp) - current_lvl_xp_cost))
 
         # Request to open the pokemon evo window
         evo_id = check_evolution_for_pokemon(
@@ -1393,12 +1402,19 @@ def save_main_pokemon_progress(
                                 "info", f"{new_attack} will be discarded."
                             )
                 mainpkmndata["attacks"] = attacks
+    experience_till_next_level = int(
+        find_experience_for_level(
+            main_pokemon.growth_rate,
+            main_pokemon.level,
+            settings_obj.get("misc.remove_level_cap"),
+        )
+    )
     msg = ""
     msg += translator.translate(
         "mainpokemon_gained_xp",
         main_pokemon_name=main_pokemon.name,
         exp=exp,
-        experience_till_next_level=experience,
+        experience_till_next_level=experience_till_next_level,
         main_pokemon_xp=main_pokemon.xp,
     )
     color = "#a17cf7"  # pokemon leveling info color for tooltip

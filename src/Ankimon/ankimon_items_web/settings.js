@@ -173,9 +173,43 @@
                 return buildChipGroup(setting);
             case 'wishlist':
                 return buildWishlistControl(setting);
+            case 'password':
+                return buildPasswordInput(setting);
             default:
                 return buildTextInput(setting);
         }
+    }
+
+    /**
+     * Builds a password input field for sensitive credential settings.
+     *
+     * Creates a masked input field with placeholder text and change tracking.
+     *
+     * @param {Object} setting - The setting configuration object.
+     * @returns {HTMLElement} The password input element.
+     */
+    function buildPasswordInput(setting) {
+        const input = document.createElement('input');
+        const savedPlaceholder = setting.secret_placeholder || '';
+        input.type = 'password';
+        input.className = 'setting-input';
+        input.value = currentValue(setting) ?? '';
+        input.placeholder = setting.secret_configured
+            ? 'API key saved — type to replace it'
+            : 'Enter your API key';
+        input.autocomplete = 'new-password';
+        input.spellcheck = false;
+        input.addEventListener('focus', () => {
+            if (setting.secret_configured && input.value === savedPlaceholder) {
+                input.select();
+            }
+        });
+        input.addEventListener('input', () => {
+            setEdit(setting.key, input.value);
+            updateDirtyUI();
+            markRowDirty(setting.key);
+        });
+        return input;
     }
 
     function buildWishlistControl(setting) {

@@ -2154,6 +2154,11 @@ class AnkimonItemsWeb(QDialog):
                         names_dict[pid] = f"#{pid}"
             entry["names"] = names_dict
             return entry
+
+        if key == "leaderboard.api_key":
+            entry.update(settings_schema.serialize_secret_setting(value))
+            return entry
+
         if key == "misc.active_region":
             entry["type"] = "select"
             entry["options"] = settings_schema.ACTIVE_REGION_OPTIONS
@@ -2208,6 +2213,11 @@ class AnkimonItemsWeb(QDialog):
             for raw_key, raw_val in payload.items():
                 key = str(raw_key)
                 if key not in config:
+                    continue
+                if (
+                    key == "leaderboard.api_key"
+                    and settings_schema.is_unchanged_secret_placeholder(raw_val)
+                ):
                     continue
                 config[key] = self._coerce_incoming(config[key], raw_val)
         except ValueError as e:

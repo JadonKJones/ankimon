@@ -92,18 +92,34 @@ def check_file_exists(folder, filename):
 
 def test_online_connectivity(
     url="https://raw.githubusercontent.com/Unlucky-Life/ankimon/main/update_txt.md",
-    timeout=5,
+    timeout=1,
 ):
-    try:
-        # Attempt to get the URL
-        response = requests.get(url, timeout=timeout)
+    import socket
+    from urllib.parse import urlparse
 
-        # Check if the response status code is 200 (OK)
-        if response.status_code == 200:
-            return True
-    except:
-        # Connection error means no internet connectivity
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return False
+        port = parsed.port or (80 if parsed.scheme == "http" else 443)
+    except ValueError:
         return False
+
+    try:
+        with socket.create_connection((parsed.hostname, port), timeout=timeout):
+            return True
+    except OSError:
+        # Direct sockets can be blocked on proxy-only networks. Fall back to the
+        # configured requests transport without downloading the response body.
+        response = None
+        try:
+            response = requests.get(url, timeout=timeout, stream=True)
+            return response.status_code == 200
+        except requests.RequestException:
+            return False
+        finally:
+            if response is not None:
+                response.close()
 
 
 # Define the hook function
