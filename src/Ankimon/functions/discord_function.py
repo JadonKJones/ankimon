@@ -12,9 +12,11 @@ logger = mw.logger
 class DiscordPresence:
     def __init__(self, client_id, large_image_url, ankimon_tracker, logger, settings_obj, parent=mw):
         self.loop = False
+        self.connected = False
         try:
             self.RPC = Presence(client_id)
             self.RPC.connect()
+            self.connected = True
             self.large_image_url = large_image_url
             self.ankimon_tracker: AnkimonTracker = ankimon_tracker
             self.logger_obj = mw.logger
@@ -71,6 +73,8 @@ class DiscordPresence:
         """
         Update the Discord Rich Presence with a new state message.
         """
+        if not self.connected:
+            return
         try:
             while self.loop:
                 self.RPC.update(
@@ -81,12 +85,13 @@ class DiscordPresence:
                 time.sleep(30)  # Sleep for 30 seconds before updating again
         except Exception as e:
             logger.log("error",f"Error with Discord Rich Presence: {e}")
-            tooltip("Error with Discord Rich Presence. Is Discord running?")
 
     def start(self):
         """
         Start updating the Discord Rich Presence in a separate thread.
         """
+        if not self.connected:
+            return
         try:
             if not hasattr(self, 'thread') or self.thread is None or not self.thread.is_alive():
                 self.loop = True
@@ -94,12 +99,13 @@ class DiscordPresence:
                 self.thread.start()
         except Exception as e:
             logger.log("error",f"Error starting Discord Rich Presence: {e}")
-            tooltip("Error starting Discord Rich Presence. Is Discord running?")
 
     def stop(self):
         """
         Stop updating the Discord Rich Presence.
         """
+        if not self.connected:
+            return
         try:
             self.loop = False
             if hasattr(self, 'thread') and self.thread and self.thread.is_alive():
@@ -108,12 +114,13 @@ class DiscordPresence:
             self.RPC.clear()
         except Exception as e:
             logger.log("error",f"Error clearing Discord Rich Presence: {e}")
-            tooltip("Error clearing Discord Rich Presence. Please check Logger for info.")
 
     def stop_presence(self):
         """
         Update the Discord Rich Presence to indicate a break when stopping.
         """
+        if not self.connected:
+            return
         try:
             self.loop = False
             if not self.loop:
@@ -123,7 +130,6 @@ class DiscordPresence:
                 )
         except Exception as e:
             logger.log("error",f"Error stopping Discord Rich Presence: {e}")
-            tooltip("Error stopping Discord Rich Presence. Please check Logger for info.")
 
 def check_conflicting_discord_addons():
     """
