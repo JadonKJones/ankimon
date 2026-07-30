@@ -996,6 +996,15 @@ class AnkimonDB:
                 "INSERT INTO captured_pokemon (individual_id, is_main, data) VALUES (?, 0, ?)",
                 (individual_id, obfuscated_data)
             )
+
+        # Hook: auto-register caught pokemon
+        pokemon_id = pokemon_data.get("id")
+        if pokemon_id:
+            try:
+                self.mark_as_caught(int(pokemon_id))
+            except Exception as e:
+                self._log("warning", f"Failed to mark pokemon {pokemon_id} as caught: {e}")
+
         conn.commit()
         self._clear_reviewer_ownership_cache()
         return True
@@ -1445,6 +1454,45 @@ class AnkimonDB:
             if data:
                 results.append(data)
         return results
+
+    # --- Pokedex History / Visibility Operations ---
+
+    def mark_as_caught(self, pokemon_id: int):
+        """Marks a pokemon as caught in the pokedex user data."""
+        if not pokemon_id:
+            return
+        caught_ids = self.get_user_data("pokedex_caught", [])
+        if isinstance(caught_ids, list):
+            if pokemon_id not in caught_ids:
+                caught_ids.append(pokemon_id)
+                self.set_user_data("pokedex_caught", caught_ids)
+
+        # If it is caught, it should also be seen.
+        self.mark_as_seen(pokemon_id)
+
+    def get_caught_ids(self) -> set:
+        """Returns a set of pokedex IDs that have been caught."""
+        caught_ids = self.get_user_data("pokedex_caught", [])
+        if isinstance(caught_ids, list):
+            return set(caught_ids)
+        return set()
+
+    def mark_as_seen(self, pokemon_id: int):
+        """Marks a pokemon as seen in the pokedex user data."""
+        if not pokemon_id:
+            return
+        seen_ids = self.get_user_data("pokedex_seen", [])
+        if isinstance(seen_ids, list):
+            if pokemon_id not in seen_ids:
+                seen_ids.append(pokemon_id)
+                self.set_user_data("pokedex_seen", seen_ids)
+
+    def get_seen_ids(self) -> set:
+        """Returns a set of pokedex IDs that have been seen."""
+        seen_ids = self.get_user_data("pokedex_seen", [])
+        if isinstance(seen_ids, list):
+            return set(seen_ids)
+        return set()
 
     # --- User Data Operations ---
 
