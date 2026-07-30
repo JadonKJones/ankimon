@@ -80,8 +80,9 @@ class _FakePokemon:
         self.xp = kw.get("xp", 0)
         self.growth_rate = kw.get("growth_rate", "medium")
         self.cp = kw.get("cp", 345)
-        # Point at a file that does not exist to model a sprite the user never
-        # downloaded (issue #101).
+        # Defaults to a real PNG so the sprite-scaling math runs; the issue #101
+        # tests override it with a path that does not exist, modelling a sprite
+        # the user never downloaded.
         self.sprite_path = kw.get("sprite_path", _REAL_SPRITE)
 
     def get_sprite_path(self, side, ext):
@@ -527,15 +528,23 @@ def test_zero_max_hp_does_not_crash_the_hp_bar(make_window, tw_module):
         painter.end()
 
 
-def test_unknown_growth_rate_does_not_crash_the_xp_bar(make_window):
-    """``find_experience_for_level`` returns 0 for a growth rate it can't map.
+@pytest.mark.parametrize(
+    "render", ["pokemon_display_first_encounter", "pokemon_display_battle"]
+)
+def test_zero_experience_does_not_crash_the_xp_bar(
+    make_window, tw_module, monkeypatch, render
+):
+    """A 0 from the exp-table lookup draws an empty XP bar, not a traceback.
 
-    ``mobile_sync`` writes a capitalized "Medium", which misses the lowercase
-    exp-table column and yields 0 — the XP-bar divisor.
+    Patched at the module seam instead of asserting a particular
+    ``find_experience_for_level`` return value, so this pins the divisor guard
+    itself and stays valid however that lookup behaves — main clamps its
+    sub-100 result to ``max(1, experience)``, so no real growth rate reaches 0
+    today. Both renders compute the divisor (``window_show`` for the first
+    encounter, ``pokemon_display_battle`` for the rest), so both are driven.
     """
-    from Ankimon.functions.pokemon_functions import find_experience_for_level
-
-    assert int(find_experience_for_level("Medium", 4, False)) == 0  # the divisor
+    monkeypatch.setattr(tw_module, "find_experience_for_level", lambda *a, **kw: 0)
 
     win = make_window(main=_FakePokemon("scatterbug", 664, growth_rate="Medium", xp=10))
-    assert win.pokemon_display_battle() is not None
+
+    assert getattr(win, render)() is not None

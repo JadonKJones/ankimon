@@ -432,9 +432,9 @@ body.dark #ankimon-hud #MyPokeImage,
 """
 
     if xp_bar_config:
-        # experience_for_next_lvl is 0 for a growth rate the exp table does not
-        # know (or a level outside it); render an empty bar rather than raising
-        # a ZeroDivisionError out of the HUD (issue #101).
+        # Guard the divisor: experience_for_next_lvl arrives from the caller's
+        # exp-table lookup, and a 0 (or None) would raise a ZeroDivisionError
+        # out of the HUD, so render an empty bar (issue #101).
         _exp_next = int(experience_for_next_lvl or 0)
         xp_bar_percent = (
             int((int(main_pokemon.xp or 0) / _exp_next) * 100) if _exp_next else 0

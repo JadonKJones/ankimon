@@ -457,8 +457,9 @@ class TestWindow(QWidget):
         )
 
         mainxp_bar_width = 5
-        # find_experience_for_level returns 0 for a growth rate it does not
-        # know or a level outside the exp table, so guard the divisor here too.
+        # Guard the divisor: a 0 out of the exp-table lookup would take the
+        # whole render down with a ZeroDivisionError, so draw an empty bar
+        # instead (issue #101).
         mainpokemon_xp_value = (
             int(((self.main_pokemon.xp or 0) / experience) * 148) if experience else 0
         )
@@ -653,8 +654,9 @@ class TestWindow(QWidget):
         )
 
         mainxp_bar_width = 5
-        # find_experience_for_level returns 0 for a growth rate it does not
-        # know or a level outside the exp table, so guard the divisor here too.
+        # Guard the divisor: a 0 out of the exp-table lookup would take the
+        # whole render down with a ZeroDivisionError, so draw an empty bar
+        # instead (issue #101).
         mainpokemon_xp_value = (
             int(((self.main_pokemon.xp or 0) / experience) * 148) if experience else 0
         )
