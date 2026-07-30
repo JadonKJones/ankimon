@@ -265,6 +265,21 @@ class StarterWindow(QWidget):
 
         return water_starter_button, fire_starter_button, grass_start_button
 
+    def _load_sprite(self, path):
+        """Load a Pokémon sprite, falling back to the substitute.
+
+        ``QPixmap.load`` returns False for a missing file rather than raising,
+        so a sprite that never downloaded would otherwise be drawn blank — and
+        used to crash the screen outright in the aspect-ratio maths (issue
+        #101). Every screen in this window loads its sprite through here so the
+        substitute shows consistently: previously the preview screen fell back
+        but the confirmation and fossil screens still went blank.
+        """
+        pixmap = QPixmap()
+        if not pixmap.load(str(path)):
+            pixmap.load(str(frontdefault / "substitute.png"))
+        return pixmap
+
     def pokemon_display_starter(self, water_start, fire_start, grass_start):
         bckgimage_path = addon_dir / "addon_sprites" / "starter_screen" / "bckg.png"
         water_id = int(search_pokedex(water_start, "species_id"))
@@ -275,30 +290,17 @@ class StarterWindow(QWidget):
         pixmap_bckg = QPixmap()
         pixmap_bckg.load(str(bckgimage_path))
 
-        def load_starter_sprite(path):
-            """Load a starter sprite, falling back to the substitute.
-
-            ``QPixmap.load`` returns False for a missing file rather than
-            raising, so a sprite that never downloaded would otherwise be
-            drawn blank — and used to crash the screen outright in the
-            aspect-ratio maths below (issue #101).
-            """
-            pixmap = QPixmap()
-            if not pixmap.load(str(path)):
-                pixmap.load(str(frontdefault / "substitute.png"))
-            return pixmap
-
         # Display the Pokémon image
         water_label = QLabel()
-        water_pixmap = load_starter_sprite(frontdefault / f"{water_id}.png")
+        water_pixmap = self._load_sprite(frontdefault / f"{water_id}.png")
 
         # Display the Pokémon image
         fire_label = QLabel()
-        fire_pixmap = load_starter_sprite(frontdefault / f"{fire_id}.png")
+        fire_pixmap = self._load_sprite(frontdefault / f"{fire_id}.png")
 
         # Display the Pokémon image
         grass_label = QLabel()
-        grass_pixmap = load_starter_sprite(frontdefault / f"{grass_id}.png")
+        grass_pixmap = self._load_sprite(frontdefault / f"{grass_id}.png")
 
         # Use the shared helper: the local copy that lived here shadowed it and
         # lacked its null-pixmap guard, so a starter sprite that never
@@ -348,10 +350,8 @@ class StarterWindow(QWidget):
         pixmap_bckg.load(str(bckgimage_path))
 
         # Display the Pokémon image
-        image_path = frontdefault / f"{id}.png"
         image_label = QLabel()
-        image_pixmap = QPixmap()
-        image_pixmap.load(str(image_path))
+        image_pixmap = self._load_sprite(frontdefault / f"{id}.png")
         image_pixmap = resize_pixmap_img(image_pixmap, 250)
 
         # Merge the background image and the Pokémon image
@@ -388,10 +388,8 @@ class StarterWindow(QWidget):
         pixmap_bckg.load(str(bckgimage_path))
 
         # Display the Pokémon image
-        image_path = frontdefault / f"{id}.png"
         image_label = QLabel()
-        image_pixmap = QPixmap()
-        image_pixmap.load(str(image_path))
+        image_pixmap = self._load_sprite(frontdefault / f"{id}.png")
         image_pixmap = resize_pixmap_img(image_pixmap, 250)
 
         # Merge the background image and the Pokémon image
