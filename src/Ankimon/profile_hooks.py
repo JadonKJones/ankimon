@@ -98,6 +98,12 @@ def _on_profile_did_open(online_connectivity):
             logger.log("error", f"Failed to register Ankimon sync hooks: {e}")
 
         try:
+            from .pyobj.brrr_deprecation_dialog import check_and_show_brrr_deprecation_notice
+            check_and_show_brrr_deprecation_notice()
+        except Exception as e:
+            logger.log("error", f"Failed to check BRRRR_Experimental deprecation notice: {e}")
+
+        try:
             show_tip_of_the_day()
         except Exception as e:
             show_warning_with_traceback(

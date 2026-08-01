@@ -46,3 +46,9 @@ class QtPresenter:
 
     def report_error(self, exception, message=""):
         show_warning_with_traceback(exception=exception, message=message)
+
+    def notify_brrr_deprecation(self):
+        from .pyobj.brrr_deprecation_dialog import BRRRDeprecationNoticeDialog
+
+        dialog = BRRRDeprecationNoticeDialog()
+        dialog.exec()

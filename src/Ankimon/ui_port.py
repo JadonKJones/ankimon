@@ -95,3 +95,7 @@ class HeadlessPresenter:
     def report_error(self, exception: BaseException, message: str = "") -> None:
         """A would-be error dialog with traceback."""
         events.emit("error", message=message, exception=repr(exception))
+
+    def notify_brrr_deprecation(self) -> None:
+        """A would-be BRRRR_Experimental deprecation notice."""
+        events.emit("brrr_deprecation_notice")

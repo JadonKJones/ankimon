@@ -223,12 +223,16 @@ def _get_settings():
 def get_update_channel() -> str:
     """The user's selected auto-update channel. Defaults to matching the installed
     build — an "-E" build → experimental, otherwise stable — until the user picks
-    one in the update dialog. Any unrecognized stored value falls back the same way."""
+    one in the update dialog. Any unrecognized stored value falls back the same way.
+    Legacy "BRRRR_Experimental" channel settings automatically migrate to "main"."""
     settings = _get_settings()
     raw = None
     if settings is not None:
         try:
             raw = settings.get("misc.update_channel")
+            if raw and str(raw).strip().lower() == "brrrr_experimental":
+                set_update_channel(CHANNEL_MAIN)
+                raw = CHANNEL_MAIN
         except Exception:
             raw = None
     if raw in UPDATE_CHANNELS:
@@ -425,6 +429,29 @@ def get_update_state_path() -> Path:
     return addon_dir / "user_files" / "update_state.json"
 
 
+def _migrate_brrr_state_if_needed(data: dict) -> dict:
+    """If update_state.json points to the legacy BRRRR_Experimental branch, migrate it to main."""
+    if not isinstance(data, dict):
+        return data
+    source_type = data.get("source_type")
+    source_name = data.get("source_name")
+    if source_type == "branch" and str(source_name).strip().lower() == "brrrr_experimental":
+        data["source_name"] = CHANNEL_MAIN
+        data["brrr_migrated_to_main"] = True
+        try:
+            path = get_update_state_path()
+            if path.exists():
+                path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        try:
+            from .brrr_deprecation_dialog import check_and_show_brrr_deprecation_notice
+            check_and_show_brrr_deprecation_notice()
+        except Exception:
+            pass
+    return data
+
+
 def save_update_state(
     source_type: str,
     source_name: str,
@@ -434,6 +461,9 @@ def save_update_state(
     try:
         import time
         from ..resources import addon_ver
+
+        if source_type == "branch" and str(source_name).strip().lower() == "brrrr_experimental":
+            source_name = CHANNEL_MAIN
 
         path = get_update_state_path()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -482,7 +512,7 @@ def read_update_state() -> Optional[dict]:
             # anything a text editor can produce must come back as None here.
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                return data
+                return _migrate_brrr_state_if_needed(data)
     except Exception:
         pass
     return None
