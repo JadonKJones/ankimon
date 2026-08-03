@@ -808,6 +808,15 @@ class SettingsWindow(QMainWindow):
         except Exception as e:
             print(f"Ankimon: Failed to refresh hotkeys: {e}")
 
+        # Emit a shared settings-change notification so any open native views
+        # (PokemonPC, unified shell, etc.) can refresh immediately.
+        try:
+            from ..events import events
+            events.emit("settings_changed", {"config": self.config})
+        except Exception as e:
+            # Best-effort — settings still saved even if the event fails.
+            print(f"Ankimon: Failed to emit settings_changed event: {e}")
+
         # The rest is for showing the confirmation message
         excluded_patterns = {
             "mypokemon",
