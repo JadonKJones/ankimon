@@ -1144,8 +1144,52 @@ class AnkimonItemsWeb(QDialog):
         if not ok:
             return
         self.ready_screens.add(screen)
+        settings_obj = self.shop_manager.settings_obj if self.shop_manager is not None else None
+        if settings_obj is not None:
+            self._apply_sprite_visibility(
+                settings_obj.get("gui.show_sprites_across_ankimon", True),
+                screens=(screen,),
+            )
         if self.current_screen == screen:
             self.push_screen_data()
+
+    def _apply_sprite_visibility(self, show_sprites, screens=None):
+        """Hide raster sprite content without collapsing the surrounding UI.
+
+        The web shell owns the Item Shop, Trainer Card, Team, and Ankidex
+        screens. ``visibility`` preserves every image element's allocated size;
+        removing raster CSS backgrounds leaves their sized containers intact.
+        """
+        targets = screens or tuple(self._views)
+        enabled = "true" if show_sprites else "false"
+        script = f"""
+            (() => {{
+                const show = {enabled};
+                let style = document.getElementById('ankimon-sprite-visibility');
+                if (!style) {{
+                    style = document.createElement('style');
+                    style.id = 'ankimon-sprite-visibility';
+                    document.head.appendChild(style);
+                }}
+                document.querySelectorAll('*').forEach((element) => {{
+                    const background = getComputedStyle(element).backgroundImage;
+                    if (background.includes('.png') || background.includes('.gif')) {{
+                        element.classList.add('ankimon-raster-background');
+                    }}
+                }});
+                style.textContent = show ? '' : `
+                    img[src*=".png"], img[src*=".gif"] {{ visibility: hidden !important; }}
+                    [style*=".png"], [style*=".gif"] {{ background-image: none !important; }}
+                    .ankimon-raster-background {{ background-image: none !important; }}
+                    /* Mobile Reviews uses an inline SVG Pokéball for its empty state. */
+                    #state-empty .pokeball-icon-container {{ visibility: hidden !important; }}
+                `;
+            }})()
+        """
+        for screen in targets:
+            view = self._views.get(screen)
+            if view is not None:
+                view.page().runJavaScript(script)
 
     def push_screen_data(self):
         # A screen can only receive data once its first load has finished.
@@ -2239,6 +2283,9 @@ class AnkimonItemsWeb(QDialog):
             return {"ok": False, "message": f"Save failed: {e}"}
 
         self._refresh_reviewer_hotkeys(config)
+        self._apply_sprite_visibility(
+            config.get("gui.show_sprites_across_ankimon", True)
+        )
 
         if adjustments:
             return {
