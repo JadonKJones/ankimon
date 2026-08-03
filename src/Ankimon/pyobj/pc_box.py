@@ -69,7 +69,6 @@ from ..functions.pokedex_functions import (
     search_pokedex_by_id,
 )
 from ..functions.gui_functions import type_icon_path, move_category_path
-from ..events import events
 
 MOVE_TYPE_COLORS = {
     "Normal": "#A8A878",
@@ -565,6 +564,7 @@ def _refresh_open_item_windows():
     (never constructing a window just to refresh it), mirroring
     ``singletons.swap_ankimon_account``.
     """
+    # Lazy import to avoid circular dependency at module load time
     from .. import singletons
 
     item_win = singletons._WINDOW_CACHE.get("item_window")
@@ -717,9 +717,6 @@ class PokemonPC(QDialog):
         self.time_timer.timeout.connect(self._update_time_display)
         self.time_timer.start(60000)  # Every minute
 
-        # Subscribe to settings-change events so sprite visibility updates instantly
-        events.on("settings_changed", self._on_settings_changed)
-
     def on_theme_change(self):
         """
         Callback function triggered when Anki's theme changes (light to dark or vice versa).
@@ -732,23 +729,6 @@ class PokemonPC(QDialog):
                 pass
             return
         self.refresh_gui()
-
-    def _on_settings_changed(self, data):
-        """
-        React to a settings_changed event by updating sprite visibility if changed.
-        """
-        if not is_alive(self):
-            return
-        config = data.get("config") if isinstance(data, dict) else None
-        if config is None:
-            try:
-                config = self.settings.load_config()
-            except Exception:
-                return
-        new_show_sprites = config.get("gui.show_sprites_across_ankimon", True)
-        if new_show_sprites != self.show_sprites_across_ankimon:
-            self.show_sprites_across_ankimon = new_show_sprites
-            self.refresh_pokemon_grid()
 
     def create_gui(self):
         """
@@ -1041,12 +1021,6 @@ class PokemonPC(QDialog):
             t = getattr(self, attr, None)
             if t and t.isActive():
                 t.stop()
-
-        # Unsubscribe from events to prevent stale callbacks
-        try:
-            events.off("settings_changed", self._on_settings_changed)
-        except Exception:
-            pass
 
         self.on_window_close()
         event.accept()
