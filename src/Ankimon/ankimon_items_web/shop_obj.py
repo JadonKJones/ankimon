@@ -1088,6 +1088,10 @@ class AnkimonItemsWeb(QDialog):
         self.load_screen(SCREEN_ITEMS)
         self._restore_geometry()
 
+        # Subscribe to settings-change events so native views can refresh
+        # immediately when sprite visibility or other display settings change.
+        events.on("settings_changed", self._on_settings_changed)
+
     # ------------------------------------------------------------------
     # Screen switching
     # ------------------------------------------------------------------
@@ -2282,10 +2286,14 @@ class AnkimonItemsWeb(QDialog):
         except Exception as e:
             return {"ok": False, "message": f"Save failed: {e}"}
 
-        self._refresh_reviewer_hotkeys(config)
+        # Apply sprite visibility to web views.
         self._apply_sprite_visibility(
             config.get("gui.show_sprites_across_ankimon", True)
         )
+
+        # Emit a shared settings-change notification so any open native views
+        # (PokemonPC, legacy SettingsWindow, etc.) can refresh immediately.
+        events.emit("settings_changed", {"config": config})
 
         if adjustments:
             return {
@@ -2294,6 +2302,24 @@ class AnkimonItemsWeb(QDialog):
                 "adjustments": adjustments,
             }
         return {"ok": True, "message": "Settings saved."}
+
+    def _on_settings_changed(self, data):
+        """React to a settings_changed event from any source (web settings
+        or legacy SettingsWindow) by applying sprite visibility to web views
+        and refreshing native views that depend on the sprite setting."""
+        config = data.get("config") if isinstance(data, dict) else None
+        if config is None:
+            # If no config payload was provided, reload from disk.
+            settings_obj = self.shop_manager.settings_obj if self.shop_manager is not None else None
+            if settings_obj is not None:
+                try:
+                    config = settings_obj.load_config()
+                except Exception:
+                    pass
+        if config is not None:
+            self._apply_sprite_visibility(
+                config.get("gui.show_sprites_across_ankimon", True)
+            )
 
     @staticmethod
     def _coerce_incoming(existing, incoming):
