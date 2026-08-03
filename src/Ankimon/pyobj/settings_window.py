@@ -812,7 +812,7 @@ class SettingsWindow(QMainWindow):
         # (PokemonPC, unified shell, etc.) can refresh immediately.
         try:
             from ..events import events
-            events.emit("settings_changed", {"config": self.config})
+            events.emit("settings_changed", config=self.config)
         except Exception as e:
             # Best-effort — settings still saved even if the event fails.
             print(f"Ankimon: Failed to emit settings_changed event: {e}")
