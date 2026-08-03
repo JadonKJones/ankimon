@@ -294,8 +294,10 @@ class PokemonTrade:
             your_pokemon_movie.start()
             set_bw_frame()
         else:
-            # Display a placeholder when sprites are hidden - use a small generic icon or blank
-            your_pokemon_sprite_label.setPixmap(QPixmap(1, 1))  # Minimal placeholder
+            # Display a transparent placeholder when sprites are hidden to preserve layout geometry
+            transparent_pixmap = QPixmap(64, 64)
+            transparent_pixmap.fill(Qt.GlobalColor.transparent)
+            your_pokemon_sprite_label.setPixmap(transparent_pixmap)
         
         your_pokemon_name_label = QLabel(f"{self.name}")
         your_pokemon_name_label.setFont(QFont("Arial", 12))
@@ -316,7 +318,10 @@ class PokemonTrade:
         if show_sprites:
             self.other_pokemon_sprite_label.setPixmap(QPixmap(":/icons/pokeball.png").scaled(sprite_size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         else:
-            self.other_pokemon_sprite_label.setPixmap(QPixmap(1, 1))
+            # Use transparent 64x64 placeholder to preserve layout geometry
+            transparent_pixmap = QPixmap(64, 64)
+            transparent_pixmap.fill(Qt.GlobalColor.transparent)
+            self.other_pokemon_sprite_label.setPixmap(transparent_pixmap)
             
         self.other_pokemon_name_label = QLabel("")
         self.other_pokemon_name_label.setFont(QFont("Arial", 12))
@@ -524,8 +529,17 @@ class PokemonTrade:
             # Only show sprites if the setting allows
             show_sprites = self._should_show_sprites()
             if not show_sprites:
-                self.other_pokemon_sprite_label.setPixmap(QPixmap(1, 1))
-                self.other_pokemon_name_label.setText("")
+                # Use transparent placeholder to preserve layout
+                transparent_pixmap = QPixmap(64, 64)
+                transparent_pixmap.fill(Qt.GlobalColor.transparent)
+                self.other_pokemon_sprite_label.setPixmap(transparent_pixmap)
+                # Still attempt to parse and display the Pokémon name even without sprites
+                canonical = parse_to_canonical(code)
+                if canonical:
+                    parts = canonical.split(',')
+                    pokemon_id = int(parts[0])
+                    other_name = self.get_pokemon_name_by_id(pokemon_id)
+                    self.other_pokemon_name_label.setText(other_name)
                 return
             
             self.other_pokemon_sprite_label.setPixmap(QPixmap())
@@ -569,7 +583,10 @@ class PokemonTrade:
             if self._should_show_sprites():
                 self.other_pokemon_sprite_label.setPixmap(QPixmap(":/icons/pokeball.png").scaled(QSize(64, 64), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
             else:
-                self.other_pokemon_sprite_label.setPixmap(QPixmap(1, 1))
+                # Use transparent 64x64 placeholder
+                transparent_pixmap = QPixmap(64, 64)
+                transparent_pixmap.fill(Qt.GlobalColor.transparent)
+                self.other_pokemon_sprite_label.setPixmap(transparent_pixmap)
             self.other_pokemon_name_label.setText("")
 
     def get_pokemon_name_by_id(self, pokemon_id):
