@@ -1090,7 +1090,7 @@ class AnkimonItemsWeb(QDialog):
 
         # Subscribe to settings-change events so native views can refresh
         # immediately when sprite visibility or other display settings change.
-        events.on("settings_changed", self._on_settings_changed)
+        events.subscribe("settings_changed", self._on_settings_changed)
 
     # ------------------------------------------------------------------
     # Screen switching
