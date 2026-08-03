@@ -2289,7 +2289,12 @@ class AnkimonItemsWeb(QDialog):
 
         # Emit a shared settings-change notification so any open native views
         # (PokemonPC, legacy SettingsWindow, etc.) can refresh immediately.
-        events.emit("settings_changed", {"config": config})
+        try:
+            events.emit("settings_changed", {"config": config})
+        except Exception as e:
+            logger = services.logger
+            if logger:
+                logger.log("error", f"Failed to emit settings_changed event: {e}")
 
         if adjustments:
             return {
