@@ -104,6 +104,18 @@ DEFAULT_CONFIG = {
 }
 
 
+HUD_TOGGLE_AUTO_SYNC_KEYS = (
+    "gui.hud_player_sprite",
+    "gui.hud_enemy_sprite",
+    "gui.hud_xp_bar",
+    "gui.hud_hp_bars",
+    "gui.hud_status_badge",
+    "gui.hud_owned_indicator",
+    "gui.hud_enemy_shiny_indicator",
+    "gui.hud_player_shiny_indicator",
+)
+
+
 class Settings:
     def __init__(self):
         self.config = self.load_config()
@@ -230,7 +242,58 @@ class Settings:
                         f"Ankimon: Warning: Could not convert '{config[key]}' for key '{key}' to int."
                     )
 
-    def save_config(self, config):
+    def _apply_hud_toggle_autosync(self, config, previous_value=None, explicit_overrides=None):
+        """When the main sprite visibility setting changes, mirror that choice
+        into the reviewer HUD toggles for the listed elements.
+
+        The auto-sync only runs if the main setting actually changed state;
+        unrelated saves leave the HUD toggle values alone.
+
+        explicit_overrides is a set of HUD toggle keys that the user explicitly
+        changed in the current save. Those keys are preserved rather than
+        being overwritten by the guideline behavior.
+        """
+        if not isinstance(config, dict):
+            return []
+
+        if explicit_overrides is None:
+            explicit_overrides = set()
+
+        main_key = "gui.show_sprites_across_ankimon"
+        if main_key not in config:
+            return []
+
+        current_value = config.get(main_key, True)
+        if previous_value is None:
+            previous_value = current_value
+        if previous_value == current_value:
+            return []
+
+        changed_keys = []
+        if current_value is False:
+            for key in HUD_TOGGLE_AUTO_SYNC_KEYS:
+                if key in explicit_overrides:
+                    continue
+                if config.get(key, True) is True:
+                    config[key] = False
+                    changed_keys.append(key)
+        elif current_value is True:
+            for key in HUD_TOGGLE_AUTO_SYNC_KEYS:
+                if key in explicit_overrides:
+                    continue
+                if config.get(key, True) is False:
+                    config[key] = True
+                    changed_keys.append(key)
+
+        return changed_keys
+
+    def save_config(self, config, explicit_overrides=None):
+        previous_value = None
+        if hasattr(self, "config") and self.config is not None:
+            previous_value = self.config.get("gui.show_sprites_across_ankimon", True)
+
+        self._apply_hud_toggle_autosync(config, previous_value, explicit_overrides)
+
         # 1. Always save to database if available
         if services.db is not None:
             try:
@@ -280,19 +343,26 @@ class Settings:
             return default
         return DEFAULT_CONFIG.get(key)
 
-    def set(self, key, value):
+    def set(self, key, value, explicit_overrides=None):
+        previous_value = self.config.get("gui.show_sprites_across_ankimon", True)
         self.config[key] = value
+        changed_keys = self._apply_hud_toggle_autosync(
+            self.config, previous_value, explicit_overrides
+        )
+
         # Persist ONLY the changed key. The previous implementation re-saved the
         # entire config (~60 rows + a commit) on every set; the battle loop awards
         # cash per review, so a single battle rewrote all of config dozens of times.
         if services.db is not None:
             try:
                 services.db.set_config_value(key, value)
+                for changed_key in changed_keys:
+                    services.db.set_config_value(changed_key, self.config[changed_key])
             except Exception as e:
                 print(f"Ankimon: Failed to save config key '{key}': {e}")
         else:
             # No DB yet (very early boot / legacy) — fall back to the full save.
-            self.save_config(self.config)
+            self.save_config(self.config, explicit_overrides)
             return
         self._save_legacy_obf_if_present()
         self.compute_gui_config()
