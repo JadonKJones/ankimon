@@ -22,7 +22,7 @@ from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWidgets import QStackedWidget
 import csv
 from ..utils import give_item
-from ..pyobj.settings import DEFAULT_CONFIG
+from ..pyobj.settings import DEFAULT_CONFIG, HUD_TOGGLE_AUTO_SYNC_KEYS
 
 try:
     from ..utils import is_dev_mode
@@ -2270,15 +2270,30 @@ class AnkimonItemsWeb(QDialog):
         config, adjustments = settings_schema.validate_and_clamp(config, original_config)
 
         try:
+            explicit_overrides = {
+                key for key in payload.keys() if key in HUD_TOGGLE_AUTO_SYNC_KEYS
+            }
             changed = False
+            save_order = []
+            main_key = "gui.show_sprites_across_ankimon"
+            if original_config.get(main_key) != config.get(main_key):
+                save_order.append(main_key)
             for key, val in config.items():
+                if key == main_key:
+                    continue
                 if original_config.get(key) != val:
-                    settings_obj.set(key, val)
-                    changed = True
+                    save_order.append(key)
+
+            for key in save_order:
+                settings_obj.set(key, config[key], explicit_overrides)
+                changed = True
+
             if changed:
-                # Settings.save_config(config) requires the dict — passing
-                # the fully-merged config persists every key in one write.
-                settings_obj.save_config(config)
+                # Persist the live settings object, not the original payload dict.
+                # The live object may have been updated by auto-sync logic in
+                # Settings.set() for dependent HUD toggles.
+                settings_obj.save_config(settings_obj.config, explicit_overrides)
+                config = dict(settings_obj.config)
         except Exception as e:
             return {"ok": False, "message": f"Save failed: {e}"}
 
