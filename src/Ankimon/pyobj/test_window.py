@@ -553,7 +553,9 @@ class TestWindow(QWidget):
         except (TypeError, ValueError, OverflowError):
             safe_max_hp = 1
 
-        return max(0, safe_hp), max(1, safe_max_hp)
+        safe_max_hp = max(1, safe_max_hp)
+        safe_hp = min(max(0, safe_hp), safe_max_hp)
+        return safe_hp, safe_max_hp
 
     def draw_hp_bar(self, x, y, h, w, hp, max_hp, painter):
         hp, max_hp = self._safe_hp_pair(hp, max_hp)

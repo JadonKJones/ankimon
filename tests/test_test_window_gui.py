@@ -276,6 +276,13 @@ def test_hp_none_values_render_in_encounter_and_battle_views(make_window):
     assert not win.main_label.pixmap().isNull()
 
 
+def test_hp_values_are_clamped_to_normalized_maximum(make_window):
+    win = make_window()
+
+    assert win._safe_hp_pair(150, 100) == (100, 100)
+    assert win._safe_hp_pair(10**400, 1) == (1, 1)
+
+
 def test_first_encounter_resets_counter_and_battle_does_not_increment(make_window):
     tracker = _FakeTracker()
     tracker.pokemon_encounter = 3
