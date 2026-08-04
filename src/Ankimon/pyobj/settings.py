@@ -267,6 +267,11 @@ class Settings:
         so that when re-enabling sprites, only the keys that were automatically
         disabled are restored. Keys that the user manually disabled are left
         unchanged, preserving their manual override.
+
+        Important: Keys remain in _autosynced_hud_keys even after being restored
+        when sprites are re-enabled. This ensures that if sprites are hidden
+        again, the auto-disable behavior re-applies. Keys are only removed from
+        _autosynced_hud_keys when the user manually overrides them.
         """
         if not isinstance(config, dict):
             return []
@@ -299,23 +304,29 @@ class Settings:
                 if config.get(key, True) is True:
                     config[key] = False
                     changed_keys.append(key)
+                    # Track that this key was auto-disabled so we can restore it later
                     self._autosynced_hud_keys.add(key)
 
-        # When sprites are re-enabled, only restore HUD toggles that were
-        # previously auto-disabled. Keys that the user manually disabled
-        # remain disabled, preserving their manual override.
+        # When sprites are re-enabled, restore all HUD toggles that were
+        # auto-disabled. Keys that the user manually disabled remain disabled,
+        # preserving their manual override.
         elif current_value is True:
             for key in HUD_TOGGLE_AUTO_SYNC_KEYS:
                 if key in explicit_overrides:
                     continue
-                # Only re-enable keys that were previously disabled by auto-sync
+                # Only re-enable keys that were previously auto-disabled
                 if key not in self._autosynced_hud_keys:
+                    continue
+                # Check if the user manually set this key after it was auto-disabled
+                if key in self._manually_set_hud_keys:
+                    # User manually overrode it, remove from auto-synced set
+                    self._autosynced_hud_keys.discard(key)
                     continue
                 if config.get(key, True) is False:
                     config[key] = True
                     changed_keys.append(key)
-                    # Remove from auto-synced set since we're restoring it
-                    self._autosynced_hud_keys.discard(key)
+                    # Keep in autosynced set so we can re-disable if sprites are hidden again
+                    # DO NOT remove from _autosynced_hud_keys here
 
         # Persist the auto-sync state so it survives restarts
         config["gui._autosynced_hud_keys"] = list(self._autosynced_hud_keys)
@@ -431,8 +442,10 @@ class Settings:
                 services.db.set_config_value(key, value)
                 for changed_key in changed_keys:
                     services.db.set_config_value(changed_key, self.config[changed_key])
-                # Also persist the auto-sync state keys if they changed
-                if key in HUD_TOGGLE_AUTO_SYNC_KEYS or changed_keys:
+                # ALWAYS persist the auto-sync state keys if they might have changed.
+                # This includes when the main sprite setting changed, when a HUD toggle
+                # changed, or when auto-sync modified any keys.
+                if key == "gui.show_sprites_across_ankimon" or key in HUD_TOGGLE_AUTO_SYNC_KEYS or changed_keys:
                     services.db.set_config_value(
                         "gui._autosynced_hud_keys",
                         list(self._autosynced_hud_keys)
