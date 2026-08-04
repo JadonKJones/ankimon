@@ -26,6 +26,11 @@
         'gui.hud_player_shiny_indicator',
     ];
 
+    // Track which HUD keys were auto-synced in this session so we can restore
+    // only those when re-enabling sprites. Keys that the user manually set
+    // remain untouched.
+    let autoSyncedKeys = new Set();
+
     function initChannel(cb) {
         if (typeof qt === 'undefined' || !qt.webChannelTransport) {
             console.warn('qt.webChannelTransport unavailable — standalone mode');
@@ -44,6 +49,8 @@
     window.initializeSettings = function (data) {
         state.data = data || {groups: []};
         state.edits = {};  // fresh data resets dirty state
+        // Reset auto-sync tracking on fresh data load
+        autoSyncedKeys = new Set();
         renderAll();
     };
 
@@ -662,8 +669,18 @@
         if (!original) return;
         if (deepEqual(original.value, value)) {
             delete state.edits[key];
+            // If this was an auto-synced key that the user manually restored,
+            // remove it from the auto-synced set.
+            if (HUD_TOGGLE_AUTO_SYNC_KEYS.includes(key)) {
+                autoSyncedKeys.delete(key);
+            }
         } else {
             state.edits[key] = value;
+            // If the user manually changes a HUD toggle, remove it from auto-synced
+            // set so auto-sync doesn't override their explicit choice.
+            if (HUD_TOGGLE_AUTO_SYNC_KEYS.includes(key)) {
+                autoSyncedKeys.delete(key);
+            }
         }
     }
 
@@ -699,19 +716,59 @@
         return setting ? setting.value : undefined;
     }
 
+    /**
+     * Get the original value of a setting from the server data (pre-edits).
+     * This is used to determine whether a HUD toggle was originally True
+     * (meaning it might have been auto-synced) or originally False
+     * (meaning the user manually disabled it).
+     */
+    function getOriginalValue(key) {
+        const setting = findSetting(key);
+        return setting ? setting.value : undefined;
+    }
+
     function syncHudTogglesForSpriteVisibility() {
         const mainKey = 'gui.show_sprites_across_ankimon';
         const mainValue = getSettingValue(mainKey);
         if (mainValue === undefined) return;
 
-        HUD_TOGGLE_AUTO_SYNC_KEYS.forEach((key) => {
-            const current = getSettingValue(key);
-            if (mainValue === false && current === true) {
-                state.edits[key] = false;
-            } else if (mainValue === true && current === false) {
-                state.edits[key] = true;
-            }
-        });
+        // When disabling sprites, auto-disable all HUD toggles that are currently
+        // enabled, unless the user explicitly set them in this session.
+        if (mainValue === false) {
+            HUD_TOGGLE_AUTO_SYNC_KEYS.forEach((key) => {
+                // Skip if the user explicitly overrode this in the current session
+                if (Object.prototype.hasOwnProperty.call(state.edits, key)) {
+                    return;
+                }
+                const current = getSettingValue(key);
+                if (current === true) {
+                    state.edits[key] = false;
+                    autoSyncedKeys.add(key);
+                }
+            });
+        }
+        // When re-enabling sprites, only restore HUD toggles that were
+        // previously auto-disabled. Keys that the user manually disabled
+        // remain disabled, preserving their manual override.
+        else if (mainValue === true) {
+            HUD_TOGGLE_AUTO_SYNC_KEYS.forEach((key) => {
+                // Only re-enable if we auto-synced it off earlier
+                if (!autoSyncedKeys.has(key)) {
+                    return;
+                }
+                // Skip if the user explicitly overrode this in the current session
+                if (Object.prototype.hasOwnProperty.call(state.edits, key)) {
+                    return;
+                }
+                const current = getSettingValue(key);
+                if (current === false) {
+                    // Restore to the original value from the server, or default to true
+                    const original = getOriginalValue(key);
+                    state.edits[key] = original !== undefined ? original : true;
+                    autoSyncedKeys.delete(key);
+                }
+            });
+        }
     }
 
     function deepEqual(a, b) {
@@ -808,7 +865,11 @@
                 // Re-fetch fresh data so the UI reflects what was actually
                 // persisted (including any clamping).
                 bridge.getSettings(function (fresh) {
-                    if (fresh) window.initializeSettings(fresh);
+                    if (fresh) {
+                        // Reset auto-sync tracking on fresh data load
+                        autoSyncedKeys = new Set();
+                        window.initializeSettings(fresh);
+                    }
                     if (done) done();
                 });
             } else {
@@ -879,6 +940,7 @@
         discardBtn.textContent = 'Discard & Leave';
         discardBtn.addEventListener('click', () => {
             state.edits = {};
+            autoSyncedKeys = new Set();
             renderAll();
             close();
             proceed();
@@ -908,6 +970,7 @@
     function onDiscard() {
         if (Object.keys(state.edits).length === 0) return;
         state.edits = {};
+        autoSyncedKeys = new Set();
         renderAll();
         showToast('Changes discarded');
     }
