@@ -258,18 +258,6 @@
 				topPoke.classList.remove('opattack');
 			}
 		}
-
-		// Toggle opacity on '9' key press
-		document.addEventListener('keydown', function(event) {
-			if (event.key === '9') {
-				var htmlElement = document.documentElement;
-				if (htmlElement.style.opacity === '0') {
-					htmlElement.style.opacity = '1';
-				} else {
-					htmlElement.style.opacity = '0';
-				}
-			}
-		});
 	}
 	catch (error) {
 		console.log(error)
