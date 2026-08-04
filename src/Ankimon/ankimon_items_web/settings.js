@@ -15,6 +15,17 @@
     let nav = null;
     let unsavedGuardOpen = false;
 
+    const HUD_TOGGLE_AUTO_SYNC_KEYS = [
+        'gui.hud_player_sprite',
+        'gui.hud_enemy_sprite',
+        'gui.hud_xp_bar',
+        'gui.hud_hp_bars',
+        'gui.hud_status_badge',
+        'gui.hud_owned_indicator',
+        'gui.hud_enemy_shiny_indicator',
+        'gui.hud_player_shiny_indicator',
+    ];
+
     function initChannel(cb) {
         if (typeof qt === 'undefined' || !qt.webChannelTransport) {
             console.warn('qt.webChannelTransport unavailable — standalone mode');
@@ -574,6 +585,9 @@
             btn.textContent = label;
             btn.addEventListener('click', () => {
                 setEdit(setting.key, i === 0);
+                if (setting.key === 'gui.show_sprites_across_ankimon') {
+                    syncHudTogglesForSpriteVisibility();
+                }
                 renderAll();  // refresh control + dirty pip
             });
             wrap.appendChild(btn);
@@ -657,14 +671,47 @@
         for (const g of (state.data.groups || [])) {
             for (const s of (g.settings || [])) {
                 if (s.key === key) return s;
+                if (s.type === 'chips') {
+                    for (const chip of (s.chips || [])) {
+                        if (chip.key === key) return chip;
+                    }
+                }
             }
             for (const sub of (g.subgroups || [])) {
                 for (const s of (sub.settings || [])) {
                     if (s.key === key) return s;
+                    if (s.type === 'chips') {
+                        for (const chip of (s.chips || [])) {
+                            if (chip.key === key) return chip;
+                        }
+                    }
                 }
             }
         }
         return null;
+    }
+
+    function getSettingValue(key) {
+        if (Object.prototype.hasOwnProperty.call(state.edits, key)) {
+            return state.edits[key];
+        }
+        const setting = findSetting(key);
+        return setting ? setting.value : undefined;
+    }
+
+    function syncHudTogglesForSpriteVisibility() {
+        const mainKey = 'gui.show_sprites_across_ankimon';
+        const mainValue = getSettingValue(mainKey);
+        if (mainValue === undefined) return;
+
+        HUD_TOGGLE_AUTO_SYNC_KEYS.forEach((key) => {
+            const current = getSettingValue(key);
+            if (mainValue === false && current === true) {
+                state.edits[key] = false;
+            } else if (mainValue === true && current === false) {
+                state.edits[key] = true;
+            }
+        });
     }
 
     function deepEqual(a, b) {
@@ -744,6 +791,9 @@
         // callers like the unsaved-changes guard can chain navigation.
         const done = typeof onDone === 'function' ? onDone : null;
         if (!bridge) { if (done) done(); return; }
+        // The Show Sprites toggle itself syncs HUD elements immediately when
+        // its button is clicked. Do not reapply that guideline during every
+        // save, because manual HUD overrides should win.
         const payload = {...state.edits};
         if (Object.keys(payload).length === 0) { if (done) done(); return; }
         // Stringify so the bridge sees a stable `str` parameter — see the
