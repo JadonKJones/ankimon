@@ -101,11 +101,7 @@ DEFAULT_CONFIG = {
     "mobile.inactive_companions": [],
     "leaderboard.username": "",
     "leaderboard.api_key": "",
-    # Persisted auto-sync state keys (internal, not user-facing)
-    "gui._autosynced_hud_keys": [],
-    "gui._manually_set_hud_keys": [],
 }
-
 
 HUD_TOGGLE_AUTO_SYNC_KEYS = (
     "gui.hud_player_sprite",
@@ -123,13 +119,6 @@ class Settings:
     def __init__(self):
         self.config = self.load_config()
         self.compute_gui_config()
-        # Load persisted auto-sync state from config
-        self._autosynced_hud_keys = set(
-            self.config.get("gui._autosynced_hud_keys", [])
-        )
-        self._manually_set_hud_keys = set(
-            self.config.get("gui._manually_set_hud_keys", [])
-        )
 
     def get_description(self, key):
         return self.descriptions.get(key, "No description available.")
@@ -252,117 +241,41 @@ class Settings:
                         f"Ankimon: Warning: Could not convert '{config[key]}' for key '{key}' to int."
                     )
 
-    def _apply_hud_toggle_autosync(self, config, previous_value=None, explicit_overrides=None):
+    def _apply_hud_toggle_autosync(self, config, previous_value=None):
         """When the main sprite visibility setting changes, mirror that choice
         into the reviewer HUD toggles for the listed elements.
 
-        The auto-sync only runs if the main setting actually changed state;
-        unrelated saves leave the HUD toggle values alone.
-
-        explicit_overrides is a set of HUD toggle keys that the user explicitly
-        changed in the current save. Those keys are preserved rather than
-        being overwritten by the guideline behavior.
-
-        This method tracks which HUD keys were auto-synced versus manually set
-        so that when re-enabling sprites, only the keys that were automatically
-        disabled are restored. Keys that the user manually disabled are left
-        unchanged, preserving their manual override.
-
-        Important: Keys remain in _autosynced_hud_keys even after being restored
-        when sprites are re-enabled. This ensures that if sprites are hidden
-        again, the auto-disable behavior re-applies. Keys are only removed from
-        _autosynced_hud_keys when the user manually overrides them.
+        The global setting is authoritative - it always forces all related
+        HUD toggles to match, regardless of previous individual settings.
         """
         if not isinstance(config, dict):
             return []
-
-        if explicit_overrides is None:
-            explicit_overrides = set()
 
         main_key = "gui.show_sprites_across_ankimon"
         if main_key not in config:
             return []
 
         current_value = config.get(main_key, True)
-        if previous_value is None:
-            previous_value = current_value
-        if previous_value == current_value:
+        
+        # If the setting hasn't changed, do nothing
+        if previous_value is not None and previous_value == current_value:
             return []
 
+        # Apply the global setting authoritatively to all HUD toggles
         changed_keys = []
-
-        # When sprites are hidden, auto-disable all HUD toggles that are currently
-        # enabled, unless the user explicitly overrode them in this session.
-        if current_value is False:
-            for key in HUD_TOGGLE_AUTO_SYNC_KEYS:
-                # Skip explicit overrides from the current session
-                if key in explicit_overrides:
-                    continue
-                # Skip keys that were previously manually set (not auto-synced)
-                if key in self._manually_set_hud_keys:
-                    continue
-                if config.get(key, True) is True:
-                    config[key] = False
-                    changed_keys.append(key)
-                    # Track that this key was auto-disabled so we can restore it later
-                    self._autosynced_hud_keys.add(key)
-
-        # When sprites are re-enabled, restore all HUD toggles that were
-        # auto-disabled. Keys that the user manually disabled remain disabled,
-        # preserving their manual override.
-        elif current_value is True:
-            for key in HUD_TOGGLE_AUTO_SYNC_KEYS:
-                if key in explicit_overrides:
-                    continue
-                # Only re-enable keys that were previously auto-disabled
-                if key not in self._autosynced_hud_keys:
-                    continue
-                # Check if the user manually set this key after it was auto-disabled
-                if key in self._manually_set_hud_keys:
-                    # User manually overrode it, remove from auto-synced set
-                    self._autosynced_hud_keys.discard(key)
-                    continue
-                if config.get(key, True) is False:
-                    config[key] = True
-                    changed_keys.append(key)
-                    # Keep in autosynced set so we can re-disable if sprites are hidden again
-                    # DO NOT remove from _autosynced_hud_keys here
-
-        # Persist the auto-sync state so it survives restarts
-        config["gui._autosynced_hud_keys"] = list(self._autosynced_hud_keys)
-        config["gui._manually_set_hud_keys"] = list(self._manually_set_hud_keys)
-
+        for key in HUD_TOGGLE_AUTO_SYNC_KEYS:
+            if config.get(key, True) != current_value:
+                config[key] = current_value
+                changed_keys.append(key)
+        
         return changed_keys
 
-    def save_config(self, config, explicit_overrides=None, previous_main_value=None):
-        """
-        Save the configuration, applying HUD auto-sync if the main sprite
-        visibility setting changed.
+    def save_config(self, config, explicit_overrides=None):
+        previous_value = None
+        if hasattr(self, "config") and self.config is not None:
+            previous_value = self.config.get("gui.show_sprites_across_ankimon", True)
 
-        Args:
-            config: The configuration dict to save.
-            explicit_overrides: Set of keys explicitly changed in this session.
-            previous_main_value: The previous value of
-                "gui.show_sprites_across_ankimon" before any edits were applied.
-                If not provided, this method will attempt to read it from
-                self.config, but callers should pass it explicitly to avoid
-                reading a value that may have already been modified.
-
-        The previous_main_value parameter is critical because load_config()
-        returns the live Settings.config dictionary. When SettingsWindow
-        modifies the config dict before calling save_config(), reading
-        previous_value from self.config would see the new value, not the old
-        one, preventing auto-sync from detecting the change.
-        """
-        # Use the caller-provided previous value, or fall back to self.config
-        # if not provided (for backward compatibility with legacy callers).
-        if previous_main_value is None:
-            if hasattr(self, "config") and self.config is not None:
-                previous_main_value = self.config.get("gui.show_sprites_across_ankimon", True)
-            else:
-                previous_main_value = True
-
-        self._apply_hud_toggle_autosync(config, previous_main_value, explicit_overrides)
+        self._apply_hud_toggle_autosync(config, previous_value)
 
         # 1. Always save to database if available
         if services.db is not None:
@@ -414,24 +327,10 @@ class Settings:
         return DEFAULT_CONFIG.get(key)
 
     def set(self, key, value, explicit_overrides=None):
-        # Track manual HUD overrides for future auto-sync decisions.
-        # When a user explicitly changes a HUD toggle, we need to remember
-        # that choice so auto-sync doesn't override it later.
-        if key in HUD_TOGGLE_AUTO_SYNC_KEYS:
-            self._manually_set_hud_keys.add(key)
-            # Remove from auto-synced set since user manually took over
-            self._autosynced_hud_keys.discard(key)
-            # Persist the updated state immediately so it's not lost
-            self.config["gui._manually_set_hud_keys"] = list(self._manually_set_hud_keys)
-            self.config["gui._autosynced_hud_keys"] = list(self._autosynced_hud_keys)
-
-        # Capture the previous value BEFORE applying the edit, so auto-sync
-        # can detect if the main sprite setting actually changed.
-        previous_main_value = self.config.get("gui.show_sprites_across_ankimon", True)
-
+        previous_value = self.config.get("gui.show_sprites_across_ankimon", True)
         self.config[key] = value
         changed_keys = self._apply_hud_toggle_autosync(
-            self.config, previous_main_value, explicit_overrides
+            self.config, previous_value
         )
 
         # Persist ONLY the changed key. The previous implementation re-saved the
@@ -442,23 +341,11 @@ class Settings:
                 services.db.set_config_value(key, value)
                 for changed_key in changed_keys:
                     services.db.set_config_value(changed_key, self.config[changed_key])
-                # ALWAYS persist the auto-sync state keys if they might have changed.
-                # This includes when the main sprite setting changed, when a HUD toggle
-                # changed, or when auto-sync modified any keys.
-                if key == "gui.show_sprites_across_ankimon" or key in HUD_TOGGLE_AUTO_SYNC_KEYS or changed_keys:
-                    services.db.set_config_value(
-                        "gui._autosynced_hud_keys",
-                        list(self._autosynced_hud_keys)
-                    )
-                    services.db.set_config_value(
-                        "gui._manually_set_hud_keys",
-                        list(self._manually_set_hud_keys)
-                    )
             except Exception as e:
                 print(f"Ankimon: Failed to save config key '{key}': {e}")
         else:
             # No DB yet (very early boot / legacy) — fall back to the full save.
-            self.save_config(self.config, explicit_overrides, previous_main_value)
+            self.save_config(self.config, explicit_overrides)
             return
         self._save_legacy_obf_if_present()
         self.compute_gui_config()
