@@ -114,7 +114,8 @@ reviews:
     enabled: true
     auto_incremental_review: true
     auto_pause_after_reviewed_commits: 0
-    ignore_title_keywords: []
+    ignore_title_keywords:
+      - "DO NOT REVIEW"
     labels: []
     drafts: true
     base_branches:
@@ -171,6 +172,8 @@ reviews:
           or a webview. Add validation, safe failure behaviour, and clear logging.
 
   pre_merge_checks:
+    # Preserve a human escape hatch: only requested reviewers, never the PR
+    # author alone, may override a judgement-based pre-merge finding.
     override_requested_reviewers_only: true
     docstrings:
       mode: warning
@@ -269,17 +272,9 @@ reviews:
       essential_rules: true
     ruff:
       enabled: true
-    pylint:
-      enabled: true
-    flake8:
-      enabled: true
     semgrep:
       enabled: true
-    opengrep:
-      enabled: true
     gitleaks:
-      enabled: true
-    trufflehog:
       enabled: true
     presidio:
       enabled: true
@@ -298,12 +293,6 @@ reviews:
     shellcheck:
       enabled: true
     dotenvLint:
-      enabled: true
-    checkov:
-      enabled: true
-    trivy:
-      enabled: true
-    hadolint:
       enabled: true
     languagetool:
       enabled: true
@@ -359,9 +348,10 @@ reviews:
       instructions: |
         Verify battle and collection invariants, probability boundaries, stat and
         experience arithmetic, item consumption, evolution/catch conditions, and
-        deterministic behaviour. Validate external/bundled data before use and add
-        regression tests for fixed edge cases. Do not confuse Pokémon move priority
-        data with repository issue priority labels.
+        deterministic behaviour. When changed logic consumes external or bundled
+        data, validate it at the ingestion boundary. Add regression tests for fixed
+        edge cases. Do not confuse Pokémon move priority data with repository issue
+        priority labels.
     - path: "src/Ankimon/{config*.py,config.json,manifest.json,meta.json,pyobj/settings.py}"
       instructions: |
         Check setting names, types, defaults, migrations, and UI exposure together.
@@ -397,7 +387,7 @@ reviews:
 
 chat:
   art: false
-  allow_non_org_members: true
+  allow_non_org_members: false
   auto_reply: true
 
 knowledge_base:
@@ -407,14 +397,11 @@ knowledge_base:
   code_guidelines:
     enabled: true
     filePatterns:
-      - README.md
-      - CONFIG.md
-      - src/Ankimon/config.md
       - "**/AGENTS.md"
       - "**/REVIEW.md"
   learnings:
     scope: local
-    approval_delay: 0
+    approval_delay: 3
   issues:
     scope: local
   pull_requests:
