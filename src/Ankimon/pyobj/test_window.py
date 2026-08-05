@@ -463,7 +463,9 @@ class TestWindow(QWidget):
 
         mainxp_bar_width = 5
         safe_experience = experience if experience > 0 else 1
-        mainpokemon_xp_value = int(((self.main_pokemon.xp or 0) / safe_experience) * 148)
+        mainpokemon_xp_value = int(
+            ((self.main_pokemon.xp or 0) / safe_experience) * 148
+        )
 
         # Paint XP Bar
         painter.setBrush(QColor(58, 155, 220))
@@ -692,7 +694,9 @@ class TestWindow(QWidget):
 
         mainxp_bar_width = 5
         safe_experience = experience if experience > 0 else 1
-        mainpokemon_xp_value = int(((self.main_pokemon.xp or 0) / safe_experience) * 148)
+        mainpokemon_xp_value = int(
+            ((self.main_pokemon.xp or 0) / safe_experience) * 148
+        )
 
         # Paint XP Bar
         painter.setBrush(QColor(58, 155, 220))
