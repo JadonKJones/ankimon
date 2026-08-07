@@ -429,8 +429,7 @@ class PokemonObject:
         for key, value in kwargs.items():
             if key in self._READONLY_ATTRS:
                 continue
-            if hasattr(self, key):
-                setattr(self, key, value)
+            setattr(self, key, value)
         # Derived caches — recompute from the (possibly updated)
         # base_stats/level/iv/ev so they don't go stale.
         self.max_hp = self.calculate_max_hp()
