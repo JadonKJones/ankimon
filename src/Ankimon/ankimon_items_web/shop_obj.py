@@ -21,7 +21,7 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWidgets import QStackedWidget
 import csv
-from ..utils import give_item
+from ..utils import give_item, is_alive
 from ..pyobj.settings import DEFAULT_CONFIG, HUD_TOGGLE_AUTO_SYNC_KEYS
 
 try:
@@ -2297,16 +2297,16 @@ class AnkimonItemsWeb(QDialog):
         except Exception as e:
             return {"ok": False, "message": f"Save failed: {e}"}
 
-        # Apply sprite visibility to web views.
+        # Apply sprite visibility to web views and then refresh hotkeys.
         self._apply_sprite_visibility(
             config.get("gui.show_sprites_across_ankimon", True)
         )
-
-        # Refresh reviewer hotkeys with the new config.
         self._refresh_reviewer_hotkeys(config)
 
-        # Emit a shared settings-change notification so any open native views
-        # (PokemonPC, legacy SettingsWindow, etc.) can refresh immediately.
+        # Refresh already-open native windows that depend on sprite visibility.
+        self._refresh_native_windows()
+
+        # Emit a shared settings-change notification for diagnostics only.
         try:
             events.emit("settings_changed", config=config)
         except Exception as e:
@@ -2340,8 +2340,36 @@ class AnkimonItemsWeb(QDialog):
                 config.get("gui.show_sprites_across_ankimon", True)
             )
 
-    @staticmethod
-    def _coerce_incoming(existing, incoming):
+    def _refresh_native_windows(self):
+        from ..utils import is_alive
+        from .. import singletons
+
+        try:
+            if is_alive(services.pokemon_pc):
+                services.pokemon_pc.refresh_gui()
+        except Exception:
+            pass
+
+        try:
+            if is_alive(services.reviewer):
+                services.reviewer.refresh_hud()
+        except Exception:
+            pass
+
+        try:
+            if services.trainer_card is not None:
+                services.trainer_card.refresh()
+        except Exception:
+            pass
+
+        try:
+            achievement_win = singletons._WINDOW_CACHE.get("achievement_bag")
+            if is_alive(achievement_win):
+                achievement_win.renewWidgets()
+        except Exception:
+            pass
+
+    def _coerce_incoming(self, existing, incoming):
         """Match the new value's type to the existing config entry so a
         text-input UI doesn't accidentally rewrite an int field as a str.
         Raises ValueError for non-coercible numeric input — caller surfaces
