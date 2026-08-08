@@ -25,6 +25,8 @@ from aqt.qt import (
 from aqt.utils import showWarning
 from aqt import mw
 from aqt.theme import theme_manager
+from ..services import services
+from ..utils import is_alive
 from .settings import HUD_TOGGLE_AUTO_SYNC_KEYS
 
 
@@ -574,6 +576,44 @@ class SettingsWindow(QMainWindow):
         if region_combo is not None:
             self._refresh_region_dropdown(region_combo)
 
+    def _refresh_live_windows(self):
+        """Refresh native Ankimon windows that depend on sprite visibility."""
+        from ..utils import is_alive
+        from .. import singletons
+
+        try:
+            if is_alive(services.pokemon_pc):
+                services.pokemon_pc.refresh_gui()
+        except Exception:
+            pass
+
+        try:
+            if is_alive(services.reviewer):
+                services.reviewer.refresh_hud()
+        except Exception:
+            pass
+
+        try:
+            if services.trainer_card is not None:
+                services.trainer_card.refresh()
+        except Exception:
+            pass
+
+        try:
+            achievement_win = singletons._WINDOW_CACHE.get("achievement_bag")
+            if is_alive(achievement_win):
+                achievement_win.renewWidgets()
+        except Exception:
+            pass
+
+        try:
+            settings_win = singletons._WINDOW_CACHE.get("settings_window")
+            if is_alive(settings_win) and settings_win is not self:
+                settings_win.config = settings_win.load_config()
+                settings_win._refresh_widgets()
+        except Exception:
+            pass
+
     def _gen_enabled_in_ui(self, gen_key):
         """Current (possibly unsaved) state of a generation toggle, read from
         its widget; falls back to the stored config when no widget exists."""
@@ -799,13 +839,50 @@ class SettingsWindow(QMainWindow):
         # also triggers automatic sync behavior.
         explicit_overrides = set(self.explicit_hud_toggle_overrides)
 
-        # Now that self.config is up-to-date, call the save callback.
-        self.save_config_callback(self.config, explicit_overrides)
+        current_config = dict(self.load_config())
+        for key, widget in self.input_widgets.items():
+            if key not in current_config:
+                continue
+            if isinstance(widget, QLineEdit):
+                new_text = widget.text().strip()
+
+                if key == "battle.cards_per_round":
+                    try:
+                        new_value = int(new_text)
+                        current_config[key] = 1 if new_value == 0 else new_value
+                    except ValueError:
+                        if "-" in new_text:
+                            try:
+                                first_val, second_val = map(int, new_text.split("-", 1))
+                                low = min(first_val, second_val)
+                                high = max(first_val, second_val)
+                                current_config[key] = f"{low}-{high}"
+                            except ValueError:
+                                current_config[key] = self.original_config.get(key)
+                        else:
+                            current_config[key] = self.original_config.get(key)
+                elif type(self.original_config.get(key)) is int:
+                    try:
+                        current_config[key] = int(new_text)
+                    except ValueError:
+                        current_config[key] = self.original_config.get(key)
+                elif type(self.original_config.get(key)) is float:
+                    try:
+                        current_config[key] = float(new_text)
+                    except ValueError:
+                        current_config[key] = self.original_config.get(key)
+                else:
+                    current_config[key] = str(new_text)
+            elif isinstance(widget, QButtonGroup):
+                current_config[key] = widget.checkedId() == 1
+            elif isinstance(widget, QComboBox):
+                current_config[key] = widget.currentData()
+
+        self.save_config_callback(current_config, explicit_overrides)
         self.explicit_hud_toggle_overrides.clear()
-        # Refresh the current widgets so any auto-synced dependent settings
-        # (such as HUD toggles when Show Sprites Across Ankimon changes) are
-        # reflected immediately in the open window.
+        self.config = self.load_config()
         self._refresh_widgets()
+        self.original_config = self.config.copy()
 
         # Refresh the reviewer UI so hotkey changes (incl. team-cycle) take
         # effect without a restart. Reviewer builds that support team cycling
@@ -829,14 +906,16 @@ class SettingsWindow(QMainWindow):
         except Exception as e:
             print(f"Ankimon: Failed to refresh hotkeys: {e}")
 
-        # Emit a shared settings-change notification so any open native views
-        # (PokemonPC, unified shell, etc.) can refresh immediately.
+        # Emit a shared settings-change notification for diagnostics only.
         try:
             from ..events import events
             events.emit("settings_changed", config=self.config)
         except Exception as e:
             # Best-effort — settings still saved even if the event fails.
             print(f"Ankimon: Failed to emit settings_changed event: {e}")
+
+        # Refresh already-open native windows that depend on sprite visibility.
+        self._refresh_live_windows()
 
         # The rest is for showing the confirmation message
         excluded_patterns = {
