@@ -533,6 +533,7 @@ class PokemonTrade:
                 transparent_pixmap = QPixmap(64, 64)
                 transparent_pixmap.fill(Qt.GlobalColor.transparent)
                 self.other_pokemon_sprite_label.setPixmap(transparent_pixmap)
+                self.other_pokemon_name_label.setText("")
                 # Still attempt to parse and display the Pokémon name even without sprites
                 canonical = parse_to_canonical(code)
                 if canonical:
