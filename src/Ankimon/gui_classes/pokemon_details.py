@@ -750,6 +750,7 @@ def PokemonCollectionDetails(
     evolution_rejected: bool = False,
     friendship_time_enabled: bool = True,
     trigger_evo_callback: Callable = None,
+    show_sprites: bool = True,
 ):
     """Classic single-layout details panel (backward-compatible entrypoint).
 
@@ -792,6 +793,7 @@ def PokemonCollectionDetails(
             evolution_rejected=evolution_rejected,
             friendship_time_enabled=friendship_time_enabled,
             trigger_evo_callback=trigger_evo_callback,
+            show_sprites=show_sprites,
         )
     )
     layout = QVBoxLayout()
