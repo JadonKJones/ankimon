@@ -134,12 +134,6 @@ class EvoWindow(QWidget):
         pixmap_bckg = QPixmap()
         pixmap_bckg.load(str(bckgimage_path))
 
-        # Display the Pokémon image
-        image_path = frontdefault / f"{evo_id}.png"
-        image_pixmap = QPixmap()
-        image_pixmap.load(str(image_path))
-        image_pixmap = resize_pixmap_img(image_pixmap, 250)
-
         # Merge the background image and the Pokémon image
         merged_pixmap = QPixmap(pixmap_bckg.size())
         merged_pixmap.fill(
@@ -152,9 +146,14 @@ class EvoWindow(QWidget):
         # draw background to a specific pixel
         painter.drawPixmap(0, 0, pixmap_bckg)
         
-        # Only draw the Pokémon sprite if sprites are enabled
+        # Only load and draw the Pokémon sprite if sprites are enabled
         show_sprites = self._should_show_sprites()
         if show_sprites:
+            # Display the Pokémon image
+            image_path = frontdefault / f"{evo_id}.png"
+            image_pixmap = QPixmap()
+            image_pixmap.load(str(image_path))
+            image_pixmap = resize_pixmap_img(image_pixmap, 250)
             painter.drawPixmap(125, 10, image_pixmap)
 
         # custom font
@@ -238,34 +237,9 @@ class EvoWindow(QWidget):
         # Check if sprites should be shown
         show_sprites = self._should_show_sprites()
 
-        # Display the Pokémon image
-        pkmnimage_path = frontdefault / f"{prevo_id}.png"
-        pkmnimage_path2 = frontdefault / f"{(evo_id)}.png"
-        pkmnpixmap = QPixmap()
-        pkmnpixmap.load(str(pkmnimage_path))
-        pkmnpixmap2 = QPixmap()
-        pkmnpixmap2.load(str(pkmnimage_path2))
+        # Load the background image
         pixmap_bckg = QPixmap()
         pixmap_bckg.load(str(evolve_image_path))
-        # Calculate the new dimensions to maintain the aspect ratio
-        max_width = 200
-        original_width = pkmnpixmap.width()
-        original_height = pkmnpixmap.height()
-
-        if original_width > max_width:
-            new_width = max_width
-            new_height = (original_height * max_width) // original_width
-            pkmnpixmap = pkmnpixmap.scaled(new_width, new_height)
-
-        # Calculate the new dimensions to maintain the aspect ratio
-        max_width = 200
-        original_width = pkmnpixmap.width()
-        original_height = pkmnpixmap.height()
-
-        if original_width > max_width:
-            new_width = max_width
-            new_height = (original_height * max_width) // original_width
-            pkmnpixmap2 = pkmnpixmap2.scaled(new_width, new_height)
 
         # Merge the background image and the Pokémon image
         merged_pixmap = QPixmap(pixmap_bckg.size())
@@ -277,8 +251,37 @@ class EvoWindow(QWidget):
         painter = QPainter(merged_pixmap)
         painter.drawPixmap(0, 0, pixmap_bckg)
         
-        # Only draw Pokémon sprites if sprites are enabled
+        # Only load, resize, and draw Pokémon sprites if sprites are enabled
         if show_sprites:
+            # Display the Pokémon image
+            pkmnimage_path = frontdefault / f"{prevo_id}.png"
+            pkmnpixmap = QPixmap()
+            pkmnpixmap.load(str(pkmnimage_path))
+            
+            pkmnimage_path2 = frontdefault / f"{(evo_id)}.png"
+            pkmnpixmap2 = QPixmap()
+            pkmnpixmap2.load(str(pkmnimage_path2))
+
+            # Calculate the new dimensions to maintain the aspect ratio
+            max_width = 200
+            original_width = pkmnpixmap.width()
+            original_height = pkmnpixmap.height()
+
+            if original_width > max_width:
+                new_width = max_width
+                new_height = (original_height * max_width) // original_width
+                pkmnpixmap = pkmnpixmap.scaled(new_width, new_height)
+
+            # Calculate the new dimensions to maintain the aspect ratio
+            max_width = 200
+            original_width = pkmnpixmap2.width()
+            original_height = pkmnpixmap2.height()
+
+            if original_width > max_width:
+                new_width = max_width
+                new_height = (original_height * max_width) // original_width
+                pkmnpixmap2 = pkmnpixmap2.scaled(new_width, new_height)
+
             painter.drawPixmap(255, 70, pkmnpixmap)
             painter.drawPixmap(255, 285, pkmnpixmap2)
         
