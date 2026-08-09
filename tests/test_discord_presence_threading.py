@@ -30,6 +30,7 @@ def discord_env(monkeypatch):
     logger = MagicMock()
     tooltip = MagicMock()
     presenter_notify = MagicMock()
+    event_emit = MagicMock()
     mw = types.SimpleNamespace(
         addonManager=types.SimpleNamespace(allAddons=lambda: []),
         logger=logger,
@@ -76,6 +77,10 @@ def discord_env(monkeypatch):
     )
     modules[services_module.__name__] = services_module
 
+    events_module = types.ModuleType("Ankimon.events")
+    events_module.events = types.SimpleNamespace(emit=event_emit)
+    modules[events_module.__name__] = events_module
+
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
 
@@ -94,6 +99,7 @@ def discord_env(monkeypatch):
     spec.loader.exec_module(module)
 
     return types.SimpleNamespace(
+        event_emit=event_emit,
         logger=logger,
         module=module,
         mw=mw,
@@ -106,12 +112,19 @@ def discord_env(monkeypatch):
 def _assert_queued_tooltip(env, message):
     env.tooltip.assert_not_called()
     env.presenter_notify.assert_not_called()
+    env.event_emit.assert_called_once_with("tooltip", message=message)
     assert len(env.taskman.callbacks) == 1
 
     env.taskman.callbacks.pop()()
 
     env.tooltip.assert_called_once_with(message)
     env.presenter_notify.assert_not_called()
+
+
+def _presence_without_init(env):
+    instance = object.__new__(env.module.DiscordPresence)
+    instance.logger_obj = env.logger
+    return instance
 
 
 def test_setup_failure_queues_non_modal_tooltip(discord_env, monkeypatch):
@@ -139,7 +152,7 @@ def test_setup_failure_queues_non_modal_tooltip(discord_env, monkeypatch):
 
 def test_update_failure_queues_tooltip_from_worker(discord_env):
     main_thread = threading.get_ident()
-    instance = object.__new__(discord_env.module.DiscordPresence)
+    instance = _presence_without_init(discord_env)
     instance.loop = True
     instance.RPC = types.SimpleNamespace(
         update=MagicMock(side_effect=RuntimeError("connection lost"))
@@ -162,7 +175,7 @@ def test_update_failure_queues_tooltip_from_worker(discord_env):
 
 
 def test_start_failure_queues_non_modal_tooltip(discord_env):
-    instance = object.__new__(discord_env.module.DiscordPresence)
+    instance = _presence_without_init(discord_env)
     instance.thread = types.SimpleNamespace(
         is_alive=MagicMock(side_effect=RuntimeError("thread failed"))
     )
@@ -176,7 +189,7 @@ def test_start_failure_queues_non_modal_tooltip(discord_env):
 
 
 def test_stop_failure_queues_non_modal_tooltip(discord_env):
-    instance = object.__new__(discord_env.module.DiscordPresence)
+    instance = _presence_without_init(discord_env)
     instance.loop = True
     instance.thread = None
     instance.RPC = types.SimpleNamespace(
@@ -192,7 +205,7 @@ def test_stop_failure_queues_non_modal_tooltip(discord_env):
 
 
 def test_stop_presence_failure_queues_non_modal_tooltip(discord_env):
-    instance = object.__new__(discord_env.module.DiscordPresence)
+    instance = _presence_without_init(discord_env)
     instance.loop = True
     instance.RPC = types.SimpleNamespace(
         update=MagicMock(side_effect=RuntimeError("update failed"))
