@@ -4,11 +4,15 @@ import time
 
 from ..pyobj.ankimon_tracker import AnkimonTracker
 from ..addon_files.lib.pypresence import Presence
-from aqt.utils import showWarning
+from aqt.utils import tooltip
 from aqt import mw
 from ..pyobj.error_handler import show_warning_with_traceback
-from ..services import services
 logger = mw.logger
+
+
+def _show_discord_error(message):
+    mw.taskman.run_on_main(lambda: tooltip(message))
+
 
 class DiscordPresence:
     def __init__(self, client_id, large_image_url, ankimon_tracker, logger, settings_obj, parent=mw):
@@ -43,7 +47,7 @@ class DiscordPresence:
 
         except Exception as e:
             logger.log("error",f"Error with Discord setup: {e}")
-            mw.taskman.run_on_main(lambda: services.ui.notify("warning", "Error with Discord setup. Is Discord running?"))
+            _show_discord_error("Error with Discord setup. Is Discord running?")
 
     def _get_special_quotes(self):
         return [
@@ -82,7 +86,9 @@ class DiscordPresence:
                 time.sleep(30)  # Sleep for 30 seconds before updating again
         except Exception as e:
             logger.log("error",f"Error with Discord Rich Presence: {e}")
-            mw.taskman.run_on_main(lambda: services.ui.notify("warning", "Error with Discord Rich Presence. Is Discord running?"))
+            _show_discord_error(
+                "Error with Discord Rich Presence. Is Discord running?"
+            )
 
     def start(self):
         """
@@ -95,7 +101,9 @@ class DiscordPresence:
                 self.thread.start()
         except Exception as e:
             logger.log("error",f"Error starting Discord Rich Presence: {e}")
-            mw.taskman.run_on_main(lambda: services.ui.notify("warning", "Error starting Discord Rich Presence. Is Discord running?"))
+            _show_discord_error(
+                "Error starting Discord Rich Presence. Is Discord running?"
+            )
 
     def stop(self):
         """
@@ -109,7 +117,9 @@ class DiscordPresence:
             self.RPC.clear()
         except Exception as e:
             logger.log("error",f"Error clearing Discord Rich Presence: {e}")
-            mw.taskman.run_on_main(lambda: services.ui.notify("warning", "Error clearing Discord Rich Presence. Please check Logger for info."))
+            _show_discord_error(
+                "Error clearing Discord Rich Presence. Please check Logger for info."
+            )
 
     def stop_presence(self):
         """
@@ -124,7 +134,9 @@ class DiscordPresence:
                 )
         except Exception as e:
             logger.log("error",f"Error stopping Discord Rich Presence: {e}")
-            mw.taskman.run_on_main(lambda: services.ui.notify("warning", "Error stopping Discord Rich Presence. Please check Logger for info."))
+            _show_discord_error(
+                "Error stopping Discord Rich Presence. Please check Logger for info."
+            )
 
 def check_conflicting_discord_addons():
     """
