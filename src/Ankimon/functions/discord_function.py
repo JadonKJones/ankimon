@@ -42,7 +42,7 @@ class DiscordPresence:
 
         except Exception as e:
             logger.log("error",f"Error with Discord setup: {e}")
-            tooltip("Error with Discord setup. Is Discord running?")
+            mw.taskman.run_on_main(lambda: tooltip("Error with Discord setup. Is Discord running?"))
 
     def _get_special_quotes(self):
         return [
@@ -81,7 +81,7 @@ class DiscordPresence:
                 time.sleep(30)  # Sleep for 30 seconds before updating again
         except Exception as e:
             logger.log("error",f"Error with Discord Rich Presence: {e}")
-            tooltip("Error with Discord Rich Presence. Is Discord running?")
+            mw.taskman.run_on_main(lambda: tooltip("Error with Discord Rich Presence. Is Discord running?"))
 
     def start(self):
         """
@@ -94,7 +94,7 @@ class DiscordPresence:
                 self.thread.start()
         except Exception as e:
             logger.log("error",f"Error starting Discord Rich Presence: {e}")
-            tooltip("Error starting Discord Rich Presence. Is Discord running?")
+            mw.taskman.run_on_main(lambda: tooltip("Error starting Discord Rich Presence. Is Discord running?"))
 
     def stop(self):
         """
@@ -108,7 +108,7 @@ class DiscordPresence:
             self.RPC.clear()
         except Exception as e:
             logger.log("error",f"Error clearing Discord Rich Presence: {e}")
-            tooltip("Error clearing Discord Rich Presence. Please check Logger for info.")
+            mw.taskman.run_on_main(lambda: tooltip("Error clearing Discord Rich Presence. Please check Logger for info."))
 
     def stop_presence(self):
         """
@@ -123,7 +123,7 @@ class DiscordPresence:
                 )
         except Exception as e:
             logger.log("error",f"Error stopping Discord Rich Presence: {e}")
-            tooltip("Error stopping Discord Rich Presence. Please check Logger for info.")
+            mw.taskman.run_on_main(lambda: tooltip("Error stopping Discord Rich Presence. Please check Logger for info."))
 
 def check_conflicting_discord_addons():
     """
