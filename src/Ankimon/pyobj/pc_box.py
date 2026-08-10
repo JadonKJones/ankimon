@@ -1336,8 +1336,24 @@ class PokemonPC(QDialog):
         return widget
 
     def _show_placeholder_details(self):
-        """Switches the details panel to placeholder mode."""
+        """
+        Switches the details panel to placeholder mode and recreates the placeholder
+        widget to reflect the current sprite visibility setting.
+        """
         if hasattr(self, "details_panel_stack"):
+            # Remove the old placeholder widget if it exists
+            if hasattr(self, "_placeholder_widget"):
+                # Check if the widget is still in the stack
+                index = self.details_panel_stack.indexOf(self._placeholder_widget)
+                if index >= 0:
+                    self.details_panel_stack.removeWidget(self._placeholder_widget)
+                self._placeholder_widget.deleteLater()
+                self._placeholder_widget = None
+            
+            # Create a fresh placeholder with the current sprite setting
+            self._placeholder_widget = self._create_placeholder_widget()
+            # Insert at index 0 (placeholder slot)
+            self.details_panel_stack.insertWidget(0, self._placeholder_widget)
             self.details_panel_stack.setCurrentIndex(0)
         self._selected_individual_id = None
         self._refresh_slot_selection()
@@ -1677,8 +1693,13 @@ class PokemonPC(QDialog):
 
     def refresh_gui(self):
         """
-        Refreshes the user interface by populating the grid.
-        Avoids calling create_gui() to prevent full layout rebuilds.
+        Refreshes the user interface by populating the grid and updating the details panel
+        to reflect the current sprite visibility setting.
+
+        This method reloads the sprite visibility settings, refreshes the Pokémon grid,
+        and ensures that both the selected Pokémon details and the placeholder widget
+        reflect the updated setting. This allows the user to toggle sprites on/off
+        and see the change immediately without restarting Anki.
         """
         self._pokemon_cache = None  # Invalidate database cache
         
