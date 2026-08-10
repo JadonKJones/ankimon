@@ -1292,20 +1292,24 @@ class PokemonPC(QDialog):
         layout.setContentsMargins(40, 20, 40, 20)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Pokéball Icon
+        # Pokéball Icon - only show if sprites are enabled
         icon_label = QLabel()
-        pixmap = QPixmap(str(icon_path))
-        if not self.settings.get("gui.show_sprites_across_ankimon", True):
-            # Keep the placeholder's visual spacing while omitting its Pokéball.
+        show_sprites = self.settings.get("gui.show_sprites_across_ankimon", True)
+        
+        if not show_sprites:
+            # When sprites are disabled, use an empty label with the same fixed size
+            # to maintain layout stability
             icon_label.setFixedSize(180, 180)
-        elif not pixmap.isNull():
-            scaled_pixmap = pixmap.scaled(
-                180,
-                180,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            icon_label.setPixmap(scaled_pixmap)
+        else:
+            pixmap = QPixmap(str(icon_path))
+            if not pixmap.isNull():
+                scaled_pixmap = pixmap.scaled(
+                    180,
+                    180,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                icon_label.setPixmap(scaled_pixmap)
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Main Prompt
@@ -1677,13 +1681,28 @@ class PokemonPC(QDialog):
         Avoids calling create_gui() to prevent full layout rebuilds.
         """
         self._pokemon_cache = None  # Invalidate database cache
+        
+        # Reload the sprite visibility setting to ensure it's current
+        self.show_sprites_across_ankimon = self.settings.get(
+            "gui.show_sprites_across_ankimon", True
+        )
+        self.gif_in_collection = self.settings.get("gui.gif_in_collection")
+        
         if not self.layout():
             self.create_gui()
         else:
             self.refresh_pokemon_grid()
-            # If no Pokémon is selected (e.g. after account swap), refresh the placeholder
-            if self._selected_individual_id is None:
+            
+            # If a Pokémon is selected, refresh its details to apply the new sprite setting
+            if self._selected_individual_id is not None:
+                # Re-fetch the Pokémon data and show details with updated sprites
+                selected_pokemon = services.db.get_pokemon(self._selected_individual_id)
+                if selected_pokemon:
+                    self.show_pokemon_details(selected_pokemon)
+            else:
+                # If no Pokémon is selected, refresh the placeholder to apply the new setting
                 self._show_placeholder_details()
+                
         self.layout().invalidate()
         self.layout().activate()
 
