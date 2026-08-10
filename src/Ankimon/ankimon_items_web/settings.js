@@ -15,6 +15,17 @@
     let nav = null;
     let unsavedGuardOpen = false;
 
+    const HUD_TOGGLE_AUTO_SYNC_KEYS = [
+        'gui.hud_player_sprite',
+        'gui.hud_enemy_sprite',
+        'gui.hud_xp_bar',
+        'gui.hud_hp_bars',
+        'gui.hud_status_badge',
+        'gui.hud_owned_indicator',
+        'gui.hud_enemy_shiny_indicator',
+        'gui.hud_player_shiny_indicator',
+    ];
+
     function initChannel(cb) {
         if (typeof qt === 'undefined' || !qt.webChannelTransport) {
             console.warn('qt.webChannelTransport unavailable — standalone mode');
@@ -574,11 +585,29 @@
             btn.textContent = label;
             btn.addEventListener('click', () => {
                 setEdit(setting.key, i === 0);
+                if (setting.key === 'gui.show_sprites_across_ankimon') {
+                    syncHudTogglesForSpriteVisibility();
+                }
                 renderAll();  // refresh control + dirty pip
             });
             wrap.appendChild(btn);
         });
         return wrap;
+    }
+
+    function syncHudTogglesForSpriteVisibility() {
+        const mainKey = 'gui.show_sprites_across_ankimon';
+        const mainValue = getSettingValue(mainKey);
+        if (mainValue === undefined) return;
+
+        HUD_TOGGLE_AUTO_SYNC_KEYS.forEach((key) => {
+            const current = getSettingValue(key);
+            if (mainValue === false && current === true) {
+                state.edits[key] = false;
+            } else if (mainValue === true && current === false) {
+                state.edits[key] = true;
+            }
+        });
     }
 
     function buildSelect(setting) {
@@ -677,6 +706,14 @@
         return null;
     }
 
+    function getSettingValue(key) {
+        if (Object.prototype.hasOwnProperty.call(state.edits, key)) {
+            return state.edits[key];
+        }
+        const setting = findSetting(key);
+        return setting ? setting.value : undefined;
+    }
+
     function deepEqual(a, b) {
         if (a === b) return true;
         if (typeof a !== typeof b) return false;
@@ -754,8 +791,6 @@
         // callers like the unsaved-changes guard can chain navigation.
         const done = typeof onDone === 'function' ? onDone : null;
         if (!bridge) { if (done) done(); return; }
-        // The Show Sprites toggle's sync is handled authoritatively by the
-        // Python settings layer. The UI simply forwards the payload.
         const payload = {...state.edits};
         if (Object.keys(payload).length === 0) { if (done) done(); return; }
         // Stringify so the bridge sees a stable `str` parameter — see the
