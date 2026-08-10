@@ -1720,6 +1720,10 @@ class PokemonPC(QDialog):
                 selected_pokemon = services.db.get_pokemon(self._selected_individual_id)
                 if selected_pokemon:
                     self.show_pokemon_details(selected_pokemon)
+                else:
+                    # The selected Pokémon no longer exists - clear stale state and show placeholder
+                    self._selected_individual_id = None
+                    self._show_placeholder_details()
             else:
                 # If no Pokémon is selected, refresh the placeholder to apply the new setting
                 self._show_placeholder_details()
