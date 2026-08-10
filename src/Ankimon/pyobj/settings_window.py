@@ -27,7 +27,6 @@ from aqt import mw
 from aqt.theme import theme_manager
 from ..services import services
 from ..utils import is_alive
-from .settings import HUD_TOGGLE_AUTO_SYNC_KEYS
 
 
 # create_rounded_pixmap function remains the same
@@ -60,7 +59,6 @@ class SettingsWindow(QMainWindow):
         self.setMaximumWidth(600)
         self.setMaximumHeight(900)
         self.parent = mw
-        self.explicit_hud_toggle_overrides = set()
 
         self.descriptions = self.load_descriptions()
         self.friendly_names = self.load_friendly_names()
@@ -276,10 +274,6 @@ class SettingsWindow(QMainWindow):
             button_group.addButton(false_radio, 0)
             if key.startswith("misc.gen"):
                 button_group.buttonClicked.connect(lambda: self._on_gen_toggled())
-            if key in HUD_TOGGLE_AUTO_SYNC_KEYS:
-                button_group.buttonClicked.connect(
-                    lambda _, hud_key=key: self._on_hud_toggle_clicked(hud_key)
-                )
             h_layout.addWidget(true_radio)
             h_layout.addWidget(false_radio)
             layout.addWidget(radio_container)
@@ -631,11 +625,6 @@ class SettingsWindow(QMainWindow):
         if region_combo is not None:
             self._refresh_region_dropdown(region_combo)
 
-    def _on_hud_toggle_clicked(self, key):
-        # Track explicit HUD toggle changes so the autosync rule does not
-        # override a user choice made in the same save transaction.
-        self.explicit_hud_toggle_overrides.add(key)
-
     def _refresh_region_dropdown(self, combo):
         region_to_gen = {
             "kanto": "misc.gen1",
@@ -834,11 +823,6 @@ class SettingsWindow(QMainWindow):
                         elif button.text() == "Disabled" and not self.config[key]:
                             button.setChecked(True)
 
-        # Preserve HUD toggles explicitly changed by the user in this save.
-        # This avoids overwriting manual overrides when the Show Sprites setting
-        # also triggers automatic sync behavior.
-        explicit_overrides = set(self.explicit_hud_toggle_overrides)
-
         current_config = dict(self.load_config())
         for key, widget in self.input_widgets.items():
             if key not in current_config:
@@ -878,8 +862,7 @@ class SettingsWindow(QMainWindow):
             elif isinstance(widget, QComboBox):
                 current_config[key] = widget.currentData()
 
-        self.save_config_callback(current_config, explicit_overrides)
-        self.explicit_hud_toggle_overrides.clear()
+        self.save_config_callback(current_config)
         self.config = self.load_config()
         self._refresh_widgets()
         self.original_config = self.config.copy()
