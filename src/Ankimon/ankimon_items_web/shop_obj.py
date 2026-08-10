@@ -2298,6 +2298,18 @@ class AnkimonItemsWeb(QDialog):
             else:
                 final_config = original_config
         except Exception as e:
+            # Restore the original live config state on failure to prevent
+            # partial application from leaking into subsequent operations.
+            try:
+                # If the write loop partially applied some keys before failing,
+                # restore the original_config into the live settings object.
+                for key, val in original_config.items():
+                    if settings_obj.config.get(key) != val:
+                        settings_obj.config[key] = val
+            except Exception:
+                # If restoration itself fails, we're in a degraded state;
+                # still return the error to the caller.
+                pass
             return {"ok": False, "message": f"Save failed: {e}"}
 
         # Apply sprite visibility to web views and then refresh hotkeys.
