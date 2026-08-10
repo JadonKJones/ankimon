@@ -247,6 +247,10 @@ class Settings:
 
         The global setting is authoritative - it always forces all related
         HUD toggles to match, regardless of previous individual settings.
+
+        IMPORTANT: This method only syncs HUD values when there is an explicit
+        transition of the main setting. When previous_value is None (new profile
+        or first-time setup), HUD preferences are preserved and NOT overwritten.
         """
         if not isinstance(config, dict):
             return []
@@ -257,8 +261,13 @@ class Settings:
 
         current_value = config.get(main_key, True)
         
+        # If we don't have a previous value, this is a new profile or first-time setup.
+        # Do NOT overwrite existing HUD preferences - preserve user's saved settings.
+        if previous_value is None:
+            return []
+
         # If the setting hasn't changed, do nothing
-        if previous_value is not None and previous_value == current_value:
+        if previous_value == current_value:
             return []
 
         # Apply the global setting authoritatively to all HUD toggles
@@ -270,7 +279,17 @@ class Settings:
         
         return changed_keys
 
-    def save_config(self, config, explicit_overrides=None):
+    def save_config(self, config):
+        """Save configuration to persistent storage.
+
+        The global sprite setting (gui.show_sprites_across_ankimon) is authoritative
+        and will automatically sync all related HUD toggle values when it changes.
+        Individual HUD toggles are not independently persisted when the global
+        setting is active - they are always derived from the global setting.
+
+        Args:
+            config (dict): Configuration dictionary to save.
+        """
         previous_value = None
         if hasattr(self, "config") and self.config is not None:
             previous_value = self.config.get("gui.show_sprites_across_ankimon", True)
@@ -326,7 +345,16 @@ class Settings:
             return default
         return DEFAULT_CONFIG.get(key)
 
-    def set(self, key, value, explicit_overrides=None):
+    def set(self, key, value):
+        """Set a single configuration value and persist it to storage.
+
+        The global sprite setting (gui.show_sprites_across_ankimon) is authoritative
+        and will automatically sync all related HUD toggle values when it changes.
+
+        Args:
+            key (str): Configuration key to set.
+            value: Value to assign to the key.
+        """
         previous_value = self.config.get("gui.show_sprites_across_ankimon", True)
         self.config[key] = value
         changed_keys = self._apply_hud_toggle_autosync(
@@ -345,7 +373,7 @@ class Settings:
                 print(f"Ankimon: Failed to save config key '{key}': {e}")
         else:
             # No DB yet (very early boot / legacy) — fall back to the full save.
-            self.save_config(self.config, explicit_overrides)
+            self.save_config(self.config)
             return
         self._save_legacy_obf_if_present()
         self.compute_gui_config()
