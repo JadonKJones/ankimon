@@ -956,4 +956,6 @@ class SettingsWindow(QMainWindow):
                 # Still update baseline if no changes were detected
                 self.original_config = self.config.copy()
         else:
+            # Clear stale HUD override keys when the user restores a toggle before saving
+            self.explicit_hud_toggle_overrides.clear()
             QMessageBox.information(self, "No Changes", "No settings were changed.")
