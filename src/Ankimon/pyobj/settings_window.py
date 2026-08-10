@@ -27,6 +27,7 @@ from aqt import mw
 from aqt.theme import theme_manager
 from ..services import services
 from ..utils import is_alive
+from .settings import HUD_TOGGLE_AUTO_SYNC_KEYS
 
 
 # create_rounded_pixmap function remains the same
@@ -59,6 +60,7 @@ class SettingsWindow(QMainWindow):
         self.setMaximumWidth(600)
         self.setMaximumHeight(900)
         self.parent = mw
+        self.explicit_hud_toggle_overrides = set()
 
         self.descriptions = self.load_descriptions()
         self.friendly_names = self.load_friendly_names()
@@ -274,6 +276,10 @@ class SettingsWindow(QMainWindow):
             button_group.addButton(false_radio, 0)
             if key.startswith("misc.gen"):
                 button_group.buttonClicked.connect(lambda: self._on_gen_toggled())
+            if key in HUD_TOGGLE_AUTO_SYNC_KEYS:
+                button_group.buttonClicked.connect(
+                    lambda _, hud_key=key: self._on_hud_toggle_clicked(hud_key)
+                )
             h_layout.addWidget(true_radio)
             h_layout.addWidget(false_radio)
             layout.addWidget(radio_container)
@@ -649,6 +655,11 @@ class SettingsWindow(QMainWindow):
         if region_combo is not None:
             self._refresh_region_dropdown(region_combo)
 
+    def _on_hud_toggle_clicked(self, key):
+        # Track explicit HUD toggle changes so the autosync rule does not
+        # override a user choice made in the same save transaction.
+        self.explicit_hud_toggle_overrides.add(key)
+
     def _refresh_region_dropdown(self, combo):
         region_to_gen = {
             "kanto": "misc.gen1",
@@ -719,13 +730,10 @@ class SettingsWindow(QMainWindow):
                 widget.setVisible(is_expanded)
 
     def on_save(self) -> Union[int, str]:
-        # Create a detached working copy of the current config BEFORE parsing
-        # any widget values. This ensures that if save_config_callback() fails,
-        # runtime consumers cannot observe unsaved values through the live
-        # configuration.
-        working_config = dict(self.load_config())
+        # Refresh self.config with latest values before modifying
+        self.config = self.load_config()
 
-        # Update the working copy from the current state of all UI widgets
+        # Update self.config from the current state of all UI widgets
         for key, widget in self.input_widgets.items():
             original_value = self.original_config.get(key)
 
@@ -736,7 +744,7 @@ class SettingsWindow(QMainWindow):
                     # Single Value
                     try:
                         new_value = int(new_text)
-                        working_config[key] = 1 if new_value == 0 else new_value
+                        self.config[key] = 1 if new_value == 0 else new_value
                     # Range Value
                     except ValueError:
                         if "-" in new_text:
@@ -744,59 +752,58 @@ class SettingsWindow(QMainWindow):
                                 first_val, second_val = map(int, new_text.split("-", 1))
                                 low = min(first_val, second_val)
                                 high = max(first_val, second_val)
-                                working_config[key] = f"{low}-{high}"
+                                self.config[key] = f"{low}-{high}"
                             except ValueError:
-                                working_config[key] = 2
+                                self.config[key] = 2
                         else:
                             # Cannot decode input – fallback
-                            working_config[key] = original_value
+                            self.config[key] = original_value
 
                 # Standard handling for other settings
                 elif type(original_value) is int:
                     try:
-                        working_config[key] = int(new_text)
+                        self.config[key] = int(new_text)
                     except ValueError:
-                        working_config[key] = original_value
+                        self.config[key] = original_value
                 elif type(original_value) is float:
                     try:
-                        working_config[key] = float(new_text)
+                        self.config[key] = float(new_text)
                     except ValueError:
-                        working_config[key] = original_value
+                        self.config[key] = original_value
                 else:
-                    working_config[key] = str(new_text)
+                    self.config[key] = str(new_text)
             elif isinstance(widget, QButtonGroup):
-                working_config[key] = widget.checkedId() == 1
+                self.config[key] = widget.checkedId() == 1
             elif isinstance(widget, QComboBox):
-                working_config[key] = widget.currentData()
-
+                self.config[key] = widget.currentData()
         # --- Enforce bounds for cash rewards ---
         has_adjustments = False
         adjustment_msg = ""
 
         # 1. Validate Interval
-        if "trainer.cash_reward_interval" in working_config:
+        if "trainer.cash_reward_interval" in self.config:
             try:
-                orig_val = int(working_config["trainer.cash_reward_interval"])
+                orig_val = int(self.config["trainer.cash_reward_interval"])
                 new_val = max(5, min(100, orig_val))
                 if new_val != orig_val:
-                    working_config["trainer.cash_reward_interval"] = new_val
+                    self.config["trainer.cash_reward_interval"] = new_val
                     has_adjustments = True
                     adjustment_msg += (
                         f"- Reward Interval: Adjusted to {new_val} (Range: 5-100)\n"
                     )
             except (ValueError, TypeError):
-                working_config["trainer.cash_reward_interval"] = 10
+                self.config["trainer.cash_reward_interval"] = 10
 
         # 2. Validate Amount & Cheat Threshold
-        if "trainer.cash_reward_amount" in working_config:
+        if "trainer.cash_reward_amount" in self.config:
             try:
-                orig_amount = int(working_config["trainer.cash_reward_amount"])
+                orig_amount = int(self.config["trainer.cash_reward_amount"])
                 # Hard bounds
                 new_amount = max(10, min(400, orig_amount))
 
                 # Cheat Threshold
-                interval = int(working_config.get("trainer.cash_reward_interval", 10))
-                daily_average = int(working_config.get("battle.daily_average", 100))
+                interval = int(self.config.get("trainer.cash_reward_interval", 10))
+                daily_average = int(self.config.get("battle.daily_average", 100))
                 if daily_average <= 0:
                     daily_average = 100
                 max_per_card = 400.0 / daily_average
@@ -811,9 +818,9 @@ class SettingsWindow(QMainWindow):
                         f"- Reward Amount: Adjusted to {new_amount}¥ (Range: 10-400)\n"
                     )
 
-                working_config["trainer.cash_reward_amount"] = new_amount
+                self.config["trainer.cash_reward_amount"] = new_amount
             except (ValueError, TypeError):
-                working_config["trainer.cash_reward_amount"] = 100
+                self.config["trainer.cash_reward_amount"] = 100
 
         if has_adjustments:
             # Update UI widgets to reflect capped values
@@ -821,7 +828,7 @@ class SettingsWindow(QMainWindow):
                 if key in self.input_widgets and isinstance(
                     self.input_widgets[key], QLineEdit
                 ):
-                    self.input_widgets[key].setText(str(working_config[key]))
+                    self.input_widgets[key].setText(str(self.config[key]))
 
             QMessageBox.warning(
                 self,
@@ -831,7 +838,7 @@ class SettingsWindow(QMainWindow):
 
         # Check if all generations are disabled
         gen_keys = [f"misc.gen{i}" for i in range(1, 10)]
-        all_gens_disabled = all(working_config.get(key) is False for key in gen_keys)
+        all_gens_disabled = all(self.config.get(key) is False for key in gen_keys)
 
         if all_gens_disabled:
             showWarning(
@@ -839,27 +846,67 @@ class SettingsWindow(QMainWindow):
             )
             for key in gen_keys:
                 # Revert logic
-                working_config[key] = self.original_config.get(key, True)
+                self.config[key] = self.original_config.get(key, True)
                 # Update UI widgets
                 if key in self.input_widgets and isinstance(
                     self.input_widgets[key], QButtonGroup
                 ):
                     group = self.input_widgets[key]
                     for button in group.buttons():
-                        if button.text() == "Enabled" and working_config[key]:
+                        if button.text() == "Enabled" and self.config[key]:
                             button.setChecked(True)
-                        elif button.text() == "Disabled" and not working_config[key]:
+                        elif button.text() == "Disabled" and not self.config[key]:
                             button.setChecked(True)
 
-        # Save the detached working copy
-        self.save_config_callback(working_config)
+        # Preserve HUD toggles explicitly changed by the user in this save.
+        # This avoids overwriting manual overrides when the Show Sprites setting
+        # also triggers automatic sync behavior.
+        explicit_overrides = set(self.explicit_hud_toggle_overrides)
 
-        # Refresh the live configuration and UI widgets
+        current_config = dict(self.load_config())
+        for key, widget in self.input_widgets.items():
+            if key not in current_config:
+                continue
+            if isinstance(widget, QLineEdit):
+                new_text = widget.text().strip()
+
+                if key == "battle.cards_per_round":
+                    try:
+                        new_value = int(new_text)
+                        current_config[key] = 1 if new_value == 0 else new_value
+                    except ValueError:
+                        if "-" in new_text:
+                            try:
+                                first_val, second_val = map(int, new_text.split("-", 1))
+                                low = min(first_val, second_val)
+                                high = max(first_val, second_val)
+                                current_config[key] = f"{low}-{high}"
+                            except ValueError:
+                                current_config[key] = self.original_config.get(key)
+                        else:
+                            current_config[key] = self.original_config.get(key)
+                elif type(self.original_config.get(key)) is int:
+                    try:
+                        current_config[key] = int(new_text)
+                    except ValueError:
+                        current_config[key] = self.original_config.get(key)
+                elif type(self.original_config.get(key)) is float:
+                    try:
+                        current_config[key] = float(new_text)
+                    except ValueError:
+                        current_config[key] = self.original_config.get(key)
+                else:
+                    current_config[key] = str(new_text)
+            elif isinstance(widget, QButtonGroup):
+                current_config[key] = widget.checkedId() == 1
+            elif isinstance(widget, QComboBox):
+                current_config[key] = widget.currentData()
+
+        self.save_config_callback(current_config, explicit_overrides)
+        self.explicit_hud_toggle_overrides.clear()
         self.config = self.load_config()
         self._refresh_widgets()
-
-        # Do NOT assign self.original_config here - it will be assigned after
-        # changed_settings is calculated so the comparison logic works correctly.
+        self.original_config = self.config.copy()
 
         # Refresh the reviewer UI so hotkey changes (incl. team-cycle) take
         # effect without a restart. Reviewer builds that support team cycling
