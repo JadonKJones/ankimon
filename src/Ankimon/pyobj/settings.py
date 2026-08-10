@@ -251,6 +251,8 @@ class Settings:
         IMPORTANT: This method only syncs HUD values when there is an explicit
         transition of the main setting. When previous_value is None (new profile
         or first-time setup), HUD preferences are preserved and NOT overwritten.
+        However, we return the main key to signal the bridge that processing
+        occurred, ensuring the JavaScript callback is invoked.
         """
         if not isinstance(config, dict):
             return []
@@ -263,8 +265,11 @@ class Settings:
         
         # If we don't have a previous value, this is a new profile or first-time setup.
         # Do NOT overwrite existing HUD preferences - preserve user's saved settings.
+        # Return the main key so the bridge knows something was processed.
+        # This ensures the JavaScript callback is invoked, even though we
+        # didn't modify any HUD preferences.
         if previous_value is None:
-            return []
+            return [main_key]
 
         # If the setting hasn't changed, do nothing
         if previous_value == current_value:
