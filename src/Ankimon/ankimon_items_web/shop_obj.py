@@ -2242,32 +2242,30 @@ class AnkimonItemsWeb(QDialog):
         settings_obj = self.shop_manager.settings_obj if self.shop_manager is not None else None
         if settings_obj is None:
             return {"ok": False, "message": "Settings service is uninitialized."}
-        try:
-            config = settings_obj.load_config()
-        except Exception:
-            config = dict(settings_obj.config)
 
-        # Snapshot what's on disk so we can skip writes for unchanged keys
-        # after clamping (avoids spurious observer notifications).
-        original_config = dict(config)
+        # Load the CURRENT live config as our baseline
+        live_config = settings_obj.load_config()
+        # Create a detached working copy for all validation/coercion
+        working_config = dict(live_config)
+        original_config = dict(live_config)
 
         # Coerce incoming values back to the type of the existing config
         # entry so e.g. an int field doesn't silently become a string.
         try:
             for raw_key, raw_val in payload.items():
                 key = str(raw_key)
-                if key not in config:
+                if key not in working_config:
                     continue
                 if (
                     key == "leaderboard.api_key"
                     and settings_schema.is_unchanged_secret_placeholder(raw_val)
                 ):
                     continue
-                config[key] = self._coerce_incoming(config[key], raw_val)
+                working_config[key] = self._coerce_incoming(working_config[key], raw_val)
         except ValueError as e:
             return {"ok": False, "message": f"Validation error: {e}"}
 
-        config, adjustments = settings_schema.validate_and_clamp(config, original_config)
+        working_config, adjustments = settings_schema.validate_and_clamp(working_config, original_config)
 
         try:
             explicit_overrides = {
@@ -2276,16 +2274,18 @@ class AnkimonItemsWeb(QDialog):
             changed = False
             save_order = []
             main_key = "gui.show_sprites_across_ankimon"
-            if original_config.get(main_key) != config.get(main_key):
+            if original_config.get(main_key) != working_config.get(main_key):
                 save_order.append(main_key)
-            for key, val in config.items():
+            for key, val in working_config.items():
                 if key == main_key:
                     continue
                 if original_config.get(key) != val:
                     save_order.append(key)
 
-            for key in save_order:
-                settings_obj.set(key, config[key], explicit_overrides)
+            # Only write to the live settings object after all validation has passed
+            if save_order:
+                for key in save_order:
+                    settings_obj.set(key, working_config[key], explicit_overrides)
                 changed = True
 
             if changed:
@@ -2293,22 +2293,25 @@ class AnkimonItemsWeb(QDialog):
                 # The live object may have been updated by auto-sync logic in
                 # Settings.set() for dependent HUD toggles.
                 settings_obj.save_config(settings_obj.config, explicit_overrides)
-                config = dict(settings_obj.config)
+                # Reload the final config state from the live object
+                final_config = dict(settings_obj.config)
+            else:
+                final_config = original_config
         except Exception as e:
             return {"ok": False, "message": f"Save failed: {e}"}
 
         # Apply sprite visibility to web views and then refresh hotkeys.
         self._apply_sprite_visibility(
-            config.get("gui.show_sprites_across_ankimon", True)
+            final_config.get("gui.show_sprites_across_ankimon", True)
         )
-        self._refresh_reviewer_hotkeys(config)
+        self._refresh_reviewer_hotkeys(final_config)
 
         # Refresh already-open native windows that depend on sprite visibility.
         self._refresh_native_windows()
 
         # Emit a shared settings-change notification for diagnostics only.
         try:
-            events.emit("settings_changed", config=config)
+            events.emit("settings_changed", config=final_config)
         except Exception as e:
             logger = services.logger
             if logger:
@@ -2417,4 +2420,3 @@ class AnkimonItemsWeb(QDialog):
 
 
 # _attribute_xp_and_evs_to_companion has been moved to functions.mobile_sync
-
