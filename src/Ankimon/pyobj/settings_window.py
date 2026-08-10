@@ -879,7 +879,6 @@ class SettingsWindow(QMainWindow):
             # Reload the final config state from the live settings object
             self.config = self.load_config()
             self._refresh_widgets()
-            self.original_config = self.config.copy()
 
             # Refresh the reviewer UI so hotkey changes (incl. team-cycle) take
             # effect without a restart. Reviewer builds that support team cycling
@@ -906,7 +905,8 @@ class SettingsWindow(QMainWindow):
             # Emit a shared settings-change notification for diagnostics only.
             try:
                 from ..events import events
-                events.emit("settings_changed", config=self.config)
+                # Pass a detached copy so buffered events retain values from each save
+                events.emit("settings_changed", config=dict(self.config))
             except Exception as e:
                 # Best-effort — settings still saved even if the event fails.
                 print(f"Ankimon: Failed to emit settings_changed event: {e}")
@@ -914,7 +914,7 @@ class SettingsWindow(QMainWindow):
             # Refresh already-open native windows that depend on sprite visibility.
             self._refresh_live_windows()
 
-            # Show confirmation message
+            # Show confirmation message using the original_config baseline
             excluded_patterns = {
                 "mypokemon",
                 "mainpokemon",
@@ -928,8 +928,8 @@ class SettingsWindow(QMainWindow):
                 for key in self.config
                 if not any(pattern in key for pattern in excluded_patterns)
                 and (
-                    self.config[key] != self.original_config.get(key)
-                    or type(self.config[key]) is not type(self.original_config.get(key))
+                    self.config[key] != original_config.get(key)
+                    or type(self.config[key]) is not type(original_config.get(key))
                 )
             }
 
@@ -949,8 +949,11 @@ class SettingsWindow(QMainWindow):
                 QMessageBox.information(
                     self, "Config changes", f"Changed settings:\n{changed_message}"
                 )
+                # Update baseline only after successful comparison
                 self.original_config = self.config.copy()
             else:
                 QMessageBox.information(self, "No Changes", "No settings were changed.")
+                # Still update baseline if no changes were detected
+                self.original_config = self.config.copy()
         else:
             QMessageBox.information(self, "No Changes", "No settings were changed.")
