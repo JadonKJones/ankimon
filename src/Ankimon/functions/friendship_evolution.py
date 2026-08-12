@@ -41,12 +41,14 @@ class FriendshipEvolution(NamedTuple):
         evo_name: Capitalised display name of the evolved species.
         min_happiness: Friendship value required to evolve.
         time_of_day: ``"day"``, ``"night"``, or ``None`` (no time requirement).
+        known_move_type_id: Optional ID representing a required move type (e.g. 18 for Fairy).
     """
 
     evo_id: int
     evo_name: str
     min_happiness: int
     time_of_day: Optional[str]
+    known_move_type_id: Optional[int] = None
 
 
 class LevelEvolution(NamedTuple):
@@ -246,6 +248,14 @@ def get_friendship_evolutions_for_species(
             time_raw = (row.get("time_of_day") or "").strip().lower()
             time_of_day = time_raw if time_raw in ("day", "night") else None
 
+            known_move_type_id = None
+            try:
+                known_move_type_id_raw = row.get("known_move_type_id")
+                if known_move_type_id_raw:
+                    known_move_type_id = int(known_move_type_id_raw)
+            except (TypeError, ValueError):
+                pass
+
             name = return_name_for_id(int(evo))
             evo_name = name.capitalize() if name else str(evo)
 
@@ -255,6 +265,7 @@ def get_friendship_evolutions_for_species(
                     evo_name=evo_name,
                     min_happiness=min_happiness,
                     time_of_day=time_of_day,
+                    known_move_type_id=known_move_type_id,
                 )
             )
             break  # one friendship row per evolved species is enough
@@ -413,7 +424,7 @@ def get_level_evolutions_for_species(
 
 
 def _select_evolution(
-    evos: tuple[FriendshipEvolution, ...], time_of_day: str
+    evos: tuple[FriendshipEvolution, ...], time_of_day: str, attacks: list[str] = None
 ) -> FriendshipEvolution:
     """Pick the most appropriate friendship evolution for the current time.
 
@@ -425,17 +436,44 @@ def _select_evolution(
     Args:
         evos: Non-empty tuple from :func:`get_friendship_evolutions_for_species`.
         time_of_day: Current time of day (``"day"`` or ``"night"``).
+        attacks: Optional list of move internal names the Pokémon knows.
 
     Returns:
         The chosen :class:`FriendshipEvolution`.
     """
-    eligible_now = [e for e in evos if e.time_of_day in (time_of_day, None)]
+    from .pokedex_functions import find_details_move
+
+    valid_evos = []
+    attacks = attacks or []
+
+    # Check if the pokemon has a move of the required type for any evolutions
+    # that require a specific move type.
+    # Move types map to known_move_type_id. 18 corresponds to Fairy.
+    known_move_type_names = set()
+    for atk in attacks:
+        move_details = find_details_move(atk)
+        if move_details and move_details.get("type"):
+            known_move_type_names.add(move_details.get("type").lower())
+
+    for evo in evos:
+        if evo.known_move_type_id is not None:
+            # 18 = Fairy type in Ankimon's evolution tables
+            if evo.known_move_type_id == 18 and "fairy" not in known_move_type_names:
+                continue
+        valid_evos.append(evo)
+
+    if not valid_evos:
+        valid_evos = list(evos)
+
+    eligible_now = [e for e in valid_evos if e.time_of_day in (time_of_day, None)]
+
     if eligible_now:
-        # Prefer explicit-time rows (e.g. Espeon@day) over blank-time rows, then
-        # lowest evo_id. ``time_of_day is None`` sorts last via the bool key.
-        return min(eligible_now, key=lambda e: (e.time_of_day is None, e.evo_id))
+        # Prioritize evolutions with a specific move requirement (e.g. Sylveon),
+        # then explicit-time rows (e.g. Espeon@day) over blank-time rows,
+        # then lowest evo_id. ``time_of_day is None`` sorts last via the bool key.
+        return min(eligible_now, key=lambda e: (e.known_move_type_id is None, e.time_of_day is None, e.evo_id))
     # Nothing matches the current time; still return a representative.
-    return min(evos, key=lambda e: e.evo_id)
+    return min(valid_evos, key=lambda e: e.evo_id)
 
 
 def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
@@ -463,12 +501,14 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
         everstone = pokemon.get("everstone", False)
         evolution_rejected = pokemon.get("evolution_rejected", False)
         level = _coerce_int(pokemon.get("level", 1), 1)
+        attacks = pokemon.get("attacks") or []
     else:
         species_id = getattr(pokemon, "id", None)
         friendship = _coerce_int(getattr(pokemon, "friendship", 0), 0)
         everstone = getattr(pokemon, "everstone", False)
         evolution_rejected = getattr(pokemon, "evolution_rejected", False)
         level = _coerce_int(getattr(pokemon, "level", 1), 1)
+        attacks = getattr(pokemon, "attacks", []) or []
 
     time_of_day = get_time_of_day(now)
 
@@ -514,7 +554,7 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
             pokemon=pokemon,
         )
 
-    chosen = _select_evolution(evos, time_of_day)
+    chosen = _select_evolution(evos, time_of_day, attacks)
     evo_id = chosen.evo_id
     evo_name = chosen.evo_name
     min_happiness = chosen.min_happiness

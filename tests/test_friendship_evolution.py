@@ -558,19 +558,29 @@ def test_eevee_has_three_friendship_evolutions_including_sylveon():
     assert by_id[700].time_of_day is None
 
 
-def test_eevee_prefers_time_gated_evo_over_blank_sylveon():
-    # With Espeon(day), Umbreon(night) and Sylveon(blank) all eligible-ish, the
-    # time-gated match wins over the blank-time Sylveon at the matching hour.
+def test_eevee_prefers_time_gated_evo_over_blank_sylveon_without_fairy_move():
+    # Without a Fairy move, Sylveon is filtered out, so Espeon(day) and
+    # Umbreon(night) win at their respective times.
     day = fe.evolution_readiness(
-        {"id": 133, "friendship": 200, "everstone": False},
+        {"id": 133, "friendship": 200, "everstone": False, "attacks": ["tackle"]},
         now=datetime(2024, 1, 1, 9, 0),
     )
     assert day["evo_name"] == "Espeon"
     night = fe.evolution_readiness(
-        {"id": 133, "friendship": 200, "everstone": False},
+        {"id": 133, "friendship": 200, "everstone": False, "attacks": ["tackle"]},
         now=datetime(2024, 1, 1, 23, 0),
     )
     assert night["evo_name"] == "Umbreon"
+
+
+def test_eevee_prefers_sylveon_with_fairy_move():
+    # When Eevee knows a Fairy-type move (e.g. charm), Sylveon's specific move
+    # requirement is met and takes precedence over time-gated evolutions like Espeon.
+    day = fe.evolution_readiness(
+        {"id": 133, "friendship": 200, "everstone": False, "attacks": ["tackle", "charm"]},
+        now=datetime(2024, 1, 1, 9, 0),
+    )
+    assert day["evo_name"] == "Sylveon"
 
 
 # --------------------------------------------------------------------------- #
