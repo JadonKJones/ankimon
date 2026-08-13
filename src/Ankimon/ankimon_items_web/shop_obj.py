@@ -88,6 +88,14 @@ SCREEN_TEAM = "team"
 SCREEN_MOBILE = "mobile"
 SCREEN_HISTORY = "history"
 
+SPRITE_VISIBILITY_SCREENS = (
+    SCREEN_ITEMS,
+    SCREEN_ANKIDEX,
+    SCREEN_SETTINGS,
+    SCREEN_PROFILE,
+    SCREEN_TEAM,
+)
+
 
 class NavBridge(QObject):
     """Cross-screen navigation — exposed in all shell pages."""
@@ -224,7 +232,12 @@ class SettingsBridge(QObject):
             payload = json.loads(payload_json) if payload_json else {}
         except (TypeError, ValueError) as e:
             return {"ok": False, "message": f"Invalid payload JSON: {e}"}
-        return self._w.handle_save_settings(payload)
+
+        explicit_overrides = None
+        if isinstance(payload, dict) and isinstance(payload.get("values"), dict):
+            explicit_overrides = payload.get("explicit_hud_overrides")
+            payload = payload["values"]
+        return self._w.handle_save_settings(payload, explicit_overrides)
 
     @pyqtSlot(str, result="QVariant")
     def searchPokemon(self, query):
@@ -1145,7 +1158,7 @@ class AnkimonItemsWeb(QDialog):
             return
         self.ready_screens.add(screen)
         settings_obj = self.shop_manager.settings_obj if self.shop_manager is not None else None
-        if settings_obj is not None:
+        if settings_obj is not None and screen in SPRITE_VISIBILITY_SCREENS:
             self._apply_sprite_visibility(
                 settings_obj.get("gui.show_sprites_across_ankimon", True),
                 screens=(screen,),
@@ -1156,11 +1169,16 @@ class AnkimonItemsWeb(QDialog):
     def _apply_sprite_visibility(self, show_sprites, screens=None):
         """Hide raster sprite content without collapsing the surrounding UI.
 
-        The web shell owns the Item Shop, Trainer Card, Team, and Ankidex
-        screens. ``visibility`` preserves every image element's allocated size;
-        removing raster CSS backgrounds leaves their sized containers intact.
+        The setting applies only to the intended non-battle shell screens.
+        ``visibility`` preserves every image element's allocated size; removing
+        raster CSS backgrounds leaves their sized containers intact.
         """
-        targets = screens or tuple(self._views)
+        requested_screens = screens or SPRITE_VISIBILITY_SCREENS
+        targets = tuple(
+            screen
+            for screen in requested_screens
+            if screen in SPRITE_VISIBILITY_SCREENS
+        )
         enabled = "true" if show_sprites else "false"
         script = f"""
             (() => {{
@@ -1181,8 +1199,6 @@ class AnkimonItemsWeb(QDialog):
                     img[src*=".png"], img[src*=".gif"] {{ visibility: hidden !important; }}
                     [style*=".png"], [style*=".gif"] {{ background-image: none !important; }}
                     .ankimon-raster-background {{ background-image: none !important; }}
-                    /* Mobile Reviews uses an inline SVG Pokéball for its empty state. */
-                    #state-empty .pokeball-icon-container {{ visibility: hidden !important; }}
                 `;
             }})()
         """
@@ -2232,12 +2248,27 @@ class AnkimonItemsWeb(QDialog):
         setattr(self, cache_attr, data)
         return data
 
-    def handle_save_settings(self, payload):
+    def handle_save_settings(self, payload, explicit_overrides=None):
         """Apply the JS-side payload, run legacy bounds checks, persist."""
         from . import settings_schema
 
         if not isinstance(payload, dict):
             return {"ok": False, "message": "Invalid payload."}
+
+        if explicit_overrides is None:
+            # Backward compatibility for callers that still send the legacy flat
+            # payload: a HUD key present there represents an explicit edit.
+            explicit_overrides = {
+                key for key in payload if key in HUD_TOGGLE_AUTO_SYNC_KEYS
+            }
+        elif isinstance(explicit_overrides, (list, tuple, set)):
+            explicit_overrides = {
+                str(key)
+                for key in explicit_overrides
+                if str(key) in HUD_TOGGLE_AUTO_SYNC_KEYS
+            }
+        else:
+            explicit_overrides = set()
 
         settings_obj = self.shop_manager.settings_obj if self.shop_manager is not None else None
         if settings_obj is None:
@@ -2268,9 +2299,6 @@ class AnkimonItemsWeb(QDialog):
         working_config, adjustments = settings_schema.validate_and_clamp(working_config, original_config)
 
         try:
-            explicit_overrides = {
-                key for key in payload.keys() if key in HUD_TOGGLE_AUTO_SYNC_KEYS
-            }
             changed = False
             save_order = []
             main_key = "gui.show_sprites_across_ankimon"

@@ -206,7 +206,10 @@ class Settings:
                 config[key] = DEFAULT_CONFIG[key]
 
         if modified:
-            self.save_config(config)
+            # Persist schema/default migration without triggering behavioral
+            # side effects such as HUD autosync. Existing user HUD preferences
+            # must survive the introduction of a new master visibility key.
+            self.save_config(config, apply_hud_autosync=False)
 
         # Preserve the identity of ``self.config`` across (re)loads: external
         # holders of the dict keep observing updates instead of a stale rebind.
@@ -241,12 +244,14 @@ class Settings:
                         f"Ankimon: Warning: Could not convert '{config[key]}' for key '{key}' to int."
                     )
 
-    def _apply_hud_toggle_autosync(self, config, previous_value=None):
+    def _apply_hud_toggle_autosync(
+        self, config, previous_value=None, explicit_overrides=None
+    ):
         """When the main sprite visibility setting changes, mirror that choice
         into the reviewer HUD toggles for the listed elements.
 
-        The global setting is authoritative - it always forces all related
-        HUD toggles to match, regardless of previous individual settings.
+        The global setting is authoritative for HUD toggles the user did not
+        explicitly override in the same save transaction.
         """
         if not isinstance(config, dict):
             return []
@@ -256,26 +261,36 @@ class Settings:
             return []
 
         current_value = config.get(main_key, True)
-        
-        # If the setting hasn't changed, do nothing
-        if previous_value is not None and previous_value == current_value:
+
+        # Autosync is a change-side effect, not a migration/default-seeding
+        # side effect. A missing previous value means there is no user-initiated
+        # transition to mirror.
+        if previous_value is None or previous_value == current_value:
             return []
 
-        # Apply the global setting authoritatively to all HUD toggles
+        explicit_overrides = set(explicit_overrides or ())
+
         changed_keys = []
         for key in HUD_TOGGLE_AUTO_SYNC_KEYS:
+            if key in explicit_overrides:
+                continue
             if config.get(key, True) != current_value:
                 config[key] = current_value
                 changed_keys.append(key)
-        
+
         return changed_keys
 
-    def save_config(self, config, explicit_overrides=None):
+    def save_config(
+        self, config, explicit_overrides=None, apply_hud_autosync=True
+    ):
         previous_value = None
         if hasattr(self, "config") and self.config is not None:
             previous_value = self.config.get("gui.show_sprites_across_ankimon", True)
 
-        self._apply_hud_toggle_autosync(config, previous_value)
+        if apply_hud_autosync:
+            self._apply_hud_toggle_autosync(
+                config, previous_value, explicit_overrides
+            )
 
         # 1. Always save to database if available
         if services.db is not None:
@@ -330,7 +345,7 @@ class Settings:
         previous_value = self.config.get("gui.show_sprites_across_ankimon", True)
         self.config[key] = value
         changed_keys = self._apply_hud_toggle_autosync(
-            self.config, previous_value
+            self.config, previous_value, explicit_overrides
         )
 
         # Persist ONLY the changed key. The previous implementation re-saved the

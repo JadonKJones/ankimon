@@ -7,6 +7,7 @@
     const state = {
         data: null,           // raw payload from Python
         edits: {},            // key → new value (only present if dirty)
+        explicitHudOverrides: new Set(),
         search: '',
         activeGroup: null,    // currently scrolled-into-view group label
     };
@@ -44,6 +45,7 @@
     window.initializeSettings = function (data) {
         state.data = data || {groups: []};
         state.edits = {};  // fresh data resets dirty state
+        state.explicitHudOverrides.clear();
         renderAll();
     };
 
@@ -584,9 +586,19 @@
             btn.className = 'setting-toggle-option' + (isOn ? ' active' : '') + (i === 1 ? ' off' : '');
             btn.textContent = label;
             btn.addEventListener('click', () => {
-                setEdit(setting.key, i === 0);
+                const nextValue = i === 0;
                 if (setting.key === 'gui.show_sprites_across_ankimon') {
+                    // A new master-toggle action starts a new sync transaction.
+                    // HUD choices only count as overrides when the user reselects
+                    // them after this automatic synchronization.
+                    state.explicitHudOverrides.clear();
+                    setEdit(setting.key, nextValue);
                     syncHudTogglesForSpriteVisibility();
+                } else {
+                    if (HUD_TOGGLE_AUTO_SYNC_KEYS.includes(setting.key)) {
+                        state.explicitHudOverrides.add(setting.key);
+                    }
+                    setEdit(setting.key, nextValue);
                 }
                 renderAll();  // refresh control + dirty pip
             });
@@ -601,11 +613,11 @@
         if (mainValue === undefined) return;
 
         HUD_TOGGLE_AUTO_SYNC_KEYS.forEach((key) => {
-            const current = getSettingValue(key);
-            if (mainValue === false && current === true) {
-                state.edits[key] = false;
-            } else if (mainValue === true && current === false) {
-                state.edits[key] = true;
+            if (getSettingValue(key) !== mainValue) {
+                // Programmatic synchronization changes dirty state but must not
+                // mark the HUD key as an explicit user override. setEdit also
+                // correctly removes the edit if sync restores the saved value.
+                setEdit(key, mainValue);
             }
         });
     }
@@ -791,8 +803,12 @@
         // callers like the unsaved-changes guard can chain navigation.
         const done = typeof onDone === 'function' ? onDone : null;
         if (!bridge) { if (done) done(); return; }
-        const payload = {...state.edits};
-        if (Object.keys(payload).length === 0) { if (done) done(); return; }
+        const edits = {...state.edits};
+        if (Object.keys(edits).length === 0) { if (done) done(); return; }
+        const payload = {
+            values: edits,
+            explicit_hud_overrides: Array.from(state.explicitHudOverrides),
+        };
         // Stringify so the bridge sees a stable `str` parameter — see the
         // SettingsBridge.saveSettings comment for why we avoid passing the
         // dict directly through QVariant.
@@ -876,6 +892,7 @@
         discardBtn.textContent = 'Discard & Leave';
         discardBtn.addEventListener('click', () => {
             state.edits = {};
+            state.explicitHudOverrides.clear();
             renderAll();
             close();
             proceed();
@@ -905,6 +922,7 @@
     function onDiscard() {
         if (Object.keys(state.edits).length === 0) return;
         state.edits = {};
+        state.explicitHudOverrides.clear();
         renderAll();
         showToast('Changes discarded');
     }
