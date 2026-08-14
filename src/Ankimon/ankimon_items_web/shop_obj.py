@@ -1875,7 +1875,10 @@ class AnkimonItemsWeb(QDialog):
                         normalized_target = target_evo_name.lower().replace(" ", "").replace("-", "").replace("'", "").replace(".", "").replace(":", "")
                         target_data = pokedex_data.get(normalized_target) or pokedex_data.get(target_evo_name.lower())
 
-                        if target_data and target_data.get("evoType") == "useItem":
+                        if target_data and target_data.get("evoType") in (
+                            "useItem",
+                            "trade",
+                        ):
                             # Normalize both sides by stripping spaces, hyphens and
                             # apostrophes so pokedex.json display names (e.g.
                             # "King's Rock") match items.csv identifiers (e.g.
