@@ -282,7 +282,7 @@ class ImprovedPokemonDataSync(QDialog):
     def check_for_differences(self):
         """Check for differences between local and AnkiWeb data."""
         try:
-            differences = self.sync_handler.get_file_differences()
+            differences = self.sync_handler.get_file_differences(automatic=False)
 
             if not differences:
                 self.header_label.setText(
@@ -1104,10 +1104,11 @@ class AnkimonDataSync:
             # Profile not loaded yet
             return []
 
-    def get_file_differences(self) -> Dict[str, Dict]:
+    def get_file_differences(self, automatic: bool = False) -> Dict[str, Dict]:
         """
         Compare local files with media files and return differences.
         Returns dict with file differences for UI display.
+        If automatic is True, only return differences if the media file is strictly newer.
         """
         try:
             # Migrate legacy files first
@@ -1131,10 +1132,61 @@ class AnkimonDataSync:
                     'media_data': None
                 }
 
-                # Check if the media file (from AnkiWeb) is strictly newer than the local file
-                # If the local file is newer, it just means we haven't synced yet, which is not a conflict.
                 if file_diff['local_exists'] and file_diff['media_exists']:
-                    if os.path.getmtime(media_file) > os.path.getmtime(source_file):
+                    if automatic:
+                        # For automatic startup checks, we want to know if the media file is newer,
+                        # OR if they differ and it's a genuine conflict from another device
+                        # (rather than just un-synced progress on the current device).
+
+                        # Only check further if they actually differ in content
+                        if not filecmp.cmp(source_file, media_file, shallow=False):
+                            if os.path.getmtime(media_file) > os.path.getmtime(source_file):
+                                file_diff['files_differ'] = True
+                            else:
+                                # The local file is newer by mtime, but they differ.
+                                # Check if it's a genuine conflict by inspecting the database contents
+                                # rather than treating un-synced progress as a conflict.
+                                try:
+                                    if filename.endswith(".db"):
+                                        import sqlite3
+                                        def get_db_stats(db_path):
+                                            conn = sqlite3.connect(str(db_path))
+                                            cursor = conn.cursor()
+                                            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                                            tables = {row[0] for row in cursor.fetchall()}
+                                            stats = {}
+                                            if "pokemon_history" in tables:
+                                                cursor.execute("SELECT COUNT(*) FROM pokemon_history")
+                                                stats["history"] = cursor.fetchone()[0]
+                                            if "captured_pokemon" in tables:
+                                                cursor.execute("SELECT COUNT(*) FROM captured_pokemon")
+                                                stats["pokemon"] = cursor.fetchone()[0]
+                                            conn.close()
+                                            return stats
+
+                                        local_stats = get_db_stats(source_file)
+                                        media_stats = get_db_stats(media_file)
+
+                                        # If the media file has more progress (history/pokemon) than the local file,
+                                        # despite the local file having a newer mtime (e.g. from a quick local play),
+                                        # this is a conflict that the user should resolve.
+                                        media_history = media_stats.get("history", 0)
+                                        local_history = local_stats.get("history", 0)
+                                        media_pokemon = media_stats.get("pokemon", 0)
+                                        local_pokemon = local_stats.get("pokemon", 0)
+
+                                        if media_history > local_history or media_pokemon > local_pokemon:
+                                            file_diff['files_differ'] = True
+                                        else:
+                                            file_diff['files_differ'] = False
+                                    else:
+                                        file_diff['files_differ'] = False
+                                except Exception:
+                                    # Fall back to not showing the prompt if we can't parse it
+                                    file_diff['files_differ'] = False
+                    else:
+                        # Detect differences via content comparison regardless of modification times
+                        # to allow manual syncs in either direction.
                         file_diff['files_differ'] = not filecmp.cmp(source_file, media_file, shallow=False)
                 elif file_diff['local_exists'] or file_diff['media_exists']:
                     file_diff['files_differ'] = True
@@ -1313,7 +1365,7 @@ def check_and_sync_pokemon_data(settings_obj, logger):
 
     try:
         sync_handler = AnkimonDataSync()
-        differences = sync_handler.get_file_differences()
+        differences = sync_handler.get_file_differences(automatic=True)
 
         if differences:
             # Show the sync dialog only if there are differences
