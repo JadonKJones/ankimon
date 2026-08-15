@@ -1226,7 +1226,10 @@ def save_main_pokemon_progress(
     logger: ShowInfoLogger,
     evo_window: EvoWindow,
 ):
-    if settings_obj.get("misc.remove_level_cap") is True:
+    remove_cap_val = settings_obj.get("misc.remove_level_cap")
+    is_cap_removed = str(remove_cap_val).lower() in ("true", "1") or remove_cap_val is True
+
+    if is_cap_removed:
         main_pokemon.xp += exp
         level_cap = None
     elif main_pokemon.level != 100:
@@ -1262,7 +1265,7 @@ def save_main_pokemon_progress(
         find_experience_for_level(
             main_pokemon.growth_rate,
             main_pokemon.level,
-            settings_obj.get("misc.remove_level_cap"),
+            is_cap_removed,
         )
     ) < int(main_pokemon.xp) and (level_cap is None or main_pokemon.level < level_cap):
         if levels_gained >= 10:
@@ -1270,7 +1273,7 @@ def save_main_pokemon_progress(
             next_level_cost = int(find_experience_for_level(
                 main_pokemon.growth_rate,
                 main_pokemon.level,
-                settings_obj.get("misc.remove_level_cap"),
+                is_cap_removed,
             ))
             main_pokemon.xp = max(0, next_level_cost - 1)
             break
@@ -1278,7 +1281,7 @@ def save_main_pokemon_progress(
         current_lvl_xp_cost = int(find_experience_for_level(
             main_pokemon.growth_rate,
             main_pokemon.level,
-            settings_obj.get("misc.remove_level_cap"),
+            is_cap_removed,
         ))
         main_pokemon.level += 1
         events.emit("levelup", pokemon=main_pokemon.name, level=main_pokemon.level)
@@ -1406,7 +1409,7 @@ def save_main_pokemon_progress(
         find_experience_for_level(
             main_pokemon.growth_rate,
             main_pokemon.level,
-            settings_obj.get("misc.remove_level_cap"),
+            is_cap_removed,
         )
     )
     msg = ""

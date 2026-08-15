@@ -2160,7 +2160,9 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
     growth_rate = pkmndata.get("growth_rate", "medium-fast")
     level = int(pkmndata.get("level", 1))
     xp = int(pkmndata.get("xp", 0))
-    remove_cap = settings_obj.get("misc.remove_level_cap") if settings_obj else False
+
+    remove_cap_val = settings_obj.get("misc.remove_level_cap") if settings_obj else False
+    remove_cap = str(remove_cap_val).lower() in ("true", "1") or remove_cap_val is True
 
     experience_req = int(find_experience_for_level(growth_rate, level, remove_cap))
     if remove_cap:
