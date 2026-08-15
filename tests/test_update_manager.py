@@ -11,6 +11,7 @@ what the services-registry refactor targets.)
 """
 
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -218,3 +219,136 @@ def test_fetch_tags_filters_pre_2_0(monkeypatch):
         {"name": "1.3962-E", "zipball_url": "z"},
     ])
     assert [t["name"] for t in um.fetch_tags()] == ["2.0-E"]
+
+
+# --- dating the installed build ------------------------------------------------
+#
+# Anki decides an addon is out of date by comparing meta.json's "mod" against
+# AnkiWeb's listing timestamp, not by comparing version numbers. The in-app
+# updater copies files in place and never goes through AddonManager.install(),
+# which is the only thing that normally writes "mod" -- so without an explicit
+# stamp the value keeps describing whichever build Anki last installed, and
+# AnkiWeb's copy looks newer than a GitHub build that is actually ahead of it.
+
+
+def _meta_at(tmp_path, monkeypatch, content=None):
+    """Point the updater at a throwaway meta.json (never the real addon dir)."""
+    path = tmp_path / "meta.json"
+    if content is not None:
+        path.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(um, "get_meta_json_path", lambda: path)
+    return path
+
+
+def test_parse_iso8601_handles_github_timestamps():
+    assert um._parse_iso8601("1970-01-01T00:00:00Z") == 0
+    assert um._parse_iso8601("2026-08-08T11:02:30Z") == 1786186950
+    assert um._parse_iso8601(None) is None
+    assert um._parse_iso8601("not a date") is None
+
+
+def test_fetch_releases_keeps_published_at(monkeypatch):
+    monkeypatch.setattr(um, "_api_get", lambda _ep: [
+        {"tag_name": "2.4", "zipball_url": "z", "body": "",
+         "published_at": "2026-08-08T11:02:30Z"},
+    ])
+    assert um.fetch_releases()[0]["published_at"] == "2026-08-08T11:02:30Z"
+
+
+def test_fetch_ref_date_refuses_unsafe_refs(monkeypatch):
+    seen = []
+    monkeypatch.setattr(um, "_api_get", lambda ep: seen.append(ep))
+    assert um.fetch_ref_date("../../../etc/passwd") is None
+    assert um.fetch_ref_date("feature/slashes") is None
+    assert um.fetch_ref_date("") is None
+    assert seen == []  # nothing unsafe reached the API
+
+
+def test_fetch_commit_date_still_rejects_non_hex(monkeypatch):
+    seen = []
+    monkeypatch.setattr(um, "_api_get", lambda ep: seen.append(ep))
+    assert um.fetch_commit_date("not-a-sha") is None
+    assert um.fetch_commit_date("") is None
+    assert seen == []
+
+
+def test_resolve_build_mtime_prefers_release_published_at(monkeypatch):
+    called = []
+    monkeypatch.setattr(um, "fetch_ref_date", lambda ref: called.append(ref))
+    ts = um.resolve_build_mtime("release", "2.4", "2.4", "2026-08-08T11:02:30Z")
+    assert ts == 1786186950
+    assert called == []  # a release needs no extra round trip
+
+
+def test_resolve_build_mtime_falls_back_to_commit_date(monkeypatch):
+    monkeypatch.setattr(
+        um, "fetch_ref_date",
+        lambda ref: "2026-01-02T03:04:05Z" if ref == "abc1234def" else None,
+    )
+    assert um.resolve_build_mtime("branch", "main", "abc1234def") == 1767323045
+
+
+def test_resolve_build_mtime_dates_a_tag_by_its_name(monkeypatch):
+    monkeypatch.setattr(
+        um, "fetch_ref_date",
+        lambda ref: "2026-01-02T03:04:05Z" if ref == "2.4" else None,
+    )
+    assert um.resolve_build_mtime("tag", "2.4", None) == 1767323045
+
+
+def test_resolve_build_mtime_returns_none_when_unresolvable(monkeypatch):
+    monkeypatch.setattr(um, "fetch_ref_date", lambda _ref: None)
+    assert um.resolve_build_mtime("branch", "main", "deadbeef1") is None
+
+
+def test_stamp_addon_mod_writes_when_newer(tmp_path, monkeypatch):
+    path = _meta_at(
+        tmp_path, monkeypatch,
+        '{"mod": 100, "config": {"a": 1}, "disabled": false, "name": "Ankimon"}',
+    )
+    assert um.stamp_addon_mod(500) is True
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["mod"] == 500
+    # Anki owns every other key in this file; none of them may be lost.
+    assert data["config"] == {"a": 1}
+    assert data["disabled"] is False
+    assert data["name"] == "Ankimon"
+
+
+def test_stamp_addon_mod_stamps_when_key_absent(tmp_path, monkeypatch):
+    path = _meta_at(tmp_path, monkeypatch, '{"name": "Ankimon"}')
+    assert um.stamp_addon_mod(500) is True
+    assert json.loads(path.read_text(encoding="utf-8"))["mod"] == 500
+
+
+def test_stamp_addon_mod_never_moves_backwards(tmp_path, monkeypatch):
+    """Installing an older tag must not mask a genuinely newer AnkiWeb release."""
+    path = _meta_at(tmp_path, monkeypatch, '{"mod": 900}')
+    assert um.stamp_addon_mod(500) is False
+    assert json.loads(path.read_text(encoding="utf-8"))["mod"] == 900
+
+
+def test_stamp_addon_mod_is_a_noop_when_unchanged(tmp_path, monkeypatch):
+    _meta_at(tmp_path, monkeypatch, '{"mod": 500}')
+    assert um.stamp_addon_mod(500) is False
+
+
+def test_stamp_addon_mod_leaves_missing_meta_alone(tmp_path, monkeypatch):
+    """No meta.json means Anki is not managing this install (clone / hand-unzip)."""
+    path = _meta_at(tmp_path, monkeypatch)
+    assert um.stamp_addon_mod(500) is False
+    assert not path.exists()
+
+
+def test_stamp_addon_mod_leaves_unparseable_meta_untouched(tmp_path, monkeypatch):
+    path = _meta_at(tmp_path, monkeypatch, "{not json")
+    assert um.stamp_addon_mod(500) is False
+    assert path.read_text(encoding="utf-8") == "{not json"
+    assert list(tmp_path.iterdir()) == [path]  # and no stray temp file
+
+
+def test_stamp_addon_mod_rejects_nonpositive(tmp_path, monkeypatch):
+    path = _meta_at(tmp_path, monkeypatch, '{"mod": 100}')
+    assert um.stamp_addon_mod(0) is False
+    assert um.stamp_addon_mod(-1) is False
+    assert json.loads(path.read_text(encoding="utf-8"))["mod"] == 100

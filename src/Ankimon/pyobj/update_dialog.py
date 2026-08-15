@@ -1169,6 +1169,7 @@ class UpdateDialog(QDialog):
         source_type: str = None,
         source_name: str = None,
         commit_sha: str = None,
+        published_at: str = None,
         extra_warning: str = None,
     ):
         prompt = f"Update Ankimon to {label}?\n\nYour Pokemon data, settings, and sprites will be preserved."
@@ -1201,7 +1202,12 @@ class UpdateDialog(QDialog):
                 mw.taskman.run_on_main(lambda: self.status_label.setText(m))
 
             success, msg = apply_update(
-                zip_path, source_type, source_name, commit_sha, status_cb=status_update
+                zip_path,
+                source_type,
+                source_name,
+                commit_sha,
+                published_at,
+                status_cb=status_update,
             )
             return success, msg, messages
 
@@ -1245,6 +1251,7 @@ class UpdateDialog(QDialog):
             source_type="release",
             source_name=r["name"],
             commit_sha=r["name"],
+            published_at=r.get("published_at"),
         )
 
     def _on_release_update(self):
@@ -1258,6 +1265,7 @@ class UpdateDialog(QDialog):
                 source_type="release",
                 source_name=data["name"],
                 commit_sha=data["name"],
+                published_at=data.get("published_at"),
             )
 
     def _on_dev_install(self):
@@ -1561,6 +1569,7 @@ class BranchUpdateProgressDialog(QDialog):
         else:
             source_type, source_name, commit_sha = "branch", self.branch_name, self.remote_sha
             download = lambda: _download_branch_zip(self.branch_name, progress_cb=self.on_progress)
+        published_at = release.get("published_at") if release else None
 
         def bg(_col):
             zip_path = download()
@@ -1575,6 +1584,7 @@ class BranchUpdateProgressDialog(QDialog):
                 source_type=source_type,
                 source_name=source_name,
                 commit_sha=commit_sha,
+                published_at=published_at,
                 status_cb=status_update,
             )
 

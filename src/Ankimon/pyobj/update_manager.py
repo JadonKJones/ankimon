@@ -26,6 +26,9 @@ DEFAULT_SUBMODULE_SHA = "f3092b03fbe1e37d1788ef802dee98906d621e36"
 # updater out (older versions predate it), so pre-2.0 versions are filtered from
 # the release/tag pickers — going back would break the update feature itself.
 MIN_UPDATER_VERSION = (2, 0)
+# Refs that may be interpolated into an API path. Every tag and branch the
+# pickers offer matches this; anything else is refused rather than requested.
+_SAFE_REF_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 # Auto-update channels (user-selectable in the update dialog). "stable" and
 # "experimental" are release channels told apart by the tag suffix — an
@@ -348,6 +351,9 @@ def fetch_releases() -> list[dict]:
             "name": r["tag_name"],
             "body": r.get("body", ""),
             "zipball_url": r["zipball_url"],
+            # When the release went public, which is the timestamp AnkiWeb's own
+            # listing is compared against. Not the same as the tag's commit date.
+            "published_at": r.get("published_at") or r.get("created_at"),
         }
         for r in data
         if _is_supported_version(r["tag_name"])
@@ -383,16 +389,28 @@ def fetch_branch_sha(branch: str) -> Optional[str]:
     return None
 
 
-def fetch_commit_date(sha: str) -> Optional[str]:
-    if not sha or len(sha) < 7 or not all(c in "0123456789abcdefABCDEF" for c in sha):
+def fetch_ref_date(ref: str) -> Optional[str]:
+    """Committer date (ISO 8601) of whatever ``ref`` resolves to — SHA or tag.
+
+    Deliberately narrow about what it will put in a URL: the tags and branches
+    the pickers offer are version-shaped, so anything stranger fails closed
+    (no date, hence no timestamp stamped) rather than being sent to the API.
+    """
+    if not ref or not _SAFE_REF_RE.match(ref):
         return None
-    data = _api_get(f"commits/{sha}")
+    data = _api_get(f"commits/{ref}")
     commit = data.get("commit") if isinstance(data, dict) else None
     if isinstance(commit, dict):
         committer = commit.get("committer") or {}
         author = commit.get("author") or {}
         return committer.get("date") or author.get("date")
     return None
+
+
+def fetch_commit_date(sha: str) -> Optional[str]:
+    if not sha or len(sha) < 7 or not all(c in "0123456789abcdefABCDEF" for c in sha):
+        return None
+    return fetch_ref_date(sha)
 
 
 def fetch_branch_commits(branch: str, local_sha: Optional[str] = None) -> list[dict]:
@@ -423,6 +441,107 @@ def fetch_branch_commits(branch: str, local_sha: Optional[str] = None) -> list[d
 
 def get_update_state_path() -> Path:
     return addon_dir / "user_files" / "update_state.json"
+
+
+def get_meta_json_path() -> Path:
+    return addon_dir / "meta.json"
+
+
+def _write_json_atomic(path: Path, data: dict) -> None:
+    """Write ``data`` as JSON via temp file + ``os.replace``.
+
+    meta.json belongs to Anki, which read-modify-writes it on the main thread
+    (``AddonManager.write_addon_meta``) while this can run from an updater
+    worker. A half-written file makes Anki's ``addonMeta()`` fall back to an
+    empty dict, silently discarding ``config``, ``disabled`` and ``mod``.
+    """
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
+        raise
+
+
+def _parse_iso8601(value: Optional[str]) -> Optional[int]:
+    """GitHub's ``2026-08-08T11:02:30Z`` as epoch seconds, or None."""
+    if not value:
+        return None
+    try:
+        from datetime import datetime, timezone
+
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+        return int(parsed.replace(tzinfo=timezone.utc).timestamp())
+    except Exception:
+        return None
+
+
+def resolve_build_mtime(
+    source_type: Optional[str],
+    source_name: Optional[str],
+    commit_sha: Optional[str],
+    published_at: Optional[str] = None,
+) -> Optional[int]:
+    """Epoch seconds describing the build about to be installed.
+
+    A release is dated by when it went public, because that is the timestamp
+    AnkiWeb's own listing is compared against; everything else is dated by the
+    commit it was built from. None means "could not tell", and the caller then
+    leaves ``mod`` untouched rather than guessing.
+    """
+    if source_type == "release":
+        published = _parse_iso8601(published_at)
+        if published:
+            return published
+    for ref in (commit_sha, source_name):
+        resolved = _parse_iso8601(fetch_ref_date(ref)) if ref else None
+        if resolved:
+            return resolved
+    return None
+
+
+def stamp_addon_mod(timestamp: int) -> bool:
+    """Record ``timestamp`` as meta.json's ``mod`` — the field Anki dates the
+    installed build by. Returns whether anything was written.
+
+    Anki decides an add-on is out of date with ``installed_at >= server_mtime``,
+    where ``installed_at`` is this key (``AddonMeta.is_latest``). Only
+    ``AddonManager.install()`` ever writes it, and the in-app updater bypasses
+    that machinery entirely — so left alone the value keeps describing whichever
+    build Anki last installed, and AnkiWeb's copy looks newer than a GitHub
+    build that is in fact ahead of it. That is the accidental-downgrade prompt.
+
+    Never moves ``mod`` backwards: installing an older tag must not mask a
+    genuinely newer AnkiWeb release. A meta.json that Anki did not create is
+    left alone, as is one that no longer parses as a JSON object.
+    """
+    try:
+        if not timestamp or timestamp <= 0:
+            return False
+        path = get_meta_json_path()
+        if not path.exists():
+            # No meta.json means Anki is not managing this install (git clone,
+            # hand-unzipped copy); inventing one would fabricate metadata.
+            return False
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        if not isinstance(data, dict):
+            return False
+        current = data.get("mod")
+        if isinstance(current, (int, float)) and timestamp <= current:
+            return False
+        data["mod"] = int(timestamp)
+        _write_json_atomic(path, data)
+        return True
+    except Exception as e:
+        print(f"Ankimon Updater: Failed to stamp meta.json mod: {e}")
+        return False
 
 
 def save_update_state(
@@ -669,6 +788,7 @@ def apply_update(
     source_type: Optional[str] = None,
     source_name: Optional[str] = None,
     commit_sha: Optional[str] = None,
+    published_at: Optional[str] = None,
     status_cb=None,
 ) -> tuple[bool, str]:
     def log(msg):
@@ -789,6 +909,19 @@ def apply_update(
             # --- Save update state if provided ---
             if source_type and source_name:
                 save_update_state(source_type, source_name, commit_sha or "")
+
+            # Date meta.json by the build just installed, so Anki stops treating
+            # whichever build it last installed as the newer copy. Resolving the
+            # timestamp needs the network, so it gets its own guard — a GitHub
+            # hiccup must not turn a finished install into a rollback.
+            try:
+                mtime = resolve_build_mtime(
+                    source_type, source_name, commit_sha, published_at
+                )
+                if mtime and stamp_addon_mod(mtime):
+                    log("Recorded install date for Anki's update check.")
+            except Exception as e:
+                print(f"Ankimon Updater: Could not date the install: {e}")
 
             cleanup()
             log(f"Update complete. Installed {installed} files.")
