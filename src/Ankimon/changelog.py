@@ -164,6 +164,7 @@ def check_branch_update(online_connectivity: bool, ssh: bool):
 
     def bg(_col):
         try:
+            sync_ankiweb_update_state()
             from .pyobj.update_manager import fetch_branch_sha, fetch_branch_commits
 
             remote_sha = fetch_branch_sha(source_name)
@@ -216,6 +217,42 @@ def check_for_update(online_connectivity: bool, ssh: bool):
         _poll_release_channel(channel)
 
 
+def sync_ankiweb_update_state() -> bool:
+    """Check if the latest STABLE release tag on GitHub is newer than local addon_ver.
+
+    If a strictly newer stable tag exists on GitHub: enables Anki's native update check
+    (update_enabled: True).
+    Otherwise: disables Anki's native update check (update_enabled: False) to prevent
+    AnkiWeb from prompting older web versions for users on experimental (-E) or newer builds.
+    Returns the boolean value set to update_enabled.
+    """
+    from .pyobj.update_manager import (
+        latest_release_for_channel,
+        is_newer_version,
+        set_anki_update_enabled,
+        CHANNEL_STABLE,
+    )
+
+    try:
+        stable_release = latest_release_for_channel(CHANNEL_STABLE)
+        stable_tag = stable_release.get("name") if stable_release else None
+        if stable_tag and is_newer_version(stable_tag, addon_ver):
+            set_anki_update_enabled(True)
+            _log_info(
+                f"sync_ankiweb_update_state: update_enabled=True (stable {stable_tag} > local {addon_ver})"
+            )
+            return True
+        else:
+            set_anki_update_enabled(False)
+            _log_info(
+                f"sync_ankiweb_update_state: update_enabled=False (stable {stable_tag} <= local {addon_ver})"
+            )
+            return False
+    except Exception as e:
+        _log_info(f"sync_ankiweb_update_state failed: {e}")
+        return False
+
+
 def _poll_release_channel(channel: str):
     """Prompt when the newest release on a release channel (stable/experimental)
     is strictly newer than the installed version.
@@ -242,6 +279,7 @@ def _poll_release_channel(channel: str):
 
     def bg(_col):
         try:
+            sync_ankiweb_update_state()
             return latest_release_for_channel(channel)
         except Exception as e:
             return e
@@ -267,6 +305,10 @@ def schedule_branch_update_check(online_connectivity: bool, ssh: bool) -> None:
     The branch updater retains its connectivity gate. The sprite updater runs
     independently because its background request path handles network failures.
     """
+    # Disable native AnkiWeb update check early so offline/unverified boots stay protected
+    from .pyobj.update_manager import set_anki_update_enabled
+
+    set_anki_update_enabled(False)
 
     def _on_profile_open() -> None:
         if online_connectivity:
