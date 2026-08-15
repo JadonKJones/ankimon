@@ -451,19 +451,18 @@ class PokemonObject:
         """Return the stats of the Pokémon."""
         return vars(self)
 
-    # Derived/read-only attributes to skip in update_stats. ``cp`` and
-    # ``stats`` are @property getters whose setattr raises
-    # AttributeError (silently swallowed by the caller's bare
-    # `except Exception`). ``max_hp`` is a plain cache field — setattr
-    # would succeed, but the splatted value is almost certainly stale
-    # relative to the new ``level``/``base_stats``, so we skip it and
-    # recompute it ourselves below. ``pokedex_id`` / ``display_name`` /
-    # ``generation`` are likewise getter-only derived properties (resolved
-    # from ``self.id``), so a splatted value is redundant at best and raises
-    # AttributeError at worst.
-    _READONLY_ATTRS = frozenset(
-        {"cp", "stats", "max_hp", "pokedex_id", "display_name", "generation"}
-    )
+    # Allowlist of legitimate writable data attributes for update_stats.
+    # Only these fields can be set via setattr to prevent accidentally
+    # shadowing methods or properties with plain values.
+    _WRITABLE_ATTRS = frozenset({
+        "individual_id", "name", "nickname", "shiny", "id", "level", "ability",
+        "type", "gender", "tier", "everstone", "evolution_rejected",
+        "pokemon_defeated", "base_stats", "ev", "iv", "ev_yield", "attacks",
+        "moves", "base_experience", "growth_rate", "xp", "friendship",
+        "battle_status", "position", "stat_stages", "volatile_status", "nature",
+        "held_item", "hp", "current_hp", "is_favorite", "captured_date",
+        "mega", "special_form"
+    })
 
     @staticmethod
     def _normalize_hp(value, fallback, max_hp):
@@ -488,10 +487,9 @@ class PokemonObject:
     def update_stats(self, **kwargs):
         """Update the attributes of the Pokémon object with keyword arguments."""
         for key, value in kwargs.items():
-            if key in self._READONLY_ATTRS:
+            if key not in self._WRITABLE_ATTRS:
                 continue
-            if hasattr(self, key):
-                setattr(self, key, value)
+            setattr(self, key, value)
         # Derived caches — recompute from the (possibly updated)
         # base_stats/level/iv/ev so they don't go stale.
         self.max_hp = self.calculate_max_hp()
