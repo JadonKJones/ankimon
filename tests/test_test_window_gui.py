@@ -233,8 +233,8 @@ def test_init_ui_builds_persistent_scaffolding(make_window):
     assert win.button_widget.isHidden()
 
     # Fixed 556x300 window (exp's fixed size/styling)
-    assert (win.minimumWidth(), win.minimumHeight()) == (556, 300)
-    assert (win.maximumWidth(), win.maximumHeight()) == (556, 300)
+    assert win.minimumWidth() == 556
+    assert win.maximumWidth() == 556
     assert "rgb(44,44,44)" in win.styleSheet()
 
     # The Ankimon logo landed on the persistent label

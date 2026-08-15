@@ -154,7 +154,7 @@ class TestWindow(QWidget):
         self.setStyleSheet("background-color: rgb(44,44,44);")
         self._reset_window_title()
         self.setWindowIcon(QIcon(str(icon_path)))
-        self.setFixedSize(556, 300)
+        self.setFixedWidth(556)
 
     def open_dynamic_window(self):
         # Create and show the dynamic window
