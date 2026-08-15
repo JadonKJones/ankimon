@@ -137,6 +137,7 @@ def _exec_profile_hooks(monkeypatch, gui_hooks):
         _stub_module(
             "Ankimon.functions.encounter_functions",
             clear_encounter_cache=clear_encounter,
+            clear_auto_battle_override=MagicMock(),
         ),
     )
 
