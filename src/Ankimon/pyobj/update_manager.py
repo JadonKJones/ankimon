@@ -488,6 +488,58 @@ def read_update_state() -> Optional[dict]:
     return None
 
 
+def get_meta_json_path() -> Path:
+    return addon_dir / "meta.json"
+
+
+def set_anki_update_enabled(enabled: bool) -> bool:
+    """Toggle Anki's native update check in meta.json.
+
+    When False, Anki skips checking AnkiWeb for updates to this addon, preventing
+    accidental downgrades to older web releases. Preserves all other meta.json keys
+    (e.g., config, disabled, mod).
+    """
+    try:
+        path = get_meta_json_path()
+        data = {}
+        if path.exists():
+            try:
+                content = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(content, dict):
+                    data = content
+            except Exception:
+                data = {}
+        if data.get("update_enabled") != enabled:
+            data["update_enabled"] = enabled
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        return True
+    except Exception as e:
+        try:
+            from ..services import services
+
+            if services.logger:
+                services.logger.log(
+                    "error", f"Failed to set meta.json update_enabled={enabled}: {e}"
+                )
+        except Exception:
+            pass
+        return False
+
+
+def get_anki_update_enabled() -> Optional[bool]:
+    """Read update_enabled flag from meta.json, or None if file missing/unreadable."""
+    try:
+        path = get_meta_json_path()
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data.get("update_enabled")
+    except Exception:
+        pass
+    return None
+
+
 def _download_zip_to_temp(url: str, progress_cb=None) -> Optional[str]:
     req = _make_request(url)
     try:
@@ -789,6 +841,9 @@ def apply_update(
             # --- Save update state if provided ---
             if source_type and source_name:
                 save_update_state(source_type, source_name, commit_sha or "")
+
+            # Ensure newly installed build starts with AnkiWeb auto-update disabled
+            set_anki_update_enabled(False)
 
             cleanup()
             log(f"Update complete. Installed {installed} files.")
