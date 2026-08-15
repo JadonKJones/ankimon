@@ -26,11 +26,19 @@ on:
 # unaffected (the ruleset targets the main branch only), so they stay on
 # GITHUB_TOKEN.
 jobs:
-  release:
+  # Everything up to a finished .ankiaddon. The version bump, the tag and the
+  # push to main all happen here, because `aab build` dates the manifest from
+  # the tag and so needs it to exist first. An abandoned run therefore leaves
+  # main claiming a version that was never released — recoverable by approving
+  # the held run (it waits 30 days), or by reverting the bump and deleting the tag.
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: read
+    outputs:
+      release_tag: ${{ steps.vars.outputs.release_tag }}
+      module_name: ${{ steps.vars.outputs.module_name }}
     # Bind the workflow_dispatch inputs to env vars once, then reference them as
     # "$VERSION" / "$HIGHLIGHTS" in every run: block. Expanding
     # ${{ github.event.inputs.* }} straight into a shell script is a
@@ -264,11 +272,50 @@ jobs:
               f.write(content)
           EOF
 
+      - name: Hand the package to the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: ankiaddon
+          path: |
+            build/*.ankiaddon
+            patched_changelog.md
+          if-no-files-found: error
+          retention-days: 30
+
+  # AnkiWeb has no public upload API, and scripting the private one is against
+  # its Terms — so the upload stays a human step. It has to happen BEFORE the
+  # GitHub release exists, because Anki compares timestamps rather than version
+  # numbers: whichever channel is published last looks newer. Publishing to
+  # GitHub first leaves every in-app updater user with a meta.json "mod" older
+  # than the AnkiWeb listing, which is exactly the state that offers them the
+  # AnkiWeb build as an "update".
+  #
+  # The environment holds this job until a required reviewer approves it.
+  # Configure it once: Settings → Environments → New environment → "ankiweb",
+  # then add yourself under "Required reviewers".
+  #
+  #   1. Download the "ankiaddon" artifact from this run.
+  #   2. Upload Ankimon.ankiaddon at https://ankiweb.net/shared/addons/
+  #   3. Approve this job. The GitHub release then goes out, dated after it.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment:
+      name: ankiweb
+      url: https://ankiweb.net/shared/addons/
+    steps:
+      - name: Download the package built above
+        uses: actions/download-artifact@v4
+        with:
+          name: ankiaddon
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
-          tag_name: ${{ steps.vars.outputs.release_tag }}
-          name: "${{ steps.vars.outputs.module_name }} v${{ steps.vars.outputs.release_tag }}"
+          tag_name: ${{ needs.build.outputs.release_tag }}
+          name: "${{ needs.build.outputs.module_name }} v${{ needs.build.outputs.release_tag }}"
           body_path: patched_changelog.md
           files: build/*.ankiaddon
           draft: false
