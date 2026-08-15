@@ -43,6 +43,12 @@ During extraction, standard updates completely replace the addon folder. To prev
 2. `HelpInfos.html`, `updateinfos.md`, `meta.json` (root settings files).
 3. `update_state.json` (updater's own status file).
 
+`meta.json` is preserved through extraction but must then be **re-dated** — see
+[Stamp the install date](#modify-stamp-the-install-date) below. Preserving it
+alone is not enough: Anki decides an add-on is out of date by comparing that
+file's `mod` timestamp against AnkiWeb's, so carrying the old value forward makes
+Anki offer the AnkiWeb build as an "update" to code that is already newer.
+
 ---
 
 ## 3. Step-by-Step Porting Changes & Diffs
@@ -197,6 +203,43 @@ Modify the final section of `apply_update(...)` to write the update state upon s
 +
              return True, "Ankimon updated successfully!"
 ```
+
+#### [MODIFY] Stamp the install date
+
+`AddonManager.install()` is the only thing that normally writes `meta.json`'s
+`mod`, and an in-app updater bypasses it entirely — it copies files in place. So
+without this step `mod` keeps describing whichever build *Anki* last installed,
+and Anki offers the AnkiWeb copy as an update to a newer GitHub build. Accepting
+it downgrades the user. This is the whole reason `stamp_addon_mod` exists.
+
+Add it as the **last** thing `apply_update(...)` does, after the backup cleanup —
+anything that can still raise must run before it, or a late failure will roll the
+code back while leaving `meta.json` dated as the new build:
+
+```diff
+             # Save local update metadata
+             save_update_state(source_type, source_name, commit_sha or "")
+
+             # ... cleanup(), final log(), backup rmtree ...
+
++            # Date meta.json by the build just installed. Guarded separately:
++            # resolving the timestamp needs the network, and a GitHub hiccup
++            # must not fail an install that already succeeded.
++            try:
++                mtime = resolve_build_mtime(
++                    source_type, source_name, commit_sha, published_at
++                )
++                if mtime and stamp_addon_mod(mtime):
++                    log("Recorded install date for Anki's update check.")
++            except Exception as e:
++                print(f"Ankimon Updater: Could not date the install: {e}")
++
+             return True, "Ankimon updated successfully!"
+```
+
+A release (or a tag naming one) is dated by its `published_at`; anything else by
+the commit it was built from. The value never moves backwards, and the commit
+path is capped at the present so a skewed clock cannot pin `mod` into the future.
 
 ---
 

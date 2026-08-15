@@ -33,6 +33,7 @@ from .update_manager import (
     _download_pr_zip,
     read_update_state,
     fetch_branch_sha,
+    published_at_for_tag,
 )
 from ..resources import addon_ver, IS_EXPERIMENTAL_BUILD
 
@@ -1317,13 +1318,8 @@ class UpdateDialog(QDialog):
                     # installs byte-identical code to the Releases tab. Date it
                     # the same way, or the tag's (earlier) commit timestamp lets
                     # the AnkiWeb upload look newer than the code just installed.
-                    published_at=next(
-                        (
-                            r.get("published_at")
-                            for r in (self._releases or [])
-                            if r.get("name") == data["name"]
-                        ),
-                        None,
+                    published_at=published_at_for_tag(
+                        data["name"], self._releases
                     ),
                 )
 

@@ -11,12 +11,24 @@ on:
         required: false
         type: string
 
-# This workflow runs the ENTIRE release in one job on the built-in GITHUB_TOKEN
-# (which never expires) — prepare -> integrity test -> commit + tag -> build ->
-# publish. It deliberately does NOT hand off to main.yml via a tag push: GitHub
-# won't trigger a second workflow from a tag pushed with GITHUB_TOKEN, and a PAT
-# just to trigger that hand-off is a fragile, expiring dependency. Folding the
-# build+publish in here removes it entirely.
+# This workflow runs the WHOLE release on the built-in GITHUB_TOKEN (which never
+# expires) — prepare -> integrity test -> commit + tag -> build, then a manual
+# approval gate, then publish. It deliberately does NOT hand off to main.yml via
+# a tag push: GitHub won't trigger a second workflow from a tag pushed with
+# GITHUB_TOKEN, and a PAT just to trigger that hand-off is a fragile, expiring
+# dependency. Folding the build+publish in here removes it entirely.
+#
+# It is split across two jobs on purpose. AnkiWeb must be updated BEFORE the
+# GitHub release exists, because Anki decides an add-on is out of date by
+# comparing timestamps rather than version numbers — whichever channel publishes
+# last looks newer, so a GitHub-first release leaves in-app updater users being
+# offered the AnkiWeb build. AnkiWeb has no upload API (scripting the private one
+# is against its Terms), so the upload is a human step and the `ankiweb`
+# environment gate is what forces it to happen in the right order.
+#
+#   dispatch -> build (bump, tag, package) -> [you upload to AnkiWeb, approve] -> publish
+#
+# The step-by-step is on the `publish` job below.
 #
 # NOTE: pushing the version-bump commit to `main` uses a GitHub App installation
 # token (minted below via create-github-app-token) — `main` has a ruleset that

@@ -81,6 +81,10 @@ def _load_update_dialog():
             "_download_pr_zip",
             "read_update_state",
             "fetch_branch_sha",
+            # This tuple mirrors update_dialog's `from .update_manager import`
+            # list — a name added there must be added here, or this module fails
+            # to import at collection time.
+            "published_at_for_tag",
         ):
             setattr(update_manager, name, lambda *args, **kwargs: None)
         sys.modules["Ankimon.pyobj.update_manager"] = update_manager

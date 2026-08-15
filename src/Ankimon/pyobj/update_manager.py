@@ -26,8 +26,10 @@ DEFAULT_SUBMODULE_SHA = "f3092b03fbe1e37d1788ef802dee98906d621e36"
 # updater out (older versions predate it), so pre-2.0 versions are filtered from
 # the release/tag pickers — going back would break the update feature itself.
 MIN_UPDATER_VERSION = (2, 0)
-# Refs that may be interpolated into an API path. Every tag and branch the
-# pickers offer matches this; anything else is refused rather than requested.
+# Refs that may be interpolated into an API path. Tags are version-shaped and
+# always match; branch names often do not (``add/foo``, ``agent/bar``), and are
+# deliberately refused rather than requested — the branch paths resolve a commit
+# SHA first, so rejecting the name only costs an undated install, never a wrong one.
 _SAFE_REF_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 # Auto-update channels (user-selectable in the update dialog). "stable" and
@@ -494,27 +496,45 @@ def resolve_build_mtime(
     release order that gap is enough for the AnkiWeb upload to land in between,
     which would re-offer the identical version as an "update".
 
-    Anything else is dated by the commit it was built from. The result is capped
-    at the present: a commit dated in the future (a skewed clock, or a crafted
-    committer date on a PR build) would otherwise be written to ``mod`` and,
-    because the stamp never moves backwards, suppress AnkiWeb updates until that
-    date arrived. None means "could not tell", and the caller leaves ``mod`` alone.
+    Anything else is dated by the commit it was built from, and *that* value is
+    capped at the present: a commit dated in the future (a skewed clock, or a
+    crafted committer date on a PR build) would otherwise be written to ``mod``
+    and, because the stamp never moves backwards, suppress AnkiWeb updates until
+    that date arrived. The cap is deliberately not applied to ``published_at`` —
+    that comes from GitHub's clock, not the committer's, so capping it against a
+    slow local clock could only corrupt a value that was already correct.
+
+    None means "could not tell", and the caller leaves ``mod`` alone.
     """
     import time
 
-    resolved = None
     if source_type in ("release", "tag"):
-        resolved = _parse_iso8601(published_at)
-    if not resolved:
-        # commit_sha and source_name are the same string on the release and tag
-        # paths, so dedupe rather than repeat a request that already failed.
-        for ref in dict.fromkeys(r for r in (commit_sha, source_name) if r):
-            resolved = _parse_iso8601(fetch_ref_date(ref))
-            if resolved:
-                break
-    if not resolved:
+        published = _parse_iso8601(published_at)
+        if published:
+            return published
+    # commit_sha and source_name are the same string on the release and tag
+    # paths, so dedupe rather than repeat a request that already failed.
+    for ref in dict.fromkeys(r for r in (commit_sha, source_name) if r):
+        resolved = _parse_iso8601(fetch_ref_date(ref))
+        if resolved:
+            return min(resolved, int(time.time()))
+    return None
+
+
+def published_at_for_tag(tag: str, releases: list) -> Optional[str]:
+    """The publish date of the release this tag names, if we already have it.
+
+    Every tag the picker offers names a published release and installs
+    byte-identical code, so a tag install should be dated exactly like the
+    equivalent release install. Returns None when the tag names no release we
+    know about, and the caller falls back to the tag's commit date.
+    """
+    if not tag or not releases:
         return None
-    return min(resolved, int(time.time()))
+    for release in releases:
+        if isinstance(release, dict) and release.get("name") == tag:
+            return release.get("published_at")
+    return None
 
 
 def stamp_addon_mod(timestamp: int) -> bool:
@@ -528,9 +548,14 @@ def stamp_addon_mod(timestamp: int) -> bool:
     build Anki last installed, and AnkiWeb's copy looks newer than a GitHub
     build that is in fact ahead of it. That is the accidental-downgrade prompt.
 
-    Never moves ``mod`` backwards: installing an older tag must not mask a
-    genuinely newer AnkiWeb release. A meta.json that Anki did not create is
-    left alone, as is one that no longer parses as a JSON object.
+    Never moves ``mod`` backwards. Note what that does and does not buy: since
+    Anki compares ``installed_at >= server_mtime``, a *lower* ``mod`` is what
+    surfaces an AnkiWeb build, so refusing to lower it means a deliberate
+    downgrade keeps the build the user chose instead of having AnkiWeb's silently
+    offered back over the top. It also makes the stamp monotonic, so introducing
+    it can never leave a user worse off than the un-stamped behaviour they have
+    today. A meta.json that Anki did not create is left alone, as is one that no
+    longer parses as a JSON object.
     """
     try:
         if not timestamp or timestamp <= 0:
