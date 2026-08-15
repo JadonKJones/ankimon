@@ -13,7 +13,9 @@ what the services-registry refactor targets.)
 import importlib.util
 import json
 import sys
+import time
 import types
+import zipfile
 from pathlib import Path
 
 _SRC = Path(__file__).parent.parent / "src"
@@ -352,3 +354,102 @@ def test_stamp_addon_mod_rejects_nonpositive(tmp_path, monkeypatch):
     assert um.stamp_addon_mod(0) is False
     assert um.stamp_addon_mod(-1) is False
     assert json.loads(path.read_text(encoding="utf-8"))["mod"] == 100
+
+
+def test_resolve_build_mtime_dates_a_tag_by_its_release(monkeypatch):
+    """Tags name published releases and install identical code, so they share a date."""
+    called = []
+    monkeypatch.setattr(um, "fetch_ref_date", lambda ref: called.append(ref))
+    ts = um.resolve_build_mtime("tag", "2.4", "2.4", "2026-08-08T11:02:30Z")
+    assert ts == 1786186950
+    assert called == []
+
+
+def test_resolve_build_mtime_clamps_a_future_commit_date(monkeypatch):
+    """A skewed clock or a crafted committer date must not pin mod into the future.
+
+    stamp_addon_mod never moves backwards, so an unclamped future value would
+    suppress every AnkiWeb update until that date actually arrived.
+    """
+    monkeypatch.setattr(um, "fetch_ref_date", lambda _ref: "2099-01-01T00:00:00Z")
+    before = int(time.time())
+    ts = um.resolve_build_mtime("pr", "123", "abc1234def")
+    assert ts is not None
+    assert before <= ts <= int(time.time())
+
+
+def test_resolve_build_mtime_does_not_repeat_a_failed_lookup(monkeypatch):
+    """commit_sha and source_name are the same string on the tag/release paths."""
+    called = []
+    monkeypatch.setattr(um, "fetch_ref_date", lambda ref: called.append(ref))
+    assert um.resolve_build_mtime("tag", "2.4", "2.4") is None
+    assert called == ["2.4"]
+
+
+# --- apply_update end to end ---------------------------------------------------
+
+
+def _staged_install(tmp_path, monkeypatch):
+    """Set apply_update up to run past the git-clone guard against a temp dir."""
+    addon = tmp_path / "addon"
+    addon.mkdir()
+    (addon / "old.py").write_text("old", encoding="utf-8")
+    (addon / "meta.json").write_text(
+        json.dumps({"mod": 100, "config": {"k": 1}, "disabled": False}),
+        encoding="utf-8",
+    )
+    zip_path = tmp_path / "update.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("ankimon-main/src/Ankimon/__init__.py", "new")
+        zf.writestr("ankimon-main/src/Ankimon/new.py", "new")
+
+    monkeypatch.setattr(um, "addon_dir", addon)
+    monkeypatch.setattr(um, "is_git_clone", lambda: False)
+    monkeypatch.setattr(um, "_get_gitignore_patterns", lambda: [])
+    monkeypatch.setattr(um, "_fetch_submodule_sha", lambda _ref: None)
+    monkeypatch.setattr(um, "_download_and_extract_submodule", lambda *a, **k: None)
+    monkeypatch.setattr(um, "save_update_state", lambda *a, **k: None)
+    monkeypatch.setattr(um, "get_meta_json_path", lambda: addon / "meta.json")
+    monkeypatch.setattr(um, "fetch_ref_date", lambda _ref: None)  # no network
+    return addon, zip_path
+
+
+def test_apply_update_stamps_mod_from_the_release_date(tmp_path, monkeypatch):
+    """The published_at threaded from the dialog reaches meta.json."""
+    addon, zip_path = _staged_install(tmp_path, monkeypatch)
+
+    ok, _msg = um.apply_update(
+        str(zip_path), "release", "2.4", "2.4", "2026-08-08T11:02:30Z"
+    )
+
+    assert ok is True
+    meta = json.loads((addon / "meta.json").read_text(encoding="utf-8"))
+    assert meta["mod"] == 1786186950
+    # Anki owns the rest of this file; the install must not cost it anything.
+    assert meta["config"] == {"k": 1}
+    assert meta["disabled"] is False
+
+
+def test_apply_update_does_not_stamp_when_the_install_rolls_back(tmp_path, monkeypatch):
+    """A late failure restores the old build, so meta.json must not claim the new one.
+
+    Stamping before the rollback handler would leave old code on disk dated as the
+    new build -- Anki would read it as current and suppress the update that repairs it.
+    """
+    addon, zip_path = _staged_install(tmp_path, monkeypatch)
+
+    def explode(msg):
+        if "Update complete" in msg:
+            raise RuntimeError("taskman gone")
+
+    ok, _msg = um.apply_update(
+        str(zip_path),
+        "release",
+        "2.4",
+        "2.4",
+        "2026-08-08T11:02:30Z",
+        status_cb=explode,
+    )
+
+    assert ok is False
+    assert json.loads((addon / "meta.json").read_text(encoding="utf-8"))["mod"] == 100

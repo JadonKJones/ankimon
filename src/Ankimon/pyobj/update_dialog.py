@@ -1313,6 +1313,18 @@ class UpdateDialog(QDialog):
                     source_type="tag",
                     source_name=data["name"],
                     commit_sha=data["name"],
+                    # Every tag the picker offers names a published release, and
+                    # installs byte-identical code to the Releases tab. Date it
+                    # the same way, or the tag's (earlier) commit timestamp lets
+                    # the AnkiWeb upload look newer than the code just installed.
+                    published_at=next(
+                        (
+                            r.get("published_at")
+                            for r in (self._releases or [])
+                            if r.get("name") == data["name"]
+                        ),
+                        None,
+                    ),
                 )
 
 

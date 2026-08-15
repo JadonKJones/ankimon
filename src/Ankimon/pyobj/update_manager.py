@@ -488,20 +488,33 @@ def resolve_build_mtime(
 ) -> Optional[int]:
     """Epoch seconds describing the build about to be installed.
 
-    A release is dated by when it went public, because that is the timestamp
-    AnkiWeb's own listing is compared against; everything else is dated by the
-    commit it was built from. None means "could not tell", and the caller then
-    leaves ``mod`` untouched rather than guessing.
+    A release — or a tag naming one — is dated by when that release went public,
+    because that is the timestamp AnkiWeb's listing is compared against. The
+    tag's own commit is typically minutes older, and under the AnkiWeb-first
+    release order that gap is enough for the AnkiWeb upload to land in between,
+    which would re-offer the identical version as an "update".
+
+    Anything else is dated by the commit it was built from. The result is capped
+    at the present: a commit dated in the future (a skewed clock, or a crafted
+    committer date on a PR build) would otherwise be written to ``mod`` and,
+    because the stamp never moves backwards, suppress AnkiWeb updates until that
+    date arrived. None means "could not tell", and the caller leaves ``mod`` alone.
     """
-    if source_type == "release":
-        published = _parse_iso8601(published_at)
-        if published:
-            return published
-    for ref in (commit_sha, source_name):
-        resolved = _parse_iso8601(fetch_ref_date(ref)) if ref else None
-        if resolved:
-            return resolved
-    return None
+    import time
+
+    resolved = None
+    if source_type in ("release", "tag"):
+        resolved = _parse_iso8601(published_at)
+    if not resolved:
+        # commit_sha and source_name are the same string on the release and tag
+        # paths, so dedupe rather than repeat a request that already failed.
+        for ref in dict.fromkeys(r for r in (commit_sha, source_name) if r):
+            resolved = _parse_iso8601(fetch_ref_date(ref))
+            if resolved:
+                break
+    if not resolved:
+        return None
+    return min(resolved, int(time.time()))
 
 
 def stamp_addon_mod(timestamp: int) -> bool:
@@ -910,19 +923,6 @@ def apply_update(
             if source_type and source_name:
                 save_update_state(source_type, source_name, commit_sha or "")
 
-            # Date meta.json by the build just installed, so Anki stops treating
-            # whichever build it last installed as the newer copy. Resolving the
-            # timestamp needs the network, so it gets its own guard — a GitHub
-            # hiccup must not turn a finished install into a rollback.
-            try:
-                mtime = resolve_build_mtime(
-                    source_type, source_name, commit_sha, published_at
-                )
-                if mtime and stamp_addon_mod(mtime):
-                    log("Recorded install date for Anki's update check.")
-            except Exception as e:
-                print(f"Ankimon Updater: Could not date the install: {e}")
-
             cleanup()
             log(f"Update complete. Installed {installed} files.")
 
@@ -931,6 +931,25 @@ def apply_update(
                 shutil.rmtree(backup_dir)
             except Exception:
                 pass
+
+            # Date meta.json by the build just installed, so Anki stops treating
+            # whichever build it last installed as the newer copy.
+            #
+            # Deliberately the last thing done, after every statement that could
+            # still raise into the rollback handler below. Stamping earlier would
+            # let a late failure restore the old code while leaving meta.json
+            # dated as the new build — Anki would then believe the rolled-back
+            # install is current and suppress the very update that repairs it.
+            # Resolving the timestamp also needs the network, so it is guarded
+            # separately: a GitHub hiccup must not fail a finished install.
+            try:
+                mtime = resolve_build_mtime(
+                    source_type, source_name, commit_sha, published_at
+                )
+                if mtime and stamp_addon_mod(mtime):
+                    log("Recorded install date for Anki's update check.")
+            except Exception as e:
+                print(f"Ankimon Updater: Could not date the install: {e}")
 
             return True, "Update applied successfully. Please restart Anki."
 
