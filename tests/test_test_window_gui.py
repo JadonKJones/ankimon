@@ -3,10 +3,15 @@
 Pins the OBSERVABLE contract of the ported encounter display:
 
 * ``init_ui`` builds ONE persistent layout (a ``main_label`` plus a hidden
-  death-screen ``button_widget``) and a fixed 556x300 window — no
+  death-screen ``button_widget``) in a margin-free window pinned to the battle
+  scenes' 556px width, with the height left to the layout — no
   rebuild-per-encounter: the layout and label objects keep their identity
   across ``display_first_encounter`` / ``display_battle`` /
   ``display_pokemon_death`` calls.
+* No view is cropped: every scene the window renders fits inside
+  ``main_label`` at its natural size (the regression a fixed 556x300 window
+  caused — it cut the message bar off the foot of the battle scene and clipped
+  11px off each side of it).
 * ``_get_display_name`` routes mega/gmax internal names through the base's
   ``pokedex_functions.get_pretty_name_for_name`` (expectations validated
   against the real ``data_files/pokedex.json``), and everything else through
@@ -232,15 +237,90 @@ def test_init_ui_builds_persistent_scaffolding(make_window):
     assert layout.itemAt(1).widget() is win.button_widget
     assert win.button_widget.isHidden()
 
-    # Fixed 556x300 window (exp's fixed size/styling)
-    assert win.minimumWidth() == 556
-    assert win.maximumWidth() == 556
+    # Width is pinned to the battle scenes' own width; the height is the
+    # layout's to decide, so a taller view can never be cut off.
+    assert win.minimumWidth() == win.maximumWidth() == 556
+    assert win.maximumHeight() > win.minimumHeight()
+
+    # No contents margins: the 556px-wide scene has to reach both edges of a
+    # 556px-wide window, and QVBoxLayout's default 11px inset would crop it.
+    margins = layout.contentsMargins()
+    assert (margins.left(), margins.right()) == (0, 0)
+
     assert "rgb(44,44,44)" in win.styleSheet()
 
     # The Ankimon logo landed on the persistent label
     assert win.main_label.pixmap() is not None
     assert not win.main_label.pixmap().isNull()
     assert win.windowTitle() == "Ankimon Window"
+
+
+@pytest.mark.parametrize("view", ["first_encounter", "battle", "death"])
+def test_no_view_is_cropped(make_window, qapp, view):
+    """Every view renders at its natural size — nothing is cut off.
+
+    The regression this pins: ``init_ui`` used to pin the window to 556x300,
+    but the battle scene WITH its dialog box is 556x371, so the message bar
+    along its foot fell outside the window entirely. Both axes were wrong —
+    the layout's default 11px side margins also left the 556px-wide scene only
+    534px to draw in, shaving 11px off each side of every view.
+
+    Asserting on ``main_label`` rather than on the size constraints is what
+    makes this bite: a QLabel silently centre-crops a pixmap too big for it,
+    so the only honest question is whether the label is at least as large as
+    what it was handed. The window has to be shown for Qt to resolve the
+    layout against the real constraints (the suite runs offscreen).
+    """
+    win = make_window()
+    win.show()
+    qapp.processEvents()
+
+    if view == "first_encounter":
+        win.ankimon_tracker_obj.pokemon_encounter = 0  # the 556x371 scene
+        win.display_first_encounter()
+    elif view == "battle":
+        win.ankimon_tracker_obj.pokemon_encounter = 3  # the 555x258 scene
+        win.display_battle()
+    else:
+        win.display_pokemon_death()
+    qapp.processEvents()
+
+    pixmap = win.main_label.pixmap()
+    assert pixmap is not None and not pixmap.isNull()
+
+    assert win.main_label.width() >= pixmap.width(), (
+        f"{view}: {pixmap.width()}px-wide art cropped to a "
+        f"{win.main_label.width()}px label"
+    )
+    assert win.main_label.height() >= pixmap.height(), (
+        f"{view}: {pixmap.height()}px-tall art cropped to a "
+        f"{win.main_label.height()}px label"
+    )
+
+    win.hide()
+
+
+def test_death_view_keeps_room_for_the_buttons(make_window, qapp):
+    """The catch/defeat row is inside the window, not pushed past its foot.
+
+    The death view is the tallest thing after the battle scene — the pokedex
+    card plus the button row — and it is the view a fixed height is most
+    likely to clip, since the buttons are added below the art rather than
+    drawn into it.
+    """
+    win = make_window()
+    win.show()
+    qapp.processEvents()
+    win.display_pokemon_death()
+    qapp.processEvents()
+
+    assert not win.button_widget.isHidden()
+    button_bottom = win.button_widget.geometry().bottom()
+    assert button_bottom <= win.height(), (
+        f"catch/defeat row ends at y={button_bottom} in a {win.height()}px window"
+    )
+
+    win.hide()
 
 
 def test_layout_identity_persists_across_display_calls(make_window):
