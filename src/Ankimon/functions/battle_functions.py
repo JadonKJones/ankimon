@@ -612,6 +612,10 @@ def validate_pokemon_status(pokemon):
     if hasattr(pokemon, "hp") and pokemon.hp <= 0 and current_status != "fainted":
         return "fainted"
 
+    # If Pokemon has HP > 0 but status is fainted, revert to fighting
+    if hasattr(pokemon, "hp") and pokemon.hp > 0 and current_status == "fainted":
+        return "fighting"
+
     return current_status
 
 
