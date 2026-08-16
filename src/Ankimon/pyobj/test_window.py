@@ -126,6 +126,12 @@ class TestWindow(QWidget):
         layout = self.layout()
         self.clear_layout(layout)
 
+        # The battle scene is a full-bleed backdrop, not a widget on a page, so
+        # the layout keeps no contents margins: QVBoxLayout's default 11px inset
+        # left only 534px for a 556px-wide scene, silently cropping 11px off
+        # each side (the window is sized to the scene, see setFixedWidth below).
+        layout.setContentsMargins(0, 0, 0, 0)
+
         # Main label that will persist and show everything (Logo, Battle, Death)
         self.main_label = QLabel()
         self.main_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -154,7 +160,15 @@ class TestWindow(QWidget):
         self.setStyleSheet("background-color: rgb(44,44,44);")
         self._reset_window_title()
         self.setWindowIcon(QIcon(str(icon_path)))
-        self.setFixedSize(556, 300)
+        # Pin the width to the battle scenes' own width (the art is 556x371 with
+        # the dialog box, 555x258 without) and let the layout own the height.
+        # A fixed 556x300 cropped every view: the scene with its dialog box needs
+        # 371, so the message bar at its foot was cut off, and the death screen
+        # needs 297 for the pokedex card plus the catch/defeat row. Heights vary
+        # per view, and Qt only ever raises a shown top-level window's minimum,
+        # so the window grows to whichever view needs the most and then holds
+        # steady — no per-view resize flicker.
+        self.setFixedWidth(556)
 
     def open_dynamic_window(self):
         # Create and show the dynamic window
