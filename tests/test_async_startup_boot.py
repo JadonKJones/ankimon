@@ -909,7 +909,15 @@ def test_success_callback_failure_clears_reload_lifecycle_flags(boot_env):
     """QueryOp routes only *op* exceptions to .failure(); a raising success
     callback propagates instead, so the flag reset has to be a finally."""
 
+    observed = []
+
     def fail_ui_startup(results):
+        observed.append(
+            (
+                boot_env.services._startup_in_progress,
+                boot_env.services._is_reloading,
+            )
+        )
         raise RuntimeError("qt half boom")
 
     sys.modules["Ankimon.startup"].run_startup_ui_callbacks = fail_ui_startup
@@ -918,6 +926,9 @@ def test_success_callback_failure_clears_reload_lifecycle_flags(boot_env):
     with pytest.raises(RuntimeError, match="qt half boom"):
         boot_env.exec_init()
 
+    # Pin the *transition*: both flags were still set when the callback blew
+    # up, so the final False below can only come from the finally.
+    assert observed == [(True, True)]
     # Left set, restart_ankimon() would block on _startup_in_progress until its
     # timeout on every later Ctrl+Shift+R, and backups would stay suppressed.
     assert boot_env.services._startup_in_progress is False
@@ -926,9 +937,16 @@ def test_success_callback_failure_clears_reload_lifecycle_flags(boot_env):
 
 def test_unschedulable_queryop_clears_reload_lifecycle_flags(boot_env):
     """If run_in_background() raises, neither callback ever runs."""
-    monkey = SyncQueryOp.run_in_background
+    real_run_in_background = SyncQueryOp.run_in_background
+    observed = []
 
     def fail_to_schedule(self):
+        observed.append(
+            (
+                boot_env.services._startup_in_progress,
+                boot_env.services._is_reloading,
+            )
+        )
         raise RuntimeError("taskman gone")
 
     SyncQueryOp.run_in_background = fail_to_schedule
@@ -937,8 +955,9 @@ def test_unschedulable_queryop_clears_reload_lifecycle_flags(boot_env):
         with pytest.raises(RuntimeError, match="taskman gone"):
             boot_env.exec_init()
     finally:
-        SyncQueryOp.run_in_background = monkey
+        SyncQueryOp.run_in_background = real_run_in_background
 
+    assert observed == [(True, True)]
     assert boot_env.services._startup_in_progress is False
     assert boot_env.services._is_reloading is False
 
