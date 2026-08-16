@@ -45,6 +45,13 @@ from PyQt6.QtWidgets import QApplication, QWidget
 from aqt import gui_hooks, mw
 
 
+# Longest the reload blocks the GUI thread waiting for an in-flight startup
+# QueryOp. Generous enough for a slow first boot (legacy backup + dev-mode disk
+# copy + DB migration on a large collection), bounded so a wedged startup costs
+# the developer one tooltip instead of a frozen Anki that needs force-quitting.
+_STARTUP_WAIT_TIMEOUT_SECONDS = 30.0
+
+
 def restart_ankimon():
     """Tear the add-on down and re-import it in place (developer hot-reload)."""
     import time
@@ -53,26 +60,58 @@ def restart_ankimon():
 
     from .services import services
 
-    # Wait for the active startup QueryOp before purging modules. Otherwise its
-    # worker can hold a database connection lock while waiting for Python's
-    # import lock, as teardown waits for that same database lock.
-    while getattr(services, "_startup_in_progress", False):
-        QApplication.processEvents()
-        time.sleep(0.02)
-
-    addon_package = __name__.split(".")[0]
-    services._is_reloading = True
+    # Re-entrancy guard. The wait loop below pumps the Qt event queue while the
+    # Ctrl+Shift+R QShortcut and the "Restart Ankimon" menu action are both
+    # still live and enabled, so a second trigger can land *inside* this call
+    # and start a concurrent teardown of half-purged modules. The flag lives on
+    # the registry, not at module scope, because _purge_addon_modules() drops
+    # this module while the reload is still running.
+    if getattr(services, "_reload_in_progress", False):
+        return
+    services._reload_in_progress = True
     try:
-        teardown_ankimon(addon_package)
-        importlib.import_module(addon_package)
-        tooltip("Ankimon reloaded.")
-    except Exception as exc:  # surface any reload failure to the developer
-        message = f"Ankimon reload failed: {exc}\n{traceback.format_exc()}"
-        print(message)
+        # Wait for the active startup QueryOp before purging modules. Otherwise
+        # its worker can hold a database connection lock while waiting for
+        # Python's import lock, as teardown waits for that same database lock.
+        deadline = time.monotonic() + _STARTUP_WAIT_TIMEOUT_SECONDS
+        while getattr(services, "_startup_in_progress", False):
+            if time.monotonic() >= deadline:
+                # Purging now is exactly what deadlocks, so abort the reload
+                # rather than trade a slow startup for a hung Anki.
+                print(
+                    "Ankimon reload aborted: startup still running after "
+                    f"{_STARTUP_WAIT_TIMEOUT_SECONDS:.0f}s."
+                )
+                try:
+                    tooltip("Ankimon reload skipped — startup still running.")
+                except Exception:
+                    pass
+                return
+            QApplication.processEvents()
+            time.sleep(0.02)
+
+        addon_package = __name__.split(".")[0]
+        services._is_reloading = True
         try:
-            tooltip("Ankimon reload failed — see console.")
-        except Exception:
-            pass
+            teardown_ankimon(addon_package)
+            importlib.import_module(addon_package)
+            tooltip("Ankimon reloaded.")
+        except Exception as exc:  # surface any reload failure to the developer
+            # A successful re-import starts a fresh startup QueryOp, and *its*
+            # callbacks own clearing _is_reloading. If we failed before that
+            # (teardown raised, or the edited module has a syntax error) nothing
+            # else will clear the flag, and every later startup in this session
+            # would keep silently skipping its backups.
+            if not getattr(services, "_startup_in_progress", False):
+                services._is_reloading = False
+            message = f"Ankimon reload failed: {exc}\n{traceback.format_exc()}"
+            print(message)
+            try:
+                tooltip("Ankimon reload failed — see console.")
+            except Exception:
+                pass
+    finally:
+        services._reload_in_progress = False
 
 
 def _handler_belongs_to_addon(handler, addon_package):

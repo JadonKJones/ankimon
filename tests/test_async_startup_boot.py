@@ -905,6 +905,58 @@ def test_startup_failure_clears_reload_lifecycle_flags(boot_env):
     assert boot_env.services._is_reloading is False
 
 
+def test_success_callback_failure_clears_reload_lifecycle_flags(boot_env):
+    """QueryOp routes only *op* exceptions to .failure(); a raising success
+    callback propagates instead, so the flag reset has to be a finally."""
+
+    def fail_ui_startup(results):
+        raise RuntimeError("qt half boom")
+
+    sys.modules["Ankimon.startup"].run_startup_ui_callbacks = fail_ui_startup
+    boot_env.services._is_reloading = True
+
+    with pytest.raises(RuntimeError, match="qt half boom"):
+        boot_env.exec_init()
+
+    # Left set, restart_ankimon() would block on _startup_in_progress until its
+    # timeout on every later Ctrl+Shift+R, and backups would stay suppressed.
+    assert boot_env.services._startup_in_progress is False
+    assert boot_env.services._is_reloading is False
+
+
+def test_unschedulable_queryop_clears_reload_lifecycle_flags(boot_env):
+    """If run_in_background() raises, neither callback ever runs."""
+    monkey = SyncQueryOp.run_in_background
+
+    def fail_to_schedule(self):
+        raise RuntimeError("taskman gone")
+
+    SyncQueryOp.run_in_background = fail_to_schedule
+    boot_env.services._is_reloading = True
+    try:
+        with pytest.raises(RuntimeError, match="taskman gone"):
+            boot_env.exec_init()
+    finally:
+        SyncQueryOp.run_in_background = monkey
+
+    assert boot_env.services._startup_in_progress is False
+    assert boot_env.services._is_reloading is False
+
+
+def test_services_declares_and_resets_the_hot_reload_flags(boot_env):
+    """The registry is what survives _purge_addon_modules, so the hot-reload
+    flags have to live there and come back false on a profile-level reset."""
+    services = boot_env.services
+    for attr in ("_startup_in_progress", "_is_reloading", "_reload_in_progress"):
+        assert getattr(services, attr) is False
+        setattr(services, attr, True)
+
+    services.reset()
+
+    for attr in ("_startup_in_progress", "_is_reloading", "_reload_in_progress"):
+        assert getattr(services, attr) is False
+
+
 def test_changelog_keeps_real_connectivity(boot_env):
     """exp stubbed online_connectivity=False and dropped the changelog call;
     the port must keep both on the REAL connectivity result."""
