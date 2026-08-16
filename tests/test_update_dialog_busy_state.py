@@ -699,6 +699,12 @@ def test_branch_progress_malformed_result_uses_failure_path():
 
 
 class _StampSpy:
+    """Stands in for stamp_addon_mod, recording the timestamps it is handed.
+
+    An empty ``calls`` list is the assertion that matters in most of these
+    tests: it means no meta.json write was attempted from that phase.
+    """
+
     def __init__(self):
         self.calls = []
 

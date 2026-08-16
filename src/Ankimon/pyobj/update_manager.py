@@ -427,6 +427,13 @@ def fetch_ref_date(ref: str) -> Optional[str]:
 
 
 def fetch_commit_date(sha: str) -> Optional[str]:
+    """Committer date (ISO 8601) of a commit SHA, or None.
+
+    Narrower than ``fetch_ref_date``: the argument must look like a SHA (hex,
+    at least the 7 characters GitHub's short form uses), so a branch or tag name
+    is refused here even though the endpoint would accept it. Callers that hold
+    a name rather than a SHA want ``fetch_ref_date``.
+    """
     if not sha or len(sha) < 7 or not all(c in "0123456789abcdefABCDEF" for c in sha):
         return None
     return fetch_ref_date(sha)
@@ -463,6 +470,12 @@ def get_update_state_path() -> Path:
 
 
 def get_meta_json_path() -> Path:
+    """Anki's metadata file for this add-on.
+
+    Anki's, not ours — it also holds ``config``, ``disabled`` and the rest, so
+    anything writing here edits only the key it owns. Indirected through a
+    function so tests can point it at a temp directory.
+    """
     return addon_dir / "meta.json"
 
 

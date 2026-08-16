@@ -11,12 +11,21 @@ on:
         required: false
         type: string
 
-# This workflow runs the WHOLE release on the built-in GITHUB_TOKEN (which never
-# expires) — prepare -> integrity test -> commit + tag -> build, then a manual
-# approval gate, then publish. It deliberately does NOT hand off to main.yml via
+# This workflow runs the whole release end to end — prepare -> integrity test ->
+# commit + tag -> build, then a manual approval gate, then publish — without any
+# long-lived stored credential. It deliberately does NOT hand off to main.yml via
 # a tag push: GitHub won't trigger a second workflow from a tag pushed with
 # GITHUB_TOKEN, and a PAT just to trigger that hand-off is a fragile, expiring
-# dependency. Folding the build+publish in here removes it entirely.
+# dependency to have to store and rotate. Folding the build+publish in here
+# removes it entirely.
+#
+# On tokens: GITHUB_TOKEN is scoped to a single job. Actions mints a fresh one
+# per job and it dies when that job ends (6h ceiling on hosted runners), so it is
+# not one token spanning the run. That is precisely what makes the approval gate
+# safe to wait on for days: `publish` is issued its own new token when it finally
+# starts, rather than needing one to survive the wait. The tag push and the
+# release creation each use their job's GITHUB_TOKEN; the push to `main` needs
+# more than that, and uses the App installation token — see the NOTE below.
 #
 # It is split across two jobs on purpose. AnkiWeb must be updated BEFORE the
 # GitHub release exists, because Anki decides an add-on is out of date by
@@ -369,6 +378,13 @@ jobs:
           name: "${{ needs.build.outputs.module_name }} v${{ needs.build.outputs.release_tag }}"
           body_path: patched_changelog.md
           files: build/*.ankiaddon
+          # Belt and braces with the verification step above: this action's
+          # default is to publish happily when `files` matches nothing, which at
+          # this point in the run would mean a release with no add-on attached
+          # and AnkiWeb already updated. The two guards are independent — this
+          # one keeps holding if the glob above ever drifts from the one the
+          # verification step checks.
+          fail_on_unmatched_files: true
           draft: false
           generate_release_notes: false
         env:
