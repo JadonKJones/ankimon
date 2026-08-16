@@ -9,7 +9,12 @@ that, so these run against real Qt (the Tier-2 / integrity-test env) and skip
 cleanly in the aqt-free Tier-1 env.
 
 Kept out of ``test_reloader.py`` on purpose: that file installs fake ``PyQt6``
-modules in ``sys.modules``, which is exactly what would invalidate these.
+modules in ``sys.modules``, which is exactly what would invalidate these. It
+restores them via ``monkeypatch``, so real Qt is back by the time this module
+runs — but that only holds because ``test_reloader_qt`` sorts *after*
+``test_reloader``. If collection order ever changes (a rename, xdist, a
+shuffling plugin), ``_env_guard`` below turns these into skips rather than
+failures, so re-run this file standalone before trusting a green suite.
 
 Run standalone with::
 
