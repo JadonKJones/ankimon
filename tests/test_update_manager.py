@@ -131,9 +131,10 @@ def test_apply_update_refuses_on_git_clone_and_cleans_zip(tmp_path, monkeypatch)
     dummy_zip = tmp_path / "update.zip"
     dummy_zip.write_bytes(b"PK\x03\x04")
 
-    ok, msg = um.apply_update(str(dummy_zip))
+    ok, msg, pending_mod = um.apply_update(str(dummy_zip))
 
     assert ok is False
+    assert pending_mod is None
     assert "git" in msg.lower()
     assert not dummy_zip.exists()  # guard cleaned up the downloaded archive
 
@@ -320,6 +321,22 @@ def test_fetch_ref_date_refuses_unsafe_refs(monkeypatch):
     assert seen == []  # nothing unsafe reached the API
 
 
+def test_fetch_ref_date_refuses_dot_segments(monkeypatch):
+    """The character class alone admits ".." — a URL normaliser eats it, and
+    ``commits/..`` then addresses the repo rather than a commit."""
+    seen = []
+    monkeypatch.setattr(um, "_api_get", lambda ep: seen.append(ep))
+    for ref in ("..", ".", "...", "..%2f", "2.0..2.1", ".hidden"):
+        assert um.fetch_ref_date(ref) is None, ref
+    assert seen == []
+
+
+def test_is_safe_ref_still_accepts_real_tags():
+    """The tags and SHAs the pickers actually offer must keep resolving."""
+    for ref in ("2.03", "2.02-E", "v1.9.1", "abc1234def", "main", "some_branch"):
+        assert um._is_safe_ref(ref) is True, ref
+
+
 def test_fetch_commit_date_still_rejects_non_hex(monkeypatch):
     seen = []
     monkeypatch.setattr(um, "_api_get", lambda ep: seen.append(ep))
@@ -490,8 +507,8 @@ def _staged_install(tmp_path, monkeypatch):
     return addon, zip_path
 
 
-def test_apply_update_stamps_mod_from_the_release_date(tmp_path, monkeypatch):
-    """The published_at threaded from the dialog reaches meta.json."""
+def test_apply_update_returns_the_release_date_to_stamp(tmp_path, monkeypatch):
+    """The published_at threaded from the dialog comes back as pending_mod."""
     addon, zip_path = _staged_install(tmp_path, monkeypatch)
 
     seen = {}
@@ -504,27 +521,80 @@ def test_apply_update_stamps_mod_from_the_release_date(tmp_path, monkeypatch):
     monkeypatch.setattr(um, "resolve_build_mtime", _spy)
 
     # Distinct values in every slot, so a transposed argument cannot pass.
-    ok, _msg = um.apply_update(
+    ok, _msg, pending_mod = um.apply_update(
         str(zip_path), "release", "rel-name", "sha-value", "2026-08-08T11:02:30Z"
     )
 
     assert ok is True
     assert seen["args"] == ("release", "rel-name", "sha-value", "2026-08-08T11:02:30Z")
-    meta = json.loads((addon / "meta.json").read_text(encoding="utf-8"))
-    assert meta["mod"] == 1786186950
-    # Anki owns the rest of this file; the install must not cost it anything.
-    assert meta["config"] == {"k": 1}
-    assert meta["disabled"] is False
+    assert pending_mod == 1786186950
     # and the install really happened
     assert (addon / "new.py").exists()
     assert not (addon / "old.py").exists()
 
 
+def test_apply_update_never_writes_meta_json_itself(tmp_path, monkeypatch):
+    """The structural half of the concurrency fix.
+
+    apply_update runs in a QueryOp worker. meta.json is Anki's file and Anki
+    read-modify-writes it from the main thread, so the worker must not touch it
+    at all — it resolves the timestamp and hands it back. If this assertion ever
+    fails, the read-modify-write has crept back onto the worker thread and the
+    lost-update race is live again.
+    """
+    addon, zip_path = _staged_install(tmp_path, monkeypatch)
+    before = (addon / "meta.json").read_text(encoding="utf-8")
+
+    ok, _msg, pending_mod = um.apply_update(
+        str(zip_path), "release", "2.4", "2.4", "2026-08-08T11:02:30Z"
+    )
+
+    assert ok is True
+    assert pending_mod == 1786186950  # resolved, but deliberately not written
+    assert (addon / "meta.json").read_text(encoding="utf-8") == before
+
+
+def test_a_concurrent_config_write_survives_the_stamp(tmp_path, monkeypatch):
+    """The regression this worker/main-thread split exists for.
+
+    Anki keeps running while the updater worker installs. If the worker had
+    snapshotted meta.json and written it back, a config Anki wrote in between —
+    the add-on config dialog, an enable/disable toggle — would be reverted to
+    that snapshot. Resolving in the worker and writing on the main thread means
+    the write reads whatever is actually on disk at the moment it runs.
+    """
+    addon, zip_path = _staged_install(tmp_path, monkeypatch)
+    meta_path = addon / "meta.json"
+
+    # --- worker thread: install, resolve the date, touch nothing else ---
+    ok, _msg, pending_mod = um.apply_update(
+        str(zip_path), "release", "2.4", "2.4", "2026-08-08T11:02:30Z"
+    )
+    assert ok is True and pending_mod == 1786186950
+
+    # --- main thread, meanwhile: Anki writes a config change ---
+    meta_path.write_text(
+        json.dumps({"mod": 100, "config": {"k": 2, "added": True}, "disabled": True}),
+        encoding="utf-8",
+    )
+
+    # --- main thread: the stamp, reading current state rather than a snapshot ---
+    assert um.stamp_addon_mod(pending_mod) is True
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["mod"] == 1786186950
+    # The change that a stale snapshot would have silently discarded.
+    assert meta["config"] == {"k": 2, "added": True}
+    assert meta["disabled"] is True
+
+
 def test_apply_update_does_not_stamp_when_the_install_rolls_back(tmp_path, monkeypatch):
     """A late failure restores the old build, so meta.json must not claim the new one.
 
-    Stamping before the rollback handler would leave old code on disk dated as the
-    new build -- Anki would read it as current and suppress the update that repairs it.
+    Returning a timestamp here would have the caller date restored old code as
+    the new build -- Anki would read it as current and suppress the update that
+    repairs it. The guard is that the rollback path returns None, and the
+    dialog's success callback only stamps when the install actually succeeded.
     """
     addon, zip_path = _staged_install(tmp_path, monkeypatch)
 
@@ -532,7 +602,7 @@ def test_apply_update_does_not_stamp_when_the_install_rolls_back(tmp_path, monke
         if "Update complete" in msg:
             raise RuntimeError("taskman gone")
 
-    ok, msg = um.apply_update(
+    ok, msg, pending_mod = um.apply_update(
         str(zip_path),
         "release",
         "2.4",
@@ -542,6 +612,7 @@ def test_apply_update_does_not_stamp_when_the_install_rolls_back(tmp_path, monke
     )
 
     assert ok is False
+    assert pending_mod is None  # nothing for the caller to stamp
     # The rollback really ran: the previous build's files are back. (It restores
     # the backup over the top rather than deleting files the update added, so
     # new.py survives — pre-existing behaviour, not what this test is about.)

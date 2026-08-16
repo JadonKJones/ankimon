@@ -284,8 +284,19 @@ jobs:
               f.write(content)
           EOF
 
+      # Pinned to a commit, like the third-party actions above. The artifact is
+      # the only thing crossing the approval gate — between this upload and the
+      # download below sits a human step and an arbitrary wait, so a mutable tag
+      # here means the code that carries the release could change underneath a
+      # run that is already half-approved.
+      #
+      # Both paths are relative to the workspace, so the artifact's root is their
+      # least common ancestor — the workspace — and the layout the publish job
+      # sees is "build/*.ankiaddon" plus "patched_changelog.md" at the top level.
+      # The publish job's paths depend on that; the verification step there fails
+      # the run if it ever stops holding.
       - name: Hand the package to the publish job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ankiaddon
           path: |
@@ -319,9 +330,37 @@ jobs:
       url: https://ankiweb.net/shared/addons/
     steps:
       - name: Download the package built above
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ankiaddon
+
+      # By the time this job runs, AnkiWeb has already been updated — that is the
+      # whole point of the gate above. So this is the last moment a missing file
+      # can still be caught for free: publishing a release with no .ankiaddon
+      # attached, or with an empty body, would leave the two channels
+      # disagreeing with no way to un-publish the AnkiWeb upload. Assert the
+      # layout the build job produced rather than trusting it, so a future change
+      # to the upload paths fails loudly here instead of shipping a broken release.
+      - name: Verify the artifact is complete
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          if [ ! -s patched_changelog.md ]; then
+            echo "::error::patched_changelog.md is missing or empty — the release body would be blank."
+            exit 1
+          fi
+          packages=(build/*.ankiaddon)
+          if [ ${#packages[@]} -eq 0 ]; then
+            echo "::error::No build/*.ankiaddon in the artifact — the release would ship without the add-on."
+            ls -R . || true
+            exit 1
+          fi
+          # The changelog's download link is hard-coded to this exact filename.
+          if [ ! -s build/Ankimon.ankiaddon ]; then
+            echo "::error::build/Ankimon.ankiaddon is missing or empty — the changelog's download link would 404."
+            exit 1
+          fi
+          echo "Publishing ${#packages[@]} package(s): ${packages[*]}"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
