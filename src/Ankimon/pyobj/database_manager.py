@@ -997,6 +997,16 @@ class AnkimonDB:
                 (individual_id, obfuscated_data)
             )
         conn.commit()
+
+        # Ensure the pokedex explicitly remembers this pokemon, so it isn't
+        # forgotten if it evolves and overwrites this row.
+        pokedex_id = pokemon_data.get("id")
+        if pokedex_id:
+            try:
+                self.mark_as_caught(int(pokedex_id))
+            except Exception as e:
+                self._log("warning", f"Failed to mark saved pokemon as caught: {e}")
+
         self._clear_reviewer_ownership_cache()
         return True
 
@@ -1445,6 +1455,45 @@ class AnkimonDB:
             if data:
                 results.append(data)
         return results
+
+
+    def get_caught_ids(self) -> set:
+        """Returns the set of explicitly marked caught pokedex IDs."""
+        data = self.get_user_data("pokedex_caught", [])
+        return set(data) if isinstance(data, list) else set()
+
+    def get_seen_ids(self) -> set:
+        """Returns the set of explicitly marked seen pokedex IDs."""
+        data = self.get_user_data("pokedex_seen", [])
+        return set(data) if isinstance(data, list) else set()
+
+    def mark_as_caught(self, pokedex_id: int):
+        """Marks a pokedex ID as caught (and seen)."""
+        if not pokedex_id:
+            return
+
+        caught = self.get_user_data("pokedex_caught", [])
+        if not isinstance(caught, list):
+            caught = []
+
+        if pokedex_id not in caught:
+            caught.append(pokedex_id)
+            self.set_user_data("pokedex_caught", caught)
+
+        self.mark_as_seen(pokedex_id)
+
+    def mark_as_seen(self, pokedex_id: int):
+        """Marks a pokedex ID as seen."""
+        if not pokedex_id:
+            return
+
+        seen = self.get_user_data("pokedex_seen", [])
+        if not isinstance(seen, list):
+            seen = []
+
+        if pokedex_id not in seen:
+            seen.append(pokedex_id)
+            self.set_user_data("pokedex_seen", seen)
 
     # --- User Data Operations ---
 
