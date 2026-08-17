@@ -4,8 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version string (e.g., 2.04 or 2.04-E)"
+        description: "Version number (e.g., 2.32 or 2.4)"
         required: true
+        type: string
+      experimental:
+        description: "Experimental release (-E suffix & auto-publish)?"
+        required: true
+        type: boolean
+        default: true
       highlights:
         description: "Highlights/What's new summary (optional)"
         required: false
@@ -61,16 +67,36 @@ jobs:
     outputs:
       release_tag: ${{ steps.vars.outputs.release_tag }}
       module_name: ${{ steps.vars.outputs.module_name }}
+      is_experimental: ${{ steps.vars.outputs.is_experimental }}
     # Bind the workflow_dispatch inputs to env vars once, then reference them as
-    # "$VERSION" / "$HIGHLIGHTS" in every run: block. Expanding
+    # "$RAW_VERSION" / "$IS_EXPERIMENTAL" / "$HIGHLIGHTS". Expanding
     # ${{ github.event.inputs.* }} straight into a shell script is a
     # template-injection vector (a value containing quotes or $(...) would
     # execute); a shell reading an env var is safe.
     env:
-      VERSION: ${{ github.event.inputs.version }}
+      RAW_VERSION: ${{ github.event.inputs.version }}
+      IS_EXPERIMENTAL: ${{ github.event.inputs.experimental }}
       HIGHLIGHTS: ${{ github.event.inputs.highlights }}
 
     steps:
+      - name: Resolve release version
+        id: resolve-version
+        shell: bash
+        run: |
+          # Strip any leading 'v' or trailing '-E' if typed by habit
+          RAW_VER="${RAW_VERSION#v}"
+          BASE_VER="${RAW_VER%-E}"
+          if [ "${IS_EXPERIMENTAL}" = "true" ] || [ "${IS_EXPERIMENTAL}" = "True" ]; then
+            FINAL_VER="${BASE_VER}-E"
+            IS_EXP="true"
+          else
+            FINAL_VER="${BASE_VER}"
+            IS_EXP="false"
+          fi
+          echo "VERSION=${FINAL_VER}" >> $GITHUB_ENV
+          echo "IS_EXP=${IS_EXP}" >> $GITHUB_ENV
+          echo "Resolved version: ${FINAL_VER} (experimental: ${IS_EXP})"
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -239,6 +265,7 @@ jobs:
           # Tags in this repo are unprefixed; strip a leading 'v' defensively.
           echo "release_tag=${VERSION}" >> $GITHUB_OUTPUT
           echo "version_no_prefix=${VERSION#v}" >> $GITHUB_OUTPUT
+          echo "is_experimental=${IS_EXP}" >> $GITHUB_OUTPUT
 
       - name: Get previous tag
         id: previoustag
@@ -332,7 +359,7 @@ jobs:
   #   3. Approve this job. The GitHub release then goes out, dated after it.
   publish-stable:
     name: Publish Stable (AnkiWeb Gate)
-    if: ${{ !endsWith(github.event.inputs.version, '-E') }}
+    if: ${{ needs.build.outputs.is_experimental != 'true' }}
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -397,7 +424,7 @@ jobs:
   # automatically without waiting on the manual ankiweb environment gate.
   publish-experimental:
     name: Publish Experimental (Direct)
-    if: ${{ endsWith(github.event.inputs.version, '-E') }}
+    if: ${{ needs.build.outputs.is_experimental == 'true' }}
     needs: build
     runs-on: ubuntu-latest
     permissions:
