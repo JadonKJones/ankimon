@@ -71,12 +71,15 @@ class FakeDB:
         self.shiny_count = 2
         self.highest_level = 42
         self.raise_on_execute = False
+        self.raise_on_highest_level_query = False
 
     def execute(self, sql, *args):
         self.calls.append(sql)
         if self.raise_on_execute:
             raise RuntimeError("no such table: captured_pokemon")
         if "ORDER BY level DESC" in sql:
+            if self.raise_on_highest_level_query:
+                raise RuntimeError("database is locked")
             return SimpleNamespace(fetchone=lambda: {"level": self.highest_level})
         return SimpleNamespace(fetchone=lambda: [self.pokedex_count])
 
@@ -121,7 +124,15 @@ def env(monkeypatch):
             "trainer.name": "Nuz",
         }
     )
-    services = SimpleNamespace(db=db, settings=settings, ui=SimpleNamespace(notify=lambda *a: None))
+    notifications = []
+    services = SimpleNamespace(
+        db=db,
+        settings=settings,
+        # In production this port is QtPresenter, whose notify() is a modal
+        # showInfo(); record every call so a test can prove the sync path
+        # never reaches it.
+        ui=SimpleNamespace(notify=lambda level, message: notifications.append((level, message))),
+    )
 
     monkeypatch.setitem(
         sys.modules,
@@ -181,10 +192,15 @@ def env(monkeypatch):
     clock = FakeClock()
     # Replace the module's own `time` binding rather than patching the real
     # time module, which would leak into every other test in the session.
-    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=clock.monotonic))
+    # raising=False so the fixture still builds against a tree without the rate
+    # limit — that is what lets these tests fail loudly (rather than error out)
+    # if the hardening is ever reverted.
+    monkeypatch.setattr(
+        module, "time", SimpleNamespace(monotonic=clock.monotonic), raising=False
+    )
     # The rate-limit stamp is a module global and survives module reuse; start
     # every test from a known point on the fake clock.
-    monkeypatch.setattr(module, "_last_leaderboard_sync", 0.0)
+    monkeypatch.setattr(module, "_last_leaderboard_sync", 0.0, raising=False)
 
     return SimpleNamespace(
         module=module,
@@ -193,7 +209,13 @@ def env(monkeypatch):
         services=services,
         pushes=pushes,
         clock=clock,
+        notifications=notifications,
     )
+
+
+def _interval(env):
+    """The rate-limit window (0 on a tree that has no rate limit at all)."""
+    return getattr(env.module, "LEADERBOARD_SYNC_MIN_INTERVAL", 0.0)
 
 
 def _make_card(env, **overrides):
@@ -266,7 +288,7 @@ def test_startup_sync_consumes_the_rate_limit_window(env):
 
 def test_repeat_syncs_inside_the_interval_are_dropped(env):
     card = _make_card(env)
-    env.clock.advance(env.module.LEADERBOARD_SYNC_MIN_INTERVAL)
+    env.clock.advance(_interval(env))
     env.pushes.clear()
 
     assert card.sync_leaderboard() is True
@@ -278,11 +300,11 @@ def test_repeat_syncs_inside_the_interval_are_dropped(env):
 
 def test_sync_resumes_after_the_interval_elapses(env):
     card = _make_card(env)
-    env.clock.advance(env.module.LEADERBOARD_SYNC_MIN_INTERVAL)
+    env.clock.advance(_interval(env))
     env.pushes.clear()
 
     assert card.sync_leaderboard() is True
-    env.clock.advance(env.module.LEADERBOARD_SYNC_MIN_INTERVAL + 0.1)
+    env.clock.advance(_interval(env) + 0.1)
     assert card.sync_leaderboard() is True
 
     assert len(env.pushes) == 2
@@ -290,7 +312,7 @@ def test_sync_resumes_after_the_interval_elapses(env):
 
 def test_force_bypasses_the_rate_limit(env):
     card = _make_card(env)
-    env.clock.advance(env.module.LEADERBOARD_SYNC_MIN_INTERVAL)
+    env.clock.advance(_interval(env))
     env.pushes.clear()
 
     assert card.sync_leaderboard() is True
@@ -302,7 +324,7 @@ def test_force_bypasses_the_rate_limit(env):
 
 def test_a_failed_push_still_consumes_the_rate_limit_window(env):
     card = _make_card(env)
-    env.clock.advance(env.module.LEADERBOARD_SYNC_MIN_INTERVAL)
+    env.clock.advance(_interval(env))
     env.pushes.clear()
     env.db.raise_on_execute = True
 
@@ -384,7 +406,7 @@ def test_level_is_floored_at_one(env):
 
 def test_refresh_republishes_the_new_values(env):
     card = _make_card(env)
-    env.clock.advance(env.module.LEADERBOARD_SYNC_MIN_INTERVAL)
+    env.clock.advance(_interval(env))
     env.pushes.clear()
 
     # What swap_ankimon_account and the profile screen's rename/sprite handlers
@@ -415,7 +437,7 @@ def test_refresh_respects_the_rate_limit(env):
 def test_refresh_without_settings_does_not_raise(env):
     card = _make_card(env)
     card.settings_obj = None
-    env.clock.advance(env.module.LEADERBOARD_SYNC_MIN_INTERVAL)
+    env.clock.advance(_interval(env))
     env.pushes.clear()
 
     card.refresh()  # must not raise
@@ -434,6 +456,35 @@ def test_database_failure_is_reported_not_raised(env, capsys):
 
     assert card.sync_leaderboard(force=True) is False
     assert "leaderboard" in capsys.readouterr().out.lower()
+
+
+def test_database_failure_never_opens_a_dialog(env):
+    card = _make_card(env)
+    env.notifications.clear()
+    env.db.raise_on_execute = True
+
+    assert card.sync_leaderboard(force=True) is False
+
+    # services.ui.notify() is a modal showInfo() in production. Reaching it
+    # from here would block the review the player is in the middle of.
+    assert env.notifications == []
+
+
+def test_a_failed_highest_level_query_aborts_instead_of_publishing_a_zero(env):
+    card = _make_card(env)
+    env.pushes.clear()
+    env.notifications.clear()
+    # Only the highest-level query fails; every other query still succeeds, so
+    # a payload could be built and sent.
+    env.db.raise_on_highest_level_query = True
+
+    assert card.sync_leaderboard(force=True) is False
+
+    # highest_pokemon_level() would have swallowed this, popped a modal and
+    # returned 0 — and find_trainer_rank turns a 0 into "Novice Trainer",
+    # silently overwriting the player's real rank on the public leaderboard.
+    assert env.pushes == []
+    assert env.notifications == []
 
 
 def test_missing_leaderboard_module_is_a_silent_no_op(env, monkeypatch):

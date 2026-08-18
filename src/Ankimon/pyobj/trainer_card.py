@@ -232,8 +232,9 @@ class TrainerCard:
           staleness this hook exists to remove.
 
         Never raises and never opens a dialog: it runs on gameplay write paths
-        where a leaderboard hiccup must not interrupt a review. Failures are
-        printed, matching ``ankimon_leaderboard``'s own reporting.
+        where a leaderboard hiccup must not interrupt a review, so it avoids
+        the helpers that report through ``services.ui`` and prints instead,
+        matching ``ankimon_leaderboard``'s own reporting.
 
         Returns True when a payload was handed to the leaderboard module, and
         False when the sync was opted out of, rate limited, unavailable, or
@@ -266,7 +267,17 @@ class TrainerCard:
 
         try:
             level = int(settings_obj.get("trainer.level", 1))
-            highest_level = int(self.highest_pokemon_level())
+            # Query the highest level here rather than through
+            # highest_pokemon_level(): that helper reports a database error via
+            # services.ui.notify(), which in production is a modal showInfo()
+            # — precisely the popup this method must never open on a review
+            # path — and then returns a sentinel 0 that would quietly publish a
+            # "Novice Trainer" rank over the player's real one. Failing the
+            # push outright is the better answer; the next one retries.
+            row = services.db.execute(
+                "SELECT level FROM captured_pokemon WHERE level IS NOT NULL ORDER BY level DESC LIMIT 1"
+            ).fetchone()
+            highest_level = int(row["level"]) if row else 0
             data = {
                 "trainerRank": f"{find_trainer_rank(highest_level, level)}",
                 "trainerName": settings_obj.get("trainer.name", self.trainer_name),
