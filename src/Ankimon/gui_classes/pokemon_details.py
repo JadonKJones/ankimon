@@ -414,8 +414,8 @@ def PokemonCollectionDetailsSplit(
         show_evolution_ui = readiness["method"] is not None and (
             readiness["method"] != "friendship" or friendship_time_enabled
         )
-        if trigger_evo_callback is None:
-            if show_evolution_ui and readiness["ready"]:
+        if show_evolution_ui:
+            if trigger_evo_callback is None and readiness["ready"]:
                 evo_name = readiness["evo_name"] or "the next form"
                 evolve_now_button = QPushButton(f"✨ Evolve into {evo_name} now")
                 evolve_now_button.setFont(custom_font)
@@ -451,7 +451,7 @@ def PokemonCollectionDetailsSplit(
                     evolution_note_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     evolution_note_label.setStyleSheet("color: #FF69B4;")
                     evolution_note_widget = evolution_note_label
-            elif show_evolution_ui and readiness["status_text"]:
+            elif not readiness["ready"] and readiness["status_text"]:
                 evolution_req_label = QLabel(readiness["status_text"])
                 evolution_req_label.setFont(custom_font)
                 evolution_req_label.setWordWrap(True)
