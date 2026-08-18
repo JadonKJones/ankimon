@@ -41,6 +41,7 @@ import importlib
 import sys
 import traceback
 
+from PyQt6.QtCore import QCoreApplication, QEvent
 from PyQt6.QtWidgets import QApplication, QWidget
 from aqt import gui_hooks, mw
 
@@ -222,6 +223,21 @@ def _teardown_windows(addon_package, services):
                 pass
 
 
+def _flush_deferred_widget_deletes():
+    """Destroy closed Qt/WebEngine objects before their modules are purged.
+
+    ``deleteLater()`` only schedules destruction. Purging and re-importing the
+    add-on while old QWebEngine pages are still alive can release their profile
+    first and crash Qt during shutdown or the next reload.
+    """
+    app = QApplication.instance()
+    if app is None:
+        return
+    for _ in range(2):
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
+
+
 def _purge_addon_modules(addon_package):
     """Drop the add-on's submodules from ``sys.modules`` so the re-import is fresh.
 
@@ -264,6 +280,7 @@ def teardown_ankimon(addon_package):
     _restore_reviewer_wraps()
     _delete_reload_shortcuts(services)
     _teardown_windows(addon_package, services)
+    _flush_deferred_widget_deletes()
 
     # Drop the cached DB singleton (closes its connection). The registry still
     # holds the same AnkimonDB instance with its db_path intact, so the reused
