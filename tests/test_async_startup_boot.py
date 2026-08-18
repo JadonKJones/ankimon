@@ -478,6 +478,28 @@ def test_dev_mode_auto_backup_uses_passed_manager(startup_env):
     assert FakeBackupManager.instances == [manager]
 
 
+def test_hot_reload_skips_both_background_backups(startup_env, monkeypatch):
+    env = startup_env
+    env.settings.config["misc.developer_mode"] = True
+    services = sys.modules["Ankimon.services"].services
+    monkeypatch.setattr(services, "_is_reloading", True, raising=False)
+
+    manager = FakeBackupManager(env.logger, env.settings)
+    results = env.mod.run_startup_background_checks(manager)
+
+    assert results["backup_manager"] is manager
+    assert _called(env, "run_backup") == []
+    assert manager.create_calls == []
+    assert (
+        "log",
+        "info",
+        "Skipping background backups during hot-reload.",
+    ) in env.calls
+    # The remainder of startup still runs normally.
+    assert _called(env, "generate_random_pokemon")
+    assert _called(env, "count_items_and_rewrite")
+
+
 def test_auto_catch_migration_folds_legacy_key_once(startup_env):
     env = startup_env
     env.settings.config["battle.automatic_catch_special"] = False
@@ -860,6 +882,98 @@ def test_boot_ordering_background_then_ui_then_menu(boot_env):
     # The QueryOp ran collection-free.
     assert len(SyncQueryOp.instances) == 1
     assert SyncQueryOp.instances[0].without_collection_called is True
+    assert boot_env.services._startup_in_progress is False
+    assert boot_env.services._is_reloading is False
+
+
+def test_startup_failure_clears_reload_lifecycle_flags(boot_env):
+    observed_startup_flags = []
+
+    def fail_background_startup(backup_manager=None):
+        observed_startup_flags.append(boot_env.services._startup_in_progress)
+        raise RuntimeError("startup boom")
+
+    sys.modules[
+        "Ankimon.startup"
+    ].run_startup_background_checks = fail_background_startup
+    boot_env.services._is_reloading = True
+
+    boot_env.exec_init()
+
+    assert observed_startup_flags == [True]
+    assert boot_env.services._startup_in_progress is False
+    assert boot_env.services._is_reloading is False
+
+
+def test_success_callback_failure_clears_reload_lifecycle_flags(boot_env):
+    """QueryOp routes only *op* exceptions to .failure(); a raising success
+    callback propagates instead, so the flag reset has to be a finally."""
+
+    observed = []
+
+    def fail_ui_startup(results):
+        observed.append(
+            (
+                boot_env.services._startup_in_progress,
+                boot_env.services._is_reloading,
+            )
+        )
+        raise RuntimeError("qt half boom")
+
+    sys.modules["Ankimon.startup"].run_startup_ui_callbacks = fail_ui_startup
+    boot_env.services._is_reloading = True
+
+    with pytest.raises(RuntimeError, match="qt half boom"):
+        boot_env.exec_init()
+
+    # Pin the *transition*: both flags were still set when the callback blew
+    # up, so the final False below can only come from the finally.
+    assert observed == [(True, True)]
+    # Left set, restart_ankimon() would block on _startup_in_progress until its
+    # timeout on every later Ctrl+Shift+R, and backups would stay suppressed.
+    assert boot_env.services._startup_in_progress is False
+    assert boot_env.services._is_reloading is False
+
+
+def test_unschedulable_queryop_clears_reload_lifecycle_flags(boot_env):
+    """If run_in_background() raises, neither callback ever runs."""
+    real_run_in_background = SyncQueryOp.run_in_background
+    observed = []
+
+    def fail_to_schedule(self):
+        observed.append(
+            (
+                boot_env.services._startup_in_progress,
+                boot_env.services._is_reloading,
+            )
+        )
+        raise RuntimeError("taskman gone")
+
+    SyncQueryOp.run_in_background = fail_to_schedule
+    boot_env.services._is_reloading = True
+    try:
+        with pytest.raises(RuntimeError, match="taskman gone"):
+            boot_env.exec_init()
+    finally:
+        SyncQueryOp.run_in_background = real_run_in_background
+
+    assert observed == [(True, True)]
+    assert boot_env.services._startup_in_progress is False
+    assert boot_env.services._is_reloading is False
+
+
+def test_services_declares_and_resets_the_hot_reload_flags(boot_env):
+    """The registry is what survives _purge_addon_modules, so the hot-reload
+    flags have to live there and come back false on a profile-level reset."""
+    services = boot_env.services
+    for attr in ("_startup_in_progress", "_is_reloading", "_reload_in_progress"):
+        assert getattr(services, attr) is False
+        setattr(services, attr, True)
+
+    services.reset()
+
+    for attr in ("_startup_in_progress", "_is_reloading", "_reload_in_progress"):
+        assert getattr(services, attr) is False
 
 
 def test_changelog_keeps_real_connectivity(boot_env):
