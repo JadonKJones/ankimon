@@ -396,12 +396,11 @@ def PokemonCollectionDetailsSplit(
         attacks_label.setFixedWidth(230)
         attacks_label.setFixedHeight(80)
 
-        # Friendship-evolution UI (classic single-panel path): an actionable
-        # "Evolve now" button when the Pokémon is ready, otherwise the
-        # requirement line (e.g. "40 friendship to evolve into Espeon · needs
-        # Day"). Only shown when relevant, and only when the caller did not
-        # supply its own trigger_evo_callback (which renders the button in the
-        # right-hand column instead).
+        # Evolution UI: show the requirement line whenever the Pokémon is not
+        # ready (e.g. "40 friendship to evolve into Espeon · needs Day").
+        # When ready, the classic path renders its own "Evolve now" button only
+        # if the caller did not supply trigger_evo_callback; callback callers
+        # render their evolve button in the right-hand column instead.
         evolution_req_widget = None
         # A secondary note shown alongside the Evolve button when the user
         # previously rejected this evolution (soft state) — the manual button
