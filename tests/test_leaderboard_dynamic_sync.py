@@ -378,6 +378,52 @@ def test_level_is_floored_at_one(env):
 
 
 # --------------------------------------------------------------------------
+# refresh() — the account switch / rename / sprite-change path
+# --------------------------------------------------------------------------
+
+
+def test_refresh_republishes_the_new_values(env):
+    card = _make_card(env)
+    env.clock.advance(env.module.LEADERBOARD_SYNC_MIN_INTERVAL)
+    env.pushes.clear()
+
+    # What swap_ankimon_account and the profile screen's rename/sprite handlers
+    # do: write settings, then refresh() the card.
+    env.settings.set("trainer.name", "SecondAccount")
+    env.settings.set("trainer.sprite", "blue")
+    env.settings.set("trainer.cash", 9999)
+    card.refresh()
+
+    assert len(env.pushes) == 1, "refresh() must republish the switched-to state"
+    payload = env.pushes[-1]
+    assert payload["trainerName"] == "SecondAccount"
+    assert payload["trainerSprite"] == "blue.png"
+    assert payload["cash"] == 9999
+
+
+def test_refresh_respects_the_rate_limit(env):
+    card = _make_card(env)
+    env.pushes.clear()
+
+    # A refresh moments after the startup push is still throttled: it is a user
+    # action, and the change goes up on the next interval regardless.
+    card.refresh()
+
+    assert env.pushes == []
+
+
+def test_refresh_without_settings_does_not_raise(env):
+    card = _make_card(env)
+    card.settings_obj = None
+    env.clock.advance(env.module.LEADERBOARD_SYNC_MIN_INTERVAL)
+    env.pushes.clear()
+
+    card.refresh()  # must not raise
+
+    assert env.pushes == []
+
+
+# --------------------------------------------------------------------------
 # Containment
 # --------------------------------------------------------------------------
 

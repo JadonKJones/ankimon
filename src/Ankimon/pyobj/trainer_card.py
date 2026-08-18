@@ -79,9 +79,10 @@ class TrainerCard:
         cash = int(settings_obj.get("trainer.cash"))
         self.cash = cash
 
-        # Startup sync. force=True because a freshly built card means a new
-        # profile or an account switch, which must publish even if the previous
-        # card pushed moments ago.
+        # Startup sync. force=True because a freshly built card means a fresh
+        # profile, whose true state must go up even if some previous card in
+        # this process pushed moments ago. (A same-process account switch goes
+        # through refresh(), not through here.)
         self.sync_leaderboard(force=True)
 
     def refresh(self):
@@ -117,6 +118,14 @@ class TrainerCard:
             self.favorite_pokemon = self.main_pokemon.name
         else:
             self.favorite_pokemon = "None"
+
+        # Every caller of refresh() has just changed something the leaderboard
+        # publishes — the active account (swap_ankimon_account), the trainer's
+        # name or sprite (the profile screen), or the settings behind them — so
+        # republish. Deliberately not forced: these are user actions that can be
+        # repeated quickly, and the rate limit already guarantees the change
+        # goes up within one interval.
+        self.sync_leaderboard()
 
     # Number of badges the trainer has earned
     def badge_count(self):
@@ -203,9 +212,10 @@ class TrainerCard:
     def sync_leaderboard(self, force=False):
         """Publish the trainer's current stats to the Ankimon leaderboard.
 
-        Called once at construction and thereafter from
-        ``singletons.notify_stats_changed()`` on every gameplay stat change, so
-        it is built to be cheap and safe to call very often:
+        Called at construction, from :meth:`refresh` (account switch, rename,
+        sprite change), and from ``singletons.notify_stats_changed()`` on every
+        gameplay stat change — so it is built to be cheap and safe to call very
+        often:
 
         * the ``misc.leaderboard`` opt-in is read first, before any database
           work, so the users who leave the leaderboard off (the default) pay
