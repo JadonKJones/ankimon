@@ -1935,7 +1935,14 @@ class AnkimonItemsWeb(QDialog):
                         normalized_target = target_evo_name.lower().replace(" ", "").replace("-", "").replace("'", "").replace(".", "").replace(":", "")
                         target_data = pokedex_data.get(normalized_target) or pokedex_data.get(target_evo_name.lower())
 
-                        if target_data and target_data.get("evoType") == "useItem":
+                        if target_data and target_data.get("evoType") in ("useItem", "trade"):
+                            # "trade" belongs here alongside "useItem": Ankimon has no
+                            # trading, so the trade-with-held-item species (Rhydon ->
+                            # Rhyperior via Protector, Onix -> Steelix via Metal Coat,
+                            # Seadra -> Kingdra via Dragon Scale, ...) are evolved by
+                            # applying the item directly. Omitting it hid every one of
+                            # them from this picker, which shop.js filters to e === 1.
+                            #
                             # Normalize both sides by stripping spaces, hyphens and
                             # apostrophes so pokedex.json display names (e.g.
                             # "King's Rock") match items.csv identifiers (e.g.
