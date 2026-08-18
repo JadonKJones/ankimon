@@ -5,6 +5,7 @@ from ..services import services
 from ..events import events
 import math
 import json
+import time
 
 
 # Constants for leveling
@@ -19,6 +20,20 @@ POKEMON_TIERS = {
     "legendary": 120,
     "mythical": 160,
 }
+
+# Leaderboard pushes are rate limited. TrainerCard.sync_leaderboard() is wired to
+# singletons.notify_stats_changed(), which fires on every XP gain, catch and cash
+# reward, so an unthrottled hook would build a payload and open a socket per
+# review. The leaderboard only ever needs the newest snapshot, so dropping the
+# in-between pushes loses nothing: the next gameplay event publishes the newer
+# numbers.
+LEADERBOARD_SYNC_MIN_INTERVAL = 60.0  # seconds
+
+# Monotonic timestamp of the last push handed to the leaderboard module. Module
+# level rather than per-instance, so that rebuilding the TrainerCard (profile
+# load, hot reload) cannot silently reset the rate limit; the call sites that
+# legitimately need to bypass it pass force=True.
+_last_leaderboard_sync = 0.0
 
 
 class TrainerCard:
@@ -58,12 +73,16 @@ class TrainerCard:
             + ".png"
         )
         league = find_trainer_rank(
-            int(self.highest_pokemon_level()), int(self.level)
+            highest_pokemon_level, int(self.level)
         )  # Trainer's rank in the Pokémon world
         self.league = league
         cash = int(settings_obj.get("trainer.cash"))
         self.cash = cash
-        self.sync_leaderboard()
+
+        # Startup sync. force=True because a freshly built card means a new
+        # profile or an account switch, which must publish even if the previous
+        # card pushed moments ago.
+        self.sync_leaderboard(force=True)
 
     def refresh(self):
         """Reload trainer data from current settings + database (in place).
@@ -181,29 +200,80 @@ class TrainerCard:
         """Reload the team data from the file"""
         self.team = self.get_team()
 
+    def sync_leaderboard(self, force=False):
+        """Publish the trainer's current stats to the Ankimon leaderboard.
 
-    def sync_leaderboard(self):
-        """Sync TrainerCard data to the Ankimon leaderboard."""
+        Called once at construction and thereafter from
+        ``singletons.notify_stats_changed()`` on every gameplay stat change, so
+        it is built to be cheap and safe to call very often:
+
+        * the ``misc.leaderboard`` opt-in is read first, before any database
+          work, so the users who leave the leaderboard off (the default) pay
+          nothing for the hook;
+        * pushes are rate limited to one per ``LEADERBOARD_SYNC_MIN_INTERVAL``
+          seconds unless ``force`` is set. The leaderboard can therefore lag the
+          live save by up to one interval, and by the tail of a session that
+          ended inside it — the forced startup push republishes the true state
+          on the next launch, so it converges without a shutdown hook;
+        * every value is read fresh instead of from the cached ``self.*``
+          attributes. Those go stale mid-session — ``self.league`` is only
+          recomputed by :meth:`refresh`, and ``self.cash`` is not updated by
+          shop purchases — so uploading them would re-create exactly the
+          staleness this hook exists to remove.
+
+        Never raises and never opens a dialog: it runs on gameplay write paths
+        where a leaderboard hiccup must not interrupt a review. Failures are
+        printed, matching ``ankimon_leaderboard``'s own reporting.
+
+        Returns True when a payload was handed to the leaderboard module, and
+        False when the sync was opted out of, rate limited, unavailable, or
+        failed.
+        """
+        global _last_leaderboard_sync
+
+        settings_obj = self.settings_obj
+        if settings_obj is None or not settings_obj.get("misc.leaderboard"):
+            return False
+        if services.db is None:
+            return False
+
+        now = time.monotonic()
+        if not force and (now - _last_leaderboard_sync) < LEADERBOARD_SYNC_MIN_INTERVAL:
+            return False
+
         try:
-            settings_obj = self.settings_obj
+            # Lazy import: ankimon_leaderboard pulls in Qt/Anki, so importing it
+            # at module top would break the headless core. Imported here instead,
+            # and an ImportError simply means "no leaderboard available" (harness).
+            from .ankimon_leaderboard import sync_data_to_leaderboard
+        except ImportError:
+            return False
+
+        # Consume the rate-limit window up front, so a payload that keeps
+        # failing (missing table, server down) backs off for a full interval
+        # instead of re-running these queries on every single stat change.
+        _last_leaderboard_sync = now
+
+        try:
+            level = int(settings_obj.get("trainer.level", 1))
+            highest_level = int(self.highest_pokemon_level())
             data = {
-                "trainerRank": f"{self.league}",
-                "trainerName": self.trainer_name,
-                "level": max(1, self.level),
+                "trainerRank": f"{find_trainer_rank(highest_level, level)}",
+                "trainerName": settings_obj.get("trainer.name", self.trainer_name),
+                "level": max(1, level),
                 "pokedex": services.db.execute("SELECT COUNT(DISTINCT pokedex_id) FROM captured_pokemon WHERE pokedex_id IS NOT NULL").fetchone()[0],
                 "caughtPokemon": services.db.get_pokemon_count(),
-                "trainerLevel": self.level,
-                "highestLevel": int(self.highest_pokemon_level()),
+                "trainerLevel": level,
+                "highestLevel": highest_level,
                 "shinies": f"{services.db.get_shiny_count()}",
-                "cash": self.cash,
-                "trainerSprite": f"{settings_obj.get('trainer.sprite', 'default') + '.png'}",
+                "cash": int(settings_obj.get("trainer.cash", 0)),
+                "trainerSprite": f"{settings_obj.get('trainer.sprite', 'default')}.png",
             }
-            from .ankimon_leaderboard import sync_data_to_leaderboard
             sync_data_to_leaderboard(data)
-        except ImportError:
-            pass
         except Exception as e:
-            pass  # Do not block UI with popups on background errors
+            print(f"Ankimon: Error in syncing data to leaderboard: {e}")
+            return False
+        return True
 
     def display_card_data(self):
         """Method to return trainer card data as a dictionary"""
