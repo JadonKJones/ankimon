@@ -33,6 +33,8 @@ from .update_manager import (
     _download_pr_zip,
     read_update_state,
     fetch_branch_sha,
+    published_at_for_tag,
+    stamp_addon_mod,
 )
 from ..resources import addon_ver, IS_EXPERIMENTAL_BUILD
 
@@ -1169,6 +1171,7 @@ class UpdateDialog(QDialog):
         source_type: str = None,
         source_name: str = None,
         commit_sha: str = None,
+        published_at: str = None,
         extra_warning: str = None,
     ):
         prompt = f"Update Ankimon to {label}?\n\nYour Pokemon data, settings, and sprites will be preserved."
@@ -1193,24 +1196,40 @@ class UpdateDialog(QDialog):
 
             zip_path = download_fn(progress_cb=self._on_progress)
             if not zip_path:
-                return False, "Download failed. Check your internet connection.", []
+                return (
+                    False,
+                    "Download failed. Check your internet connection.",
+                    [],
+                    None,
+                )
             messages = []
 
             def status_update(m):
                 messages.append(m)
                 mw.taskman.run_on_main(lambda: self.status_label.setText(m))
 
-            success, msg = apply_update(
-                zip_path, source_type, source_name, commit_sha, status_cb=status_update
+            success, msg, pending_mod = apply_update(
+                zip_path,
+                source_type,
+                source_name,
+                commit_sha,
+                published_at,
+                status_cb=status_update,
             )
-            return success, msg, messages
+            return success, msg, messages, pending_mod
 
         def on_done(result):
             try:
-                success, msg, messages = result
+                success, msg, messages, pending_mod = result
             except Exception as exc:
                 on_failed(exc)
                 return
+            # Date meta.json here, not in the worker above: QueryOp guarantees
+            # this callback runs on the main thread, which is the thread Anki
+            # read-modify-writes meta.json from. Doing it in the worker would
+            # let a stale snapshot overwrite a concurrent config change.
+            if success and pending_mod:
+                stamp_addon_mod(pending_mod)
             if self._end_busy(busy_token):
                 self.status_label.setText(messages[-1] if messages else msg)
                 self.progress_bar.setValue(100 if success else 0)
@@ -1245,6 +1264,7 @@ class UpdateDialog(QDialog):
             source_type="release",
             source_name=r["name"],
             commit_sha=r["name"],
+            published_at=r.get("published_at"),
         )
 
     def _on_release_update(self):
@@ -1258,6 +1278,7 @@ class UpdateDialog(QDialog):
                 source_type="release",
                 source_name=data["name"],
                 commit_sha=data["name"],
+                published_at=data.get("published_at"),
             )
 
     def _on_dev_install(self):
@@ -1305,6 +1326,13 @@ class UpdateDialog(QDialog):
                     source_type="tag",
                     source_name=data["name"],
                     commit_sha=data["name"],
+                    # Every tag the picker offers names a published release, and
+                    # installs byte-identical code to the Releases tab. Date it
+                    # the same way, or the tag's (earlier) commit timestamp lets
+                    # the AnkiWeb upload look newer than the code just installed.
+                    published_at=published_at_for_tag(
+                        data["name"], self._releases
+                    ),
                 )
 
 
@@ -1552,6 +1580,7 @@ class BranchUpdateProgressDialog(QDialog):
             _download_branch_zip,
             _download_zip_to_temp,
             apply_update,
+            stamp_addon_mod,
         )
 
         release = self.release
@@ -1561,11 +1590,12 @@ class BranchUpdateProgressDialog(QDialog):
         else:
             source_type, source_name, commit_sha = "branch", self.branch_name, self.remote_sha
             download = lambda: _download_branch_zip(self.branch_name, progress_cb=self.on_progress)
+        published_at = release.get("published_at") if release else None
 
         def bg(_col):
             zip_path = download()
             if not zip_path:
-                return False, "Download failed. Check your internet connection."
+                return False, "Download failed. Check your internet connection.", None
 
             def status_update(msg):
                 mw.taskman.run_on_main(lambda: self.status_label.setText(msg))
@@ -1575,15 +1605,20 @@ class BranchUpdateProgressDialog(QDialog):
                 source_type=source_type,
                 source_name=source_name,
                 commit_sha=commit_sha,
+                published_at=published_at,
                 status_cb=status_update,
             )
 
         def on_done(result):
             try:
-                success, msg = result
+                success, msg, pending_mod = result
             except Exception as exc:
                 on_failed(exc)
                 return
+            # Main thread (QueryOp guarantees it), which is where meta.json has
+            # to be written — see the matching note on the release/tag path.
+            if success and pending_mod:
+                stamp_addon_mod(pending_mod)
             self.btn_close.setEnabled(True)
             if success:
                 self.btn_close.setText("Restart Anki")

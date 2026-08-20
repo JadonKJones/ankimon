@@ -235,7 +235,14 @@ def _load_stats_csv_cache():
 
 
 def _load_poke_evo_cache():
-    """Cache pokemon evolution data to avoid repeated file I/O"""
+    """Cache pokemon evolution data to avoid repeated file I/O.
+
+    Returns a plain ``list`` of rows on purpose. ``pokemon_evolution.csv`` has
+    no unique key: ``evolves_from_species_id`` repeats for branching evolutions
+    (Eevee, Tyrogue, Wurmple, ...) and ``evolved_species_id`` repeats for
+    species reachable by several methods, so keying a dict on either column
+    would silently drop rows. Filter the list instead.
+    """
     global _poke_evo_cache
     if _poke_evo_cache is None:
         try:
