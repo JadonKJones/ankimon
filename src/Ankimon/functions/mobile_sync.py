@@ -227,8 +227,8 @@ def _generate_encounter(level: int, tracker, collected_ids=None, settings_obj=No
 
     # Inject trainer_card and main_pokemon temporarily into the globals
     # of encounter_functions so that tier/chance generation matches the live UI
-    old_trainer_card = ef.trainer_card
-    old_main_pokemon = ef.main_pokemon
+    old_trainer_card = getattr(ef, "trainer_card", None)
+    old_main_pokemon = getattr(ef, "main_pokemon", None)
     if trainer_card is not None:
         ef.trainer_card = trainer_card
     if main_pokemon is not None:

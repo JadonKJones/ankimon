@@ -911,7 +911,8 @@ def generate_random_pokemon(
     selected_tier = None
 
     # 1. Select the initial tier based on probabilities
-    initial_tier = get_tier(ankimon_tracker_obj.get_total_reviews(), trainer_card.level)
+    t_level = trainer_card.level if trainer_card is not None else 1
+    initial_tier = get_tier(ankimon_tracker_obj.get_total_reviews(), t_level)
 
     # Find starting point in fallback order
     try:
