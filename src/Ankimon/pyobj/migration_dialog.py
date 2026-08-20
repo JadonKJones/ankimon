@@ -192,7 +192,19 @@ class MigrationDialog(QDialog):
                         main_pokemon = main_data[0] if isinstance(main_data, list) else main_data
                         if isinstance(main_pokemon, dict):
                             if not main_pokemon.get("individual_id"):
-                                main_pokemon["individual_id"] = str(uuid.uuid4())
+                                all_captured = self.db.get_all_pokemon()
+                                match = None
+                                for p in all_captured:
+                                    if (p.get("id") == main_pokemon.get("id") and
+                                        p.get("level") == main_pokemon.get("level") and
+                                        p.get("name") == main_pokemon.get("name") and
+                                        p.get("iv") == main_pokemon.get("iv")):
+                                        match = p
+                                        break
+                                if match and match.get("individual_id"):
+                                    main_pokemon["individual_id"] = match["individual_id"]
+                                else:
+                                    main_pokemon["individual_id"] = str(uuid.uuid4())
                             if self.db.save_main_pokemon(main_pokemon):
                                 stats["main"] = 1
                     self._update_progress(55, "✓ Migrated main Pokemon")
@@ -219,8 +231,12 @@ class MigrationDialog(QDialog):
                             continue
                         
                         if item_name:
-                            self.db.add_item(item_name, quantity, extra_data=extra_data, commit=False)
-                            stats["items"] += 1
+                            existing = self.db.get_item(item_name)
+                            if existing:
+                                self.db.update_item_quantity(item_name, quantity)
+                                stats["items"] += 1
+                            elif self.db.add_item(item_name, quantity, extra_data=extra_data, commit=False):
+                                stats["items"] += 1
                     
                     # Final commit for items
                     self.db._get_connection().commit()

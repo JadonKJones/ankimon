@@ -1665,7 +1665,14 @@ class AnkimonDB:
                 try:
                     with open(mypokemon_path, 'r', encoding='utf-8') as f:
                         pokemon_list = json.load(f)
+                    seen_ids = set()
                     for pokemon in pokemon_list:
+                        if not isinstance(pokemon, dict):
+                            continue
+                        ind_id = pokemon.get("individual_id")
+                        if not ind_id or ind_id in seen_ids:
+                            pokemon["individual_id"] = str(uuid.uuid4())
+                        seen_ids.add(pokemon["individual_id"])
                         if self.save_pokemon(pokemon):
                             stats["pokemon"] += 1
                     self._log("info", f"Migrated {stats['pokemon']} pokemon from mypokemon.json")
@@ -1680,8 +1687,23 @@ class AnkimonDB:
                     if main_data:
                         # mainpokemon.json is a list with one item
                         main_pokemon = main_data[0] if isinstance(main_data, list) else main_data
-                        if self.save_main_pokemon(main_pokemon):
-                            stats["main"] = 1
+                        if isinstance(main_pokemon, dict):
+                            if not main_pokemon.get("individual_id"):
+                                all_captured = self.get_all_pokemon()
+                                match = None
+                                for p in all_captured:
+                                    if (p.get("id") == main_pokemon.get("id") and
+                                        p.get("level") == main_pokemon.get("level") and
+                                        p.get("name") == main_pokemon.get("name") and
+                                        p.get("iv") == main_pokemon.get("iv")):
+                                        match = p
+                                        break
+                                if match and match.get("individual_id"):
+                                    main_pokemon["individual_id"] = match["individual_id"]
+                                else:
+                                    main_pokemon["individual_id"] = str(uuid.uuid4())
+                            if self.save_main_pokemon(main_pokemon):
+                                stats["main"] = 1
                     self._log("info", "Migrated main pokemon from mainpokemon.json")
                 except Exception as e:
                     self._log("error", f"Failed to migrate mainpokemon.json: {e}")
@@ -1694,11 +1716,23 @@ class AnkimonDB:
                     
                     for item in items_list:
                         if not item: continue
-                        # Support multiple legacy keys for item name
-                        item_name = item.get("item") or item.get("name") or item.get("item_name")
-                        quantity = item.get("quantity", item.get("amount", 1))
+                        if isinstance(item, str):
+                            item_name = item
+                            quantity = 1
+                            extra_data = None
+                        elif isinstance(item, dict):
+                            # Support multiple legacy keys for item name
+                            item_name = item.get("item") or item.get("name") or item.get("item_name")
+                            quantity = item.get("quantity", item.get("amount", 1))
+                            extra_data = item
+                        else:
+                            continue
                         if item_name:
-                            if self.add_item(item_name, quantity, extra_data=item, commit=False):
+                            existing = self.get_item(item_name)
+                            if existing:
+                                self.update_item_quantity(item_name, quantity)
+                                stats["items"] += 1
+                            elif self.add_item(item_name, quantity, extra_data=extra_data, commit=False):
                                 stats["items"] += 1
                     
                     self._get_connection().commit()
@@ -1810,7 +1844,7 @@ class AnkimonDB:
         db_counts = {"pokemon": 0, "items": 0, "badges": 0}
         cursor.execute("SELECT COUNT(*) FROM captured_pokemon")
         db_counts["pokemon"] = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM items")
+        cursor.execute("SELECT COALESCE(SUM(quantity), 0) FROM items")
         db_counts["items"] = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM badges")
         db_counts["badges"] = cursor.fetchone()[0]
