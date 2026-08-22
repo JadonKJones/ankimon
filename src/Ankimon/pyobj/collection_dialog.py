@@ -122,6 +122,12 @@ def MainPokemon(
 
     reviewer = Container()
     reviewer.web = mw.reviewer.web
+
+    # Update the cached main_pokemon reference inside reviewer_obj so the HUD draws the new pokemon
+    reviewer_obj.main_pokemon = main_pokemon
+
+    # Invalidate cache and trigger a fresh render
+    reviewer_obj.invalidate_hud_cache()
     reviewer_obj.update_life_bar(reviewer, 0, 0)
 
     if test_window.isVisible():
