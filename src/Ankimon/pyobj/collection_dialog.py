@@ -47,14 +47,24 @@ def MainPokemon(
     pokemon_id = pokemon_data.get("id")
     pokemon_name = search_pokedex_by_id(pokemon_id)
     base_stats = search_pokedex(pokemon_name, "baseStats")
-    current_hp = PokemonObject.calc_stat(
-        "hp",
-        base_stats["hp"],
-        pokemon_data["level"],
-        pokemon_data["iv"]["hp"],
-        pokemon_data["ev"]["hp"],
-        pokemon_data.get("nature", "serious"),
-    )
+    # HP: hand the constructor the PERSISTED values and let PokemonObject
+    # normalize them. Passing a freshly computed max-HP stat here (the old
+    # behaviour) silently full-healed the incoming main and, via
+    # db.save_main_pokemon(to_dict()) below, persisted that full HP.
+    #
+    # ``hp`` is the live field -- to_dict() labels it "Current HP", and
+    # battle_loop/item_window write it -- with ``current_hp`` as its mirror.
+    # Partially migrated records can carry one without the other (see
+    # update_main_pokemon._normalize_loaded_hp), so fall back to the mirror
+    # when ``hp`` is missing or null; otherwise _normalize_hp resolves a None
+    # ``hp`` to full max HP and we re-persist the very heal this fixes.
+    # Deliberately NOT _normalize_loaded_hp's current_hp-first order:
+    # item_window.Check_Heal_Item bumps ``hp`` alone, so preferring the mirror
+    # would silently undo a potion used just before the switch.
+    persisted_hp = pokemon_data.get("hp")
+    if persisted_hp is None:
+        persisted_hp = pokemon_data.get("current_hp")
+
     # Create NEW PokemonObject instance using class constructor
     new_main_pokemon = PokemonObject(
         name=pokemon_name,
@@ -67,12 +77,15 @@ def MainPokemon(
         attacks=pokemon_data.get("attacks", ["Struggle"]),
         base_experience=pokemon_data.get("base_experience", 0),
         growth_rate=pokemon_data.get("growth_rate", "medium"),
-        current_hp=current_hp,
+        # ``or`` not a get() default: a record holding an explicit null nature
+        # would otherwise reach get_nature_stat_mult() and blow up on None.lower().
+        nature=pokemon_data.get("nature") or "serious",
+        hp=persisted_hp,
+        current_hp=pokemon_data.get("current_hp"),
         gender=pokemon_data.get("gender", "N"),
         shiny=pokemon_data.get("shiny", False),
         individual_id=pokemon_data.get("individual_id", str(uuid.uuid4())),
         id=pokemon_data.get("id", 133),
-        status=pokemon_data.get("status", None),
         volatile_status=set(pokemon_data.get("volatile_status", [])),
         xp=pokemon_data.get("xp", 0),
         nickname=pokemon_data.get("nickname", ""),
@@ -80,6 +93,7 @@ def MainPokemon(
         friendship=pokemon_data.get("friendship", 0),
         pokemon_defeated=pokemon_data.get("pokemon_defeated", 0),
         everstone=pokemon_data.get("everstone", False),
+        evolution_rejected=pokemon_data.get("evolution_rejected", False),
         mega=pokemon_data.get("mega", False),
         special_form=pokemon_data.get("special_form", None),
         tier=pokemon_data.get("tier", None),
@@ -96,7 +110,6 @@ def MainPokemon(
         "everstone",
         "mega",
         "special_form",
-        "current_hp",
         "base_experience",
     ]
     for attr in extra_fields:
@@ -116,19 +129,14 @@ def MainPokemon(
         ),
     )
 
-    # Update UI components
-    class Container(object):
-        pass
-
-    reviewer = Container()
-    reviewer.web = mw.reviewer.web
-
-    # Update the cached main_pokemon reference inside reviewer_obj so the HUD draws the new pokemon
-    reviewer_obj.main_pokemon = main_pokemon
-
-    # Invalidate cache and trigger a fresh render
-    reviewer_obj.invalidate_hud_cache()
-    reviewer_obj.update_life_bar(reviewer, 0, 0)
+    # Update UI components. refresh_hud() is Reviewer_Manager's single entry
+    # point for a repaint: it builds the reviewer shim itself and is guarded, so
+    # no reviewer/webview is a silent no-op instead of an AttributeError that
+    # would abort the rest of this function. No extra bookkeeping is needed
+    # here: reviewer_obj.main_pokemon IS the object line above mutated in place,
+    # and db.save_main_pokemon() already invalidated the HUD cache via
+    # _clear_reviewer_ownership_cache().
+    reviewer_obj.refresh_hud()
 
     if test_window.isVisible():
         test_window.display_first_encounter()
