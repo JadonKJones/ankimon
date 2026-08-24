@@ -1326,6 +1326,13 @@ def save_main_pokemon_progress(
             exception=e, message="Error loading main pokemon data."
         )
         return
+
+    # Fresh-moveset holder for both evolution checks below: filled while the
+    # level-up attack merge runs, so move-based evolutions evaluate against the
+    # moves learned on THIS level (not the stale DB row). Bound at function
+    # scope because a defeat can reach the friendship check with zero level-ups
+    # (the loop body never runs) — None then means "no fresh list; use stored".
+    attacks = None
     evolution_prompted = False
     levels_gained = 0
     while int(
@@ -1368,11 +1375,6 @@ def save_main_pokemon_progress(
             if settings_obj.get("gui.pop_up_dialog_message_on_defeat") is True:
                 logger.log_and_showinfo("info", f"{msg}")
         main_pokemon.xp = int(max(0, int(main_pokemon.xp) - current_lvl_xp_cost))
-
-        # Fresh-moveset holder for the level-evolution check below: filled while
-        # the level-up attack merge runs, so move-based evolutions evaluate
-        # against the moves learned on THIS level (not the stale DB row).
-        attacks = None
 
         if main_pokemon_data:
             mainpkmndata = main_pokemon_data
