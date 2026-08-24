@@ -1369,40 +1369,10 @@ def save_main_pokemon_progress(
                 logger.log_and_showinfo("info", f"{msg}")
         main_pokemon.xp = int(max(0, int(main_pokemon.xp) - current_lvl_xp_cost))
 
-        # Request to open the pokemon evo window
-        evo_id = check_evolution_for_pokemon(
-            main_pokemon.individual_id,
-            main_pokemon.id,
-            main_pokemon.level,
-            evo_window,
-            main_pokemon.everstone,
-            getattr(main_pokemon, "evolution_rejected", False),
-        )
-        if evo_id is not None:
-            evolution_prompted = True
-            events.emit(
-                "evolution_offered",
-                pokemon=main_pokemon.name,
-                trigger="level",
-                evo_id=evo_id,
-            )
-            # None-safe: return_name_for_id can return None for an unknown id, so
-            # fall back to the numeric id instead of crashing on .capitalize()
-            # (mirrors the friendship-evolution path below).
-            evo_display_name = return_name_for_id(evo_id)
-            evo_display_name = (
-                evo_display_name.capitalize() if evo_display_name else str(evo_id)
-            )
-            if not _in_bulk_resolve():
-                logger.log_and_showinfo(
-                    "info",
-                    translator.translate(
-                        "pokemon_about_to_evolve",
-                        main_pokemon_name=main_pokemon.name,
-                        evo_pokemon_name=evo_display_name,
-                        main_pokemon_level=main_pokemon.level,
-                    ),
-                )
+        # Fresh-moveset holder for the level-evolution check below: filled while
+        # the level-up attack merge runs, so move-based evolutions evaluate
+        # against the moves learned on THIS level (not the stale DB row).
+        attacks = None
 
         if main_pokemon_data:
             mainpkmndata = main_pokemon_data
@@ -1472,6 +1442,45 @@ def save_main_pokemon_progress(
                                 "info", f"{new_attack} will be discarded."
                             )
                 mainpkmndata["attacks"] = attacks
+
+        # Request to open the pokemon evo window — AFTER the level-up attack
+        # merge above, so a move-based (levelMove) evolution sees moves learned
+        # on this very level and fires on that event instead of one level late.
+        evo_id = check_evolution_for_pokemon(
+            main_pokemon.individual_id,
+            main_pokemon.id,
+            main_pokemon.level,
+            evo_window,
+            main_pokemon.everstone,
+            getattr(main_pokemon, "evolution_rejected", False),
+            current_attacks=attacks,
+        )
+        if evo_id is not None:
+            evolution_prompted = True
+            events.emit(
+                "evolution_offered",
+                pokemon=main_pokemon.name,
+                trigger="level",
+                evo_id=evo_id,
+            )
+            # None-safe: return_name_for_id can return None for an unknown id, so
+            # fall back to the numeric id instead of crashing on .capitalize()
+            # (mirrors the friendship-evolution path below).
+            evo_display_name = return_name_for_id(evo_id)
+            evo_display_name = (
+                evo_display_name.capitalize() if evo_display_name else str(evo_id)
+            )
+            if not _in_bulk_resolve():
+                logger.log_and_showinfo(
+                    "info",
+                    translator.translate(
+                        "pokemon_about_to_evolve",
+                        main_pokemon_name=main_pokemon.name,
+                        evo_pokemon_name=evo_display_name,
+                        main_pokemon_level=main_pokemon.level,
+                    ),
+                )
+
     experience_till_next_level = int(
         find_experience_for_level(
             main_pokemon.growth_rate,
@@ -1571,6 +1580,7 @@ def save_main_pokemon_progress(
                 main_pokemon.everstone,
                 main_pokemon.friendship,
                 getattr(main_pokemon, "evolution_rejected", False),
+                attacks=attacks,
             )
             if friendship_evo_id is not None:
                 evolution_prompted = True

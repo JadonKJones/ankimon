@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 from ..resources import (
     pokedex_path,
     pokedesc_lang_path,
@@ -833,7 +833,26 @@ def return_identifier_for_item_id(item_id):
     return None
 
 
-def check_evolution_by_item(pokemon_id, item_id):
+def _csv_gender_id(gender) -> Optional[int]:
+    """Normalize Ankimon's ``"M"/"F"/"Genderless"`` values to CSV gender ids.
+
+    ``pokemon_evolution.csv`` follows the veekun convention: 1 = female,
+    2 = male. Returns ``None`` for anything unrecognised (including
+    "Genderless") so a gate never matches on junk data.
+    """
+    if isinstance(gender, str):
+        gender = gender.strip().upper()
+        # Accept both the internal short form ("M"/"F", what
+        # pick_random_gender stores) and long-form variants seen in legacy
+        # saves. Anything else (incl. "Genderless") -> None -> no gate.
+        if gender in ("M", "MALE"):
+            return 2
+        if gender in ("F", "FEMALE"):
+            return 1
+    return None
+
+
+def check_evolution_by_item(pokemon_id, item_id, gender=None):
     """
     Check if a Pokémon evolves using a specific item.
 
@@ -850,6 +869,11 @@ def check_evolution_by_item(pokemon_id, item_id):
     Args:
         pokemon_id (int): The ID of the (pre-evolution) Pokémon.
         item_id (int): The ID of the item.
+        gender (str | None): The Pokémon's gender ("M"/"F"/"Genderless"). When
+            given, gender-gated evolutions from ``pokemon_evolution.csv``
+            (Gallade needs a male Kirlia, Froslass a female Snorunt/Kirlia)
+            only match when the gender agrees; ``None`` keeps the historical
+            no-gender-check behavior for callers without gender data.
 
     Returns:
         int | None: The evolved species id if the Pokémon evolves with the given
@@ -886,6 +910,38 @@ def check_evolution_by_item(pokemon_id, item_id):
                             "useItem",
                             "trade",
                         ):
+                            # Gender gate from the bundled CSV (veekun ids:
+                            # 1 = female, 2 = male). Gallade (475) requires a
+                            # male Kirlia, Froslass (478) a female Snorunt.
+                            # Only enforced when the caller supplies a
+                            # RECOGNISED gender ("M"/"F"); None/unrecognised
+                            # keeps the historical no-check behavior so
+                            # callers without gender data are unaffected.
+                            caller_gender_id = _csv_gender_id(gender)
+                            if caller_gender_id is not None:
+                                required_gender_id = None
+                                for csv_row in rows_for_key_in_table(
+                                    "evolved_species_id",
+                                    safe_int(
+                                        target_data.get("actual_id")
+                                        or target_data.get("species_id")
+                                    ),
+                                    poke_evo_path,
+                                ):
+                                    raw_gender = (csv_row.get("gender_id") or "").strip()
+                                    if not raw_gender:
+                                        continue
+                                    try:
+                                        required_gender_id = int(raw_gender)
+                                        break
+                                    except (TypeError, ValueError):
+                                        continue
+                                if (
+                                    required_gender_id is not None
+                                    and caller_gender_id != required_gender_id
+                                ):
+                                    continue
+
                             # Normalize both sides by stripping spaces, hyphens and
                             # apostrophes so pokedex.json display names (e.g.
                             # "King's Rock") match items.csv identifiers (e.g.
@@ -1036,6 +1092,7 @@ def check_evolution_for_pokemon(
     evo_window,
     everstone=False,
     evolution_rejected=False,
+    current_attacks=None,
 ):
     """
     Check if a Pokémon evolves by a level (or move-based level-up) condition.
@@ -1055,6 +1112,12 @@ def check_evolution_for_pokemon(
         everstone (bool): Whether the Pokémon is holding an Everstone.
         evolution_rejected (bool): Whether the user previously rejected this
             evolution. When True the automatic prompt is suppressed.
+        current_attacks (list | None): The Pokémon's just-updated moveset, when
+            the caller has fresher data than the database (e.g. immediately
+            after new level-up moves were learned). ``None`` falls back to the
+            stored moveset from the DB seam. Move-based evolutions evaluate
+            against this list so learning the required move on this very level
+            triggers the offer on that same event instead of one level late.
 
     Returns:
         int | None: The evolution ID if an evolution is found, or None otherwise.
@@ -1139,29 +1202,36 @@ def check_evolution_for_pokemon(
                             required_move = target_data.get("evoMove")
                             knows_move = False
 
-                            pkmn_data = None
-                            try:
-                                pkmn_data = services.db.get_pokemon(individual_id)
-                            except Exception:
-                                pkmn_data = None
-                            if pkmn_data and "attacks" in pkmn_data:
-                                p_attacks = pkmn_data["attacks"]
-                                if required_move and any(
-                                    isinstance(a, str)
-                                    and a.lower().replace(" ", "").replace("-", "")
-                                    == required_move.lower()
-                                    .replace(" ", "")
-                                    .replace("-", "")
-                                    for a in p_attacks
-                                ):
-                                    knows_move = True
+                            # Prefer the caller's just-updated moveset when
+                            # provided (the DB may still hold the pre-level-up
+                            # moveset at this point); fall back to the stored
+                            # one otherwise.
+                            if current_attacks is not None:
+                                p_attacks = current_attacks
                             else:
-                                # Fail closed when the moveset can't be fetched:
-                                # a move-gated evolution must never fire on
-                                # unconfirmed data (mirrors friendship_evolution.py's
-                                # conservative levelMove handling). knows_move stays
-                                # False so the evolution simply doesn't trigger.
-                                knows_move = False
+                                p_attacks = None
+                                try:
+                                    pkmn_data = services.db.get_pokemon(
+                                        individual_id
+                                    )
+                                except Exception:
+                                    pkmn_data = None
+                                if pkmn_data and "attacks" in pkmn_data:
+                                    p_attacks = pkmn_data["attacks"]
+                            if required_move and p_attacks and any(
+                                isinstance(a, str)
+                                and a.lower().replace(" ", "").replace("-", "")
+                                == required_move.lower()
+                                .replace(" ", "")
+                                .replace("-", "")
+                                for a in p_attacks
+                            ):
+                                knows_move = True
+                            # Fail closed when the moveset can't be fetched:
+                            # a move-gated evolution must never fire on
+                            # unconfirmed data (mirrors friendship_evolution.py's
+                            # conservative levelMove handling). knows_move stays
+                            # False so the evolution simply doesn't trigger.
 
                             if knows_move:
                                 is_level_evo = True
@@ -1337,42 +1407,6 @@ def check_key_in_table(column_name, value, file_path):
 
     # Return the matching row or None if no match is found
     return matching_row
-
-
-def rows_for_key_in_table(column_name, value, file_path):
-    """Return *all* rows where ``column_name`` equals ``value`` (as a list).
-
-    Unlike :func:`check_key_in_table`, which stops at the first hit, this returns
-    every matching row. The bundled ``pokemon_evolution.csv`` stores one row per
-    evolution *method*, so a single evolved species can appear on several rows —
-    e.g. Sylveon has a blank row and a separate ``minimum_happiness`` row, and
-    Persian has both a level-up row and a friendship row. Callers that need to
-    pick the row matching a specific method (level vs. friendship) must see them
-    all rather than just whichever comes first in the file.
-
-    Args:
-        column_name: The column to match on.
-        value: The value to match (compared as a string, like
-            :func:`check_key_in_table`).
-        file_path: Path to the CSV file to scan.
-
-    Returns:
-        A list of matching rows (each a ``dict``); empty on no match or error.
-    """
-    matching_rows = []
-    try:
-        with open(file_path, mode="r", encoding="utf-8") as file:
-            reader = csv.DictReader(file)
-            for row in reader:
-                # Use .get() to prevent KeyError if the column doesn't exist.
-                if row.get(column_name) and str(row[column_name]) == str(value):
-                    matching_rows.append(row)
-    except FileNotFoundError:
-        print(f"Error: The file {file_path} does not exist.")
-    except Exception as e:
-        print(f"Error: {e}")
-
-    return matching_rows
 
 
 def rows_for_key_in_table(column_name, value, file_path):

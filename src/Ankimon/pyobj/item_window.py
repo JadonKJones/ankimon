@@ -614,7 +614,12 @@ class ItemWindow(QWidget):
     def Check_Evo_Item(self, individual_id: str, prevo_id: str, item_name: str):
         try:
             item_id = return_id_for_item_name(item_name)
-            evo_id = check_evolution_by_item(prevo_id, item_id)
+            # Pass the main Pokémon's gender so gender-gated evolutions from
+            # pokemon_evolution.csv (Gallade = male Kirlia, Froslass = female
+            # Snorunt) can't fire on the wrong sex. A missing/unknown
+            # gender degrades to the historical no-check behavior.
+            gender = getattr(self.main_pokemon, "gender", None)
+            evo_id = check_evolution_by_item(prevo_id, item_id, gender=gender)
             if evo_id:
                 # Perform your action when the item matches the Pokémon's evolution item
                 self.logger.log_and_showinfo("info", "Pokemon Evolution is fitting !")
