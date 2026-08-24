@@ -735,3 +735,69 @@ def test_check_friendship_evolution_auto_prompts_pawmo():
         assert evo_window.calls == [("some_id", 922, 923)]
     finally:
         services.db = None
+
+def test_sylveon_no_fairy():
+    pokemon = {"id": 133, "friendship": 160, "attacks": ["tackle", "growl", "tailwhip"], "everstone": False}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Espeon"
+
+def test_sylveon_fairy():
+    pokemon = {"id": 133, "friendship": 160, "attacks": ["moonblast", "tackle", "growl", "tailwhip"], "everstone": False}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Sylveon"
+
+def test_search_pokedex_moonblast():
+    from Ankimon.functions.pokedex_functions import search_pokedex
+    print(search_pokedex("moonblast", "type"))
+    print(search_pokedex("moonblast", "types"))
+    print(search_pokedex("moonblast", "baseStats"))
+
+def test_sylveon_no_fairy():
+    pokemon = {"id": 133, "friendship": 160, "attacks": ["tackle", "growl", "tailwhip"], "everstone": False}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Espeon"
+
+def test_sylveon_fairy():
+    pokemon = {"id": 133, "friendship": 160, "attacks": ["moonblast", "tackle", "growl", "tailwhip"], "everstone": False}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Sylveon"
+
+def test_sylveon_no_fairy():
+    pokemon = {"id": 133, "friendship": 160, "attacks": ["tackle", "growl", "tailwhip"], "everstone": False}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Espeon"
+
+def test_sylveon_fairy():
+    pokemon = {"id": 133, "friendship": 160, "attacks": ["moonblast", "tackle", "growl", "tailwhip"], "everstone": False}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Sylveon"
+
+def test_sylveon_no_fairy():
+    pokemon = {"id": 133, "friendship": 160, "attacks": ["tackle", "growl", "tailwhip"], "everstone": False}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Espeon"
+
+def test_sylveon_fairy():
+    pokemon = {"id": 133, "friendship": 160, "attacks": ["moonblast", "tackle", "growl", "tailwhip"], "everstone": False}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Sylveon"
+
+def test_sylveon_no_fairy():
+    pokemon = {"id": 133, "friendship": 160, "attacks": ["tackle", "growl", "tailwhip"], "everstone": False}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Espeon"
+
+def test_sylveon_fairy():
+    pokemon = {"id": 133, "friendship": 160, "attacks": ["moonblast", "tackle", "growl", "tailwhip"], "everstone": False}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Sylveon"
+
+def test_sylveon_no_fairy():
+    pokemon = {"id": 133, "friendship": 160, "attacks": ["tackle", "growl", "tailwhip"], "everstone": False}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Espeon"
+
+def test_sylveon_fairy():
+    pokemon = {"id": 133, "friendship": 160, "attacks": ["moonblast", "tackle", "growl", "tailwhip"], "everstone": False}
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Sylveon"

@@ -233,7 +233,8 @@ def get_friendship_evolutions_for_species(
         # classic level-up evolution. Scoping friendship evolution to species
         # that evolve *purely* by friendship (Eevee, Golbat, Pichu, Riolu, ...)
         # keeps the feature focused and leaves existing level evolutions intact.
-        if any(_is_plain_level_row(r) for r in rows):
+        # EXCEPTION: Sylveon (700) is levelExtra but has a friendship row in Ankimon. We still want it here.
+        if int(evo) != 700 and any(_is_plain_level_row(r) for r in rows):
             continue
         for row in rows:
             try:
@@ -413,7 +414,7 @@ def get_level_evolutions_for_species(
 
 
 def _select_evolution(
-    evos: tuple[FriendshipEvolution, ...], time_of_day: str
+    evos: tuple[FriendshipEvolution, ...], time_of_day: str, pokemon: Any = None
 ) -> FriendshipEvolution:
     """Pick the most appropriate friendship evolution for the current time.
 
@@ -421,21 +422,54 @@ def _select_evolution(
     has none); among those, an explicitly time-gated row beats a blank-time one,
     then lowest ``evo_id``. If none is eligible now, falls back to the lowest
     ``evo_id`` so the UI can still show e.g. "waiting for Night".
+    Sylveon (id 700) requires a Fairy move; if the pokemon does not know a
+    Fairy move, Sylveon is disqualified. If it DOES know a Fairy move, Sylveon
+    outprioritizes Espeon/Umbreon.
 
     Args:
         evos: Non-empty tuple from :func:`get_friendship_evolutions_for_species`.
         time_of_day: Current time of day (``"day"`` or ``"night"``).
+        pokemon: Optional pokemon object or dict to check moves.
 
     Returns:
         The chosen :class:`FriendshipEvolution`.
     """
+    knows_fairy_move = False
+    if pokemon is not None:
+        from .pokedex_functions import find_details_move
+        attacks = []
+        if isinstance(pokemon, dict):
+            attacks = pokemon.get("attacks") or []
+        else:
+            attacks = getattr(pokemon, "attacks", []) or []
+        for a in attacks:
+            try:
+                move_data = find_details_move(str(a))
+                if move_data and move_data.get("type", "").lower() == "fairy":
+                    knows_fairy_move = True
+                    break
+            except Exception:
+                pass
+
+    if knows_fairy_move:
+        sylveon = next((e for e in evos if e.evo_id == 700), None)
+        if sylveon is not None:
+            return sylveon
+
     eligible_now = [e for e in evos if e.time_of_day in (time_of_day, None)]
+    if not knows_fairy_move:
+        eligible_now = [e for e in eligible_now if e.evo_id != 700]
+
     if eligible_now:
         # Prefer explicit-time rows (e.g. Espeon@day) over blank-time rows, then
         # lowest evo_id. ``time_of_day is None`` sorts last via the bool key.
         return min(eligible_now, key=lambda e: (e.time_of_day is None, e.evo_id))
+
+    fallback = [e for e in evos if knows_fairy_move or e.evo_id != 700]
+    if not fallback:
+        fallback = evos
     # Nothing matches the current time; still return a representative.
-    return min(evos, key=lambda e: e.evo_id)
+    return min(fallback, key=lambda e: e.evo_id)
 
 
 def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
@@ -514,7 +548,7 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
             pokemon=pokemon,
         )
 
-    chosen = _select_evolution(evos, time_of_day)
+    chosen = _select_evolution(evos, time_of_day, pokemon)
     evo_id = chosen.evo_id
     evo_name = chosen.evo_name
     min_happiness = chosen.min_happiness
