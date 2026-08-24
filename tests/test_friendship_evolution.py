@@ -735,3 +735,165 @@ def test_check_friendship_evolution_auto_prompts_pawmo():
         assert evo_window.calls == [("some_id", 922, 923)]
     finally:
         services.db = None
+
+
+# --------------------------------------------------------------------------- #
+# Move-type-gated friendship evolutions (Sylveon's Fairy-move requirement).
+#
+# The bundled pokemon_evolution.csv carries known_move_type_id=18 ("fairy") on
+# both of Sylveon's rows; _select_evolution must honor that gate: Sylveon only
+# when the Pokémon knows a Fairy move (and then it outranks Espeon/Umbreon),
+# never on missing/unconfirmed movesets.
+# --------------------------------------------------------------------------- #
+def test_sylveon_row_carries_fairy_move_gate_from_csv():
+    by_id = {e.evo_id: e for e in fe.get_friendship_evolutions_for_species(133)}
+    assert by_id[700].known_move_type == "fairy"
+    assert by_id[196].known_move_type is None
+    assert by_id[197].known_move_type is None
+
+
+def test_sylveon_needs_fairy_move_day_stays_espeon():
+    # No Fairy move -> Sylveon is gated out; day still offers Espeon.
+    pokemon = {
+        "id": 133,
+        "friendship": 200,
+        "everstone": False,
+        "attacks": ["tackle", "growl", "tailwhip"],
+    }
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Espeon"
+    assert result["ready"] is True
+
+
+def test_sylveon_with_fairy_move_wins_over_espeon():
+    # A Fairy move forces Sylveon in-game, so it outranks the time-gated rows.
+    pokemon = {
+        "id": 133,
+        "friendship": 200,
+        "everstone": False,
+        "attacks": ["moonblast", "tackle"],
+    }
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+    assert result["evo_name"] == "Sylveon"
+    assert result["evo_id"] == 700
+    assert result["ready"] is True
+
+
+def test_sylveon_with_fairy_move_also_ready_at_night():
+    pokemon = {
+        "id": 133,
+        "friendship": 200,
+        "everstone": False,
+        "attacks": ["moonblast"],
+    }
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 23, 0))
+    assert result["evo_name"] == "Sylveon"
+    assert result["ready"] is True
+
+
+def test_no_fairy_move_night_stays_umbreon():
+    pokemon = {
+        "id": 133,
+        "friendship": 200,
+        "everstone": False,
+        "attacks": ["bite", "tackle"],
+    }
+    result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 23, 0))
+    assert result["evo_name"] == "Umbreon"
+
+
+def test_missing_attacks_key_never_offers_sylveon():
+    # Unknown moveset (no "attacks" key at all) must fail closed: Sylveon is
+    # not offered even though its blank-time row would otherwise be eligible.
+    for now, expected in (
+        (datetime(2024, 1, 1, 9, 0), "Espeon"),
+        (datetime(2024, 1, 1, 23, 0), "Umbreon"),
+    ):
+        result = fe.evolution_readiness(
+            {"id": 133, "friendship": 200, "everstone": False}, now=now
+        )
+        assert result["evo_name"] == expected
+
+
+def test_auto_prompt_uses_stored_moveset_for_move_gates():
+    # The victory-time checker reads the stored attacks through the DB seam;
+    # with a Fairy move stored, Sylveon is prompted instead of Espeon.
+    from Ankimon.services import services
+
+    fake_db = mock.MagicMock()
+    fake_db.get_pokemon = mock.MagicMock(
+        return_value={"pokemon_defeated": 0, "attacks": ["Moonblast"]}
+    )
+    services.db = fake_db
+    try:
+        evo_window = _FakeEvoWindow()
+        res = fe.check_friendship_evolution_for_pokemon(
+            individual_id=7,
+            pokemon_id=133,
+            evo_window=evo_window,
+            everstone=False,
+            friendship=200,
+            now=datetime(2024, 1, 1, 9, 0),
+        )
+        assert res == 700
+        assert evo_window.calls == [(7, 133, 700)]
+    finally:
+        services.db = None
+
+
+def test_auto_prompt_without_fairy_move_prompts_time_gated_evo():
+    from Ankimon.services import services
+
+    fake_db = mock.MagicMock()
+    fake_db.get_pokemon = mock.MagicMock(
+        return_value={"pokemon_defeated": 0, "attacks": ["Tackle"]}
+    )
+    services.db = fake_db
+    try:
+        evo_window = _FakeEvoWindow()
+        res = fe.check_friendship_evolution_for_pokemon(
+            individual_id=7,
+            pokemon_id=133,
+            evo_window=evo_window,
+            everstone=False,
+            friendship=200,
+            now=datetime(2024, 1, 1, 9, 0),
+        )
+        assert res == 196
+        assert evo_window.calls == [(7, 133, 196)]
+    finally:
+        services.db = None
+
+
+def test_auto_prompt_caller_attacks_override_stored_moveset():
+    # A caller-supplied live moveset wins over the stale DB row.
+    from Ankimon.services import services
+
+    fake_db = mock.MagicMock()
+    fake_db.get_pokemon = mock.MagicMock(
+        return_value={"pokemon_defeated": 0, "attacks": ["Tackle"]}
+    )
+    services.db = fake_db
+    try:
+        evo_window = _FakeEvoWindow()
+        res = fe.check_friendship_evolution_for_pokemon(
+            individual_id=7,
+            pokemon_id=133,
+            evo_window=evo_window,
+            everstone=False,
+            friendship=200,
+            now=datetime(2024, 1, 1, 9, 0),
+            attacks=["Moonblast"],  # just learned this battle/level
+        )
+        assert res == 700
+        assert evo_window.calls == [(7, 133, 700)]
+    finally:
+        services.db = None
+
+
+def test_move_type_name_resolves_known_ids_and_degrades_on_junk():
+    assert fe._move_type_name(18) == "fairy"
+    assert fe._move_type_name("18") == "fairy"  # CSV cells arrive as strings
+    assert fe._move_type_name(None) is None
+    assert fe._move_type_name("junk") is None
+    assert fe._move_type_name(9999) is None
