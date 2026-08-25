@@ -16,6 +16,7 @@ except (ImportError, ModuleNotFoundError):
     def tooltip(msg, period=2000):
         print(f"[Ankimon Tooltip] {msg}")
 
+
 from ..services import services
 from ..events import events
 from ..functions.pokemon_functions import (
@@ -256,15 +257,15 @@ def toggle_auto_battle_override(
 ) -> Optional[Literal["catch", "defeat"]]:
     """
     Toggle the auto-battle override for the current encounter.
-    
+
     Args:
         action: "catch" or "defeat"
-    
+
     Returns:
         Current override state as a string: None, "catch", or "defeat"
     """
     global _auto_battle_override
-    
+
     # If the same action is already set, clear it (toggle off)
     if _auto_battle_override == action:
         _auto_battle_override = None
@@ -274,7 +275,7 @@ def toggle_auto_battle_override(
         _auto_battle_override = action
         action_display = "Catch" if action == "catch" else "Defeat"
         tooltip(f"Override set: Will {action_display} when fainted!")
-    
+
     return _auto_battle_override
 
 
@@ -287,6 +288,7 @@ def clear_auto_battle_override() -> None:
     """Clear the override state (called when a new encounter starts)."""
     global _auto_battle_override
     _auto_battle_override = None
+
 
 def calculate_mastery_index_ep(total_reviews, daily_average, trainer_level):
     """
@@ -1343,20 +1345,27 @@ def save_main_pokemon_progress(
         )
     ) < int(main_pokemon.xp) and (level_cap is None or main_pokemon.level < level_cap):
         if levels_gained >= 10:
-            logger.log("error", f"Level-up loop exceeded safety cap of 10 for {main_pokemon.name}")
-            next_level_cost = int(find_experience_for_level(
-                main_pokemon.growth_rate,
-                main_pokemon.level,
-                settings_obj.get("misc.remove_level_cap"),
-            ))
+            logger.log(
+                "error",
+                f"Level-up loop exceeded safety cap of 10 for {main_pokemon.name}",
+            )
+            next_level_cost = int(
+                find_experience_for_level(
+                    main_pokemon.growth_rate,
+                    main_pokemon.level,
+                    settings_obj.get("misc.remove_level_cap"),
+                )
+            )
             main_pokemon.xp = max(0, next_level_cost - 1)
             break
         levels_gained += 1
-        current_lvl_xp_cost = int(find_experience_for_level(
-            main_pokemon.growth_rate,
-            main_pokemon.level,
-            settings_obj.get("misc.remove_level_cap"),
-        ))
+        current_lvl_xp_cost = int(
+            find_experience_for_level(
+                main_pokemon.growth_rate,
+                main_pokemon.level,
+                settings_obj.get("misc.remove_level_cap"),
+            )
+        )
         main_pokemon.level += 1
         events.emit("levelup", pokemon=main_pokemon.name, level=main_pokemon.level)
         msg = ""
@@ -1456,6 +1465,7 @@ def save_main_pokemon_progress(
             main_pokemon.everstone,
             getattr(main_pokemon, "evolution_rejected", False),
             current_attacks=attacks,
+            gender=getattr(main_pokemon, "gender", None),
         )
         if evo_id is not None:
             evolution_prompted = True
@@ -1583,6 +1593,9 @@ def save_main_pokemon_progress(
                 main_pokemon.friendship,
                 getattr(main_pokemon, "evolution_rejected", False),
                 attacks=attacks,
+                # In-memory defeat count (already incremented for this battle
+                # above) keeps the victory path free of synchronous DB reads.
+                pokemon_defeated=main_pokemon.pokemon_defeated,
             )
             if friendship_evo_id is not None:
                 evolution_prompted = True
@@ -1787,6 +1800,7 @@ def save_caught_pokemon(
 
     try:
         from ..singletons import notify_stats_changed
+
         notify_stats_changed()
     except Exception:
         pass
@@ -1917,7 +1931,7 @@ def handle_enemy_faint(
         finally:
             clear_auto_battle_override()
         return
-        
+
     elif _auto_battle_override == "defeat":
         # Override: Force defeat, unless the enemy is protected by an
         # "always auto-catch" tier setting (legendary/mythical/ultra/

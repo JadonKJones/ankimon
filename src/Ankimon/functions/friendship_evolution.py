@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple, Optional
 
 from .pokedex_functions import (
-    find_details_move,
+    _load_moves_cache,
     pokemon_evolves_from_id,
     return_name_for_id,
     rows_for_key_in_table,
@@ -472,13 +472,46 @@ def get_level_evolutions_for_species(
     return tuple(evolutions)
 
 
+def _move_type_of(attack: Any) -> Optional[str]:
+    """Return the lower-case type of one move name, or ``None``.
+
+    A quiet lookup over the startup-loaded ``moves.json`` cache only.
+    Deliberately *not* :func:`find_details_move`, which answers unknown names
+    with the default "tackle" entry — that would misreport the type AND pop a
+    warning dialog through ``services.ui.warn`` mid-review. An unknown or junk
+    name simply carries no type evidence (None).
+    """
+    if not isinstance(attack, str):
+        return None
+    name = attack.strip()
+    if not name:
+        return None
+    try:
+        moves = _load_moves_cache() or {}
+    except Exception:
+        return None
+    # Same normalization ladder find_details_move uses, minus the fallback.
+    for candidate in (
+        name.lower(),
+        name.replace(" ", "").replace("-", "").lower(),
+        name.replace(" ", "").lower(),
+        name.replace("-", "").lower(),
+    ):
+        move_data = moves.get(candidate)
+        if isinstance(move_data, dict):
+            move_type = move_data.get("type")
+            if isinstance(move_type, str) and move_type.strip():
+                return move_type.strip().lower()
+    return None
+
+
 def _known_move_types(pokemon: Any) -> frozenset:
     """Return the set of move types the Pokémon knows, lower-cased.
 
     Accepts a dict or an object with an ``attacks`` attribute (the two shapes
-    :func:`evolution_readiness` supports). Move names are resolved through
-    ``find_details_move``; unknown moves resolve to a default entry rather than
-    raising, so the result is best-effort by construction.
+    :func:`evolution_readiness` supports). Move names resolve through the quiet
+    :func:`_move_type_of` cache lookup; unknown moves contribute nothing rather
+    than raising, so the result is best-effort by construction.
     """
     if pokemon is None:
         return frozenset()
@@ -488,14 +521,9 @@ def _known_move_types(pokemon: Any) -> frozenset:
         attacks = getattr(pokemon, "attacks", None) or []
     types: set = set()
     for attack in attacks:
-        try:
-            move_data = find_details_move(str(attack))
-        except Exception:
-            move_data = None
-        if isinstance(move_data, dict):
-            move_type = move_data.get("type")
-            if isinstance(move_type, str) and move_type.strip():
-                types.add(move_type.strip().lower())
+        move_type = _move_type_of(attack)
+        if move_type:
+            types.add(move_type)
     return frozenset(types)
 
 
@@ -646,9 +674,7 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
             pokemon=pokemon,
         )
 
-    chosen = _select_evolution(
-        evos, time_of_day, _known_move_types(pokemon)
-    )
+    chosen = _select_evolution(evos, time_of_day, _known_move_types(pokemon))
     evo_id = chosen.evo_id
     evo_name = chosen.evo_name
     min_happiness = chosen.min_happiness
@@ -935,6 +961,7 @@ def check_friendship_evolution_for_pokemon(
     evolution_rejected: bool = False,
     now: Optional[datetime] = None,
     attacks: Optional[list] = None,
+    pokemon_defeated: Optional[int] = None,
 ) -> Optional[int]:
     """Prompt a friendship (or defeat-milestone) evolution for a Pokémon if ready.
 
@@ -945,7 +972,8 @@ def check_friendship_evolution_for_pokemon(
 
     * friendship/time evolutions (``method == "friendship"``); and
     * ``minimumDefeated`` evolutions (a subset of ``method == "level"`` — e.g.
-      Pawmo -> Pawmot after 100 defeats), whose defeat count is read from the DB.
+      Pawmo -> Pawmot after 100 defeats), whose defeat count comes from the
+      caller's in-memory state (with a guarded DB fallback for legacy callers).
 
     Plain level-up evolutions are NOT auto-prompted here (those are handled by
     ``check_evolution_for_pokemon`` on level-up; the manual PC button covers the
@@ -962,6 +990,13 @@ def check_friendship_evolution_for_pokemon(
         attacks: Optional live moveset; when given it takes precedence over the
             stored one so move-type-gated evolutions (e.g. Sylveon's Fairy-move
             requirement) evaluate against freshest-known data.
+        pokemon_defeated: Optional defeat count for ``minimumDefeated``
+            evolutions (e.g. Pawmo -> Pawmot). Supply it — together with
+            ``attacks`` — from state the caller already holds so this checker
+            performs **no synchronous disk I/O** on Anki's review path (coding
+            guideline: never do synchronous disk I/O mid-review). ``None``
+            keeps the legacy behavior of one guarded DB read for the value(s)
+            the caller didn't supply.
 
     Returns:
         The evolved species id if the evolution was triggered, else ``None``.
@@ -976,32 +1011,39 @@ def check_friendship_evolution_for_pokemon(
         return None
 
     # Defeat count and known attacks for move/defeat-gated evolutions (Sylveon
-    # needs a Fairy-type move; Pawmo/Rellor need defeat milestones): read via the
-    # DB seam, guarded so a missing/unavailable store degrades to 0 / no attacks
-    # rather than raising on the victory hot path.
-    pokemon_defeated = 0
-    stored_attacks: list = []
-    try:
-        db = services.db
-        if db is not None and hasattr(db, "get_pokemon"):
-            record = db.get_pokemon(individual_id) or {}
-            if isinstance(record, dict):
-                pokemon_defeated = record.get("pokemon_defeated", 0)
-                stored_attacks = record.get("attacks") or []
-    except Exception:
+    # needs a Fairy-type move; Pawmo/Rellor need defeat milestones). Production
+    # callers hold both in memory already and pass them in, so the victory-time
+    # path does zero synchronous disk I/O. The DB seam below runs only for the
+    # values a caller left as None (legacy/test callers), guarded so a
+    # missing/unavailable store degrades to 0 / no attacks rather than raising.
+    defeats_known = pokemon_defeated is not None
+    if pokemon_defeated is None or attacks is None:
+        try:
+            db = services.db
+            if db is not None and hasattr(db, "get_pokemon"):
+                record = db.get_pokemon(individual_id) or {}
+                if isinstance(record, dict):
+                    if not defeats_known:
+                        pokemon_defeated = record.get("pokemon_defeated", 0) or 0
+                    if attacks is None:
+                        attacks = record.get("attacks") or []
+        except Exception:
+            if not defeats_known:
+                pokemon_defeated = 0
+            if attacks is None:
+                attacks = []
+    if pokemon_defeated is None:
+        # Caller supplied an explicit None-ish count; treat as no milestone.
         pokemon_defeated = 0
-        stored_attacks = []
 
     shim = {
         "id": pokemon_id,
         "friendship": friendship,
         "everstone": everstone,
         "pokemon_defeated": pokemon_defeated,
-        # The live moveset: lets _select_evolution honor move-type gates
-        # (e.g. Sylveon) instead of offering them on unconfirmed data. The
-        # caller's just-updated list wins; otherwise fall back to the stored
-        # one read above.
-        "attacks": attacks if attacks is not None else stored_attacks,
+        # The live moveset lets _select_evolution honor move-type gates
+        # (e.g. Sylveon) instead of offering them on unconfirmed data.
+        "attacks": attacks,
     }
     readiness = evolution_readiness(shim, now)
 

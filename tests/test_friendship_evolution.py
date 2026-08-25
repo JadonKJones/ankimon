@@ -897,3 +897,98 @@ def test_move_type_name_resolves_known_ids_and_degrades_on_junk():
     assert fe._move_type_name(None) is None
     assert fe._move_type_name("junk") is None
     assert fe._move_type_name(9999) is None
+
+
+# --------------------------------------------------------------------------- #
+# Victory-path I/O discipline + quiet move-type resolution.
+#
+# Coding guideline: "No synchronous disk I/O in the review path." The
+# victory-time checker must therefore run entirely on caller-supplied state
+# (pokemon_defeated / attacks) — no services.db.get_pokemon call at all — and
+# its move-type lookups must never route through find_details_move, whose
+# unknown-move fallback returns "tackle" data and pops a warning dialog via
+# services.ui.warn (a modal showWarning under QtPresenter) mid-review.
+# --------------------------------------------------------------------------- #
+def test_auto_prompt_with_full_caller_state_never_touches_db():
+    from Ankimon.services import services
+
+    fake_db = mock.MagicMock()
+    fake_db.get_pokemon = mock.MagicMock(
+        side_effect=AssertionError("victory path performed a DB read")
+    )
+    services.db = fake_db
+    try:
+        evo_window = _FakeEvoWindow()
+        res = fe.check_friendship_evolution_for_pokemon(
+            individual_id="some_id",
+            pokemon_id=922,
+            evo_window=evo_window,
+            everstone=False,
+            friendship=50,
+            evolution_rejected=False,
+            attacks=["Tackle"],
+            pokemon_defeated=100,  # Pawmot milestone reached this battle
+        )
+        assert res == 923
+        assert evo_window.calls == [("some_id", 922, 923)]
+        fake_db.get_pokemon.assert_not_called()
+    finally:
+        services.db = None
+
+
+def test_auto_prompt_no_level_up_victory_does_not_raise():
+    # Regression for the unbound-`attacks` crash class: a friendship-ready
+    # Pokémon winning a battle that grants NO level-up reaches the checker with
+    # attacks=None; it must fall back to the stored moveset instead of raising
+    # UnboundLocalError (which used to abort the final save).
+    from Ankimon.services import services
+
+    fake_db = mock.MagicMock()
+    fake_db.get_pokemon = mock.MagicMock(
+        return_value={"pokemon_defeated": 0, "attacks": ["Moonblast"]}
+    )
+    services.db = fake_db
+    try:
+        evo_window = _FakeEvoWindow()
+        res = fe.check_friendship_evolution_for_pokemon(
+            individual_id=7,
+            pokemon_id=133,
+            evo_window=evo_window,
+            everstone=False,
+            friendship=200,
+            now=datetime(2024, 1, 1, 9, 0),
+            # attacks omitted entirely: zero level-ups => caller has no fresh list
+        )
+        assert res == 700
+        assert evo_window.calls == [(7, 133, 700)]
+    finally:
+        services.db = None
+
+
+def test_move_type_of_is_quiet_and_accurate():
+    # Known move resolves to its real type from the moves.json cache...
+    assert fe._move_type_of("Moonblast") == "fairy"
+    assert fe._move_type_of("moonblast") == "fairy"
+    assert fe._move_type_of("Leaf Blade") == "grass"
+
+    # ...unknown/junk names resolve to None WITHOUT touching services.ui
+    # (no tackle fallback, no warning popup)...
+    class _BoomUI:
+        def warn(self, message):
+            raise AssertionError(f"ui.warn called with {message!r}")
+
+    from Ankimon.services import services
+
+    real_ui = services.ui
+    services.ui = _BoomUI()
+    try:
+        assert fe._move_type_of("Not A Real Move") is None
+        assert fe._move_type_of("") is None
+        assert fe._move_type_of(None) is None
+        assert fe._move_type_of(12345) is None
+        # ...and an unknown move contributes NO type evidence, so Sylveon's
+        # gate stays unmet instead of being satisfied by phantom "tackle".
+        types = fe._known_move_types({"attacks": ["Not A Real Move"]})
+        assert "tackle" not in types and types == frozenset()
+    finally:
+        services.ui = real_ui

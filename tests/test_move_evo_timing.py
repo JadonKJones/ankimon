@@ -107,7 +107,10 @@ def _reset_env(monkeypatch):
 
     sys.modules["Ankimon.singletons"] = _SINGLETONS_STUB
     sys.modules["Ankimon.functions.pokedex_functions"] = _POKEDEX_FUNCTIONS_STUB
-    services.settings = settings
+    # monkeypatch restores the real registry attributes after each test, so
+    # later tests can never inherit this module's fake settings/db (the direct
+    # assignments used before leaked across the suite and made it order-bound).
+    monkeypatch.setattr(services, "settings", settings)
     settings.values.update(
         {
             "misc.active_region": None,
@@ -119,7 +122,7 @@ def _reset_env(monkeypatch):
 
     fake_db = mock.MagicMock()
     fake_db.get_pokemon = mock.MagicMock(return_value={"attacks": list(STORED_ATTACKS)})
-    services.db = fake_db
+    monkeypatch.setattr(services, "db", fake_db)
 
     # Freeze pokedex_functions' clock: 09:00 local == "day" deterministically.
     frozen_now = datetime(2024, 1, 1, 9, 0)
