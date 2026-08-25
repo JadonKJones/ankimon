@@ -1658,15 +1658,13 @@ def PokemonFree(
     else:
         logger.log_and_showinfo("error", f"Failed to add {name} to history.")
 
-    # If this Pokémon is the current XP-Share target, clear the setting before
-    # it disappears from the DB. Otherwise the dangling individual_id would make
+    # If this Pokémon is an XP-Share target, drop it from the list before it
+    # disappears from the DB. Otherwise the dangling individual_id would make
     # xp_share_gain_exp look up a now-missing Pokémon and crash on the next
-    # review. str() guards against any id type mismatch in the compare.
-    settings_obj = services.settings
-    if settings_obj is not None and str(settings_obj.get("trainer.xp_share")) == str(
-        individual_id
-    ):
-        settings_obj.set("trainer.xp_share", None)
+    # review.
+    from ..functions.trainer_functions import remove_xp_share_target
+
+    remove_xp_share_target(services.settings, individual_id)
 
     # Delete from database
     db.delete_pokemon(individual_id)

@@ -18,6 +18,7 @@ from aqt.qt import (
 from aqt.utils import showWarning
 
 from PyQt6.QtGui import QIcon, QColor, QFontMetrics, QPainterPath
+from PyQt6.QtCore import QTimer, QRect
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -114,6 +115,9 @@ class TestWindow(QWidget):
         self.catch_button = None
         self.nickname_input = None
         self._last_display_time = 0
+        self.last_message_text = ""
+        self._enemy_shake_offset = (0, 0)
+        self._main_shake_offset = (0, 0)
 
         self.init_ui()
         # self.update()
@@ -363,6 +367,7 @@ class TestWindow(QWidget):
 
         # calculate wild pokemon max hp
         message_box_text = f"{self.translator.translate('wild_pokemon_appeared', enemy_pokemon_name=lang_name.capitalize())}"
+        self.last_message_text = message_box_text
 
         bckgimage_path = battlescene_path / self.ankimon_tracker_obj.battlescene_file
 
@@ -377,6 +382,47 @@ class TestWindow(QWidget):
         image_label, msg_font = self.window_show(bckgimage_path, lang_name)
 
         return image_label
+
+    # Message text geometry — inset within the dialog box baked into the
+    # background art (pkmnbattlescene.png et al), not a box drawn in code.
+    _MESSAGE_BOX_RECT = QRect(2, 265, 551, 96)
+    _MESSAGE_BOX_BORDER_THICKNESS = 13
+
+    def _draw_message_box_layer(self, painter):
+        """Draw the battle-log text over the (existing, art-baked-in) box."""
+        rect = self._MESSAGE_BOX_RECT
+        t = self._MESSAGE_BOX_BORDER_THICKNESS
+
+        if self.last_message_text:
+            battle_text_font = load_custom_font(
+                20, int(self.settings_obj.get("misc.language"))
+            )
+            painter.setFont(battle_text_font)
+            painter.setPen(QColor(240, 240, 208))
+            painter.drawText(
+                rect.adjusted(t + 8, t + 6, -(t + 8), -(t + 6)),
+                Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap,
+                self.last_message_text,
+            )
+
+    @staticmethod
+    def _fit_sprite(pixmap, max_w=120, max_h=120):
+        """Scale a sprite to fit within a max_w x max_h box, aspect preserved.
+
+        ``resize_pixmap_img`` (used for item/badge art) forces width to an
+        exact value regardless of the source image's proportions. Animated
+        (GIF) sprite sheets are typically framed much tighter than the static
+        PNGs — far less transparent padding around the actual artwork — so
+        width-only scaling to the same target made them read as visibly
+        bigger and let the main Pokémon's sprite dip into the message box
+        below it. Capping both dimensions keeps every source proportionate
+        and inside the battle scene regardless of its native framing.
+        """
+        if pixmap.width() <= 0 or pixmap.height() <= 0:
+            return pixmap
+        return pixmap.scaled(
+            max_w, max_h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        )
 
     def _load_sprite(self, pokemon, side):
         """Load a Pokémon's sprite, falling back to the substitute.
@@ -418,8 +464,8 @@ class TestWindow(QWidget):
         # Scale both to a fixed width, keeping the aspect ratio. Reading the
         # dimensions back off the scaled pixmaps keeps the draw offsets correct
         # even when a sprite is missing and cannot be scaled at all.
-        pixmap = resize_pixmap_img(pixmap, 150)
-        pixmap2 = resize_pixmap_img(pixmap2, 150)
+        pixmap = self._fit_sprite(pixmap)
+        pixmap2 = self._fit_sprite(pixmap2)
 
         new_width, new_height = pixmap.width(), pixmap.height()
         new_width2, new_height2 = pixmap2.width(), pixmap2.height()
@@ -466,8 +512,8 @@ class TestWindow(QWidget):
         mpkmn_height = new_height2
 
         # draw pokemon image to a specific pixel
-        painter.drawPixmap((410 - wpkmn_width), (170 - wpkmn_height), pixmap)
-        painter.drawPixmap((144 - mpkmn_width), (290 - mpkmn_height), pixmap2)
+        painter.drawPixmap((410 - wpkmn_width) + self._enemy_shake_offset[0], (170 - wpkmn_height) + self._enemy_shake_offset[1], pixmap)
+        painter.drawPixmap((144 - mpkmn_width) + self._main_shake_offset[0], (275 - mpkmn_height) + self._main_shake_offset[1], pixmap2)
 
         experience = int(
             find_experience_for_level(
@@ -532,11 +578,6 @@ class TestWindow(QWidget):
         painter.drawText(max_hp_x, 238, str(main_max_hp))
         painter.drawText(hp_x, 238, str(main_hp))
 
-        painter.setFont(msg_font)
-        painter.setPen(QColor(240, 240, 208))  # Text color
-
-        painter.drawText(40, 320, message_box_text)
-
         painter.setFont(hp_enemy_text_font)
         painter.setPen(QColor(31, 31, 39))  # Text color
         enemy_hp_x = 41 if enemy_max_hp < 100 else 40  # Shift left if 3 digits
@@ -553,6 +594,11 @@ class TestWindow(QWidget):
         )
 
         self._draw_cp_pp(painter)
+
+        # Repaint the message box as the topmost layer — see
+        # _draw_message_box_layer's docstring for why this is drawn fresh
+        # here instead of trusting sprite sizing to stay clear of it.
+        self._draw_message_box_layer(painter)
 
         painter.end()
 
@@ -602,13 +648,10 @@ class TestWindow(QWidget):
     def pokemon_display_battle(self):
         # No pokemon_encounter increment here — the battle loop owns the
         # per-round counter; incrementing per render double-counted rounds.
+        # Always keep the dialog-box background (never switch to the
+        # boxless variant) — only the Pokémon sprites/HP/text should change
+        # turn to turn, not the box itself.
         bckgimage_path = battlescene_path / self.ankimon_tracker_obj.battlescene_file
-
-        if self.ankimon_tracker_obj.pokemon_encounter > 1:
-            bckgimage_path = (
-                battlescene_path_without_dialog
-                / self.ankimon_tracker_obj.battlescene_file
-            )
 
         ui_path = battle_ui_path
 
@@ -630,8 +673,8 @@ class TestWindow(QWidget):
         # Scale both to a fixed width, keeping the aspect ratio. Reading the
         # dimensions back off the scaled pixmaps keeps the draw offsets correct
         # even when a sprite is missing and cannot be scaled at all.
-        pixmap = resize_pixmap_img(pixmap, 150)
-        pixmap2 = resize_pixmap_img(pixmap2, 150)
+        pixmap = self._fit_sprite(pixmap)
+        pixmap2 = self._fit_sprite(pixmap2)
 
         new_width, new_height = pixmap.width(), pixmap.height()
         new_width2, new_height2 = pixmap2.width(), pixmap2.height()
@@ -678,10 +721,11 @@ class TestWindow(QWidget):
         mpkmn_width = new_width2 // 2
         mpkmn_height = new_height2
 
-        # draw pokemon image to a specific pixel
-        painter.drawPixmap((410 - wpkmn_width), (170 - wpkmn_height), pixmap)
-        # Reposition main pokemon to be fully visible when message box disappears
-        painter.drawPixmap((144 - mpkmn_width), (270 - mpkmn_height), pixmap2)
+        # draw pokemon image to a specific pixel — same spot as the intro
+        # frame, since the dialog box (and thus the available space) no
+        # longer changes turn to turn.
+        painter.drawPixmap((410 - wpkmn_width) + self._enemy_shake_offset[0], (170 - wpkmn_height) + self._enemy_shake_offset[1], pixmap)
+        painter.drawPixmap((144 - mpkmn_width) + self._main_shake_offset[0], (275 - mpkmn_height) + self._main_shake_offset[1], pixmap2)
 
         experience = int(
             find_experience_for_level(
@@ -765,6 +809,11 @@ class TestWindow(QWidget):
         )
 
         self._draw_cp_pp(painter)
+
+        # Repaint the message box as the topmost layer — see
+        # _draw_message_box_layer's docstring for why this is drawn fresh
+        # here instead of trusting sprite sizing to stay clear of it.
+        self._draw_message_box_layer(painter)
 
         painter.end()
 
@@ -1056,16 +1105,55 @@ class TestWindow(QWidget):
         self.setStyleSheet("background-color: rgb(44,44,44);")
         self.current_view = "battle"
 
-    def display_battle(self):
+    def display_battle(self, message_text=None, shake_enemy=False, shake_main=False):
         # Debounce: prevent flicker from duplicate hooks (especially during reloads)
         if self._same_view_debounced("battle"):
             return
+
+        if message_text is not None:
+            self.last_message_text = message_text
 
         # Update the existing label without clearing the layout
         new_label = self.pokemon_display_battle()
         self.main_label.setPixmap(new_label.pixmap())
         self.button_widget.hide()
         self.current_view = "battle"
+
+        if shake_enemy:
+            self._shake_sprite("enemy")
+        if shake_main:
+            self._shake_sprite("main")
+
+    def _shake_sprite(self, side, magnitude=7, step_ms=45):
+        """Jitter one Pokémon's sprite in place — the one actually attacking
+        this turn, not the whole window. Diagonal, not side-to-side: reads as
+        a little lunge/recoil rather than a plain horizontal wobble. Since
+        the scene is a single QPainter-composited image (no per-element
+        widgets to animate), this works by nudging that sprite's (dx, dy)
+        draw-offset through a few values via QTimer and forcing a redraw at
+        each step, then settling back to (0, 0).
+        """
+        attr = "_enemy_shake_offset" if side == "enemy" else "_main_shake_offset"
+        half = magnitude // 2
+        offsets = [
+            (magnitude, -half),
+            (-magnitude, half),
+            (magnitude, -half),
+            (-magnitude, half),
+            (0, 0),
+        ]
+
+        def _step(offset):
+            try:
+                setattr(self, attr, offset)
+                if self.current_view == "battle":
+                    self._last_display_time = 0
+                    self.display_battle()
+            except RuntimeError:
+                pass
+
+        for i, offset in enumerate(offsets):
+            QTimer.singleShot(step_ms * i, lambda offset=offset: _step(offset))
 
     def rate_display_item(self, item):
         Receive_Window = QDialog(mw)

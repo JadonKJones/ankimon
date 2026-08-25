@@ -304,8 +304,16 @@ def _process_battle_effects(
                 target = "user" if key.startswith("user.") else "opponent"
                 pokemon_name = get_pokemon_name(target)
 
-                # Status applied
-                if before in ("fighting", None) and after not in ("fighting", None):
+                # Status applied — fainting gets its own dedicated message
+                # elsewhere (enemy_pokemon_fainted / player_pokemon_fainted),
+                # so skip it here: falling through to the generic
+                # status_unknown_apply template produced the nonsensical
+                # "X is affected by Fainted!".
+                if (
+                    before in ("fighting", None)
+                    and after not in ("fighting", None)
+                    and after != "fainted"
+                ):
                     normalized_status = normalize_status_name(after)
                     translation_key = f"status_{normalized_status}_apply"
 
@@ -324,8 +332,14 @@ def _process_battle_effects(
                         )
                     effect_messages.append(message)
 
-                # Status removed
-                elif before not in ("fighting", None) and after in ("fighting", None):
+                # Status removed — same "fainted" exclusion as above (a
+                # fresh encounter resetting fainted -> fighting shouldn't
+                # print "X recovers from Fainted!").
+                elif (
+                    before not in ("fighting", None)
+                    and after in ("fighting", None)
+                    and before != "fainted"
+                ):
                     normalized_status = normalize_status_name(before)
                     translation_key = f"status_{normalized_status}_remove"
 

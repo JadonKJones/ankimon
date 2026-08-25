@@ -13,8 +13,9 @@
 
     const state = {
         team: [null, null, null, null, null, null],
-        xpShare: null,         // individual_id of the XP Share holder (any owned Pokémon)
-        xpShareInfo: null,     // display stub for the holder (may be benched)
+        xpShareIds: [],        // individual_ids of every XP Share holder (any owned Pokémon)
+        xpShareInfos: [],      // display stubs for the holders (may be benched), same order as xpShareIds
+        companionId: null,     // individual_id of the Active Companion (must be a team slot member)
         maxSize: 6,
         teamCycleCount: 3,     // limit for hotkey 9 rotation
         roster: null,          // null = not loaded yet
@@ -164,18 +165,22 @@
         for (let i = 0; i < state.maxSize; i++) {
             const m = state.team[i];
             const slot = document.createElement('div');
-            const isXp = !!(m && state.xpShare && String(m.id) === String(state.xpShare));
-            slot.className = 'slot ' + (m ? 'filled' : 'empty') + (isXp ? ' xp-share' : '');
+            const isXp = !!(m && state.xpShareIds.some((id) => String(id) === String(m.id)));
+            const isCompanion = !!(m && state.companionId && String(m.id) === String(state.companionId));
+            slot.className = 'slot ' + (m ? 'filled' : 'empty') + (isXp ? ' xp-share' : '') + (isCompanion ? ' companion' : '');
 
             if (m) {
                 const cp = (m.cp === undefined || m.cp === null) ? '—' : num(m.cp);
                 const types = (m.types || []).map(typeBadge).join('');
                 const hasCycle = state.teamCycleCount > 1 && i < state.teamCycleCount;
                 const cycleBadge = hasCycle ? '<span class="slot-rotation-badge" title="Cycled via Hotkey 9">↻</span>' : '';
+                const companionBadge = isCompanion ? '<span class="slot-companion-badge" title="Active Companion">⚔</span>' : '';
 
                 slot.title = 'Click to switch';
                 slot.innerHTML = `
-                    <span class="slot-num">${i + 1}${cycleBadge}</span>
+                    <span class="slot-num">${i + 1}${cycleBadge}${companionBadge}</span>
+                    <button class="slot-corner slot-crown${isCompanion ? ' on' : ''}" data-act="companion" data-slot="${i}"
+                            title="${isCompanion ? 'Active Companion (battling now)' : 'Set as Active Companion'}">⚔</button>
                     <button class="slot-corner slot-star${isXp ? ' on' : ''}" data-act="xp" data-slot="${i}"
                             title="${isXp ? 'Remove XP Share' : 'Set as XP Share'}">★</button>
                     <button class="slot-corner slot-remove" data-act="remove" data-slot="${i}" title="Remove">✕</button>
@@ -201,13 +206,14 @@
         }
         grid.replaceChildren(frag);
 
-        // Corner buttons (★ XP Share, ✕ remove) override the card's click-to-switch.
+        // Corner buttons (⚔ Companion, ★ XP Share, ✕ remove) override the card's click-to-switch.
         grid.querySelectorAll('[data-act]').forEach((btn) => {
             const i = Number(btn.dataset.slot);
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 if (btn.dataset.act === 'remove') removeSlot(i);
                 else if (btn.dataset.act === 'xp') toggleXp(i);
+                else if (btn.dataset.act === 'companion') toggleCompanion(i);
             });
         });
 
@@ -218,8 +224,21 @@
     function toggleXp(slot) {
         const m = state.team[slot];
         if (!m) return;
-        if (state.xpShare && String(m.id) === String(state.xpShare)) setXpShare(null);
-        else setXpShare(m);
+        if (state.xpShareIds.some((id) => String(id) === String(m.id))) removeXpShare(m.id);
+        else addXpShare(m);
+    }
+
+    // ---------------- Active Companion ----------------
+    // Unlike XP Share, the companion must be an actual team member (it's who
+    // battles), so this only ever operates on a filled team slot — no
+    // separate roster picker needed. There's always exactly one, or none.
+    function toggleCompanion(slot) {
+        const m = state.team[slot];
+        if (!m) return;
+        const id = String(m.id);
+        state.companionId = (state.companionId === id) ? null : id;
+        markDirty();
+        renderTeam();
     }
 
     // Sidebar team overview: filled count, average level, total CP, type coverage.
@@ -242,30 +261,43 @@
         renderTypeCounts('resistances', teamDefense(filled, (mult) => mult < 1), 'Add Pokémon to see resistances');
     }
 
+    function resolveXpShareMember(id) {
+        // A holder may be benched, so prefer its resolved stub; fall back to a
+        // team member if it happens to be on the team.
+        const info = state.xpShareInfos.find((s) => s && String(s.id) === String(id));
+        if (info) return info;
+        return state.team.find((p) => p && String(p.id) === String(id)) || null;
+    }
+
     function renderXpShare() {
         const holder = document.getElementById('xpshare-holder');
         if (!holder) return;
-        // The holder may be benched, so prefer the resolved stub; fall back to a
-        // team member if it happens to be on the team.
-        let m = state.xpShareInfo;
-        if (!m && state.xpShare) {
-            m = state.team.find((p) => p && String(p.id) === String(state.xpShare)) || null;
-        }
-        if (m) {
-            holder.innerHTML = `
-                <div class="xps-card" title="Change XP Share">
-                    <img class="xps-sprite" src="${spriteUrl(m)}" alt="${esc(m.n)}"
-                         onerror="if (this.src.indexOf('_gif') !== -1) { this.src = this.src.replace('_gif', '').replace('.gif', '.png'); } else { this.onerror=null; this.src='${FALLBACK}'; }">
-                    <div class="xps-name">${esc(m.n)}${m.s ? ' <span class="shiny-dot">★</span>' : ''}</div>
-                    <div class="xps-lv">★ Lv ${esc(m.l)}</div>
-                    <div class="xps-change-hint">⇄ Change</div>
-                </div>`;
-        } else {
-            holder.innerHTML = '<button class="xps-empty" type="button">+ Set XP Share</button>';
-        }
-        // Whole card is the trigger (like a team slot) — opens the XP Share picker.
-        const trigger = holder.querySelector('.xps-card, .xps-empty');
-        if (trigger) trigger.addEventListener('click', openXpSharePicker);
+        const members = state.xpShareIds.map(resolveXpShareMember).filter(Boolean);
+
+        const cards = members.map((m) => `
+            <div class="xps-card" data-xp-id="${esc(m.id)}" title="Click to remove">
+                <img class="xps-sprite" src="${spriteUrl(m)}" alt="${esc(m.n)}"
+                     onerror="if (this.src.indexOf('_gif') !== -1) { this.src = this.src.replace('_gif', '').replace('.gif', '.png'); } else { this.onerror=null; this.src='${FALLBACK}'; }">
+                <div class="xps-name">${esc(m.n)}${m.s ? ' <span class="shiny-dot">★</span>' : ''}</div>
+                <div class="xps-lv">★ Lv ${esc(m.l)}</div>
+                <button class="xps-remove" type="button" data-xp-remove="${esc(m.id)}" title="Remove">✕</button>
+            </div>`).join('');
+
+        const addBtn = '<button class="xps-empty xps-add" type="button">+ Add XP Share</button>';
+        holder.innerHTML = cards + addBtn;
+
+        holder.querySelectorAll('[data-xp-remove]').forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                removeXpShare(btn.getAttribute('data-xp-remove'));
+            });
+        });
+        // Clicking the rest of a card also opens the picker (to swap/add more).
+        holder.querySelectorAll('.xps-card').forEach((card) => {
+            card.addEventListener('click', openXpSharePicker);
+        });
+        const addTrigger = holder.querySelector('.xps-add');
+        if (addTrigger) addTrigger.addEventListener('click', openXpSharePicker);
     }
 
 
@@ -274,12 +306,25 @@
     function removeSlot(slot) {
         // XP Share is independent of team membership now — removing a Pokémon
         // from a slot leaves it owned, so we keep it as the XP Share holder.
+        // Active Companion, though, MUST be a team member — clear it if the
+        // Pokémon leaving the slot was the companion.
+        const m = state.team[slot];
+        if (m && state.companionId && String(m.id) === String(state.companionId)) {
+            state.companionId = null;
+        }
         state.team[slot] = null;
         markDirty();
         renderTeam();
     }
 
     function assignSlot(slot, stub) {
+        // Swapping out the slot that held the companion clears it — the new
+        // occupant isn't automatically the companion, and the old one is no
+        // longer a team member.
+        const prev = state.team[slot];
+        if (prev && state.companionId && String(prev.id) === String(state.companionId)) {
+            state.companionId = null;
+        }
         // Copy so editing one slot can't alias another / the roster entry.
         const member = { id: stub.id, p: stub.p, n: stub.n, l: stub.l };
         if (stub.s) member.s = 1;
@@ -303,16 +348,30 @@
     }
 
     // ---------------- XP Share ----------------
-    function setXpShare(stub) {
-        if (stub) {
-            state.xpShare = String(stub.id);
-            state.xpShareInfo = { id: stub.id, p: stub.p, n: stub.n, l: stub.l };
-            if (stub.s) state.xpShareInfo.s = 1;
-            if (stub.sprite) state.xpShareInfo.sprite = stub.sprite;
-        } else {
-            state.xpShare = null;
-            state.xpShareInfo = null;
-        }
+    function addXpShare(stub) {
+        if (!stub) return;
+        const id = String(stub.id);
+        if (state.xpShareIds.some((existing) => String(existing) === id)) return;
+        state.xpShareIds.push(id);
+        const info = { id: stub.id, p: stub.p, n: stub.n, l: stub.l };
+        if (stub.s) info.s = 1;
+        if (stub.sprite) info.sprite = stub.sprite;
+        state.xpShareInfos.push(info);
+        markDirty();
+        renderTeam();
+    }
+
+    function removeXpShare(id) {
+        const idStr = String(id);
+        state.xpShareIds = state.xpShareIds.filter((existing) => String(existing) !== idStr);
+        state.xpShareInfos = state.xpShareInfos.filter((info) => String(info.id) !== idStr);
+        markDirty();
+        renderTeam();
+    }
+
+    function clearXpShare() {
+        state.xpShareIds = [];
+        state.xpShareInfos = [];
         markDirty();
         renderTeam();
     }
@@ -481,20 +540,23 @@
         list.classList.remove('hidden');
 
         const frag = document.createDocumentFragment();
-        // XP Share mode: a "No XP Share" clear card pinned first.
+        // XP Share mode: a "No XP Share" clear-all card pinned first, and
+        // picking targets TOGGLES membership without closing the picker (so
+        // several can be selected in one visit); everything else still
+        // picks-and-closes.
         if (xpMode) {
             const none = document.createElement('div');
-            none.className = 'roster-card' + (!state.xpShare ? ' current' : '');
+            none.className = 'roster-card' + (!state.xpShareIds.length ? ' current' : '');
             none.innerHTML = `
                 <div class="rc-sprite" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:1.7rem;">✕</div>
                 <div class="rc-name" style="color:var(--text-muted);">No XP Share</div>`;
-            none.addEventListener('click', () => { setXpShare(null); showPicker(false); });
+            none.addEventListener('click', () => { clearXpShare(); showPicker(false); });
             frag.appendChild(none);
         }
         const CAP = 200;
         choices.slice(0, CAP).forEach((c) => {
             const inTeam = !xpMode && taken.has(String(c.id));
-            const isCurrent = xpMode && String(state.xpShare) === String(c.id);
+            const isCurrent = xpMode && state.xpShareIds.some((id) => String(id) === String(c.id));
             const card = document.createElement('div');
             card.className = 'roster-card' + (inTeam ? ' in-team' : '') + (isCurrent ? ' current' : '');
             const types = (c.types || []).map(typeBadge).join('');
@@ -504,15 +566,17 @@
                 <div class="rc-name">${esc(c.n)}${c.s ? ' <span class="shiny-dot">★</span>' : ''}</div>
                 ${types ? `<div class="rc-types">${types}</div>` : ''}
                 <div class="rc-stats"><span>Lv ${esc(c.l)}</span><span>·</span><span class="rc-cp">${cp}</span><span>CP</span></div>
-                ${inTeam ? '<div class="rc-tag">On team</div>' : (isCurrent ? '<div class="rc-tag">Current</div>' : '')}`;
+                ${inTeam ? '<div class="rc-tag">On team</div>' : (isCurrent ? '<div class="rc-tag">Selected</div>' : '')}`;
             if (!inTeam) {
                 card.addEventListener('click', () => {
                     if (xpMode) {
-                        setXpShare(c);
+                        if (isCurrent) removeXpShare(c.id);
+                        else addXpShare(c);
+                        renderRosterList();   // stay open — reflect the toggle immediately
                     } else {
                         assignSlot(state.pickerSlot, c);
+                        showPicker(false);
                     }
-                    showPicker(false);
                 });
             }
             frag.appendChild(card);
@@ -548,9 +612,7 @@
             updateSaveUI();
             return Promise.resolve({ ok: true });
         }
-        // Third arg is companion_id — always '' (no shipped companion picker; the
-        // Python seam accepts it for when that UI is built).
-        return teamBridge.saveTeam(JSON.stringify(ids), state.xpShare || '', '').then((res) => {
+        return teamBridge.saveTeam(JSON.stringify(ids), JSON.stringify(state.xpShareIds), state.companionId || '').then((res) => {
             if (res && res.ok) {
                 state.dirty = false;
                 updateSaveUI();
@@ -579,8 +641,19 @@
         const team = (data.team || []).slice(0, state.maxSize);
         state.team = [];
         for (let i = 0; i < state.maxSize; i++) state.team.push(team[i] || null);
-        state.xpShare = data.xp_share ? String(data.xp_share) : null;
-        state.xpShareInfo = data.xp_share_info || null;
+        // Back-compat: an old bridge/preview payload may still send a bare
+        // xp_share string (and xp_share_info as a single stub) instead of lists.
+        if (Array.isArray(data.xp_share)) {
+            state.xpShareIds = data.xp_share.map(String);
+        } else {
+            state.xpShareIds = data.xp_share ? [String(data.xp_share)] : [];
+        }
+        if (Array.isArray(data.xp_share_info)) {
+            state.xpShareInfos = data.xp_share_info;
+        } else {
+            state.xpShareInfos = data.xp_share_info ? [data.xp_share_info] : [];
+        }
+        state.companionId = data.companion ? String(data.companion) : null;
         state.spriteMode = data.sprite_mode || 'static';
         state.teamCycleCount = data.team_cycle_count || 3;
 
@@ -688,8 +761,12 @@
             // *after* it for the no-bridge picker to have something to show.
             applyData({
                 max_size: 6,
-                xp_share: '2',
-                xp_share_info: { id: '2', p: 6, n: 'Charizard', l: 52, s: 1 },
+                xp_share: ['2', '4'],
+                xp_share_info: [
+                    { id: '2', p: 6, n: 'Charizard', l: 52, s: 1 },
+                    { id: '4', p: 3, n: 'Venusaur', l: 41 },
+                ],
+                companion: '1',
                 team: [
                     { id: '1', p: 25, n: 'Pikachu', l: 18, cp: 820, types: ['Electric'] },
                     { id: '2', p: 6, n: 'Charizard', l: 52, s: 1, cp: 2410, types: ['Fire', 'Flying'] },

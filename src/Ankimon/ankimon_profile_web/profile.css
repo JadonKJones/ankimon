@@ -252,6 +252,14 @@ body {
     border-color: rgba(210, 153, 34, 0.6);
     box-shadow: 0 0 0 1px rgba(210, 153, 34, 0.45) inset;
 }
+.slot.companion {
+    border-color: rgba(88, 166, 255, 0.6);
+    box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.45) inset;
+}
+/* Both badges active: blend the two accent colors into one ring. */
+.slot.companion.xp-share {
+    box-shadow: 0 0 0 1px rgba(210, 153, 34, 0.45) inset, 0 0 0 3px rgba(88, 166, 255, 0.3) inset;
+}
 
 .slot-num { position: absolute; top: 10px; left: 12px; font-size: 0.66rem; font-weight: 700; color: var(--text-muted); }
 .slot-rotation-badge {
@@ -279,12 +287,23 @@ body {
 .slot-remove { right: 8px; }
 .slot-remove:hover { color: var(--accent-red); border-color: rgba(248, 81, 73, 0.5); }
 .slot-star { right: 40px; }
-/* The active XP-Share star stays visible even when the slot isn't hovered. With
-   the ✕ hidden, park it in the top-right corner (where the ✕ would sit) so it
-   doesn't look stranded; it slides back beside the ✕ once the slot is hovered. */
-.slot-star.on { color: var(--accent-gold); border-color: rgba(210, 153, 34, 0.6); background: rgba(210, 153, 34, 0.14); opacity: 1; pointer-events: auto; right: 8px; }
-.slot.filled:hover .slot-star.on,
-.slot.filled:focus-within .slot-star.on { right: 40px; }
+.slot-crown { right: 72px; }
+/* Active badges (XP-Share star, Companion crown) stay visible even when the
+   slot isn't hovered, each parked in its own corner so they never collide:
+   crown (the more consequential pick — who actually battles) takes the
+   prominent top-right spot the ✕ would use; star parks one slot in. Both
+   slide out to their normal hover positions once the slot is hovered. */
+.slot-star.on { color: var(--accent-gold); border-color: rgba(210, 153, 34, 0.6); background: rgba(210, 153, 34, 0.14); opacity: 1; pointer-events: auto; right: 40px; }
+.slot-crown.on { color: var(--accent-blue); border-color: rgba(88, 166, 255, 0.6); background: rgba(88, 166, 255, 0.14); opacity: 1; pointer-events: auto; right: 8px; }
+.slot.filled:hover .slot-crown.on,
+.slot.filled:focus-within .slot-crown.on { right: 72px; }
+.slot-companion-badge {
+    margin-left: 5px;
+    font-size: 0.8rem;
+    color: var(--accent-blue);
+    vertical-align: middle;
+    cursor: help;
+}
 
 .slot-sprite-wrap {
     flex: 1 1 auto; min-height: 80px; max-height: 148px; width: 100%;
@@ -393,10 +412,13 @@ body {
     box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
 }
 
-/* XP Share holder — a gold-tinted mini-card with the holder's sprite. */
+/* XP Share holder — one or more gold-tinted mini-cards, each with the
+   holder's sprite. Multiple targets wrap onto their own rows. */
+.xpshare-holder {
+    display: flex; flex-direction: column; gap: 10px;
+}
 /* Vertical, whole-card-pressable (like a team slot): the sprite sits directly on
-   the card (no inner frame), the name shows in full, and "Change" is a
-   hover-revealed hint at the bottom. */
+   the card (no inner frame), the name shows in full, and a ✕ button removes it. */
 .xps-card {
     position: relative;
     display: flex; flex-direction: column; align-items: center; text-align: center;
@@ -421,16 +443,15 @@ body {
     line-height: 1.2; word-break: break-word;
 }
 .xps-lv { font-size: 0.74rem; color: var(--accent-gold); font-weight: 700; margin-top: 3px; }
-.xps-change-hint {
-    position: absolute; left: 0; right: 0; bottom: 0;
-    padding: 7px; text-align: center;
-    font-size: 0.66rem; font-weight: 800; color: var(--accent-gold);
-    text-transform: uppercase; letter-spacing: 0.4px;
-    background: linear-gradient(to top, var(--bg-darker), transparent);
-    border-radius: 0 0 12px 12px;
-    opacity: 0; transition: opacity 0.15s; pointer-events: none;
+.xps-remove {
+    position: absolute; top: 6px; right: 6px;
+    width: 20px; height: 20px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg-darker); border: 1px solid var(--border-main);
+    color: var(--text-muted); font-size: 0.72rem; line-height: 1; cursor: pointer;
+    transition: var(--transition-fast);
 }
-.xps-card:hover .xps-change-hint { opacity: 1; }
+.xps-remove:hover { border-color: var(--accent-red, #f85149); color: var(--accent-red, #f85149); }
 .xps-empty {
     width: 100%; background: var(--bg-card); border: 1px dashed var(--border-main);
     color: var(--text-muted); font-family: inherit; font-size: 0.82rem; font-weight: 700;

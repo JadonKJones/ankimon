@@ -609,21 +609,28 @@ class ProfileData:
             m["cp"] = self._calc_cp(m["id"])
 
         try:
-            xp_share = self.settings_obj.get("trainer.xp_share") or None
+            raw_xp_share = self.settings_obj.get("trainer.xp_share")
+            # Legacy saves stored a single bare id; normalize to a list here so
+            # every reader (this method, the JS UI) only ever deals with lists.
+            if isinstance(raw_xp_share, list):
+                xp_share_ids = [str(x) for x in raw_xp_share if x]
+            elif raw_xp_share:
+                xp_share_ids = [str(raw_xp_share)]
+            else:
+                xp_share_ids = []
             cycle_count = self.settings_obj.get("controls.team_cycle_count", 3)
             sprite_mode = self.settings_obj.get(
                 "ankidex.spriteMode",
                 self.settings_obj.get("pokedex_v2.spriteMode", "static")
             )
         except Exception:
-            xp_share = None
+            xp_share_ids = []
             cycle_count = 3
             sprite_mode = "static"
 
-        # companion/companion_info expose the current main Pokémon as a ready
-        # read-seam for the deferred Active Companion picker (team.js does not
-        # render them yet — see handle_save_team). Kept so that UI can wire in
-        # without a Python change.
+        # companion/companion_info: the current main Pokémon (is_main=1 in the
+        # DB) — team.js renders this as the ⚔ badge and lets it be changed via
+        # handle_save_team's companion_id.
         db = services.db
         main_pkmn = db.get_main_pokemon() if db else None
         companion_id = main_pkmn.get("individual_id") if main_pkmn else None
@@ -631,8 +638,12 @@ class ProfileData:
         return {
             "max_size": MAX_TEAM_SIZE,
             "team": members,
-            "xp_share": str(xp_share) if xp_share else None,
-            "xp_share_info": self._resolve_stub(xp_share, members) if xp_share else None,
+            "xp_share": xp_share_ids,
+            "xp_share_info": [
+                stub for stub in (
+                    self._resolve_stub(ind_id, members) for ind_id in xp_share_ids
+                ) if stub
+            ],
             "companion": str(companion_id) if companion_id else None,
             "companion_info": self._resolve_stub(companion_id, members) if companion_id else None,
             "sprite_mode": sprite_mode,
@@ -751,14 +762,20 @@ class ProfileData:
             print(f"[Ankimon] profile: CP calc failed for {individual_id}: {e}")
             return 0
 
-    def handle_save_team(self, team_ids, xp_share_id, companion_id):
-        """Persist the chosen team + XP Share holder.
+    def handle_save_team(self, team_ids, xp_share_ids, companion_id):
+        """Persist the chosen team + XP Share holders.
 
-        ``companion_id`` (Active Companion / main-Pokémon override) is a ready
-        write-seam, but NO shipped UI populates it yet — the Team screen's
-        companion picker is deferred (team.js sends ''), so the set_main_pokemon
-        branch below is inert until that UI lands. Do not describe Active
-        Companion as a working feature."""
+        ``xp_share_ids`` is a list of individual_ids (0 or more) — the XP
+        earned per defeat is split evenly across however many are set, on top
+        of the main Pokémon's own half (see functions.trainer_functions.
+        xp_share_gain_exp).
+
+        ``companion_id`` is the Active Companion — whichever team member should
+        actually be the one battling (``is_main=1`` in the DB). team.js's ⚔
+        button on a team slot sets/clears it; '' means "no change" (most saves
+        don't touch it). Setting it here reloads the live ``main_pokemon``
+        object from the DB and repaints the reviewer HUD + Ankimon Window so
+        the swap is visible immediately."""
         seen = set()
         clean_ids = []
         for raw in team_ids or []:
@@ -771,19 +788,47 @@ class ProfileData:
                 break
 
         team_data = [{"individual_id": ind_id} for ind_id in clean_ids]
-        xp_share_id = str(xp_share_id) if xp_share_id else None
+
+        xp_seen = set()
+        clean_xp_share_ids = []
+        for raw in xp_share_ids or []:
+            ind_id = str(raw) if raw is not None else ""
+            if not ind_id or ind_id in xp_seen:
+                continue
+            xp_seen.add(ind_id)
+            clean_xp_share_ids.append(ind_id)
+
         companion_id = str(companion_id) if companion_id else None
 
         try:
             # NOTE: no legacy "trainer.team" config write — the DB team table
             # (services.db.save_team) is the sole source of truth every read path
             # uses; settings.py migrates/deletes the old config key on load.
-            self.settings_obj.set("trainer.xp_share", xp_share_id)
+            self.settings_obj.set("trainer.xp_share", clean_xp_share_ids)
             services.db.save_team(team_data)
             if companion_id:
                 services.db.set_main_pokemon(companion_id)
                 from ..functions.update_main_pokemon import update_main_pokemon
+
                 update_main_pokemon(services.main_pokemon)
+                # Repaint the reviewer HUD + the Ankimon Window popup so the
+                # switch is visible immediately, not just after the next
+                # battle turn (same seam cycle_team_pokemon() in reviewer_ui.py
+                # uses for its own companion swap).
+                try:
+                    if services.reviewer is not None:
+                        services.reviewer.refresh_hud()
+                except Exception:
+                    pass
+                try:
+                    test_window = services.test_window
+                    if test_window is not None and test_window.isVisible():
+                        test_window.main_pokemon = services.main_pokemon
+                        if test_window.current_view == "battle":
+                            test_window._last_display_time = 0
+                            test_window.display_battle()
+                except Exception:
+                    pass
         except Exception as e:
             return {"ok": False, "message": f"Failed to save team: {e}"}
 

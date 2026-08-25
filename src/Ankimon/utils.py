@@ -596,6 +596,9 @@ def get_item_description(item_name, language_id):
         return None
 
 
+_registered_fonts = set()  # font_file names already handed to QFontDatabase
+
+
 def load_custom_font(font_size, language):
     if language == 1:
         font_file = "pkmn_w.ttf"
@@ -612,10 +615,19 @@ def load_custom_font(font_size, language):
         font_file = "Early GameBoy.ttf"
         font_size = int((font_size * 2) / 5)
 
-    # Register the custom font with its file path. Qt imported lazily so utils
-    # stays importable headless (custom fonts are a GUI-only concern).
+    # Register the custom font with its file path — but ONLY the first time
+    # per file. addApplicationFont() adds a brand new entry to Qt's font
+    # database on every call, even for a file already registered; this
+    # function is called on every battle-scene redraw, so without caching it
+    # could silently register the same font hundreds of times over a play
+    # session — bloating the font database until fontconfig's internal
+    # font-set sort crashes with a stack overflow (observed: SIGSEGV inside
+    # FcFontSetSort). Qt imported lazily so utils stays importable headless
+    # (custom fonts are a GUI-only concern).
     from PyQt6.QtGui import QFontDatabase, QFont
-    QFontDatabase.addApplicationFont(str(font_path / font_file))
+    if font_file not in _registered_fonts:
+        QFontDatabase.addApplicationFont(str(font_path / font_file))
+        _registered_fonts.add(font_file)
     custom_font = QFont(
         font_name
     )  # Use the font family name you specified in the font file

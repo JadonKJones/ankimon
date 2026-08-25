@@ -368,8 +368,23 @@ def on_review_card(*args):
         # deleted-but-non-None widget can't raise on the end-of-turn repaint.
         final_window = services.test_window
         if is_alive(final_window) and enemy_pokemon.hp > 0:
+            # formatted_battle_log/true_dmg_from_*_move are only set on turns
+            # where the cards-per-round batch actually ran the poke_engine
+            # simulation above (the `if cards_battle_round >= ...` block) — on
+            # other turns they're simply not in scope, so read them defensively.
+            _turn_text = locals().get("formatted_battle_log")
+            # The ATTACKER shakes, not the one hit: main dealing damage means
+            # main attacked (shake main's sprite), enemy dealing damage means
+            # enemy attacked (shake enemy's sprite) — both can be true in the
+            # same turn if neither side fainted the other first.
+            _shake_main = bool(locals().get("true_dmg_from_user_move"))
+            _shake_enemy = bool(locals().get("true_dmg_from_enemy_move"))
             try:
-                final_window.display_battle()
+                final_window.display_battle(
+                    message_text=_turn_text,
+                    shake_enemy=_shake_enemy,
+                    shake_main=_shake_main,
+                )
             except RuntimeError:
                 pass
     except Exception as e:
