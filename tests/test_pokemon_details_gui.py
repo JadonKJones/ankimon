@@ -188,6 +188,7 @@ def details(qapp, tmp_path):
 
     aqt_mod = types.ModuleType("aqt")
     aqt_mod.qconnect = lambda signal, func: signal.connect(func)
+    aqt_mod.mw = types.SimpleNamespace()
     sys.modules["aqt"] = aqt_mod
 
     sv = types.ModuleType("Ankimon.services")

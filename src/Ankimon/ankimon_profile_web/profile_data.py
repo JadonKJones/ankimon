@@ -604,29 +604,20 @@ class ProfileData:
         return out
 
     def get_team_data(self):
+        """Team screen payload: roster, XP Share holder, and Active Companion."""
         members = self._team_member_stubs()
         for m in members:
             m["cp"] = self._calc_cp(m["id"])
 
         try:
-            raw_xp_share = self.settings_obj.get("trainer.xp_share")
-            # Legacy saves stored a single bare id; normalize to a list here so
-            # every reader (this method, the JS UI) only ever deals with lists.
-            if isinstance(raw_xp_share, list):
-                xp_share_ids = [str(x) for x in raw_xp_share if x]
-            elif raw_xp_share:
-                xp_share_ids = [str(raw_xp_share)]
-            else:
-                xp_share_ids = []
-            xp_share_full_team = bool(self.settings_obj.get("trainer.xp_share_full_team"))
+            xp_share = self.settings_obj.get("trainer.xp_share") or None
             cycle_count = self.settings_obj.get("controls.team_cycle_count", 3)
             sprite_mode = self.settings_obj.get(
                 "ankidex.spriteMode",
                 self.settings_obj.get("pokedex_v2.spriteMode", "static")
             )
         except Exception:
-            xp_share_ids = []
-            xp_share_full_team = False
+            xp_share = None
             cycle_count = 3
             sprite_mode = "static"
 
@@ -640,13 +631,8 @@ class ProfileData:
         return {
             "max_size": MAX_TEAM_SIZE,
             "team": members,
-            "xp_share": xp_share_ids,
-            "xp_share_info": [
-                stub for stub in (
-                    self._resolve_stub(ind_id, members) for ind_id in xp_share_ids
-                ) if stub
-            ],
-            "xp_share_full_team": xp_share_full_team,
+            "xp_share": str(xp_share) if xp_share else None,
+            "xp_share_info": self._resolve_stub(xp_share, members) if xp_share else None,
             "companion": str(companion_id) if companion_id else None,
             "companion_info": self._resolve_stub(companion_id, members) if companion_id else None,
             "sprite_mode": sprite_mode,
@@ -765,19 +751,8 @@ class ProfileData:
             print(f"[Ankimon] profile: CP calc failed for {individual_id}: {e}")
             return 0
 
-    def handle_save_team(self, team_ids, xp_share_ids, companion_id, xp_share_full_team=False):
-        """Persist the chosen team + XP Share holders.
-
-        ``xp_share_ids`` is a list of individual_ids (0 or more) — the XP
-        earned per defeat is split evenly across however many are set, on top
-        of the main Pokémon's own half (see functions.trainer_functions.
-        xp_share_gain_exp).
-
-        ``xp_share_full_team``: the mainline Gen-6+ style toggle — when on,
-        every current team member shares XP and the individual picks in
-        ``xp_share_ids`` are ignored at read time (see
-        functions.trainer_functions.resolve_xp_share_targets). Still stored
-        here either way, so turning the toggle back off restores your picks.
+    def handle_save_team(self, team_ids, xp_share_id, companion_id):
+        """Persist the chosen team + XP Share holder.
 
         ``companion_id`` is the Active Companion — whichever team member should
         actually be the one battling (``is_main=1`` in the DB). team.js's ⚔
@@ -797,24 +772,14 @@ class ProfileData:
                 break
 
         team_data = [{"individual_id": ind_id} for ind_id in clean_ids]
-
-        xp_seen = set()
-        clean_xp_share_ids = []
-        for raw in xp_share_ids or []:
-            ind_id = str(raw) if raw is not None else ""
-            if not ind_id or ind_id in xp_seen:
-                continue
-            xp_seen.add(ind_id)
-            clean_xp_share_ids.append(ind_id)
-
+        xp_share_id = str(xp_share_id) if xp_share_id else None
         companion_id = str(companion_id) if companion_id else None
 
         try:
             # NOTE: no legacy "trainer.team" config write — the DB team table
             # (services.db.save_team) is the sole source of truth every read path
             # uses; settings.py migrates/deletes the old config key on load.
-            self.settings_obj.set("trainer.xp_share", clean_xp_share_ids)
-            self.settings_obj.set("trainer.xp_share_full_team", bool(xp_share_full_team))
+            self.settings_obj.set("trainer.xp_share", xp_share_id)
             services.db.save_team(team_data)
             if companion_id:
                 services.db.set_main_pokemon(companion_id)

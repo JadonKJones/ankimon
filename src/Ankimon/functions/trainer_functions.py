@@ -59,91 +59,17 @@ def find_trainer_rank(highest_level, trainer_level):
         print("Error: One of the files (Pokedex or MyPokemon) could not be found.")
         return "Unknown Rank"
 
-def resolve_xp_share_targets(settings_obj):
-    """The individual_ids XP Share should actually apply to right now.
-
-    When ``trainer.xp_share_full_team`` is on (the mainline Gen-6+ "whole
-    party" style — X/Y, ORAS, Sun/Moon and everything since, where Exp.
-    Share became a key item shared by the whole team instead of a single
-    held item), every current team member is a target, ignoring whatever
-    individual picks are stored. Otherwise falls back to the manually
-    picked list in ``trainer.xp_share`` (list, or a bare string for
-    older saves). ``xp_share_gain_exp``/``_xp_share_split`` already
-    de-dupe and drop the main Pokémon, so no filtering needed here.
-    """
-    try:
-        if settings_obj.get("trainer.xp_share_full_team"):
-            db = services.db
-            if db is not None:
-                return [m["individual_id"] for m in db.get_team() if m.get("individual_id")]
-    except Exception:
-        pass
-    return settings_obj.get("trainer.xp_share")
-
-
-def remove_xp_share_target(settings_obj, individual_id):
-    """Drop one Pokémon from the XP Share list (e.g. it was released/traded).
-
-    Handles both the current list-of-ids storage and a legacy bare-string
-    value, so a Pokémon being removed cleanly disappears from the target set
-    either way instead of leaving a dangling id behind.
-    """
-    if settings_obj is None:
-        return
-    current = settings_obj.get("trainer.xp_share")
-    individual_id = str(individual_id)
-    if isinstance(current, list):
-        remaining = [ind_id for ind_id in current if str(ind_id) != individual_id]
-        if remaining != current:
-            settings_obj.set("trainer.xp_share", remaining)
-    elif current and str(current) == individual_id:
-        settings_obj.set("trainer.xp_share", None)
-
-
-def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp_share_ids):
-    """Split defeat XP between the main Pokémon and one or more XP Share targets.
-
-    ``xp_share_ids`` accepts either a single individual_id (legacy/back-compat
-    — older saves stored ``trainer.xp_share`` as a bare string) or a list of
-    them. The main Pokémon always keeps half; the other half is divided evenly
-    across however many (deduplicated, main-excluded) targets are given, and
-    each target is leveled up/evolved exactly as the old single-target flow did.
-    """
-    if not xp_share_ids:
+def xp_share_gain_exp(logger, settings_obj, evo_window, main_pokemon_id, exp, xp_share_individual_id):
+    # Ensure that the XP Share Pokémon is set and different from the main Pokémon
+    if not xp_share_individual_id:
         return exp
 
-    if isinstance(xp_share_ids, str):
-        xp_share_ids = [xp_share_ids]
-
-    # De-dupe and drop the main Pokémon (it already gets its own half below).
-    seen = set()
-    targets = []
-    for ind_id in xp_share_ids:
-        if not ind_id or ind_id == main_pokemon_id or ind_id in seen:
-            continue
-        seen.add(ind_id)
-        targets.append(ind_id)
-
-    if not targets:
+    if xp_share_individual_id == main_pokemon_id:
         return exp
 
     original_exp = int(exp * 0.5)
-    shared_exp = int(exp * 0.5)
-    # Split the shared half evenly across every target.
-    per_target_exp = max(1, shared_exp // len(targets)) if shared_exp > 0 else 0
-
-    for target_id in targets:
-        _xp_share_gain_exp_one(
-            logger, settings_obj, evo_window, target_id, per_target_exp
-        )
-
-    return original_exp  # The main Pokémon's own half.
-
-
-def _xp_share_gain_exp_one(logger, settings_obj, evo_window, xp_share_individual_id, exp):
-    """Apply one XP Share target's share of XP (leveling/evolution included)."""
     remove_level_cap = settings_obj.get("misc.remove_level_cap")
-    exp = int(exp)  # Convert the experience to an integer
+    exp = int(exp * 0.5)  # Convert the experience to an integer
 
     # Load pokemon from database
     db = services.db
@@ -156,17 +82,12 @@ def _xp_share_gain_exp_one(logger, settings_obj, evo_window, xp_share_individual
     # selected, leaving a dangling individual_id in settings. get_pokemon then
     # returns None and any pokemon[...] access below would raise
     # "'NoneType' object is not subscriptable" on the next review/defeat.
-    # Drop just this stale id from the list (the other targets, if any, still
-    # get their share) so the review continues normally.
+    # Clear the stale setting and return the already-computed half-exp so the
+    # main Pokémon still gets its share and the review continues normally.
     if pokemon is None:
-        remaining = [
-            ind_id
-            for ind_id in (settings_obj.get("trainer.xp_share") or [])
-            if ind_id != xp_share_individual_id
-        ] if isinstance(settings_obj.get("trainer.xp_share"), list) else None
-        settings_obj.set("trainer.xp_share", remaining)
-        logger.log("info", "An XP Share target no longer exists; removed it from the list.")
-        return
+        settings_obj.set("trainer.xp_share", None)
+        logger.log("info", "XP Share target no longer exists; cleared the setting.")
+        return original_exp
 
     current_level = int(pokemon['level'])  # MODIFIED: Use local variable for level
     if pokemon.get('held_item') == "lucky-egg":
@@ -259,3 +180,4 @@ def _xp_share_gain_exp_one(logger, settings_obj, evo_window, xp_share_individual
         db.save_pokemon(pokemon)
 
     logger.log("info", f"{msg}")
+    return original_exp  # Return the amount of experience added

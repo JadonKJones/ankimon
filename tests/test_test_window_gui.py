@@ -655,3 +655,106 @@ def test_zero_experience_does_not_crash_the_xp_bar(
     win = make_window(main=_FakePokemon("scatterbug", 664, xp=10))
 
     assert getattr(win, render)() is not None
+
+
+# ---------------------------------------------------------------------------
+# _fit_sprite — bounded sprite scaling (fixes GIF/static sizing mismatch and
+# the sprite overflowing into the message box).
+# ---------------------------------------------------------------------------
+
+
+def test_fit_sprite_scales_within_box_preserving_aspect(tw_module):
+    from PyQt6.QtGui import QPixmap
+
+    pixmap = QPixmap(str(_REAL_SPRITE))
+    assert not pixmap.isNull()
+
+    fitted = tw_module.TestWindow._fit_sprite(pixmap, max_w=120, max_h=120)
+
+    assert fitted.width() <= 120
+    assert fitted.height() <= 120
+    # At least one dimension should actually hit the box (not shrunk to
+    # something tiny) — the scale is aspect-preserving, not distorting.
+    assert fitted.width() == 120 or fitted.height() == 120
+
+
+def test_fit_sprite_handles_a_null_pixmap_without_crashing(tw_module):
+    from PyQt6.QtGui import QPixmap
+
+    null_pixmap = QPixmap()
+    assert null_pixmap.isNull()
+
+    # Must not raise (a naive width/height divide would ZeroDivisionError).
+    result = tw_module.TestWindow._fit_sprite(null_pixmap)
+    assert result is null_pixmap
+
+
+# ---------------------------------------------------------------------------
+# Per-Pokémon attack shake — only the attacker's sprite offset should move,
+# diagonally, settling back to (0, 0).
+# ---------------------------------------------------------------------------
+
+
+def test_shake_sprite_moves_only_the_named_side_diagonally(make_window, monkeypatch):
+    win = make_window()
+    win.show()
+
+    # Run the QTimer.singleShot callback chain synchronously so the whole
+    # shake sequence is observable without a real event loop.
+    monkeypatch.setattr(
+        sys.modules[_MODULE_NAME].QTimer,
+        "singleShot",
+        staticmethod(lambda _delay, fn: fn()),
+    )
+
+    assert win._enemy_shake_offset == (0, 0)
+    assert win._main_shake_offset == (0, 0)
+
+    win._shake_sprite("enemy")
+
+    # Settles back to (0, 0) once the sequence completes.
+    assert win._enemy_shake_offset == (0, 0)
+    # The side that never attacked must never move.
+    assert win._main_shake_offset == (0, 0)
+
+
+def test_shake_sprite_offsets_are_diagonal_not_purely_horizontal(make_window, monkeypatch):
+    win = make_window()
+    win.show()
+
+    seen_offsets = []
+    monkeypatch.setattr(
+        sys.modules[_MODULE_NAME].QTimer,
+        "singleShot",
+        staticmethod(lambda _delay, fn: (fn(), seen_offsets.append(win._main_shake_offset))),
+    )
+
+    win._shake_sprite("main")
+
+    # At least one intermediate offset must have a non-zero y component —
+    # a purely-horizontal shake (the old whole-window version) would fail this.
+    assert any(dy != 0 for (_dx, dy) in seen_offsets)
+
+
+# ---------------------------------------------------------------------------
+# Battle-log text persistence — the message box used to go blank after the
+# very first frame, since only the intro render ever drew into it.
+# ---------------------------------------------------------------------------
+
+
+def test_display_battle_updates_and_persists_the_message_text(make_window, monkeypatch):
+    win = make_window()
+    clock = _FakeClock()
+    monkeypatch.setattr(sys.modules[_MODULE_NAME], "time", clock)
+
+    win.display_first_encounter()
+    assert win.last_message_text  # the intro frame seeds it
+
+    win.display_battle(message_text="Pikachu used Thunderbolt!")
+    assert win.last_message_text == "Pikachu used Thunderbolt!"
+
+    # A later render with no new text keeps showing the last one — this is
+    # the actual bug: it must NOT go back to blank.
+    clock.advance(0.1)
+    win.display_battle()
+    assert win.last_message_text == "Pikachu used Thunderbolt!"

@@ -445,6 +445,8 @@ class TestWindow(QWidget):
         return pixmap
 
     def window_show(self, bckgimage_path, lang_name):
+        """Composite the first-encounter frame (background, sprites, HP bars,
+        CP/BP, message box) into a pixmap for the Ankimon Window."""
         ui_path = battle_ui_path
 
         pixmap_ui = QPixmap()
@@ -646,6 +648,8 @@ class TestWindow(QWidget):
         return painter
 
     def pokemon_display_battle(self):
+        """Composite this turn's battle scene (sprites, HP, message box) into
+        a pixmap for the Ankimon Window."""
         # No pokemon_encounter increment here — the battle loop owns the
         # per-round counter; incrementing per render double-counted rounds.
         # Always keep the dialog-box background (never switch to the
@@ -1106,6 +1110,9 @@ class TestWindow(QWidget):
         self.current_view = "battle"
 
     def display_battle(self, message_text=None, shake_enemy=False, shake_main=False):
+        """Repaint the battle scene, optionally updating the log text and
+        triggering a shake on whichever side (``shake_enemy``/``shake_main``)
+        actually attacked this turn."""
         # Debounce: prevent flicker from duplicate hooks (especially during reloads)
         if self._same_view_debounced("battle"):
             return

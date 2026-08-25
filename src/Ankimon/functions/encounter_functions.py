@@ -40,7 +40,7 @@ from ..functions.friendship_evolution import (
     check_friendship_evolution_for_pokemon,
 )
 from ..pyobj.error_handler import show_warning_with_traceback
-from ..functions.trainer_functions import xp_share_gain_exp, resolve_xp_share_targets
+from ..functions.trainer_functions import xp_share_gain_exp
 from ..functions.badges_functions import check_for_badge, receive_badge
 from ..functions.drawing_utils import tooltipWithColour
 from ..utils import (
@@ -1667,7 +1667,7 @@ def kill_pokemon(
     exp = max(1, math.ceil(exp))
 
     # Handle XP share logic
-    xp_share_individual_id = resolve_xp_share_targets(settings_obj)
+    xp_share_individual_id = settings_obj.get("trainer.xp_share")
     if xp_share_individual_id:
         try:
             exp = xp_share_gain_exp(

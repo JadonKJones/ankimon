@@ -35,6 +35,8 @@ def test_ipc_path(path):
 
 # Returns on first IPC pipe matching Discord's
 def get_ipc_path(pipe=None):
+    """Find Discord's local IPC socket, checking native, Snap, and Flatpak
+    sandbox locations (including Vesktop's) in turn."""
     ipc = 'discord-ipc-'
     if pipe is not None:
         ipc = f"{ipc}{pipe}"

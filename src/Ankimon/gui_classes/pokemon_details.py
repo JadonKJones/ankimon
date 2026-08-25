@@ -3,7 +3,7 @@ import json
 from typing import Any, Callable
 import re
 
-from aqt import qconnect
+from aqt import mw, qconnect
 from PyQt6.QtGui import QPixmap, QPainter, QIcon, QColor, QPolygonF, QPen, QBrush
 from PyQt6.QtCore import (
     Qt,
@@ -1439,7 +1439,9 @@ def remember_attack(
             msg += f"\n Your {pokemon_data['name'].capitalize()} has learned {new_attack} !"
             logger.log_and_showinfo("info", f"{msg}")
         else:
-            dialog = AttackDialog(attacks, new_attack)
+            dialog = AttackDialog(attacks, new_attack, parent=mw)
+            dialog.raise_()
+            dialog.activateWindow()
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 selected_attack = dialog.selected_attack
                 try:
@@ -1658,13 +1660,15 @@ def PokemonFree(
     else:
         logger.log_and_showinfo("error", f"Failed to add {name} to history.")
 
-    # If this Pokémon is an XP-Share target, drop it from the list before it
-    # disappears from the DB. Otherwise the dangling individual_id would make
+    # If this Pokémon is the current XP-Share target, clear the setting before
+    # it disappears from the DB. Otherwise the dangling individual_id would make
     # xp_share_gain_exp look up a now-missing Pokémon and crash on the next
-    # review.
-    from ..functions.trainer_functions import remove_xp_share_target
-
-    remove_xp_share_target(services.settings, individual_id)
+    # review. str() guards against any id type mismatch in the compare.
+    settings_obj = services.settings
+    if settings_obj is not None and str(settings_obj.get("trainer.xp_share")) == str(
+        individual_id
+    ):
+        settings_obj.set("trainer.xp_share", None)
 
     # Delete from database
     db.delete_pokemon(individual_id)

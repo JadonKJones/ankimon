@@ -372,21 +372,6 @@ body {
     font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.6px;
     color: var(--text-muted); font-weight: 700; margin-bottom: 9px;
 }
-.ts-section-title-row {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 8px; margin-bottom: 9px;
-}
-.ts-section-title-row .ts-section-title { margin-bottom: 0; }
-.xps-fullteam-toggle {
-    font-size: 0.62rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px;
-    padding: 4px 9px; border-radius: 999px;
-    background: var(--bg-card); border: 1px solid var(--border-main);
-    color: var(--text-muted); cursor: pointer; transition: var(--transition-fast);
-}
-.xps-fullteam-toggle:hover { border-color: var(--accent-blue); color: var(--text-bright); }
-.xps-fullteam-toggle.on {
-    background: rgba(88, 166, 255, 0.16); border-color: var(--accent-blue); color: var(--accent-blue);
-}
 /* Fill the column's height: summary pinned top, the type-analysis block grows
    to fill, XP Share sits just above Save. Rather than stretch the gaps between
    sections, the chips THEMSELVES scale with viewport height (see
@@ -427,13 +412,10 @@ body {
     box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
 }
 
-/* XP Share holder — one or more gold-tinted mini-cards, each with the
-   holder's sprite. Multiple targets wrap onto their own rows. */
-.xpshare-holder {
-    display: flex; flex-direction: column; gap: 10px;
-}
+/* XP Share holder — a gold-tinted mini-card with the holder's sprite. */
 /* Vertical, whole-card-pressable (like a team slot): the sprite sits directly on
-   the card (no inner frame), the name shows in full, and a ✕ button removes it. */
+   the card (no inner frame), the name shows in full, and "Change" is a
+   hover-revealed hint at the bottom. */
 .xps-card {
     position: relative;
     display: flex; flex-direction: column; align-items: center; text-align: center;
@@ -458,26 +440,22 @@ body {
     line-height: 1.2; word-break: break-word;
 }
 .xps-lv { font-size: 0.74rem; color: var(--accent-gold); font-weight: 700; margin-top: 3px; }
-.xps-remove {
-    position: absolute; top: 6px; right: 6px;
-    width: 20px; height: 20px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    background: var(--bg-darker); border: 1px solid var(--border-main);
-    color: var(--text-muted); font-size: 0.72rem; line-height: 1; cursor: pointer;
-    transition: var(--transition-fast);
+.xps-change-hint {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 7px; text-align: center;
+    font-size: 0.66rem; font-weight: 800; color: var(--accent-gold);
+    text-transform: uppercase; letter-spacing: 0.4px;
+    background: linear-gradient(to top, var(--bg-darker), transparent);
+    border-radius: 0 0 12px 12px;
+    opacity: 0; transition: opacity 0.15s; pointer-events: none;
 }
-.xps-remove:hover { border-color: var(--accent-red, #f85149); color: var(--accent-red, #f85149); }
+.xps-card:hover .xps-change-hint { opacity: 1; }
 .xps-empty {
     width: 100%; background: var(--bg-card); border: 1px dashed var(--border-main);
     color: var(--text-muted); font-family: inherit; font-size: 0.82rem; font-weight: 700;
     padding: 13px; border-radius: 12px; cursor: pointer; transition: var(--transition-fast);
 }
 .xps-empty:hover { border-color: var(--accent-gold); color: var(--text-bright); }
-.xps-fullteam-note {
-    width: 100%; background: rgba(88, 166, 255, 0.1); border: 1px dashed var(--accent-blue);
-    color: var(--text-muted); font-size: 0.78rem; font-weight: 600; line-height: 1.4;
-    padding: 13px; border-radius: 12px; text-align: center;
-}
 /* Sidebar chips fill the column on tall screens by growing VERTICALLY — taller
    pills (scaled top/bottom padding) + bigger row gaps — while font size and
    horizontal padding stay fixed so the wrapping (chips-per-row) never changes.

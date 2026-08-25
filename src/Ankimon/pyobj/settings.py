@@ -96,10 +96,6 @@ DEFAULT_CONFIG = {
     "trainer.mobile_reviews_resolved_since_payout": 0,
     "trainer.level": 0,
     "trainer.xp": 0,
-    # Mainline Gen-6+ style (X/Y, ORAS, Sun/Moon onward): when on, the whole
-    # team shares XP instead of only the individually-picked trainer.xp_share
-    # targets. See functions.trainer_functions.resolve_xp_share_targets.
-    "trainer.xp_share_full_team": False,
     "mobile.enabled": True,
     "mobile.resolution_mode": "manual",
     "mobile.inactive_companions": [],

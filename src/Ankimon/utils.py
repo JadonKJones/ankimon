@@ -600,6 +600,9 @@ _registered_fonts = set()  # font_file names already handed to QFontDatabase
 
 
 def load_custom_font(font_size, language):
+    """Return a QFont for the addon's pixel font, registering the file with
+    Qt's font database only the first time it's needed (see the caching note
+    below — repeat registrations here bloated fontconfig into crashing)."""
     if language == 1:
         font_file = "pkmn_w.ttf"
         font_file_path = font_path / font_file
