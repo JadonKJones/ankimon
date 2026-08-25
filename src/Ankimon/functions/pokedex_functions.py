@@ -81,7 +81,6 @@ def is_valid_base_stats(base_stats) -> bool:
     return True
 
 
-
 def _load_pokedex_cache():
     """Load pokedex JSON once and cache it in memory"""
     global _pokedex_cache
@@ -852,6 +851,46 @@ def _csv_gender_id(gender) -> Optional[int]:
     return None
 
 
+def _evolution_row_gender_id(evolved_species_id) -> Optional[int]:
+    """Return the ``gender_id`` gating ``evolved_species_id``, if any.
+
+    Scans the bundled ``pokemon_evolution.csv`` rows whose
+    ``evolved_species_id`` matches and returns the first parseable non-blank
+    ``gender_id`` (veekun convention: 1 = female, 2 = male). ``None`` means the
+    species' evolution rows carry no gender gate. Form-variant ids (>= 10000,
+    e.g. Wormadam-Sandy 10004) resolve to their base species first — the CSV
+    only carries base-species rows (repo tripwire: "IDs >= 10000 must be
+    resolved to their base species via check_id_ok()").
+    """
+    try:
+        species_ref = int(evolved_species_id)
+    except (TypeError, ValueError):
+        return None
+    if species_ref >= 10000:
+        # Form variant: the CSV keys on the base species id only.
+        form_name = search_pokedex_by_id(species_ref)
+        base_species = (
+            safe_int(search_pokedex(form_name, "species_id"))
+            if (form_name and form_name != "Pokémon not found")
+            else 0
+        )
+        if base_species > 0:
+            species_ref = base_species
+    for csv_row in rows_for_key_in_table(
+        "evolved_species_id",
+        species_ref,
+        poke_evo_path,
+    ):
+        raw_gender = (csv_row.get("gender_id") or "").strip()
+        if not raw_gender:
+            continue
+        try:
+            return int(raw_gender)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def check_evolution_by_item(pokemon_id, item_id, gender=None):
     """
     Check if a Pokémon evolves using a specific item.
@@ -919,23 +958,12 @@ def check_evolution_by_item(pokemon_id, item_id, gender=None):
                             # callers without gender data are unaffected.
                             caller_gender_id = _csv_gender_id(gender)
                             if caller_gender_id is not None:
-                                required_gender_id = None
-                                for csv_row in rows_for_key_in_table(
-                                    "evolved_species_id",
+                                required_gender_id = _evolution_row_gender_id(
                                     safe_int(
                                         target_data.get("actual_id")
                                         or target_data.get("species_id")
-                                    ),
-                                    poke_evo_path,
-                                ):
-                                    raw_gender = (csv_row.get("gender_id") or "").strip()
-                                    if not raw_gender:
-                                        continue
-                                    try:
-                                        required_gender_id = int(raw_gender)
-                                        break
-                                    except (TypeError, ValueError):
-                                        continue
+                                    )
+                                )
                                 if (
                                     required_gender_id is not None
                                     and caller_gender_id != required_gender_id
@@ -1093,6 +1121,7 @@ def check_evolution_for_pokemon(
     everstone=False,
     evolution_rejected=False,
     current_attacks=None,
+    gender=None,
 ):
     """
     Check if a Pokémon evolves by a level (or move-based level-up) condition.
@@ -1118,6 +1147,11 @@ def check_evolution_for_pokemon(
             stored moveset from the DB seam. Move-based evolutions evaluate
             against this list so learning the required move on this very level
             triggers the offer on that same event instead of one level late.
+        gender (str | None): The Pokémon's gender (``"M"``/``"F"``/...). When a
+            recognised gender is supplied, CSV ``gender_id`` gates are enforced:
+            Vespiquen needs a female Combee, Salazzle a female Salandit,
+            Wormadam a female Burmy and Mothim a male one. ``None`` keeps the
+            historical no-check behavior for callers without gender data.
 
     Returns:
         int | None: The evolution ID if an evolution is found, or None otherwise.
@@ -1211,20 +1245,22 @@ def check_evolution_for_pokemon(
                             else:
                                 p_attacks = None
                                 try:
-                                    pkmn_data = services.db.get_pokemon(
-                                        individual_id
-                                    )
+                                    pkmn_data = services.db.get_pokemon(individual_id)
                                 except Exception:
                                     pkmn_data = None
                                 if pkmn_data and "attacks" in pkmn_data:
                                     p_attacks = pkmn_data["attacks"]
-                            if required_move and p_attacks and any(
-                                isinstance(a, str)
-                                and a.lower().replace(" ", "").replace("-", "")
-                                == required_move.lower()
-                                .replace(" ", "")
-                                .replace("-", "")
-                                for a in p_attacks
+                            if (
+                                required_move
+                                and p_attacks
+                                and any(
+                                    isinstance(a, str)
+                                    and a.lower().replace(" ", "").replace("-", "")
+                                    == required_move.lower()
+                                    .replace(" ", "")
+                                    .replace("-", "")
+                                    for a in p_attacks
+                                )
                             ):
                                 knows_move = True
                             # Fail closed when the moveset can't be fetched:
@@ -1237,6 +1273,33 @@ def check_evolution_for_pokemon(
                                 is_level_evo = True
 
                         if is_level_evo:
+                            # Gender gate from the bundled CSV (veekun ids:
+                            # 1 = female, 2 = male): Vespiquen needs a female
+                            # Combee, Salazzle a female Salandit, and Burmy
+                            # splits into Wormadam (female) / Mothim (male).
+                            # Only enforced when the caller supplies a
+                            # RECOGNISED gender ("M"/"F"); None/unrecognised
+                            # keeps the historical no-check behavior so
+                            # callers without gender data are unaffected.
+                            caller_gender_id = _csv_gender_id(gender)
+                            if caller_gender_id is not None:
+                                required_gender_id = _evolution_row_gender_id(
+                                    safe_int(
+                                        target_data.get("actual_id")
+                                        or target_data.get("species_id")
+                                        # Smogon-schema base forms (Wormadam,
+                                        # Mothim, Vespiquen, Salazzle, ...) carry
+                                        # only ``num``; without this fallback the
+                                        # CSV gate could never match them.
+                                        or target_data.get("num")
+                                    )
+                                )
+                                if (
+                                    required_gender_id is not None
+                                    and caller_gender_id != required_gender_id
+                                ):
+                                    continue
+
                             time_of_day = None
                             if "day" in condition:
                                 time_of_day = "day"

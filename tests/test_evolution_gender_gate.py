@@ -77,9 +77,7 @@ _DAWN_STONE_ID = 109
 @pytest.fixture(autouse=True)
 def _reset_env():
     sys.modules["Ankimon.singletons"] = _SINGLETONS_STUB
-    sys.modules["Ankimon.functions.pokedex_functions"] = (
-        _POKEDEX_FUNCTIONS_STUB
-    )
+    sys.modules["Ankimon.functions.pokedex_functions"] = _POKEDEX_FUNCTIONS_STUB
     yield
 
 
@@ -87,9 +85,7 @@ def _reset_env():
 # Gender-gated useItem evolutions (Kirlia 281 -> Gallade 475 / Froslass 478)
 # --------------------------------------------------------------------------- #
 def test_dawn_stone_on_male_kirlia_gives_gallade():
-    assert (
-        pf.check_evolution_by_item(281, _DAWN_STONE_ID, gender="Male") == 475
-    )
+    assert pf.check_evolution_by_item(281, _DAWN_STONE_ID, gender="Male") == 475
 
 
 def test_dawn_stone_on_female_snorunt_gives_froslass():
@@ -131,7 +127,9 @@ def test_non_gendered_items_unaffected_by_gender_argument():
     thunder_stone_id = 82
     without = pf.check_evolution_by_item(25, thunder_stone_id)
     for gender in ("M", "F", None):
-        assert pf.check_evolution_by_item(25, thunder_stone_id, gender=gender) == without
+        assert (
+            pf.check_evolution_by_item(25, thunder_stone_id, gender=gender) == without
+        )
 
 
 def test_csv_gender_id_normalization():
@@ -152,3 +150,93 @@ def test_rows_for_key_in_table_defined_exactly_once():
     source = inspect.getsource(pf)
     count = source.count("def rows_for_key_in_table(")
     assert count == 1
+
+
+# --------------------------------------------------------------------------- #
+# Gender-gated LEVEL evolutions (CSV gender_id on trigger-1 rows).
+#
+# pokedex.json lists only the female target for Combee/Salandit and both
+# Burmy targets with no gender data, so without the CSV gate a male Combee
+# could evolve into Vespiquen. The level path must honor the same
+# pokemon_evolution.csv gender gate as the item path.
+# --------------------------------------------------------------------------- #
+class _FakeEvoWindow:
+    def __init__(self):
+        self.calls = []
+
+    def ask_pokemon_evo(self, individual_id, pokemon_id, evo_id):
+        self.calls.append((individual_id, pokemon_id, evo_id))
+
+
+def test_female_combee_level_evolves_to_vespiquen():
+    win = _FakeEvoWindow()
+    assert pf.check_evolution_for_pokemon("ind-f", 415, 21, win, gender="F") == 416
+    assert win.calls == [("ind-f", 415, 416)]
+
+
+def test_male_combee_cannot_become_vespiquen():
+    win = _FakeEvoWindow()
+    assert pf.check_evolution_for_pokemon("ind-m", 415, 21, win, gender="M") is None
+    assert win.calls == []
+
+
+def test_male_burmy_becomes_mothim_not_wormadam():
+    win = _FakeEvoWindow()
+    assert pf.check_evolution_for_pokemon("ind-m", 412, 20, win, gender="M") == 414
+
+
+def test_burmy_gender_gate_blocks_cross_sex_targets():
+    assert (
+        pf.check_evolution_for_pokemon("ind-m", 412, 20, _FakeEvoWindow(), gender="M")
+        != 413
+    )
+    assert (
+        pf.check_evolution_for_pokemon("ind-f", 412, 20, _FakeEvoWindow(), gender="F")
+        != 414
+    )
+
+
+def test_salandit_gender_gate_on_level_path():
+    assert (
+        pf.check_evolution_for_pokemon(
+            "ind-f", 757, 33, _FakeEvoWindow(), gender="Female"
+        )
+        == 758
+    )
+    assert (
+        pf.check_evolution_for_pokemon(
+            "ind-m", 757, 33, _FakeEvoWindow(), gender="Male"
+        )
+        is None
+    )
+
+
+def test_unknown_gender_keeps_historical_level_behavior():
+    # None/unrecognised gender keeps the no-check behavior so callers (and any
+    # legacy saves) without gender data are unaffected.
+    result_none = pf.check_evolution_for_pokemon(
+        "ind-x", 415, 21, _FakeEvoWindow(), gender=None
+    )
+    assert result_none == 416
+
+
+def test_everstone_still_blocks_gated_level_evolutions():
+    win = _FakeEvoWindow()
+    assert (
+        pf.check_evolution_for_pokemon(
+            "ind-f", 415, 21, win, everstone=True, gender="F"
+        )
+        is None
+    )
+    assert win.calls == []
+
+
+def test_plain_level_evolvers_unaffected_by_gender_argument():
+    win = _FakeEvoWindow()
+    for gender in ("M", "F", None, "junk"):
+        assert (
+            pf.check_evolution_for_pokemon(
+                "ind-p", 4, 20, win, everstone=False, gender=gender
+            )
+            == 5
+        )
