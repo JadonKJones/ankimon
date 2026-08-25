@@ -372,6 +372,21 @@ body {
     font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.6px;
     color: var(--text-muted); font-weight: 700; margin-bottom: 9px;
 }
+.ts-section-title-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-bottom: 9px;
+}
+.ts-section-title-row .ts-section-title { margin-bottom: 0; }
+.xps-fullteam-toggle {
+    font-size: 0.62rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.4px;
+    padding: 4px 9px; border-radius: 999px;
+    background: var(--bg-card); border: 1px solid var(--border-main);
+    color: var(--text-muted); cursor: pointer; transition: var(--transition-fast);
+}
+.xps-fullteam-toggle:hover { border-color: var(--accent-blue); color: var(--text-bright); }
+.xps-fullteam-toggle.on {
+    background: rgba(88, 166, 255, 0.16); border-color: var(--accent-blue); color: var(--accent-blue);
+}
 /* Fill the column's height: summary pinned top, the type-analysis block grows
    to fill, XP Share sits just above Save. Rather than stretch the gaps between
    sections, the chips THEMSELVES scale with viewport height (see
@@ -458,6 +473,11 @@ body {
     padding: 13px; border-radius: 12px; cursor: pointer; transition: var(--transition-fast);
 }
 .xps-empty:hover { border-color: var(--accent-gold); color: var(--text-bright); }
+.xps-fullteam-note {
+    width: 100%; background: rgba(88, 166, 255, 0.1); border: 1px dashed var(--accent-blue);
+    color: var(--text-muted); font-size: 0.78rem; font-weight: 600; line-height: 1.4;
+    padding: 13px; border-radius: 12px; text-align: center;
+}
 /* Sidebar chips fill the column on tall screens by growing VERTICALLY — taller
    pills (scaled top/bottom padding) + bigger row gaps — while font size and
    horizontal padding stay fixed so the wrapping (chips-per-row) never changes.

@@ -16,6 +16,7 @@
         xpShareIds: [],        // individual_ids of every XP Share holder (any owned Pokémon)
         xpShareInfos: [],      // display stubs for the holders (may be benched), same order as xpShareIds
         companionId: null,     // individual_id of the Active Companion (must be a team slot member)
+        xpShareFullTeam: false, // mainline Gen 6+ style: whole team shares XP instead of picked targets
         maxSize: 6,
         teamCycleCount: 3,     // limit for hotkey 9 rotation
         roster: null,          // null = not loaded yet
@@ -269,9 +270,30 @@
         return state.team.find((p) => p && String(p.id) === String(id)) || null;
     }
 
+    function toggleXpShareFullTeam() {
+        state.xpShareFullTeam = !state.xpShareFullTeam;
+        markDirty();
+        renderXpShare();
+    }
+
     function renderXpShare() {
+        const toggleBtn = document.getElementById('xpshare-fullteam-toggle');
+        if (toggleBtn) {
+            toggleBtn.classList.toggle('on', state.xpShareFullTeam);
+            toggleBtn.textContent = state.xpShareFullTeam ? 'Whole Team ✓' : 'Whole Team';
+        }
+
         const holder = document.getElementById('xpshare-holder');
         if (!holder) return;
+
+        // Mainline Gen 6+ toggle wins: individual picks are stored but
+        // ignored while this is on (see resolve_xp_share_targets), so the
+        // picker is paused rather than shown as if it still mattered.
+        if (state.xpShareFullTeam) {
+            holder.innerHTML = '<div class="xps-fullteam-note">Sharing XP with your whole team — individual picks are paused.</div>';
+            return;
+        }
+
         const members = state.xpShareIds.map(resolveXpShareMember).filter(Boolean);
 
         const cards = members.map((m) => `
@@ -612,7 +634,7 @@
             updateSaveUI();
             return Promise.resolve({ ok: true });
         }
-        return teamBridge.saveTeam(JSON.stringify(ids), JSON.stringify(state.xpShareIds), state.companionId || '').then((res) => {
+        return teamBridge.saveTeam(JSON.stringify(ids), JSON.stringify(state.xpShareIds), state.companionId || '', state.xpShareFullTeam).then((res) => {
             if (res && res.ok) {
                 state.dirty = false;
                 updateSaveUI();
@@ -654,6 +676,7 @@
             state.xpShareInfos = data.xp_share_info ? [data.xp_share_info] : [];
         }
         state.companionId = data.companion ? String(data.companion) : null;
+        state.xpShareFullTeam = !!data.xp_share_full_team;
         state.spriteMode = data.sprite_mode || 'static';
         state.teamCycleCount = data.team_cycle_count || 3;
 
@@ -675,7 +698,10 @@
 
     function wireStaticControls() {
         document.getElementById('save-btn').addEventListener('click', saveTeam);
-        
+
+        const fullTeamToggle = document.getElementById('xpshare-fullteam-toggle');
+        if (fullTeamToggle) fullTeamToggle.addEventListener('click', toggleXpShareFullTeam);
+
         const cycleSelect = document.getElementById('cycle-select');
         if (cycleSelect) {
             cycleSelect.addEventListener('change', (e) => {
@@ -767,6 +793,7 @@
                     { id: '4', p: 3, n: 'Venusaur', l: 41 },
                 ],
                 companion: '1',
+                xp_share_full_team: false,
                 team: [
                     { id: '1', p: 25, n: 'Pikachu', l: 18, cp: 820, types: ['Electric'] },
                     { id: '2', p: 6, n: 'Charizard', l: 52, s: 1, cp: 2410, types: ['Fire', 'Flying'] },

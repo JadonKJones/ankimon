@@ -618,6 +618,7 @@ class ProfileData:
                 xp_share_ids = [str(raw_xp_share)]
             else:
                 xp_share_ids = []
+            xp_share_full_team = bool(self.settings_obj.get("trainer.xp_share_full_team"))
             cycle_count = self.settings_obj.get("controls.team_cycle_count", 3)
             sprite_mode = self.settings_obj.get(
                 "ankidex.spriteMode",
@@ -625,6 +626,7 @@ class ProfileData:
             )
         except Exception:
             xp_share_ids = []
+            xp_share_full_team = False
             cycle_count = 3
             sprite_mode = "static"
 
@@ -644,6 +646,7 @@ class ProfileData:
                     self._resolve_stub(ind_id, members) for ind_id in xp_share_ids
                 ) if stub
             ],
+            "xp_share_full_team": xp_share_full_team,
             "companion": str(companion_id) if companion_id else None,
             "companion_info": self._resolve_stub(companion_id, members) if companion_id else None,
             "sprite_mode": sprite_mode,
@@ -762,13 +765,19 @@ class ProfileData:
             print(f"[Ankimon] profile: CP calc failed for {individual_id}: {e}")
             return 0
 
-    def handle_save_team(self, team_ids, xp_share_ids, companion_id):
+    def handle_save_team(self, team_ids, xp_share_ids, companion_id, xp_share_full_team=False):
         """Persist the chosen team + XP Share holders.
 
         ``xp_share_ids`` is a list of individual_ids (0 or more) — the XP
         earned per defeat is split evenly across however many are set, on top
         of the main Pokémon's own half (see functions.trainer_functions.
         xp_share_gain_exp).
+
+        ``xp_share_full_team``: the mainline Gen-6+ style toggle — when on,
+        every current team member shares XP and the individual picks in
+        ``xp_share_ids`` are ignored at read time (see
+        functions.trainer_functions.resolve_xp_share_targets). Still stored
+        here either way, so turning the toggle back off restores your picks.
 
         ``companion_id`` is the Active Companion — whichever team member should
         actually be the one battling (``is_main=1`` in the DB). team.js's ⚔
@@ -805,6 +814,7 @@ class ProfileData:
             # (services.db.save_team) is the sole source of truth every read path
             # uses; settings.py migrates/deletes the old config key on load.
             self.settings_obj.set("trainer.xp_share", clean_xp_share_ids)
+            self.settings_obj.set("trainer.xp_share_full_team", bool(xp_share_full_team))
             services.db.save_team(team_data)
             if companion_id:
                 services.db.set_main_pokemon(companion_id)

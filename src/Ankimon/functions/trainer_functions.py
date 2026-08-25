@@ -59,6 +59,28 @@ def find_trainer_rank(highest_level, trainer_level):
         print("Error: One of the files (Pokedex or MyPokemon) could not be found.")
         return "Unknown Rank"
 
+def resolve_xp_share_targets(settings_obj):
+    """The individual_ids XP Share should actually apply to right now.
+
+    When ``trainer.xp_share_full_team`` is on (the mainline Gen-6+ "whole
+    party" style — X/Y, ORAS, Sun/Moon and everything since, where Exp.
+    Share became a key item shared by the whole team instead of a single
+    held item), every current team member is a target, ignoring whatever
+    individual picks are stored. Otherwise falls back to the manually
+    picked list in ``trainer.xp_share`` (list, or a bare string for
+    older saves). ``xp_share_gain_exp``/``_xp_share_split`` already
+    de-dupe and drop the main Pokémon, so no filtering needed here.
+    """
+    try:
+        if settings_obj.get("trainer.xp_share_full_team"):
+            db = services.db
+            if db is not None:
+                return [m["individual_id"] for m in db.get_team() if m.get("individual_id")]
+    except Exception:
+        pass
+    return settings_obj.get("trainer.xp_share")
+
+
 def remove_xp_share_target(settings_obj, individual_id):
     """Drop one Pokémon from the XP Share list (e.g. it was released/traded).
 

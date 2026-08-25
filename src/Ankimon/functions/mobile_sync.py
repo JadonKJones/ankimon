@@ -1603,7 +1603,9 @@ def _run_mobile_battles_impl(
         # suppression / thread serialisation still hold — the mobile path does
         # not open the evolution window for companions, so we intentionally do
         # not route through the desktop evo-triggering xp_share_gain_exp here.
-        xp_share_ids = settings_obj.get("trainer.xp_share") if settings_obj else None
+        from .trainer_functions import resolve_xp_share_targets
+
+        xp_share_ids = resolve_xp_share_targets(settings_obj) if settings_obj else None
         xp_share_pending = {}  # target_id -> accumulated xp across all companions
         for cid, earned_xp in companion_xp.items():
             evs_gained = companion_evs.get(cid, {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0})
@@ -1929,7 +1931,9 @@ def commit_replay_outcome(choice: str, outcome_data: dict, db, settings_obj, tra
                     # replay prep). Runs on this QueryOp background thread under
                     # _mobile_sync_lock via the mobile attribution path, so no
                     # evo-window / tooltip Qt work happens here.
-                    xp_share_ids = settings_obj.get("trainer.xp_share") if settings_obj else None
+                    from .trainer_functions import resolve_xp_share_targets
+
+                    xp_share_ids = resolve_xp_share_targets(settings_obj) if settings_obj else None
                     grant_xp, share_amounts = (
                         _xp_share_split(total_xp, companion_id, xp_share_ids)
                         if companion_id else (total_xp, {})

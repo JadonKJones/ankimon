@@ -199,8 +199,8 @@ class TeamBridge(QObject):
         return self._w.profile_data.get_member_stats(individual_id)
 
     # JSON string in (PyQt QVariant-list unwrap is unreliable on first call).
-    @pyqtSlot(str, str, str, result="QVariant")
-    def saveTeam(self, team_json, xp_share_json, companion_id):
+    @pyqtSlot(str, str, str, bool, result="QVariant")
+    def saveTeam(self, team_json, xp_share_json, companion_id, xp_share_full_team):
         try:
             team_ids = json.loads(team_json) if team_json else []
             if not isinstance(team_ids, list):
@@ -213,7 +213,9 @@ class TeamBridge(QObject):
                 raise ValueError("xp_share payload must be a list")
         except (TypeError, ValueError) as e:
             return {"ok": False, "message": f"Invalid XP Share payload: {e}"}
-        return self._w.profile_data.handle_save_team(team_ids, xp_share_ids, companion_id or None)
+        return self._w.profile_data.handle_save_team(
+            team_ids, xp_share_ids, companion_id or None, bool(xp_share_full_team)
+        )
 
 
 class SettingsBridge(QObject):
