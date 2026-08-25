@@ -1,9 +1,8 @@
-from typing import Literal, Optional
+from typing import Optional
 from ..resources import (
     pokedex_path,
     pokedesc_lang_path,
     pokenames_lang_path,
-    learnset_path,
     moves_file_path,
     poke_evo_path,
     poke_species_path,
@@ -591,9 +590,6 @@ def get_pretty_name_for_name(pokemon_name):
             if suffix in pokemon_name.lower():
                 base_name = pokemon_name.lower().replace(suffix, "").replace("-", "")
                 if base_name in pokedex_data:
-                    raw_base = pokedex_data[base_name].get(
-                        "name", base_name.capitalize()
-                    )
                     return format_lore_name(pokemon_name.title())
     except:
         pass

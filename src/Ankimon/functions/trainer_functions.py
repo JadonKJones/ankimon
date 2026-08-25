@@ -1,7 +1,4 @@
-import json
-
 from .badges_functions import get_achieved_badges
-from .pokedex_functions import extract_ids_from_file
 from .pokemon_functions import find_experience_for_level
 from .pokedex_functions import check_evolution_for_pokemon, return_name_for_id
 from .friendship_evolution import check_friendship_evolution_for_pokemon
