@@ -751,21 +751,36 @@ class ProfileData:
             print(f"[Ankimon] profile: CP calc failed for {individual_id}: {e}")
             return 0
 
+    # team.js sends this in place of a real individual_id when the Active
+    # Companion selection was never touched this session (the ⚔ button was
+    # never clicked, and no slot holding it was removed/replaced) — every
+    # OTHER team save (reordering, swapping an unrelated slot, XP Share only)
+    # must go through this path too, so it can't be a real id and must be
+    # left completely alone here: it used to be treated the same as "no
+    # companion" and cleared whatever main Pokémon was already set on every
+    # single save that didn't touch the crown, which is the actual regression
+    # this sentinel exists to prevent.
+    _COMPANION_UNCHANGED = "__companion_unchanged__"
+
     def handle_save_team(self, team_ids, xp_share_id, companion_id):
         """Persist the chosen team + XP Share holder.
 
         ``companion_id`` is the Active Companion — whichever team member should
         actually be the one battling (``is_main=1`` in the DB). team.js's ⚔
-        button on a team slot sets/clears it, and always sends the full
-        current selection (not a sparse "only touch if changed" value), so an
-        empty ``companion_id`` here is an explicit "no companion" and is
-        persisted as a clear, not silently ignored — a save that clears it and
-        then gets skipped would leave the previous companion's stale is_main=1
-        row to resurface on a later reload. Setting a real companion reloads
-        the live ``main_pokemon`` object from the DB and repaints the reviewer
-        HUD + Ankimon Window so the swap is visible immediately; clearing does
-        not touch the live in-memory main_pokemon for the current session (see
-        clear_main_pokemon()'s docstring) — it only affects the next reload."""
+        button on a team slot sets/clears it; ``_COMPANION_UNCHANGED`` means
+        this save never touched that selection at all and the existing
+        is_main row (however it got there — the crown, or an older pathway
+        like starter selection/PC box) must be left alone. Anything else is
+        authoritative: an empty/invalid value is an explicit clear (dropping
+        the stale is_main=1 row so it can't resurface on a later reload), and
+        a real, valid team-member id is a set. Setting a real companion
+        reloads the live ``main_pokemon`` object from the DB and repaints the
+        reviewer HUD + Ankimon Window so the swap is visible immediately;
+        clearing does not touch the live in-memory main_pokemon for the
+        current session (see clear_main_pokemon()'s docstring) — it only
+        affects the next reload."""
+        companion_touched = companion_id != self._COMPANION_UNCHANGED
+
         seen = set()
         clean_ids = []
         for raw in team_ids or []:
@@ -779,7 +794,7 @@ class ProfileData:
 
         team_data = [{"individual_id": ind_id} for ind_id in clean_ids]
         xp_share_id = str(xp_share_id) if xp_share_id else None
-        companion_id = str(companion_id) if companion_id else None
+        companion_id = str(companion_id) if (companion_touched and companion_id) else None
         # The Active Companion has to actually be a member of the team being
         # saved — otherwise a slot swap in the same save could point
         # set_main_pokemon at a Pokémon that just got dropped from the roster,
@@ -793,7 +808,9 @@ class ProfileData:
             # uses; settings.py migrates/deletes the old config key on load.
             self.settings_obj.set("trainer.xp_share", xp_share_id)
             services.db.save_team(team_data)
-            if companion_id:
+            if not companion_touched:
+                pass  # leave whatever main Pokémon is already set alone
+            elif companion_id:
                 services.db.set_main_pokemon(companion_id)
                 from ..functions.update_main_pokemon import update_main_pokemon
 

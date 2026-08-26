@@ -549,3 +549,62 @@ def test_tier_fallback_degrades_straight_to_normal(monkeypatch):
 
     assert queried == ["Mega", "Normal"]
     assert "Legendary" not in queried  # no sideways cascade into other rare tiers
+
+
+def test_new_pokemon_localizes_the_wild_appeared_tooltip(monkeypatch):
+    """new_pokemon() used to hardcode "A wild X appeared!" in English via a
+    raw f-string, bypassing the translator entirely. It must route through
+    translator.translate() with the existing "wild_pokemon_appeared" key (already
+    localized for every supported language) instead."""
+    fake_stats = {"hp": 45, "atk": 49, "def": 49, "spa": 65, "spd": 65, "spe": 90}
+    fake_tuple = (
+        "pikachu", 25, 5, "static", ["electric"], fake_stats, ["tackle"],
+        112, "medium", {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}, "M",
+        "fighting", {}, "normal",
+        {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        False, "hardy",
+    )
+    monkeypatch.setattr(ef, "generate_random_pokemon", lambda *a, **k: fake_tuple)
+
+    translated = []
+    ef.translator = mock.MagicMock()
+    ef.translator.translate = lambda key, **kwargs: translated.append((key, kwargs)) or "localized message"
+
+    seen_messages = []
+    monkeypatch.setattr(ef, "tooltipWithColour", lambda msg, color: seen_messages.append(msg))
+
+    pokemon = mock.MagicMock()
+    pokemon.display_name = "Pikachu"
+    pokemon.shiny = False
+
+    ef.new_pokemon(pokemon, None, mock.MagicMock(), mock.MagicMock())
+
+    assert translated == [("wild_pokemon_appeared", {"enemy_pokemon_name": "Pikachu"})]
+    assert seen_messages == ["localized message"]
+
+
+def test_new_pokemon_shiny_prefix_is_folded_into_the_translated_name(monkeypatch):
+    fake_stats = {"hp": 45, "atk": 49, "def": 49, "spa": 65, "spd": 65, "spe": 90}
+    fake_tuple = (
+        "pikachu", 25, 5, "static", ["electric"], fake_stats, ["tackle"],
+        112, "medium", {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}, "M",
+        "fighting", {}, "normal",
+        {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0},
+        True, "hardy",
+    )
+    monkeypatch.setattr(ef, "generate_random_pokemon", lambda *a, **k: fake_tuple)
+
+    translated = []
+    ef.translator = mock.MagicMock()
+    ef.translator.translate = lambda key, **kwargs: translated.append((key, kwargs)) or "msg"
+    monkeypatch.setattr(ef, "tooltipWithColour", lambda msg, color: None)
+
+    pokemon = mock.MagicMock()
+    pokemon.display_name = "Pikachu"
+    pokemon.shiny = True
+
+    ef.new_pokemon(pokemon, None, mock.MagicMock(), mock.MagicMock())
+
+    assert translated == [("wild_pokemon_appeared", {"enemy_pokemon_name": "✨ Shiny Pikachu"})]

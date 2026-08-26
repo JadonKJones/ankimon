@@ -10,12 +10,24 @@
 
     const SPRITE_BASE = '../user_files/sprites/front_default';
     const FALLBACK = SPRITE_BASE + '/0.png';
+    // Sent as the companion arg when this session never touched the Active
+    // Companion selection, so the backend leaves whatever main Pokémon is
+    // already set alone instead of reading "no companion" as "clear it" —
+    // impossible as a real individual_id, so it can't collide with one.
+    const COMPANION_UNCHANGED = '__companion_unchanged__';
 
     const state = {
         team: [null, null, null, null, null, null],
         xpShare: null,         // individual_id of the XP Share holder (any owned Pokémon)
         xpShareInfo: null,     // display stub for the holder (may be benched)
         companionId: null,     // individual_id of the Active Companion (must be a team slot member)
+        // Whether THIS session actually changed the companion (crown toggle,
+        // or an implicit clear because the companion's slot got removed/
+        // replaced) — vs. simply never having touched it. Only a touched
+        // change is sent to the backend as authoritative; an untouched save
+        // (e.g. just reordering the team) must leave whatever main Pokémon
+        // is already set alone, not wipe it. See saveTeam()/applyData().
+        companionTouched: false,
         maxSize: 6,
         teamCycleCount: 3,     // limit for hotkey 9 rotation
         roster: null,          // null = not loaded yet
@@ -232,6 +244,7 @@
         if (!m) return;
         const id = String(m.id);
         state.companionId = (state.companionId === id) ? null : id;
+        state.companionTouched = true;
         markDirty();
         renderTeam();
     }
@@ -293,6 +306,7 @@
         const m = state.team[slot];
         if (m && state.companionId && String(m.id) === String(state.companionId)) {
             state.companionId = null;
+            state.companionTouched = true;
         }
         state.team[slot] = null;
         markDirty();
@@ -306,6 +320,7 @@
         const prev = state.team[slot];
         if (prev && state.companionId && String(prev.id) === String(state.companionId)) {
             state.companionId = null;
+            state.companionTouched = true;
         }
         // Copy so editing one slot can't alias another / the roster entry.
         const member = { id: stub.id, p: stub.p, n: stub.n, l: stub.l };
@@ -575,7 +590,8 @@
             updateSaveUI();
             return Promise.resolve({ ok: true });
         }
-        return teamBridge.saveTeam(JSON.stringify(ids), state.xpShare || '', state.companionId || '').then((res) => {
+        const companionArg = state.companionTouched ? (state.companionId || '') : COMPANION_UNCHANGED;
+        return teamBridge.saveTeam(JSON.stringify(ids), state.xpShare || '', companionArg).then((res) => {
             if (res && res.ok) {
                 state.dirty = false;
                 updateSaveUI();
@@ -607,6 +623,7 @@
         state.xpShare = data.xp_share ? String(data.xp_share) : null;
         state.xpShareInfo = data.xp_share_info || null;
         state.companionId = data.companion ? String(data.companion) : null;
+        state.companionTouched = false;   // fresh load — nothing changed yet
         state.spriteMode = data.sprite_mode || 'static';
         state.teamCycleCount = data.team_cycle_count || 3;
 

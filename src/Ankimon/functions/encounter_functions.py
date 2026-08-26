@@ -1282,7 +1282,12 @@ def new_pokemon(
 
     display_name = getattr(pokemon, "display_name", pokemon.name)
     shiny_prefix = "✨ Shiny " if pokemon.shiny else ""
-    tooltipWithColour(f"A wild {shiny_prefix}{display_name} appeared!", "#F7DC6F")
+    tooltipWithColour(
+        translator.translate(
+            "wild_pokemon_appeared", enemy_pokemon_name=f"{shiny_prefix}{display_name}"
+        ),
+        "#F7DC6F",
+    )
 
     # Re-render the reviewer HUD. refresh_hud() grabs the live webview under
     # Anki and is a recorded no-op headless.
