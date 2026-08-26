@@ -51,15 +51,19 @@ def _subrun(snippet):
     break the real Ankimon boot (the same reason check.py shells out per probe),
     and we block Qt so the child runs the genuine Tier-1 (no-Anki/no-Qt) path."""
     code = _BLOCK_QT + "import json\nsys.path.insert(0, %r)\n%s" % (str(_repo), snippet)
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300)
+    proc = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=300
+    )
     assert proc.returncode == 0, (
         "harness subprocess failed (rc=%d):\n--- stdout ---\n%s\n--- stderr ---\n%s"
         % (proc.returncode, proc.stdout, proc.stderr)
     )
     for line in reversed(proc.stdout.splitlines()):
         if line.startswith(_MARKER):
-            return json.loads(line[len(_MARKER):])
-    raise AssertionError("no %s in harness output:\n%s\n%s" % (_MARKER, proc.stdout, proc.stderr))
+            return json.loads(line[len(_MARKER) :])
+    raise AssertionError(
+        "no %s in harness output:\n%s\n%s" % (_MARKER, proc.stdout, proc.stderr)
+    )
 
 
 def test_play_session_runs_without_errors():
@@ -157,9 +161,78 @@ def test_battle_loop_survives_dead_windows():
     )
 
 
+def test_victory_path_friendship_check_does_no_db_reads():
+    """The friendship/defeat-milestone checker must run on real in-memory state.
+
+    Repo rule: no synchronous disk I/O in the review path. Every defeat calls
+    check_friendship_evolution_for_pokemon, and it falls back to a
+    services.db.get_pokemon() read for whichever of `attacks` /
+    `pokemon_defeated` the caller leaves as None. Most defeats grant no
+    level-up, so the encounter path's fresh-moveset holder is still None there —
+    it must fall back to the in-memory PokemonObject moveset, not to the DB.
+
+    Drives real defeats with a spy around the checker that (a) records the
+    kwargs it was called with and (b) counts get_pokemon calls made INSIDE it.
+    """
+    result = _subrun(
+        "from harness.driver import Driver\n"
+        # Deterministic RNG: enemy faints are stochastic, and a run with zero
+        # defeats would vacuously pass.
+        "import random\n"
+        "random.seed(0)\n"
+        "d = Driver(seed={'main': {'species': 'Eevee', 'level': 30, 'gender': 'M',\n"
+        "                          'friendship': 100,\n"
+        "                          'attacks': ['Tackle', 'Swift', 'Bite', 'Baby-Doll Eyes']}},\n"
+        "           settings_overrides={'battle.cards_per_round': 1},\n"
+        "           evolution_policy='ignore')\n"
+        "import Ankimon.functions.encounter_functions as ef\n"
+        "import Ankimon.functions.friendship_evolution as fe\n"
+        "from Ankimon.services import services\n"
+        "calls = []\n"
+        "_real = fe.check_friendship_evolution_for_pokemon\n"
+        "def spy(*a, **kw):\n"
+        "    real_get = services.db.get_pokemon\n"
+        "    n = [0]\n"
+        "    def counting(iid):\n"
+        "        n[0] += 1\n"
+        "        return real_get(iid)\n"
+        "    services.db.get_pokemon = counting\n"
+        "    try:\n"
+        "        r = _real(*a, **kw)\n"
+        "    finally:\n"
+        "        services.db.get_pokemon = real_get\n"
+        "    calls.append({'attacks_none': kw.get('attacks') is None,\n"
+        "                  'defeated_none': kw.get('pokemon_defeated') is None,\n"
+        "                  'db_reads': n[0]})\n"
+        "    return r\n"
+        "ef.check_friendship_evolution_for_pokemon = spy\n"
+        "for _ in range(400):\n"
+        "    d.answer('good')\n"
+        "    if d.services.enemy_pokemon.hp <= 0:\n"
+        "        d.defeat()\n"
+        "print(%r + json.dumps({\n"
+        "    'checks': len(calls),\n"
+        "    'attacks_none': sum(1 for c in calls if c['attacks_none']),\n"
+        "    'defeated_none': sum(1 for c in calls if c['defeated_none']),\n"
+        "    'db_reads': sum(c['db_reads'] for c in calls),\n"
+        "}))" % _MARKER
+    )
+    assert result["checks"] > 0, "no defeats occurred; the check never ran"
+    assert result["attacks_none"] == 0, (
+        "%d/%d victory-path checks arrived with attacks=None and fell back to the DB"
+        % (result["attacks_none"], result["checks"])
+    )
+    assert result["defeated_none"] == 0
+    assert result["db_reads"] == 0, (
+        "victory-path friendship check performed %d synchronous DB reads"
+        % result["db_reads"]
+    )
+
+
 if __name__ == "__main__":
     test_play_session_runs_without_errors()
     test_state_snapshot_and_single_answer()
     test_auto_battle_mode_cycles()
     test_battle_loop_survives_dead_windows()
+    test_victory_path_friendship_check_does_no_db_reads()
     print("headless harness tests: OK")

@@ -17,6 +17,7 @@ try:
     from aqt import mw
 except Exception:
     mw = None
+import functools
 import json
 import math
 import random
@@ -847,7 +848,18 @@ def _csv_gender_id(gender) -> Optional[int]:
     return None
 
 
-def _evolution_row_gender_id(evolved_species_id) -> Optional[int]:
+# ``evolution_trigger_id`` values of the bundled veekun CSV, grouped by the code
+# path that consults them. Scoping the gender lookup to the trigger the caller is
+# actually evaluating keeps one method's gate from leaking onto another: today
+# every gendered species has exactly one row, but the CSV is regenerated from
+# upstream data and a second, ungendered path to the same species would
+# otherwise silently inherit the gate.
+_ITEM_EVO_TRIGGERS = (2, 3)  # 2 = trade-with-held-item, 3 = use-item
+_LEVEL_EVO_TRIGGERS = (1,)  # 1 = level-up (plain, timed, and levelMove)
+
+
+@functools.lru_cache(maxsize=None)
+def _evolution_row_gender_id(evolved_species_id, trigger_ids=None) -> Optional[int]:
     """Return the ``gender_id`` gating ``evolved_species_id``, if any.
 
     Scans the bundled ``pokemon_evolution.csv`` rows whose
@@ -857,6 +869,20 @@ def _evolution_row_gender_id(evolved_species_id) -> Optional[int]:
     e.g. Wormadam-Sandy 10004) resolve to their base species first — the CSV
     only carries base-species rows (repo tripwire: "IDs >= 10000 must be
     resolved to their base species via check_id_ok()").
+
+    ``lru_cache``d because this sits on the review path: a level-up runs it for
+    every eligible evolution candidate, and ``rows_for_key_in_table`` re-opens
+    and re-parses the whole ~500-row CSV on each call (coding guideline: no
+    synchronous disk I/O mid-review — static data is parsed once at startup).
+    The CSV is static for the process lifetime and the result is an immutable
+    ``Optional[int]``, so the cached answer is safe to share; both arguments are
+    hashable (an int and a tuple), as ``lru_cache`` requires.
+
+    Args:
+        evolved_species_id: National Pokédex id of the *evolved* species.
+        trigger_ids: Optional tuple of ``evolution_trigger_id`` values to scope
+            the scan to (:data:`_ITEM_EVO_TRIGGERS` / :data:`_LEVEL_EVO_TRIGGERS`).
+            ``None`` scans every row.
     """
     try:
         species_ref = int(evolved_species_id)
@@ -872,11 +898,18 @@ def _evolution_row_gender_id(evolved_species_id) -> Optional[int]:
         )
         if base_species > 0:
             species_ref = base_species
+    wanted_triggers = {str(t) for t in trigger_ids} if trigger_ids is not None else None
     for csv_row in rows_for_key_in_table(
         "evolved_species_id",
         species_ref,
         poke_evo_path,
     ):
+        if (
+            wanted_triggers is not None
+            and (csv_row.get("evolution_trigger_id") or "").strip()
+            not in wanted_triggers
+        ):
+            continue
         raw_gender = (csv_row.get("gender_id") or "").strip()
         if not raw_gender:
             continue
@@ -958,7 +991,8 @@ def check_evolution_by_item(pokemon_id, item_id, gender=None):
                                     safe_int(
                                         target_data.get("actual_id")
                                         or target_data.get("species_id")
-                                    )
+                                    ),
+                                    _ITEM_EVO_TRIGGERS,
                                 )
                                 if (
                                     required_gender_id is not None
@@ -1283,12 +1317,8 @@ def check_evolution_for_pokemon(
                                     safe_int(
                                         target_data.get("actual_id")
                                         or target_data.get("species_id")
-                                        # Smogon-schema base forms (Wormadam,
-                                        # Mothim, Vespiquen, Salazzle, ...) carry
-                                        # only ``num``; without this fallback the
-                                        # CSV gate could never match them.
-                                        or target_data.get("num")
-                                    )
+                                    ),
+                                    _LEVEL_EVO_TRIGGERS,
                                 )
                                 if (
                                     required_gender_id is not None

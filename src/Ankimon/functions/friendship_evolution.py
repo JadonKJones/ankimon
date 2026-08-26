@@ -533,9 +533,14 @@ def _satisfies_move_gate(
     """Return whether ``evo``'s move-type requirement is satisfied.
 
     ``known_move_types is None`` means "moves unknown" — the caller had no
-    attacks data. Every gate then evaluates False so a move-gated evolution is
-    never offered on missing data (fail-closed); non-gated evolutions are
-    unaffected and stay eligible.
+    attacks data at all. Every gate then evaluates False so a move-gated
+    evolution is never offered on missing data (fail-closed); non-gated
+    evolutions are unaffected and stay eligible.
+
+    Note that :func:`evolution_readiness` always passes a concrete frozenset:
+    :func:`_known_move_types` answers a Pokémon with no readable moveset with an
+    *empty* set, which fails the same way. The ``None`` case exists for direct
+    callers (and for the parameter's own default) and behaves identically.
     """
     if evo.known_move_type is None:
         return True
@@ -565,6 +570,14 @@ def _select_evolution(
     falls back to the lowest remaining ``evo_id`` so the UI can still show e.g.
     "waiting for Night".
 
+    If *every* row is move-gated and none is satisfied there is no reachable
+    row to rank, so the lowest ``evo_id`` comes back as a representative for the
+    UI ("needs a Fairy-type move"). Callers MUST NOT read that as eligible:
+    :func:`evolution_readiness` re-checks the chosen row with
+    :func:`_satisfies_move_gate` and folds the result into ``ready``, so the
+    branch can't fail open. (No bundled species reaches it today — Eevee, the
+    only species with gated rows, also has ungated ones.)
+
     Args:
         evos: Non-empty tuple from :func:`get_friendship_evolutions_for_species`.
         time_of_day: Current time of day (``"day"`` or ``"night"``).
@@ -575,17 +588,22 @@ def _select_evolution(
         The chosen :class:`FriendshipEvolution`.
     """
     valid_evos = [e for e in evos if _satisfies_move_gate(e, known_move_types)]
-    # A species whose every friendship row is move-gated keeps a representative
-    # for UI text ("needs a Fairy-type move") instead of turning not-evolvable.
     if not valid_evos:
-        valid_evos = list(evos)
+        # Reaching here means every row carries a move gate and none is met (an
+        # ungated row would have satisfied trivially). Ranking them by "most
+        # specific requirement" is meaningless when none is reachable, so return
+        # the lowest evo_id as a stable representative for the UI and let the
+        # caller's _satisfies_move_gate re-check keep it out of `ready`.
+        return min(evos, key=lambda e: e.evo_id)
 
     eligible_now = [e for e in valid_evos if e.time_of_day in (time_of_day, None)]
     if eligible_now:
         # Sort: satisfied move gate first (a known Fairy move outranks the
         # day/night clock — Sylveon over Espeon/Umbreon), then explicit-time
         # rows over blank-time rows, then lowest evo_id. Each ``is None`` /
-        # ``==`` predicate sorts falsy-first via the bool key.
+        # ``==`` predicate sorts falsy-first via the bool key. Every row here
+        # has already passed its gate, so the first key only ever promotes a
+        # SATISFIED gate.
         return min(
             eligible_now,
             key=lambda e: (
@@ -614,8 +632,12 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
     Returns:
         A readiness dict with keys: ``evolvable, ready, method, evo_id,
         evo_name, min_happiness, current_friendship, friendship_remaining,
-        required_time, time_ok, status_text, bar_max, rejected``. ``bar_max``
-        defaults to :data:`MAX_FRIENDSHIP` outside the friendship path.
+        required_time, time_ok, status_text, bar_max, rejected,
+        required_move_type, gated_alternatives``. ``bar_max`` defaults to
+        :data:`MAX_FRIENDSHIP` outside the friendship path;
+        ``required_move_type``/``gated_alternatives`` describe CSV
+        ``known_move_type_id`` gates (Sylveon's Fairy-move requirement) and are
+        ``None``/``()`` everywhere else.
     """
     if isinstance(pokemon, dict):
         species_id = pokemon.get("id")
@@ -646,6 +668,8 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
         "status_text": "",
         "bar_max": MAX_FRIENDSHIP,
         "rejected": False,
+        "required_move_type": None,
+        "gated_alternatives": (),
     }
 
     if species_id is None:
@@ -674,15 +698,34 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
             pokemon=pokemon,
         )
 
-    chosen = _select_evolution(evos, time_of_day, _known_move_types(pokemon))
+    known_move_types = _known_move_types(pokemon)
+    chosen = _select_evolution(evos, time_of_day, known_move_types)
     evo_id = chosen.evo_id
     evo_name = chosen.evo_name
     min_happiness = chosen.min_happiness
     required_time = chosen.time_of_day
 
+    # The chosen row can still carry an UNMET move gate in one case: every row
+    # for the species was gated, so _select_evolution had to hand back a
+    # representative. Folding move_ok into `ready` is what keeps that branch
+    # from failing open (the friendship/time numbers alone would say "ready").
+    move_ok = _satisfies_move_gate(chosen, known_move_types)
+    required_move_type = None if move_ok else chosen.known_move_type
+
+    # Evolutions the data offers but the current moveset hides. Without this the
+    # gate is invisible: a high-friendship Eevee simply shows Espeon/Umbreon and
+    # nothing ever tells the player Sylveon exists or what it wants.
+    gated_alternatives = tuple(
+        (e.evo_name, e.known_move_type)
+        for e in evos
+        if e.evo_id != evo_id
+        and e.known_move_type is not None
+        and not _satisfies_move_gate(e, known_move_types)
+    )
+
     friendship_remaining = max(0, min_happiness - friendship)
     time_ok = required_time is None or required_time == time_of_day
-    ready = (not everstone) and friendship >= min_happiness and time_ok
+    ready = (not everstone) and friendship >= min_happiness and time_ok and move_ok
 
     status_text = _build_status_text(
         everstone=everstone,
@@ -693,6 +736,8 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
         time_ok=time_ok,
         time_of_day=time_of_day,
         rejected=evolution_rejected,
+        required_move_type=required_move_type,
+        gated_alternatives=gated_alternatives,
     )
 
     return {
@@ -709,6 +754,12 @@ def evolution_readiness(pokemon: Any, now: Optional[datetime] = None) -> dict:
         "status_text": status_text,
         "bar_max": min_happiness,
         "rejected": evolution_rejected,
+        # Unmet move-type gate on the CHOSEN evolution (None when satisfied or
+        # ungated), and the (name, move_type) pairs of alternatives currently
+        # hidden behind one — e.g. ``(("Sylveon", "fairy"),)`` for an Eevee that
+        # knows no Fairy move.
+        "required_move_type": required_move_type,
+        "gated_alternatives": gated_alternatives,
     }
 
 
@@ -906,6 +957,11 @@ def _level_readiness(
         "status_text": status_text,
         "bar_max": MAX_FRIENDSHIP,
         "rejected": evolution_rejected,
+        # Shape parity with the friendship path. Level evolutions gate on a
+        # specific move NAME (``evoMove``, surfaced in status_text above), not on
+        # a move TYPE from the CSV, so these are always empty here.
+        "required_move_type": None,
+        "gated_alternatives": (),
     }
 
 
@@ -919,37 +975,67 @@ def _build_status_text(
     time_ok: bool,
     time_of_day: str,
     rejected: bool = False,
+    required_move_type: Optional[str] = None,
+    gated_alternatives: tuple = (),
 ) -> str:
     """Build the human-readable readiness line shown in the UI.
+
+    ``required_move_type`` is an unmet move-type gate on the chosen evolution
+    and always wins the line, because nothing else the player does will unblock
+    it. ``gated_alternatives`` are ``(name, move_type)`` pairs for evolutions the
+    species *can* reach but whose gate the current moveset doesn't meet; they are
+    appended as a hint so the branch is discoverable at all (without it a Fairy
+    move silently redirects an Eevee to Sylveon with no prior warning).
 
     Examples:
         - ``"Everstone prevents evolution"``
         - ``"Evolution rejected — tap Evolve now to override"``
         - ``"Ready to evolve into Espeon!"``
+        - ``"Ready to evolve into Espeon! · Sylveon needs a Fairy-type move"``
         - ``"Ready — waiting for Night (now Day)"``
         - ``"40 friendship to evolve into Espeon · needs Day"``
+        - ``"Needs a Fairy-type move to evolve into Sylveon"``
     """
     if everstone:
         return "Everstone prevents evolution"
 
+    # An unmet gate on the chosen evolution outranks every other line: the
+    # friendship bar being full doesn't matter while the moveset blocks it.
+    if required_move_type:
+        return (
+            f"Needs a {required_move_type.capitalize()}-type move "
+            f"to evolve into {evo_name}"
+        )
+
+    hint = (
+        " · "
+        + " · ".join(
+            f"{name} needs a {move_type.capitalize()}-type move"
+            for name, move_type in gated_alternatives
+            if move_type
+        )
+        if gated_alternatives
+        else ""
+    )
+
     if ready and rejected:
-        return "Evolution rejected — tap Evolve now to override"
+        return "Evolution rejected — tap Evolve now to override" + hint
 
     if ready:
-        return f"Ready to evolve into {evo_name}!"
+        return f"Ready to evolve into {evo_name}!" + hint
 
     # Friendship is high enough but the time of day is wrong.
     if friendship_remaining == 0 and not time_ok and required_time is not None:
         return (
             f"Ready — waiting for {required_time.capitalize()} "
-            f"(now {time_of_day.capitalize()})"
+            f"(now {time_of_day.capitalize()})" + hint
         )
 
     # Still needs more friendship.
     text = f"{friendship_remaining} friendship to evolve into {evo_name}"
     if required_time is not None:
         text += f" · needs {required_time.capitalize()}"
-    return text
+    return text + hint
 
 
 def check_friendship_evolution_for_pokemon(
