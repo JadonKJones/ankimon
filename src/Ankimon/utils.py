@@ -629,8 +629,17 @@ def load_custom_font(font_size, language):
     # (custom fonts are a GUI-only concern).
     from PyQt6.QtGui import QFontDatabase, QFont
     if font_file not in _registered_fonts:
-        QFontDatabase.addApplicationFont(str(font_path / font_file))
-        _registered_fonts.add(font_file)
+        # addApplicationFont() returns -1 on failure. Only cache the file as
+        # "registered" when it actually succeeded — caching a failure here
+        # would silently and permanently skip every retry for that file.
+        font_id = QFontDatabase.addApplicationFont(str(font_path / font_file))
+        # In a test env where QFontDatabase itself is mocked, addApplicationFont
+        # can return a MagicMock instead of a real int — not a failure signal,
+        # just not a real Qt call, so treat anything other than a genuine
+        # negative int as success (preserves the old always-cache behavior
+        # there) rather than letting the comparison raise.
+        if not (isinstance(font_id, int) and font_id < 0):
+            _registered_fonts.add(font_file)
     custom_font = QFont(
         font_name
     )  # Use the font family name you specified in the font file

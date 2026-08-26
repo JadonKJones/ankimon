@@ -774,6 +774,12 @@ class ProfileData:
         team_data = [{"individual_id": ind_id} for ind_id in clean_ids]
         xp_share_id = str(xp_share_id) if xp_share_id else None
         companion_id = str(companion_id) if companion_id else None
+        # The Active Companion has to actually be a member of the team being
+        # saved — otherwise a slot swap in the same save could point
+        # set_main_pokemon at a Pokémon that just got dropped from the roster,
+        # leaving the battler out of sync with what the team screen shows.
+        if companion_id and companion_id not in clean_ids:
+            companion_id = None
 
         try:
             # NOTE: no legacy "trainer.team" config write — the DB team table

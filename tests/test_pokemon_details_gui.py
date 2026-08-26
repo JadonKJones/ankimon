@@ -212,8 +212,18 @@ def details(qapp, tmp_path):
     ad = types.ModuleType("Ankimon.pyobj.attack_dialog")
 
     class AttackDialog:
-        def __init__(self, attacks, new_attack):
+        # remember_attack() calls AttackDialog(attacks, new_attack, parent=mw)
+        # then .raise_()/.activateWindow() before .exec() (the battle-freeze
+        # fix: an unparented dialog could spawn invisibly) — the double needs
+        # to accept/tolerate all of that.
+        def __init__(self, attacks, new_attack, parent=None):
             self.selected_attack = attacks[0]
+
+        def raise_(self):
+            pass
+
+        def activateWindow(self):
+            pass
 
         def exec(self):
             return 0  # rejected by default
@@ -707,6 +717,40 @@ def test_remember_attack_saves_via_services_db_and_refreshes(details):
     # The main pokemon mirror is kept in sync too.
     assert db.saved_main and db.saved_main[-1]["attacks"] == ["tackle", "thunderbolt"]
     assert refreshed == [True]
+
+
+def test_remember_attack_with_a_full_moveset_goes_through_the_replace_dialog(details):
+    # 4 known moves -> the "learn a 5th" path can't just append, it has to
+    # prompt AttackDialog(attacks, new_attack, parent=mw) for a replacement —
+    # the double's exec() returns 0 (rejected) by default, so the new move is
+    # discarded and the original 4 attacks are unchanged.
+    db = _FakeDB(
+        pokemon={
+            "uuid-1": {
+                "individual_id": "uuid-1",
+                "name": "pikachu",
+                "attacks": ["tackle", "thunderbolt", "quick-attack", "growl"],
+            }
+        },
+        main_pokemon={
+            "individual_id": "uuid-1",
+            "attacks": ["tackle", "thunderbolt", "quick-attack", "growl"],
+        },
+    )
+    details._test_services.db = db
+    logger = _RecorderLogger()
+
+    details.remember_attack(
+        "uuid-1",
+        ["tackle", "thunderbolt", "quick-attack", "growl"],
+        "thunder",
+        logger,
+        lambda: None,
+    )
+
+    # The dialog was declined (double's default), so the moveset is untouched
+    # rather than silently growing past 4 or swapping something unintended.
+    assert db.saved[-1]["attacks"] == ["tackle", "thunderbolt", "quick-attack", "growl"]
 
 
 def test_forget_attack_refuses_to_remove_last_move(details):

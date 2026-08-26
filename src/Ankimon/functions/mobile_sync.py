@@ -2231,7 +2231,21 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
                         msg_learn = f"{pkmndata.get('name', '').capitalize()} learned {new_attack}!"
                         tooltipWithColour(msg_learn, color)
                 elif new_attack not in attacks:
-                    if is_active and not in_bulk:
+                    # This function is reachable from a QueryOp worker thread
+                    # (resolve_next's run_sim / commit_replay_outcome's
+                    # do_db_work both call it off the main thread in
+                    # production). Constructing and .exec()'ing a QDialog off
+                    # the GUI thread is undefined behavior in Qt — so the move
+                    # swap only ever prompts when this call actually landed on
+                    # the main thread (the PYTEST_CURRENT_TEST synchronous
+                    # path, or any future main-thread caller). Off the main
+                    # thread the Pokémon just keeps its current moves; the
+                    # player can still swap moves later from Pokémon Details.
+                    if (
+                        is_active
+                        and not in_bulk
+                        and threading.current_thread() is threading.main_thread()
+                    ):
                         from ..pyobj.attack_dialog import AttackDialog
                         from PyQt6.QtWidgets import QDialog
                         from aqt import mw
