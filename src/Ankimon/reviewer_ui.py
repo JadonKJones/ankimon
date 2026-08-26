@@ -145,6 +145,21 @@ def cycle_team_pokemon():
         except Exception as e:
             print(f"Error updating HUD: {e}")
 
+        # The HUD refresh above only repaints the bottom-of-reviewer bars —
+        # the separate Ankimon Window popup has its own sprite/name label and
+        # was never told a swap happened, so it kept showing the pokemon that
+        # was active before the cycle. Force its repaint too, bypassing the
+        # render debounce the same way reviewer_reset_life_bar_inject does.
+        try:
+            from .utils import is_alive
+
+            test_window = services.test_window
+            if is_alive(test_window) and test_window.current_view == "battle":
+                test_window._last_display_time = 0
+                test_window.display_battle()
+        except Exception as e:
+            print(f"Error updating Ankimon Window: {e}")
+
         pkmn_name = pokemon_data.get("nickname") or pokemon_data.get("name", "Unknown")
         pkmn_level = pokemon_data.get("level", "?")
         tooltip(f"Switched to {pkmn_name}! LVL: {pkmn_level}")

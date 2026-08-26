@@ -57,11 +57,17 @@ class _FakeSettings:
 
 @pytest.fixture
 def pd_module(monkeypatch):
+    # Every sys.modules write below goes through monkeypatch.setitem (and
+    # delitem for the module actually loaded fresh) so pytest restores the
+    # real entries after this test, instead of leaking these fakes into
+    # whatever test file happens to run next in the same session — the same
+    # cross-file sys.modules pollution pattern this suite has bitten on
+    # before (see test_pokemon_details_gui.py's own isolation notes).
     for name in ("Ankimon", "Ankimon.ankimon_profile_web"):
         pkg = types.ModuleType(name)
         pkg.__path__ = [str(_SRC / name.replace(".", "/"))]
         pkg.__package__ = name
-        sys.modules[name] = pkg
+        monkeypatch.setitem(sys.modules, name, pkg)
 
     services_mod = types.ModuleType("Ankimon.services")
     fake_services = types.SimpleNamespace(
@@ -71,33 +77,35 @@ def pd_module(monkeypatch):
         test_window=None,
     )
     services_mod.services = fake_services
-    sys.modules["Ankimon.services"] = services_mod
+    monkeypatch.setitem(sys.modules, "Ankimon.services", services_mod)
 
     utils_mod = types.ModuleType("Ankimon.utils")
     utils_mod.get_all_sprites = lambda *a, **k: []
     utils_mod.POKEMON_NAME_LOOKUP = {}
-    sys.modules["Ankimon.utils"] = utils_mod
+    monkeypatch.setitem(sys.modules, "Ankimon.utils", utils_mod)
 
     resources_mod = types.ModuleType("Ankimon.resources")
     resources_mod.trainer_sprites_path = Path("/tmp")
-    sys.modules["Ankimon.resources"] = resources_mod
+    monkeypatch.setitem(sys.modules, "Ankimon.resources", resources_mod)
 
     for name in ("Ankimon.functions",):
         pkg = types.ModuleType(name)
         pkg.__path__ = [str(_SRC / name.replace(".", "/"))]
         pkg.__package__ = name
-        sys.modules[name] = pkg
+        monkeypatch.setitem(sys.modules, name, pkg)
 
     update_main_pokemon_mod = types.ModuleType("Ankimon.functions.update_main_pokemon")
     update_main_pokemon_mod.update_main_pokemon = lambda *a, **k: None
-    sys.modules["Ankimon.functions.update_main_pokemon"] = update_main_pokemon_mod
+    monkeypatch.setitem(
+        sys.modules, "Ankimon.functions.update_main_pokemon", update_main_pokemon_mod
+    )
 
-    sys.modules.pop(_MODULE_NAME, None)
+    monkeypatch.delitem(sys.modules, _MODULE_NAME, raising=False)
     spec = importlib.util.spec_from_file_location(
         _MODULE_NAME, _SRC / "Ankimon" / "ankimon_profile_web" / "profile_data.py"
     )
     mod = importlib.util.module_from_spec(spec)
-    sys.modules[_MODULE_NAME] = mod
+    monkeypatch.setitem(sys.modules, _MODULE_NAME, mod)
     spec.loader.exec_module(mod)
 
     yield mod, fake_services

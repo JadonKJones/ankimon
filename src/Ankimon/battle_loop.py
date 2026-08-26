@@ -320,6 +320,7 @@ def on_review_card(*args):
                 sign = "+" if heals_to_opponent > 0 else ""
                 tooltipWithColour(f" {sign}{int(heals_to_opponent)} HP ", heal_color, x=250)
 
+            encounter_replaced = False
             if enemy_pokemon.hp < 1:
                 enemy_pokemon.hp = 0
                 # Liveness guards (F24): resolve both windows fresh from the
@@ -335,22 +336,35 @@ def on_review_card(*args):
                     except RuntimeError:
                         live_faint_window = None
                 evo = services.evo_window
-                handle_enemy_faint(
-                    main_pokemon,
-                    enemy_pokemon,
-                    s.collected_pokemon_ids,
-                    live_faint_window,
-                    evo if is_alive(evo) else None,
-                    reviewer_obj,
-                    logger,
-                    achievements,
+                # handle_enemy_faint() returns True when it replaced
+                # enemy_pokemon with a fresh wild encounter (auto-catch/
+                # auto-defeat/override/wishlist all do, via new_pokemon(),
+                # which already painted that encounter's own intro frame) —
+                # same reasoning as handle_main_pokemon_faint below: skip the
+                # end-of-turn display_battle() so it doesn't immediately
+                # overwrite that intro frame with this turn's stale text.
+                # Manual mode (False) shows the death/catch screen instead,
+                # already excluded from that repaint via the enemy_pokemon.hp
+                # > 0 check further down.
+                encounter_replaced = bool(
+                    handle_enemy_faint(
+                        main_pokemon,
+                        enemy_pokemon,
+                        s.collected_pokemon_ids,
+                        live_faint_window,
+                        evo if is_alive(evo) else None,
+                        reviewer_obj,
+                        logger,
+                        achievements,
+                    )
                 )
                 s.mutator_full_reset = 1
+        else:
+            encounter_replaced = False
 
         if cry_counter == 10 and battle_sounds is True:
             play_sound(enemy_pokemon.id, settings_obj)
 
-        encounter_replaced = False
         if main_pokemon.hp < 1:
             # Liveness guard (F24): hand the faint handler a live window or None
             # (new_pokemon already None-checks before painting).

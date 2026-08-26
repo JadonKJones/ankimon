@@ -2245,6 +2245,7 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
                         is_active
                         and not in_bulk
                         and threading.current_thread() is threading.main_thread()
+                        and getattr(services, "ui", None) is not None
                     ):
                         # Routed through the services.ui presenter port (same
                         # seam pokemon_details.py/gui_presenter.py use) rather
@@ -2252,7 +2253,15 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
                         # module aqt-free at import time and testable against
                         # HeadlessPresenter, and production's QtPresenter still
                         # does the identical parent=mw/raise_/activateWindow
-                        # dialog under the hood.
+                        # dialog under the hood. Guarded on services.ui being
+                        # present so a sparse/partial services object (an
+                        # incomplete test double, a mid-reload state) falls
+                        # through to the no-prompt path below instead of
+                        # raising here and aborting before pkmndata["attacks"]
+                        # is even assigned — this call runs on a QueryOp
+                        # worker thread, so an uncaught exception here loses
+                        # the whole XP/EV grant for the turn, not just the
+                        # move choice.
                         selected_attack = services.ui.choose_attack_to_replace(
                             attacks, new_attack
                         )
