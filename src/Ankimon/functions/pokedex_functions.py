@@ -858,25 +858,19 @@ _ITEM_EVO_TRIGGERS = (2, 3)  # 2 = trade-with-held-item, 3 = use-item
 _LEVEL_EVO_TRIGGERS = (1,)  # 1 = level-up (plain, timed, and levelMove)
 
 
-@functools.lru_cache(maxsize=None)
 def _evolution_row_gender_id(evolved_species_id, trigger_ids=None) -> Optional[int]:
     """Return the ``gender_id`` gating ``evolved_species_id``, if any.
 
     Scans the bundled ``pokemon_evolution.csv`` rows whose
     ``evolved_species_id`` matches and returns the first parseable non-blank
     ``gender_id`` (veekun convention: 1 = female, 2 = male). ``None`` means the
-    species' evolution rows carry no gender gate. Form-variant ids (>= 10000,
-    e.g. Wormadam-Sandy 10004) resolve to their base species first — the CSV
-    only carries base-species rows (repo tripwire: "IDs >= 10000 must be
-    resolved to their base species via check_id_ok()").
+    species' evolution rows carry no gender gate. Anything that isn't an integer
+    id degrades to ``None`` ("no gate") rather than raising.
 
-    ``lru_cache``d because this sits on the review path: a level-up runs it for
-    every eligible evolution candidate, and ``rows_for_key_in_table`` re-opens
-    and re-parses the whole ~500-row CSV on each call (coding guideline: no
-    synchronous disk I/O mid-review — static data is parsed once at startup).
-    The CSV is static for the process lifetime and the result is an immutable
-    ``Optional[int]``, so the cached answer is safe to share; both arguments are
-    hashable (an int and a tuple), as ``lru_cache`` requires.
+    The coercion happens HERE rather than inside the cached helper so that an
+    unhashable argument still returns ``None`` instead of dying in
+    ``lru_cache``'s key lookup, and so the cache keys on the normalized int
+    (``475`` and ``"475"`` share one entry).
 
     Args:
         evolved_species_id: National Pokédex id of the *evolved* species.
@@ -888,6 +882,28 @@ def _evolution_row_gender_id(evolved_species_id, trigger_ids=None) -> Optional[i
         species_ref = int(evolved_species_id)
     except (TypeError, ValueError):
         return None
+    return _evolution_row_gender_id_cached(species_ref, trigger_ids)
+
+
+@functools.lru_cache(maxsize=None)
+def _evolution_row_gender_id_cached(species_ref: int, trigger_ids) -> Optional[int]:
+    """CSV-backed body of :func:`_evolution_row_gender_id` (see it for semantics).
+
+    Form-variant ids (>= 10000, e.g. Wormadam-Sandy 10004) resolve to their base
+    species first — the CSV only carries base-species rows (repo tripwire: "IDs
+    >= 10000 must be resolved to their base species via check_id_ok()").
+
+    ``lru_cache``d because this sits on the review path: a level-up runs it for
+    every eligible evolution candidate, and ``rows_for_key_in_table`` re-opens
+    and re-parses the whole ~500-row CSV on each call (coding guideline: no
+    synchronous disk I/O mid-review — static data is parsed once at startup).
+    ``poke_evo_path`` points into the shipped, read-only ``data_files`` dir, so
+    the CSV really is immutable for the process and the memoized
+    ``Optional[int]`` is safe to share. The key space is bounded by
+    species x trigger-scope (a few thousand small ints at most), so ``maxsize=None``
+    can't grow without bound. Same caveat as the other CSV caches here: a
+    transient read failure would be memoized for the session.
+    """
     if species_ref >= 10000:
         # Form variant: the CSV keys on the base species id only.
         form_name = search_pokedex_by_id(species_ref)

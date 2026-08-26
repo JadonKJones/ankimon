@@ -1592,15 +1592,22 @@ def save_main_pokemon_progress(
                 main_pokemon.everstone,
                 main_pokemon.friendship,
                 getattr(main_pokemon, "evolution_rejected", False),
-                # Prefer the fresh post-level-up list, but never fall through to
-                # None: most defeats grant no level-up, so `attacks` is still
-                # unset there and passing it alone would send the checker back to
-                # the DB on the common path. The in-memory object always carries
-                # a moveset (PokemonObject.__init__ defaults it), so this keeps
-                # the victory path free of synchronous DB reads either way.
-                attacks=attacks if attacks is not None else main_pokemon.attacks,
-                # In-memory defeat count (already incremented for this battle
-                # above), same reason.
+                # The fresh post-level-up list when this defeat produced one;
+                # None otherwise, which sends the checker to the DB for the
+                # stored moveset. That read is deliberate — do NOT "optimize" it
+                # into `main_pokemon.attacks`. The level-up merge above writes
+                # the learned move to mainpkmndata (the DB dict) only, so the
+                # in-memory PokemonObject's moveset goes stale on the first
+                # level-up and never re-syncs for the rest of the session
+                # (update_main_pokemon only runs at boot / on an evolution / from
+                # the profile+shop screens). Feeding that stale list to the CSV
+                # known_move_type gate would stop offering Sylveon to an Eevee
+                # that HAS learned a Fairy move — and flip-flop, since the rarer
+                # level-up defeats still pass the fresh list.
+                attacks=attacks,
+                # The defeat count, unlike the moveset, IS accurate in memory —
+                # it was incremented for this battle a few lines above — so pass
+                # it and spare the checker that half of the lookup.
                 pokemon_defeated=main_pokemon.pokemon_defeated,
             )
             if friendship_evo_id is not None:

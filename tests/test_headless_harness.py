@@ -161,71 +161,98 @@ def test_battle_loop_survives_dead_windows():
     )
 
 
-def test_victory_path_friendship_check_does_no_db_reads():
-    """The friendship/defeat-milestone checker must run on real in-memory state.
+def test_victory_path_move_gate_sees_moves_learned_at_level_up():
+    """The victory-time move-type gate must evaluate the CURRENT moveset.
 
-    Repo rule: no synchronous disk I/O in the review path. Every defeat calls
-    check_friendship_evolution_for_pokemon, and it falls back to a
-    services.db.get_pokemon() read for whichever of `attacks` /
-    `pokemon_defeated` the caller leaves as None. Most defeats grant no
-    level-up, so the encounter path's fresh-moveset holder is still None there —
-    it must fall back to the in-memory PokemonObject moveset, not to the DB.
+    Regression for a tempting but wrong optimization. The friendship checker
+    falls back to a services.db.get_pokemon() read for whichever of `attacks` /
+    `pokemon_defeated` the caller leaves as None, and most defeats grant no
+    level-up, so `attacks` is None on the common path. Replacing that read with
+    the in-memory `main_pokemon.attacks` looks free but is not: the level-up
+    merge writes the learned move to the DB dict only, so the PokemonObject's
+    moveset goes stale on the first level-up and never re-syncs (verified: still
+    ['tackle','growl'] 1200 answers after the DB reached
+    ['tackle','growl','babydolleyes','swift']).
 
-    Drives real defeats with a spy around the checker that (a) records the
-    kwargs it was called with and (b) counts get_pokemon calls made INSIDE it.
+    Concretely: an Eevee that learns Baby-Doll Eyes at Lv15 must be offered
+    Sylveon (700) on a later defeat, not Espeon/Umbreon. Reading the stale
+    in-memory list breaks exactly that, and flip-flops, because the rarer
+    level-up defeats still pass a fresh list.
     """
     result = _subrun(
         "from harness.driver import Driver\n"
-        # Deterministic RNG: enemy faints are stochastic, and a run with zero
-        # defeats would vacuously pass.
         "import random\n"
         "random.seed(0)\n"
-        "d = Driver(seed={'main': {'species': 'Eevee', 'level': 30, 'gender': 'M',\n"
-        "                          'friendship': 100,\n"
-        "                          'attacks': ['Tackle', 'Swift', 'Bite', 'Baby-Doll Eyes']}},\n"
+        # Starts below Lv15 knowing no Fairy move, with room in the moveset for
+        # Baby-Doll Eyes, and enough friendship that Sylveon is offerable as
+        # soon as the gate is met.
+        "d = Driver(seed={'main': {'species': 'Eevee', 'level': 14, 'gender': 'M',\n"
+        "                          'friendship': 300,\n"
+        "                          'attacks': ['Tackle', 'Growl']}},\n"
         "           settings_overrides={'battle.cards_per_round': 1},\n"
         "           evolution_policy='ignore')\n"
         "import Ankimon.functions.encounter_functions as ef\n"
         "import Ankimon.functions.friendship_evolution as fe\n"
-        "from Ankimon.services import services\n"
-        "calls = []\n"
+        "s = d.services\n"
+        "offers = []\n"
         "_real = fe.check_friendship_evolution_for_pokemon\n"
+        # The moveset the gate actually evaluates: what the caller passed, or —
+        # when it passes None — the stored one the checker falls back to.
         "def spy(*a, **kw):\n"
-        "    real_get = services.db.get_pokemon\n"
-        "    n = [0]\n"
-        "    def counting(iid):\n"
-        "        n[0] += 1\n"
-        "        return real_get(iid)\n"
-        "    services.db.get_pokemon = counting\n"
-        "    try:\n"
-        "        r = _real(*a, **kw)\n"
-        "    finally:\n"
-        "        services.db.get_pokemon = real_get\n"
-        "    calls.append({'attacks_none': kw.get('attacks') is None,\n"
-        "                  'defeated_none': kw.get('pokemon_defeated') is None,\n"
-        "                  'db_reads': n[0]})\n"
+        "    stored = (s.db.get_main_pokemon() or {}).get('attacks') or []\n"
+        "    passed = kw.get('attacks')\n"
+        "    effective = stored if passed is None else passed\n"
+        "    norm = lambda ms: [str(m).lower().replace(' ', '').replace('-', '')\n"
+        "                       for m in (ms or [])]\n"
+        "    r = _real(*a, **kw)\n"
+        "    offers.append({'evo': r,\n"
+        "                   'learned': 'babydolleyes' in norm(stored),\n"
+        "                   'gate_saw_it': 'babydolleyes' in norm(effective)})\n"
         "    return r\n"
         "ef.check_friendship_evolution_for_pokemon = spy\n"
-        "for _ in range(400):\n"
+        "for _ in range(700):\n"
         "    d.answer('good')\n"
-        "    if d.services.enemy_pokemon.hp <= 0:\n"
+        "    if s.enemy_pokemon.hp <= 0:\n"
         "        d.defeat()\n"
+        "after = [o for o in offers if o['learned']]\n"
         "print(%r + json.dumps({\n"
-        "    'checks': len(calls),\n"
-        "    'attacks_none': sum(1 for c in calls if c['attacks_none']),\n"
-        "    'defeated_none': sum(1 for c in calls if c['defeated_none']),\n"
-        "    'db_reads': sum(c['db_reads'] for c in calls),\n"
+        "    'checks': len(offers),\n"
+        "    'after_learning': len(after),\n"
+        "    'gate_blind_to_learned_move': sum(1 for o in after if not o['gate_saw_it']),\n"
+        "    'sylveon': sum(1 for o in after if o['evo'] == 700),\n"
+        "    'wrong_eeveelution': sorted({o['evo'] for o in after\n"
+        "                                 if o['evo'] not in (None, 700)}),\n"
+        "    'db_attacks': (d.services.db.get_main_pokemon() or {}).get('attacks'),\n"
+        "    'obj_attacks': list(s.main_pokemon.attacks),\n"
         "}))" % _MARKER
     )
     assert result["checks"] > 0, "no defeats occurred; the check never ran"
-    assert result["attacks_none"] == 0, (
-        "%d/%d victory-path checks arrived with attacks=None and fell back to the DB"
-        % (result["attacks_none"], result["checks"])
+    assert "babydolleyes" in (result["db_attacks"] or []), (
+        "Eevee never learned Baby-Doll Eyes; the scenario did not exercise the gate"
     )
-    assert result["defeated_none"] == 0
-    assert result["db_reads"] == 0, (
-        "victory-path friendship check performed %d synchronous DB reads"
-        % result["db_reads"]
+    assert result["after_learning"] > 0, (
+        "no victory check ran after the move was learned"
+    )
+    # The invariant: once the move is in the save, every victory-time check must
+    # evaluate a moveset that contains it.
+    assert result["gate_blind_to_learned_move"] == 0, (
+        "%d/%d victory checks evaluated a moveset missing the learned Fairy move "
+        "(db=%s, in-memory=%s)"
+        % (
+            result["gate_blind_to_learned_move"],
+            result["after_learning"],
+            result["db_attacks"],
+            result["obj_attacks"],
+        )
+    )
+    assert not result["wrong_eeveelution"], (
+        "move gate evaluated a stale moveset: offered %s instead of Sylveon after "
+        "the Fairy move was learned (db=%s, in-memory=%s)"
+        % (result["wrong_eeveelution"], result["db_attacks"], result["obj_attacks"])
+    )
+    assert result["sylveon"] > 0, (
+        "Sylveon was never offered after the Fairy move was learned (db=%s)"
+        % (result["db_attacks"],)
     )
 
 
@@ -234,5 +261,5 @@ if __name__ == "__main__":
     test_state_snapshot_and_single_answer()
     test_auto_battle_mode_cycles()
     test_battle_loop_survives_dead_windows()
-    test_victory_path_friendship_check_does_no_db_reads()
+    test_victory_path_move_gate_sees_moves_learned_at_level_up()
     print("headless harness tests: OK")
