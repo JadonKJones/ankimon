@@ -1007,16 +1007,14 @@ def _build_status_text(
             f"to evolve into {evo_name}"
         )
 
-    hint = (
-        " · "
-        + " · ".join(
-            f"{name} needs a {move_type.capitalize()}-type move"
-            for name, move_type in gated_alternatives
-            if move_type
-        )
-        if gated_alternatives
-        else ""
-    )
+    # Build the parts first: an entry with a blank type contributes nothing, and
+    # joining an all-blank list would otherwise leave a dangling " · ".
+    hint_parts = [
+        f"{name} needs a {move_type.capitalize()}-type move"
+        for name, move_type in gated_alternatives
+        if move_type
+    ]
+    hint = (" · " + " · ".join(hint_parts)) if hint_parts else ""
 
     if ready and rejected:
         return "Evolution rejected — tap Evolve now to override" + hint
