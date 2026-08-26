@@ -1013,6 +1013,10 @@ def _eevee(friendship, attacks):
 
 
 def test_readiness_reports_the_hidden_sylveon_gate():
+    # The structured keys are the contract; status_text is one rendering of them.
+    # (Note the details panel only draws status_text while ready is False — see
+    # test_readiness_hint_also_shows_while_still_gaining_friendship for the
+    # variant a user actually reads.)
     result = fe.evolution_readiness(
         _eevee(220, ["Tackle", "Swift"]), now=datetime(2024, 1, 1, 9, 0)
     )
@@ -1026,6 +1030,10 @@ def test_readiness_reports_the_hidden_sylveon_gate():
 
 
 def test_readiness_hint_also_shows_while_still_gaining_friendship():
+    # This is the branch the details panel actually renders (it draws
+    # status_text only when ready is False), and it covers the whole 0..159
+    # friendship climb — i.e. the entire window in which the player can still
+    # choose to teach a Fairy move.
     result = fe.evolution_readiness(
         _eevee(100, ["Tackle"]), now=datetime(2024, 1, 1, 9, 0)
     )

@@ -987,13 +987,22 @@ def _build_status_text(
     appended as a hint so the branch is discoverable at all (without it a Fairy
     move silently redirects an Eevee to Sylveon with no prior warning).
 
+    Where the hint actually surfaces today: the only consumer of ``status_text``
+    is the details panel (``gui_classes/pokemon_details.py``), and it renders the
+    line only while ``ready`` is False — which for a friendship evolution is the
+    whole climb from 0 to ``min_happiness`` (every capture starts at friendship
+    0, Eevee needs 160), so the player sees it for the entire period they can act
+    on it. Once ``ready`` flips the panel shows an "Evolve now" button instead
+    and the line is not drawn. The hint is still appended to the ready branches
+    below so the string stays correct for any consumer that does render it —
+    just don't read those variants as something a user sees today.
+
     Examples:
         - ``"Everstone prevents evolution"``
-        - ``"Evolution rejected — tap Evolve now to override"``
         - ``"Ready to evolve into Espeon!"``
-        - ``"Ready to evolve into Espeon! · Sylveon needs a Fairy-type move"``
         - ``"Ready — waiting for Night (now Day)"``
         - ``"40 friendship to evolve into Espeon · needs Day"``
+        - ``"40 friendship to evolve into Espeon · Sylveon needs a Fairy-type move"``
         - ``"Needs a Fairy-type move to evolve into Sylveon"``
     """
     if everstone:

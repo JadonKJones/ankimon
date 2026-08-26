@@ -252,7 +252,7 @@ def test_evolution_row_gender_id_reads_the_csv_only_once_per_key():
     # Repo rule: "No synchronous disk I/O in the review path — static data is
     # parsed once at startup." Without the cache this was one full CSV parse per
     # level-up per candidate (~0.5 ms each, measured 175x slower than cached).
-    pf._evolution_row_gender_id.cache_clear()
+    pf._evolution_row_gender_id_cached.cache_clear()
     opens = []
     real_open = pf.open if hasattr(pf, "open") else open
 
@@ -298,17 +298,28 @@ def test_evolution_row_gender_id_is_scoped_to_the_calling_trigger():
 
 
 def test_evolution_row_gender_id_resolves_form_ids_and_survives_junk():
-    # Cloak forms (>= 10000) must resolve to their base species before the CSV
-    # lookup, per the repo tripwire; junk degrades to "no gate", never raises.
+    # Characterization pin, not a regression test: cloak forms (>= 10000) must
+    # resolve to their base species before the CSV lookup, per the repo tripwire,
+    # and junk must degrade to "no gate" rather than raising. Both held before
+    # the cache was added; this pins that CACHING DID NOT BREAK THEM — the
+    # unhashable cases below would die inside lru_cache's key lookup if the
+    # coercion were not in the uncached wrapper.
     assert pf._evolution_row_gender_id(10004, pf._LEVEL_EVO_TRIGGERS) == 1
     for junk in (99999, 0, -1, None, "x", object()):
         assert pf._evolution_row_gender_id(junk, pf._LEVEL_EVO_TRIGGERS) is None
+    for unhashable in ([1, 2], {"a": 1}, {1, 2}, bytearray(b"x")):
+        assert pf._evolution_row_gender_id(unhashable, pf._LEVEL_EVO_TRIGGERS) is None
+    # Numeric strings must not open a second cache entry for the same species.
+    assert pf._evolution_row_gender_id("416", pf._LEVEL_EVO_TRIGGERS) == 1
 
 
-def test_evolved_species_id_is_resolved_without_a_num_fallback():
-    # pokedex.json carries actual_id/species_id on every one of its entries and
-    # `num` on none of them, so the gate never needs a `num` fallback. Pin that
-    # so the dead branch can't creep back in.
+def test_pokedex_entries_carry_an_id_the_gender_gate_can_resolve():
+    # Data invariant, not a behavioural regression test: the removed
+    # `or target_data.get("num")` fallback was unreachable because pokedex.json
+    # carries actual_id/species_id on every entry and `num` on none. Removing it
+    # is behaviour-neutral BY CONSTRUCTION, so no test can observe the removal —
+    # what is worth pinning is the premise, which would silently stop holding if
+    # the bundled pokedex were regenerated in the Smogon `num` schema.
     pokedex = pf._load_pokedex_cache()
     assert pokedex, "pokedex cache is empty"
     assert not [k for k, v in pokedex.items() if v.get("num") is not None]
