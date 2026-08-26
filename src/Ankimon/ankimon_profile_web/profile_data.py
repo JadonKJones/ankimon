@@ -756,10 +756,16 @@ class ProfileData:
 
         ``companion_id`` is the Active Companion — whichever team member should
         actually be the one battling (``is_main=1`` in the DB). team.js's ⚔
-        button on a team slot sets/clears it; '' means "no change" (most saves
-        don't touch it). Setting it here reloads the live ``main_pokemon``
-        object from the DB and repaints the reviewer HUD + Ankimon Window so
-        the swap is visible immediately."""
+        button on a team slot sets/clears it, and always sends the full
+        current selection (not a sparse "only touch if changed" value), so an
+        empty ``companion_id`` here is an explicit "no companion" and is
+        persisted as a clear, not silently ignored — a save that clears it and
+        then gets skipped would leave the previous companion's stale is_main=1
+        row to resurface on a later reload. Setting a real companion reloads
+        the live ``main_pokemon`` object from the DB and repaints the reviewer
+        HUD + Ankimon Window so the swap is visible immediately; clearing does
+        not touch the live in-memory main_pokemon for the current session (see
+        clear_main_pokemon()'s docstring) — it only affects the next reload."""
         seen = set()
         clean_ids = []
         for raw in team_ids or []:
@@ -810,6 +816,11 @@ class ProfileData:
                             test_window.display_battle()
                 except Exception:
                     pass
+            else:
+                # Explicit clear (or a companion validation rejected above) —
+                # drop the stale is_main=1 row so it can't resurface on a
+                # later reload. Does not touch the live in-memory session.
+                services.db.clear_main_pokemon()
         except Exception as e:
             return {"ok": False, "message": f"Failed to save team: {e}"}
 

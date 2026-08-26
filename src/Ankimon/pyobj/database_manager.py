@@ -1206,6 +1206,23 @@ class AnkimonDB:
         conn.commit()
         return True
 
+    def clear_main_pokemon(self) -> None:
+        """Clears the is_main flag from whichever Pokémon currently holds it,
+        leaving no main Pokémon persisted. Used when the Active Companion
+        selection is explicitly cleared (or invalidated) on save — without
+        this, the stale is_main=1 row would survive and a later reload could
+        restore a companion no longer in the saved team.
+
+        Deliberately does not touch the live in-memory main_pokemon singleton
+        for the current session — this only affects what the NEXT load reads
+        back, the same way get_main_pokemon() already tolerates returning
+        None (a brand-new save with no starter picked yet is this exact
+        state)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE captured_pokemon SET is_main = 0 WHERE is_main = 1")
+        conn.commit()
+
     # --- Item Operations ---
 
     def add_item(self, item_name: str, quantity: int = 1, extra_data: Optional[Dict] = None, commit: bool = True) -> bool:

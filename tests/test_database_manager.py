@@ -859,3 +859,27 @@ def test_user_data_to_config_migration_rolls_back_on_write_failure(temp_env):
     assert db.get_user_data("username") == "legacy-user"
     assert db.get_user_data("api_key") == "legacy-key"
 
+
+
+def test_clear_main_pokemon_drops_the_is_main_flag(temp_env):
+    """clear_main_pokemon() leaves no Pokémon flagged as main — used when the
+    Active Companion selection on the team screen is explicitly cleared, so a
+    stale is_main=1 row can't resurface for a Pokémon no longer on the team."""
+    db, _ = temp_env
+    db.save_pokemon({"individual_id": "uuid-a", "name": "pikachu", "id": 25, "level": 5})
+    db.set_main_pokemon("uuid-a")
+    assert db.get_main_pokemon() is not None
+
+    db.clear_main_pokemon()
+
+    assert db.get_main_pokemon() is None
+
+
+def test_clear_main_pokemon_is_a_safe_no_op_when_nothing_is_main(temp_env):
+    db, _ = temp_env
+    db.save_pokemon({"individual_id": "uuid-a", "name": "pikachu", "id": 25, "level": 5})
+    assert db.get_main_pokemon() is None
+
+    db.clear_main_pokemon()  # must not raise
+
+    assert db.get_main_pokemon() is None

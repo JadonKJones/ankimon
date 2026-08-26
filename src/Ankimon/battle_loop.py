@@ -350,6 +350,7 @@ def on_review_card(*args):
         if cry_counter == 10 and battle_sounds is True:
             play_sound(enemy_pokemon.id, settings_obj)
 
+        encounter_replaced = False
         if main_pokemon.hp < 1:
             # Liveness guard (F24): hand the faint handler a live window or None
             # (new_pokemon already None-checks before painting).
@@ -362,12 +363,20 @@ def on_review_card(*args):
                 translator,
             )
             s.mutator_full_reset = 1
+            # handle_main_pokemon_faint() heals main and, via new_pokemon(),
+            # replaces enemy_pokemon with a fresh wild encounter AND already
+            # painted that encounter's own intro frame. Below, the final
+            # display_battle() call would otherwise immediately repaint over
+            # that intro frame with THIS turn's now-stale battle-log text and
+            # shake flags — both describe the fight that just ended against
+            # the enemy that no longer exists.
+            encounter_replaced = True
 
         reviewer_obj.refresh_hud()
         # Liveness guard (F24): is_alive replaces the bare None-check so a
         # deleted-but-non-None widget can't raise on the end-of-turn repaint.
         final_window = services.test_window
-        if is_alive(final_window) and enemy_pokemon.hp > 0:
+        if not encounter_replaced and is_alive(final_window) and enemy_pokemon.hp > 0:
             # formatted_battle_log/true_dmg_from_*_move are only set on turns
             # where the cards-per-round batch actually ran the poke_engine
             # simulation above (the `if cards_battle_round >= ...` block) — on

@@ -2246,17 +2246,19 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
                         and not in_bulk
                         and threading.current_thread() is threading.main_thread()
                     ):
-                        from ..pyobj.attack_dialog import AttackDialog
-                        from PyQt6.QtWidgets import QDialog
-                        from aqt import mw
-                        dialog = AttackDialog(attacks, new_attack, parent=mw)
-                        dialog.raise_()
-                        dialog.activateWindow()
-                        if dialog.exec() == QDialog.DialogCode.Accepted:
-                            selected_attack = dialog.selected_attack
-                            if selected_attack in attacks:
-                                idx = attacks.index(selected_attack)
-                                attacks[idx] = new_attack
+                        # Routed through the services.ui presenter port (same
+                        # seam pokemon_details.py/gui_presenter.py use) rather
+                        # than constructing AttackDialog directly — keeps this
+                        # module aqt-free at import time and testable against
+                        # HeadlessPresenter, and production's QtPresenter still
+                        # does the identical parent=mw/raise_/activateWindow
+                        # dialog under the hood.
+                        selected_attack = services.ui.choose_attack_to_replace(
+                            attacks, new_attack
+                        )
+                        if selected_attack in attacks:
+                            idx = attacks.index(selected_attack)
+                            attacks[idx] = new_attack
             pkmndata["attacks"] = attacks
 
     pkmndata["level"] = level

@@ -72,3 +72,40 @@ def test_different_language_fonts_each_register_once(qapp, monkeypatch):
 
     # At most one registration per distinct underlying font file.
     assert len(calls) == len(set(calls))
+    # And both language paths were actually exercised, not just one of them
+    # happening to dedupe against itself — pin the exact distinct paths seen.
+    # language=1 falls back to "Early GameBoy.ttf" too when pkmn_w.ttf isn't
+    # bundled, so either a 1- or 2-path outcome is valid, but never more than 2.
+    assert 1 <= len(set(calls)) <= 2
+    assert any("Early GameBoy.ttf" in c for c in calls)
+
+
+def test_a_failed_registration_is_retried_on_the_next_call(qapp, monkeypatch):
+    """addApplicationFont() returning -1 (failure) must not be cached as a
+    success — otherwise every later call for that file silently gives up
+    retrying forever. First call fails, second call (for the same file)
+    should genuinely retry the real registration rather than skip it."""
+    import Ankimon.utils as ankimon_utils
+    from PyQt6.QtGui import QFontDatabase
+
+    real_add = QFontDatabase.addApplicationFont
+    calls = []
+
+    def flaky_add(path):
+        calls.append(path)
+        if len(calls) == 1:
+            return -1  # simulate a failed registration
+        return real_add(path)
+
+    monkeypatch.setattr(QFontDatabase, "addApplicationFont", staticmethod(flaky_add))
+    monkeypatch.setattr(ankimon_utils, "_registered_fonts", set())
+
+    font1 = ankimon_utils.load_custom_font(20, 0)
+    font2 = ankimon_utils.load_custom_font(20, 0)
+
+    assert font1 is not None and font2 is not None
+    # The failure must have triggered a genuine retry, not a skipped no-op.
+    assert len(calls) == 2
+    # And the retry succeeded, so a third call must NOT register again.
+    ankimon_utils.load_custom_font(20, 0)
+    assert len(calls) == 2
