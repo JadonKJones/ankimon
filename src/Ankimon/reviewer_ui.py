@@ -145,24 +145,26 @@ def cycle_team_pokemon():
         except Exception as e:
             print(f"Error updating HUD: {e}")
 
+        pkmn_name = pokemon_data.get("nickname") or pokemon_data.get("name", "Unknown")
+        pkmn_level = pokemon_data.get("level", "?")
+        switch_msg = f"Switched to {pkmn_name}! LVL: {pkmn_level}"
+
         # The HUD refresh above only repaints the bottom-of-reviewer bars —
         # the separate Ankimon Window popup has its own sprite/name label and
-        # was never told a swap happened, so it kept showing the pokemon that
-        # was active before the cycle. Force its repaint too, bypassing the
-        # render debounce the same way reviewer_reset_life_bar_inject does.
+        # message box, and was never told a swap happened, so it kept showing
+        # the pokemon (and battle text) from before the cycle. Routes the
+        # switch message into the window's own message box rather than
+        # leaving it to the floating Anki tooltip below — with the window
+        # open the two used to visually overlap/compete for the same
+        # on-screen space.
         try:
-            from .utils import is_alive
+            from .functions.drawing_utils import show_in_ankimon_window
 
-            test_window = services.test_window
-            if is_alive(test_window) and test_window.current_view == "battle":
-                test_window._last_display_time = 0
-                test_window.display_battle()
+            show_in_ankimon_window(switch_msg)
         except Exception as e:
             print(f"Error updating Ankimon Window: {e}")
 
-        pkmn_name = pokemon_data.get("nickname") or pokemon_data.get("name", "Unknown")
-        pkmn_level = pokemon_data.get("level", "?")
-        tooltip(f"Switched to {pkmn_name}! LVL: {pkmn_level}")
+        tooltip(switch_msg)
 
     except Exception as e:
         print(f"Unexpected error: {e}")

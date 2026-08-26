@@ -74,10 +74,19 @@ def test_different_language_fonts_each_register_once(qapp, monkeypatch):
     assert len(calls) == len(set(calls))
     # And both language paths were actually exercised, not just one of them
     # happening to dedupe against itself — pin the exact distinct paths seen.
-    # language=1 falls back to "Early GameBoy.ttf" too when pkmn_w.ttf isn't
-    # bundled, so either a 1- or 2-path outcome is valid, but never more than 2.
-    assert 1 <= len(set(calls)) <= 2
+    from Ankimon.resources import font_path
+
+    pkmn_w_bundled = (font_path / "pkmn_w.ttf").exists()
     assert any("Early GameBoy.ttf" in c for c in calls)
+    if pkmn_w_bundled:
+        # This repo ships pkmn_w.ttf, so language=1 must actually register
+        # it — not silently reuse the Early GameBoy path, which would pass
+        # the weaker "at most 2 distinct paths" check just as well.
+        assert any("pkmn_w.ttf" in c for c in calls)
+        assert len(set(calls)) == 2
+    else:
+        # No pkmn_w.ttf bundled -> language=1 falls back to Early GameBoy too.
+        assert len(set(calls)) == 1
 
 
 def test_a_failed_registration_is_retried_on_the_next_call(qapp, monkeypatch):

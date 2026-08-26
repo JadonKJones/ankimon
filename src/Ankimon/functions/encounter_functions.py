@@ -42,7 +42,7 @@ from ..functions.friendship_evolution import (
 from ..pyobj.error_handler import show_warning_with_traceback
 from ..functions.trainer_functions import xp_share_gain_exp
 from ..functions.badges_functions import check_for_badge, receive_badge
-from ..functions.drawing_utils import tooltipWithColour
+from ..functions.drawing_utils import tooltipWithColour, show_in_ankimon_window
 from ..utils import (
     get_ev_spread,
     is_alive,
@@ -1836,6 +1836,7 @@ def catch_pokemon(
     color = "#a17cf7"  # 6A4DAC" #pokemon leveling info color for tooltip
     try:
         tooltipWithColour(msg, color)
+        show_in_ankimon_window(msg)
     except Exception as e:
         if logger is not None:
             show_warning_with_traceback(

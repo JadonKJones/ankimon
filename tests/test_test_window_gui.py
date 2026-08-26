@@ -758,3 +758,90 @@ def test_display_battle_updates_and_persists_the_message_text(make_window, monke
     clock.advance(0.1)
     win.display_battle()
     assert win.last_message_text == "Pikachu used Thunderbolt!"
+
+
+# ---------------------------------------------------------------------------
+# Fainted sprite "tips over" — the classic Game Boy-era faint animation,
+# rotated 90° around the sprite's own center rather than just standing there
+# under an empty HP bar with nothing else to signal it fainted.
+# ---------------------------------------------------------------------------
+
+
+def test_draw_pokemon_sprite_rotates_90_degrees_when_fainted(make_window):
+    win = make_window()
+    rotations = []
+
+    class _FakePainter:
+        def save(self):
+            pass
+
+        def restore(self):
+            pass
+
+        def translate(self, x, y):
+            pass
+
+        def rotate(self, degrees):
+            rotations.append(degrees)
+
+        def drawPixmap(self, x, y, pixmap):
+            pass
+
+    # _draw_pokemon_sprite is a plain method — call it directly on an
+    # unconstructed instance via the class, no QWidget/painter needed.
+    win._draw_pokemon_sprite(
+        _FakePainter(), object(), 0, 0, 40, 40,
+        fainted=True, tip_direction=1,
+    )
+
+    assert rotations == [90]
+
+
+def test_draw_pokemon_sprite_tips_the_other_way_for_the_other_side(make_window):
+    win = make_window()
+    rotations = []
+
+    class _FakePainter:
+        def save(self): pass
+        def restore(self): pass
+        def translate(self, x, y): pass
+        def rotate(self, degrees): rotations.append(degrees)
+        def drawPixmap(self, x, y, pixmap): pass
+
+    win._draw_pokemon_sprite(
+        _FakePainter(), object(), 0, 0, 40, 40,
+        fainted=True, tip_direction=-1,
+    )
+
+    assert rotations == [-90]
+
+
+def test_draw_pokemon_sprite_does_not_rotate_when_not_fainted(make_window):
+    win = make_window()
+    calls = []
+
+    class _FakePainter:
+        def save(self): calls.append("save")
+        def restore(self): calls.append("restore")
+        def translate(self, x, y): calls.append("translate")
+        def rotate(self, degrees): calls.append("rotate")
+        def drawPixmap(self, x, y, pixmap): calls.append(("drawPixmap", x, y))
+
+    win._draw_pokemon_sprite(
+        _FakePainter(), object(), 5, 7, 40, 40,
+        fainted=False,
+    )
+
+    assert calls == [("drawPixmap", 5, 7)]
+
+
+def test_pokemon_display_battle_tips_the_fainted_side(make_window):
+    win = make_window(
+        main=_FakePokemon("pikachu", 25, hp=0, max_hp=20),
+        enemy=_FakePokemon("charizard", 6),
+    )
+
+    # Must not raise — the real regression risk here is a bad rotate-center
+    # calculation blowing up the paint pass, not a specific pixel assertion.
+    win.display_battle()
+    assert not win.main_label.pixmap().isNull()

@@ -56,7 +56,7 @@ class _FakeSettings:
 
 
 @pytest.fixture
-def pd_module(monkeypatch):
+def pd_module(monkeypatch, tmp_path):
     # Every sys.modules write below goes through monkeypatch.setitem (and
     # delitem for the module actually loaded fresh) so pytest restores the
     # real entries after this test, instead of leaking these fakes into
@@ -85,7 +85,7 @@ def pd_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "Ankimon.utils", utils_mod)
 
     resources_mod = types.ModuleType("Ankimon.resources")
-    resources_mod.trainer_sprites_path = Path("/tmp")
+    resources_mod.trainer_sprites_path = tmp_path
     monkeypatch.setitem(sys.modules, "Ankimon.resources", resources_mod)
 
     for name in ("Ankimon.functions",):
@@ -114,7 +114,9 @@ def pd_module(monkeypatch):
 def _make_pd(pd_module):
     mod, _ = pd_module
     return mod.ProfileData(
-        addon_dir=Path("/tmp"),
+        # Never read/written in the handle_save_team path this file exercises
+        # — just needs to be a real Path, not an actual writable location.
+        addon_dir=Path(__file__).parent,
         trainer_card=None,
         settings_obj=_FakeSettings(),
         logger=None,

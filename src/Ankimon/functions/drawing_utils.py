@@ -95,6 +95,30 @@ def tooltipWithColour(
             logger.log_and_showinfo("game", msg)
 
 
+def show_in_ankimon_window(msg: str) -> None:
+    """Put ``msg`` in the Ankimon Window's own message box, if it's open on
+    the battle view — used for confirmations (caught a Pokémon, switched the
+    active companion) that used to only ever appear as a floating Anki
+    tooltip. With the window open, that tooltip visually overlapped/competed
+    with the window's own message box for the same on-screen text; routing
+    the message into the window itself instead reads as one coherent log.
+    No-op (not an error) when the window doesn't exist, isn't alive, or is on
+    a different view (death/first-encounter) — those callers still get the
+    message via their own tooltipWithColour() call.
+    """
+    if not _HAVE_QT:
+        return
+    try:
+        from ..utils import is_alive
+
+        test_window = services.test_window
+        if is_alive(test_window) and test_window.current_view == "battle":
+            test_window._last_display_time = 0
+            test_window.display_battle(message_text=msg)
+    except Exception:
+        pass
+
+
 def draw_gender_symbols(
     main_pokemon: PokemonObject,
     enemy_pokemon: PokemonObject,

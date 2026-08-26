@@ -444,6 +444,26 @@ class TestWindow(QWidget):
             pixmap.load(str(self.default_path))
         return pixmap
 
+    def _draw_pokemon_sprite(self, painter, pixmap, x, y, w, h, fainted, tip_direction=1):
+        """Draw one battler's sprite at (x, y), tipped over on its side when
+        fainted — the classic Game Boy-era faint animation, instead of just
+        sitting there at full HP-bar-empty looking no different from normal.
+
+        Rotated 90° about the sprite's own center so it stays roughly
+        anchored where it was standing rather than swinging off to one side.
+        ``tip_direction`` (1 or -1) only matters visually — lets the two
+        sides tip opposite ways so they don't read as a mirrored duplicate.
+        """
+        if not fainted:
+            painter.drawPixmap(x, y, pixmap)
+            return
+        painter.save()
+        cx, cy = x + w / 2, y + h / 2
+        painter.translate(cx, cy)
+        painter.rotate(90 * tip_direction)
+        painter.drawPixmap(int(-w / 2), int(-h / 2), pixmap)
+        painter.restore()
+
     def window_show(self, bckgimage_path, lang_name):
         """Composite the first-encounter frame (background, sprites, HP bars,
         CP/BP, message box) into a pixmap for the Ankimon Window."""
@@ -727,9 +747,18 @@ class TestWindow(QWidget):
 
         # draw pokemon image to a specific pixel — same spot as the intro
         # frame, since the dialog box (and thus the available space) no
-        # longer changes turn to turn.
-        painter.drawPixmap((410 - wpkmn_width) + self._enemy_shake_offset[0], (170 - wpkmn_height) + self._enemy_shake_offset[1], pixmap)
-        painter.drawPixmap((144 - mpkmn_width) + self._main_shake_offset[0], (275 - mpkmn_height) + self._main_shake_offset[1], pixmap2)
+        # longer changes turn to turn. Tipped on its side when fainted (hp
+        # <= 0) rather than just standing there under an empty HP bar.
+        self._draw_pokemon_sprite(
+            painter, pixmap,
+            (410 - wpkmn_width) + self._enemy_shake_offset[0], (170 - wpkmn_height) + self._enemy_shake_offset[1],
+            new_width, new_height, enemy_hp <= 0, tip_direction=1,
+        )
+        self._draw_pokemon_sprite(
+            painter, pixmap2,
+            (144 - mpkmn_width) + self._main_shake_offset[0], (275 - mpkmn_height) + self._main_shake_offset[1],
+            new_width2, new_height2, main_hp <= 0, tip_direction=-1,
+        )
 
         experience = int(
             find_experience_for_level(
