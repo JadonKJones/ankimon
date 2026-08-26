@@ -240,3 +240,85 @@ def test_plain_level_evolvers_unaffected_by_gender_argument():
             )
             == 5
         )
+
+
+# --------------------------------------------------------------------------- #
+# The gender lookup sits on the review path (a level-up runs it per candidate)
+# and rows_for_key_in_table re-opens + re-parses the whole ~500-row CSV on every
+# call. Pin the lru_cache that keeps that off the hot path, and the trigger
+# scoping that keeps one evolution method's gate from leaking onto another.
+# --------------------------------------------------------------------------- #
+def test_evolution_row_gender_id_reads_the_csv_only_once_per_key():
+    # Repo rule: "No synchronous disk I/O in the review path — static data is
+    # parsed once at startup." Without the cache this was one full CSV parse per
+    # level-up per candidate (~0.5 ms each, measured 175x slower than cached).
+    pf._evolution_row_gender_id.cache_clear()
+    opens = []
+    real_open = pf.open if hasattr(pf, "open") else open
+
+    import builtins
+
+    def counting_open(file, *args, **kwargs):
+        if str(file).endswith("pokemon_evolution.csv"):
+            opens.append(str(file))
+        return real_open(file, *args, **kwargs)
+
+    original = builtins.open
+    builtins.open = counting_open
+    try:
+        first = pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS)
+        for _ in range(24):
+            assert pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS) == first
+    finally:
+        builtins.open = original
+
+    assert first == 1  # Vespiquen is female-only
+    assert len(opens) == 1, f"expected 1 CSV parse for 25 calls, got {len(opens)}"
+
+
+def test_evolution_row_gender_id_is_scoped_to_the_calling_trigger():
+    # Gallade/Froslass are gated on use-item rows (trigger 3); Vespiquen and the
+    # Burmy pair on level-up rows (trigger 1). Asking with the wrong trigger must
+    # find no gate rather than borrowing another method's.
+    assert pf._evolution_row_gender_id(475, pf._ITEM_EVO_TRIGGERS) == 2  # Gallade
+    assert pf._evolution_row_gender_id(475, pf._LEVEL_EVO_TRIGGERS) is None
+    assert pf._evolution_row_gender_id(478, pf._ITEM_EVO_TRIGGERS) == 1  # Froslass
+    assert pf._evolution_row_gender_id(478, pf._LEVEL_EVO_TRIGGERS) is None
+
+    assert pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS) == 1  # Vespiquen
+    assert pf._evolution_row_gender_id(416, pf._ITEM_EVO_TRIGGERS) is None
+    assert pf._evolution_row_gender_id(413, pf._LEVEL_EVO_TRIGGERS) == 1  # Wormadam
+    assert pf._evolution_row_gender_id(414, pf._LEVEL_EVO_TRIGGERS) == 2  # Mothim
+    assert pf._evolution_row_gender_id(758, pf._LEVEL_EVO_TRIGGERS) == 1  # Salazzle
+
+    # No trigger scope keeps the historical "any row" behavior.
+    assert pf._evolution_row_gender_id(475) == 2
+    # An ungated species stays ungated under every scope.
+    assert pf._evolution_row_gender_id(2, pf._LEVEL_EVO_TRIGGERS) is None
+
+
+def test_evolution_row_gender_id_resolves_form_ids_and_survives_junk():
+    # Cloak forms (>= 10000) must resolve to their base species before the CSV
+    # lookup, per the repo tripwire; junk degrades to "no gate", never raises.
+    assert pf._evolution_row_gender_id(10004, pf._LEVEL_EVO_TRIGGERS) == 1
+    for junk in (99999, 0, -1, None, "x", object()):
+        assert pf._evolution_row_gender_id(junk, pf._LEVEL_EVO_TRIGGERS) is None
+
+
+def test_evolved_species_id_is_resolved_without_a_num_fallback():
+    # pokedex.json carries actual_id/species_id on every one of its entries and
+    # `num` on none of them, so the gate never needs a `num` fallback. Pin that
+    # so the dead branch can't creep back in.
+    pokedex = pf._load_pokedex_cache()
+    assert pokedex, "pokedex cache is empty"
+    assert not [k for k, v in pokedex.items() if v.get("num") is not None]
+    for species in (
+        "gallade",
+        "froslass",
+        "wormadam",
+        "mothim",
+        "vespiquen",
+        "salazzle",
+    ):
+        entry = pokedex[species]
+        assert entry.get("actual_id") or entry.get("species_id")

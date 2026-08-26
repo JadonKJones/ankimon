@@ -992,3 +992,130 @@ def test_move_type_of_is_quiet_and_accurate():
         assert "tackle" not in types and types == frozenset()
     finally:
         services.ui = real_ui
+
+
+# --------------------------------------------------------------------------- #
+# Move-type gates must be VISIBLE, not just enforced.
+#
+# Filtering Sylveon out of the candidate list makes it correct but invisible: a
+# high-friendship Eevee just shows Espeon/Umbreon and nothing ever tells the
+# player the third branch exists or what it wants. evolution_readiness now
+# reports the gate alongside the choice.
+# --------------------------------------------------------------------------- #
+def _eevee(friendship, attacks):
+    return {
+        "id": 133,
+        "friendship": friendship,
+        "everstone": False,
+        "pokemon_defeated": 0,
+        "attacks": attacks,
+    }
+
+
+def test_readiness_reports_the_hidden_sylveon_gate():
+    result = fe.evolution_readiness(
+        _eevee(220, ["Tackle", "Swift"]), now=datetime(2024, 1, 1, 9, 0)
+    )
+    assert result["evo_name"] == "Espeon"
+    assert result["ready"] is True
+    # The chosen evolution has no unmet gate of its own...
+    assert result["required_move_type"] is None
+    # ...but the branch the moveset is hiding is named, with its requirement.
+    assert result["gated_alternatives"] == (("Sylveon", "fairy"),)
+    assert "Sylveon needs a Fairy-type move" in result["status_text"]
+
+
+def test_readiness_hint_also_shows_while_still_gaining_friendship():
+    result = fe.evolution_readiness(
+        _eevee(100, ["Tackle"]), now=datetime(2024, 1, 1, 9, 0)
+    )
+    assert result["ready"] is False
+    assert "60 friendship to evolve into Espeon" in result["status_text"]
+    assert "Sylveon needs a Fairy-type move" in result["status_text"]
+
+
+def test_readiness_hint_disappears_once_the_gate_is_met():
+    result = fe.evolution_readiness(
+        _eevee(220, ["Baby-Doll Eyes"]), now=datetime(2024, 1, 1, 9, 0)
+    )
+    assert result["evo_name"] == "Sylveon"
+    assert result["gated_alternatives"] == ()
+    assert result["required_move_type"] is None
+    assert result["status_text"] == "Ready to evolve into Sylveon!"
+
+
+def test_readiness_keys_exist_on_every_path():
+    # Consumers (PC box overlays, the details panel) read the dict positionally
+    # by key; every return path must carry the same shape.
+    for pokemon in (
+        _eevee(220, ["Tackle"]),  # friendship path
+        {"id": 1, "level": 20, "friendship": 0, "everstone": False},  # level path
+        {"id": 999999, "level": 5},  # not evolvable
+        {"id": None},  # missing id
+    ):
+        result = fe.evolution_readiness(pokemon, now=datetime(2024, 1, 1, 9, 0))
+        assert "required_move_type" in result
+        assert "gated_alternatives" in result
+
+
+# --------------------------------------------------------------------------- #
+# The all-rows-gated fallback in _select_evolution.
+#
+# No bundled species reaches it (Eevee, the only species with gated rows, also
+# has ungated ones), so these drive it directly. The property that matters is
+# fail-closed: the branch hands back a representative purely so the UI has
+# something to name, and that representative must never be reported as ready.
+# The first two tests pin its identity so selection stays predictable.
+# --------------------------------------------------------------------------- #
+def _gated(evo_id, name, move_type, time_of_day=None):
+    return fe.FriendshipEvolution(
+        evo_id=evo_id,
+        evo_name=name,
+        min_happiness=160,
+        time_of_day=time_of_day,
+        known_move_type=move_type,
+    )
+
+
+def test_all_gated_fallback_returns_the_lowest_id_representative():
+    evos = (_gated(700, "Sylveon", "fairy"), _gated(701, "Ghosteon", "ghost"))
+    chosen = fe._select_evolution(evos, "day", frozenset())
+    assert chosen.evo_name == "Sylveon"  # lowest evo_id; nothing here is reachable
+
+
+def test_satisfied_gate_still_wins_when_one_is_met():
+    evos = (_gated(700, "Sylveon", "fairy"), _gated(701, "Ghosteon", "ghost"))
+    chosen = fe._select_evolution(evos, "day", frozenset({"ghost"}))
+    assert chosen.evo_name == "Ghosteon"
+
+
+def test_all_gated_fallback_is_never_reported_ready(monkeypatch):
+    # Friendship and time both satisfied — only the move gate is unmet. Without
+    # folding move_ok into `ready` this path would fail OPEN and offer a
+    # gate-locked evolution.
+    monkeypatch.setattr(
+        fe,
+        "get_friendship_evolutions_for_species",
+        lambda species_id: (_gated(700, "Sylveon", "fairy"),),
+    )
+    result = fe.evolution_readiness(
+        _eevee(400, ["Tackle"]), now=datetime(2024, 1, 1, 9, 0)
+    )
+    assert result["evolvable"] is True
+    assert result["ready"] is False, "gate-locked evolution reported as ready"
+    assert result["required_move_type"] == "fairy"
+    assert result["status_text"] == ("Needs a Fairy-type move to evolve into Sylveon")
+
+
+def test_all_gated_fallback_becomes_ready_once_the_move_is_known(monkeypatch):
+    monkeypatch.setattr(
+        fe,
+        "get_friendship_evolutions_for_species",
+        lambda species_id: (_gated(700, "Sylveon", "fairy"),),
+    )
+    result = fe.evolution_readiness(
+        _eevee(400, ["Moonblast"]), now=datetime(2024, 1, 1, 9, 0)
+    )
+    assert result["ready"] is True
+    assert result["required_move_type"] is None
+    assert result["status_text"] == "Ready to evolve into Sylveon!"

@@ -1592,9 +1592,15 @@ def save_main_pokemon_progress(
                 main_pokemon.everstone,
                 main_pokemon.friendship,
                 getattr(main_pokemon, "evolution_rejected", False),
-                attacks=attacks,
+                # Prefer the fresh post-level-up list, but never fall through to
+                # None: most defeats grant no level-up, so `attacks` is still
+                # unset there and passing it alone would send the checker back to
+                # the DB on the common path. The in-memory object always carries
+                # a moveset (PokemonObject.__init__ defaults it), so this keeps
+                # the victory path free of synchronous DB reads either way.
+                attacks=attacks if attacks is not None else main_pokemon.attacks,
                 # In-memory defeat count (already incremented for this battle
-                # above) keeps the victory path free of synchronous DB reads.
+                # above), same reason.
                 pokemon_defeated=main_pokemon.pokemon_defeated,
             )
             if friendship_evo_id is not None:
