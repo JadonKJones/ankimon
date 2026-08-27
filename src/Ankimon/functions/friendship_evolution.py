@@ -19,6 +19,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple, Optional
 
 from .pokedex_functions import (
+    _LEVEL_EVO_TRIGGERS,
+    _csv_gender_id,
+    _evolution_row_gender_id,
     _load_moves_cache,
     pokemon_evolves_from_id,
     return_name_for_id,
@@ -527,6 +530,39 @@ def _known_move_types(pokemon: Any) -> frozenset:
     return frozenset(types)
 
 
+# Display names for the CSV ``gender_id`` values (veekun convention).
+_GENDER_LABELS = {1: "Female", 2: "Male"}
+
+
+def _pokemon_gender(pokemon: Any) -> Any:
+    """Return the raw ``gender`` of a Pokémon dict/object, or ``None``.
+
+    Same dual-shape handling as :func:`_known_move_types`; the value is passed
+    straight to :func:`_csv_gender_id`, which is what decides whether it is
+    recognised ("M"/"F") or degrades to "no gate".
+    """
+    if pokemon is None:
+        return None
+    if isinstance(pokemon, dict):
+        return pokemon.get("gender")
+    return getattr(pokemon, "gender", None)
+
+
+def _level_gender_gate(evo_id: int, caller_gender_id: Optional[int]) -> bool:
+    """Return whether a level-up evolution target is open to this gender.
+
+    ``caller_gender_id is None`` (no/unrecognised gender) fails **open** — the
+    same no-check-without-data convention ``check_evolution_for_pokemon`` and
+    ``check_evolution_by_item`` use for their gender gates, and deliberately the
+    opposite of the fail-closed move-type gate: a missing moveset is a fact we
+    could not read, while a missing gender is a save that never stored one.
+    """
+    if caller_gender_id is None:
+        return True
+    required = _evolution_row_gender_id(evo_id, _LEVEL_EVO_TRIGGERS)
+    return required is None or required == caller_gender_id
+
+
 def _satisfies_move_gate(
     evo: FriendshipEvolution, known_move_types: Optional[frozenset]
 ) -> bool:
@@ -841,11 +877,12 @@ def _level_readiness(
     Called by :func:`evolution_readiness` when the species has no friendship
     evolution; returns ``not_evolvable`` unchanged if it has no level-up evolution
     either. Ignores ``evolution_rejected`` (the manual button still shows) but
-    DOES enforce the region preference (``misc.active_region``), any
+    DOES enforce the region preference (``misc.active_region``), the CSV
+    ``gender_id`` gate (a male Burmy evolves into Mothim, never Wormadam), any
     ``time_of_day`` requirement, a required ``levelMove`` (e.g. Mr. Mime needs
     Mimic) and a ``minimumDefeated`` count (e.g. Pawmot needs 100 defeats):
-    ``ready = (not everstone) and level >= min_level and time_ok and knows_move
-    and defeated_ok``.
+    ``ready = (not everstone) and level >= min_level and time_ok and gender_ok
+    and knows_move and defeated_ok``.
 
     Returns:
         A readiness dict with ``method="level"`` (or ``not_evolvable``).
@@ -862,6 +899,22 @@ def _level_readiness(
     if filtered:
         level_evos = tuple(filtered)
 
+    # Gender gate from the bundled CSV (veekun ids: 1 = female, 2 = male):
+    # Vespiquen needs a female Combee, Salazzle a female Salandit, and Burmy
+    # splits into Wormadam (female) / Mothim (male). This mirrors the gate
+    # ``check_evolution_for_pokemon`` applies on the automatic level-up path —
+    # without it the PC's manual "Evolve now" button is a way around it, and a
+    # male Burmy is offered Wormadam (lowest evo_id) instead of Mothim.
+    #
+    # Unlike the region filter above this narrows the choice but never widens
+    # it back: when every target is gated to the other gender the representative
+    # is kept only so the UI can say why, and ``gender_ok`` keeps it out of
+    # ``ready``.
+    caller_gender_id = _csv_gender_id(_pokemon_gender(pokemon))
+    gendered = [e for e in level_evos if _level_gender_gate(e.evo_id, caller_gender_id)]
+    if gendered:
+        level_evos = tuple(gendered)
+
     # Among the surviving targets prefer one eligible right now (its time matches
     # or it has no time requirement); an explicit-time row beats a blank-time one.
     eligible_now = [e for e in level_evos if e.time_of_day in (time_of_day, None)]
@@ -874,8 +927,19 @@ def _level_readiness(
     min_level = chosen.min_level
     required_time = chosen.time_of_day
 
+    # Re-check the CHOSEN row rather than trusting the filter: when nothing
+    # survived it, `chosen` is a representative whose gate is unmet.
+    gender_ok = _level_gender_gate(chosen.evo_id, caller_gender_id)
+    required_gender = (
+        None
+        if gender_ok
+        else _GENDER_LABELS.get(
+            _evolution_row_gender_id(chosen.evo_id, _LEVEL_EVO_TRIGGERS)
+        )
+    )
+
     time_ok = required_time is None or required_time == time_of_day
-    ready = (not everstone) and level >= min_level and time_ok
+    ready = (not everstone) and level >= min_level and time_ok and gender_ok
 
     # Move-based (levelMove) and defeat-based (minimumDefeated) gating from the
     # evolved species' pokedex.json data.
@@ -919,6 +983,11 @@ def _level_readiness(
 
     if everstone:
         status_text = "Everstone prevents evolution"
+    elif required_gender:
+        # Nothing the player does changes a Pokémon's gender, so this outranks
+        # the level/move/defeat lines below — none of them are actionable while
+        # it holds.
+        status_text = f"Needs to be {required_gender} to evolve into {evo_name}"
     elif not knows_move and required_move:
         status_text = f"Needs to learn {required_move} to evolve"
     elif not defeated_ok and required_defeated:

@@ -1127,3 +1127,102 @@ def test_all_gated_fallback_becomes_ready_once_the_move_is_known(monkeypatch):
     assert result["ready"] is True
     assert result["required_move_type"] is None
     assert result["status_text"] == "Ready to evolve into Sylveon!"
+
+
+# --------------------------------------------------------------------------- #
+# CSV gender_id gates on the MANUAL level path (_level_readiness)
+#
+# check_evolution_for_pokemon gained the gate on the automatic level-up path,
+# but evolution_readiness feeds the PC box's "Evolve now" button, its ✨ badge
+# and the details-panel status line. Without the same gate there, the manual
+# path is a way around it: a male Combee could still be evolved into Vespiquen,
+# and a male Burmy was offered Wormadam (lowest evo_id) rather than Mothim.
+# Real bundled data throughout — Burmy 412 -> Wormadam 413 (F) / Mothim 414 (M),
+# Combee 415 -> Vespiquen 416 (F), Salandit 757 -> Salazzle 758 (F).
+# --------------------------------------------------------------------------- #
+_NOON = datetime(2024, 1, 1, 12, 0)
+
+
+def _lvl(species_id, level, gender=None):
+    pkmn = {"id": species_id, "level": level, "attacks": []}
+    if gender is not None:
+        pkmn["gender"] = gender
+    return pkmn
+
+
+def test_male_burmy_is_offered_mothim_not_wormadam():
+    result = fe.evolution_readiness(_lvl(412, 25, "M"), now=_NOON)
+    assert result["evo_id"] == 414
+    assert result["ready"] is True
+    assert result["status_text"] == "Ready to evolve into Mothim!"
+
+
+def test_female_burmy_is_offered_wormadam():
+    result = fe.evolution_readiness(_lvl(412, 25, "F"), now=_NOON)
+    assert result["evo_id"] == 413
+    assert result["ready"] is True
+
+
+def test_burmy_without_gender_keeps_historical_behavior():
+    # No gender on the record -> no gate (fail open, matching the item and
+    # automatic level paths), so the lowest-id target is still chosen.
+    result = fe.evolution_readiness(_lvl(412, 25), now=_NOON)
+    assert result["evo_id"] == 413
+    assert result["ready"] is True
+
+
+def test_male_combee_is_never_ready_for_vespiquen():
+    result = fe.evolution_readiness(_lvl(415, 25, "M"), now=_NOON)
+    assert result["evolvable"] is True
+    assert result["ready"] is False, "manual path bypassed the gender gate"
+    assert result["status_text"] == "Needs to be Female to evolve into Vespiquen"
+
+
+def test_female_combee_is_ready_for_vespiquen():
+    result = fe.evolution_readiness(_lvl(415, 25, "F"), now=_NOON)
+    assert result["evo_id"] == 416
+    assert result["ready"] is True
+
+
+def test_male_salandit_is_never_ready_for_salazzle():
+    result = fe.evolution_readiness(_lvl(757, 40, "M"), now=_NOON)
+    assert result["ready"] is False
+    assert result["status_text"] == "Needs to be Female to evolve into Salazzle"
+
+
+def test_gender_gate_outranks_the_level_line():
+    # Below the evolve level AND the wrong gender: the immutable requirement is
+    # the one worth showing, since no amount of levelling unblocks it.
+    result = fe.evolution_readiness(_lvl(415, 5, "M"), now=_NOON)
+    assert result["ready"] is False
+    assert result["status_text"] == "Needs to be Female to evolve into Vespiquen"
+
+
+def test_ungendered_species_unaffected_by_the_gate():
+    # A plain level evolution must behave identically for either gender.
+    baseline = fe.evolution_readiness(_lvl(1, 20), now=_NOON)
+    for gender in ("M", "F", "N", "Genderless", ""):
+        result = fe.evolution_readiness(_lvl(1, 20, gender), now=_NOON)
+        assert result["evo_id"] == baseline["evo_id"]
+        assert result["ready"] == baseline["ready"]
+        assert result["status_text"] == baseline["status_text"]
+
+
+def test_level_gender_gate_helper_fails_open_without_a_gender():
+    # Vespiquen (416) is female-gated in the CSV.
+    assert fe._level_gender_gate(416, None) is True
+    assert fe._level_gender_gate(416, 1) is True
+    assert fe._level_gender_gate(416, 2) is False
+    # Ivysaur (2) carries no gate at all.
+    assert fe._level_gender_gate(2, 2) is True
+
+
+def test_pokemon_gender_reads_dicts_and_objects():
+    assert fe._pokemon_gender({"gender": "F"}) == "F"
+    assert fe._pokemon_gender({}) is None
+    assert fe._pokemon_gender(None) is None
+
+    class _Obj:
+        gender = "M"
+
+    assert fe._pokemon_gender(_Obj()) == "M"
