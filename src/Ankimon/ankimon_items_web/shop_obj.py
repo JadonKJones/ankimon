@@ -336,6 +336,13 @@ class MobileBridge(QObject):
         """
         try:
             db = services.db
+            # Language code (jp / sp / es_latam / en / ...) so the mobile battle
+            # narration can localize itself; mirrors move_names._current_lang_code.
+            try:
+                from ..move_names import _current_lang_code
+                mobile_language = _current_lang_code()
+            except Exception:
+                mobile_language = "en"
             # 1. Count and ease breakdown in one GROUP BY query (lightweight)
             rows = db.execute(
                 """SELECT ease, COUNT(*) as cnt FROM pending_mobile_battles
@@ -365,7 +372,7 @@ class MobileBridge(QObject):
             battle_count = resolved_battles + math.ceil(pending_count / cards_per_round)
 
             if pending_count == 0:
-                return {"pending_count": 0, "cap": 10000, "battle_count": 0}
+                return {"pending_count": 0, "cap": 10000, "battle_count": 0, "language": mobile_language}
 
             # Populate ease breakdown from rows count
             ease_breakdown = {"1": 0, "2": 0, "3": 0, "4": 0}
@@ -534,6 +541,7 @@ class MobileBridge(QObject):
                 "main_pokemon_sprite": main_pokemon_sprite,
                 "sprite_mode": sprite_mode,
                 "team_status": self.getTeamStatus(),
+                "language": mobile_language,
             }
         except Exception as e:
             import traceback
@@ -548,6 +556,7 @@ class MobileBridge(QObject):
                 "pending_count": 0,
                 "pending_count_at_start": 0,
                 "cap": 10000,
+                "language": "en",
             }
 
     @pyqtSlot(result="QVariant")
