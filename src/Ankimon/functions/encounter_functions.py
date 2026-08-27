@@ -1606,7 +1606,10 @@ def save_main_pokemon_progress(
         # Friendship is uncapped — it keeps climbing past MAX_FRIENDSHIP (400) so
         # players can flex a super-bonded Pokémon. The progress bar still fills at
         # MAX_FRIENDSHIP; the raw number above it is what keeps growing.
-        main_pokemon.friendship += random.randint(5, 9)
+        friendship_gain = random.randint(5, 9)
+        if getattr(main_pokemon, "held_item", None) == "soothe-bell":
+            friendship_gain = int(friendship_gain * 1.5)
+        main_pokemon.friendship += friendship_gain
         mainpkmndata["friendship"] = main_pokemon.friendship
         # Skip the friendship-evolution offer when the evo window is dead/None
         # (F31 lazy singletons can leave services.evo_window None):
@@ -1732,9 +1735,12 @@ def kill_pokemon(
     # Ensure exp is at least 1 and round up if it's a decimal
     exp = max(1, math.ceil(exp))
 
-    # Handle XP share logic
+    # Handle XP share logic. "oras" mode applies to the whole active team
+    # automatically (no holder to pick), so it must run even when
+    # trainer.xp_share (the classic-mode holder) was never set.
     xp_share_individual_id = settings_obj.get("trainer.xp_share")
-    if xp_share_individual_id:
+    xp_share_mode = settings_obj.get("trainer.xp_share_mode", "classic")
+    if xp_share_individual_id or xp_share_mode == "oras":
         try:
             exp = xp_share_gain_exp(
                 logger,
@@ -1748,9 +1754,14 @@ def kill_pokemon(
             # xp_share_gain_exp's evolution check calls evo_window.ask_pokemon_evo(...)
             # unguarded; a dead/None window (F31 lazy singletons) can raise here.
             # Never let the XP-share side quest abort the main Pokemon's own
-            # progress persistence below — fall back to the standard 50% share.
+            # progress persistence below.
             services.logger.log("error", f"XP-share evolution check failed: {e}")
-            exp = int(exp * 0.5)
+            if xp_share_mode != "oras":
+                # Classic mode still owes the active Pokémon its half —
+                # xp_share_gain_exp never got to return it.
+                exp = int(exp * 0.5)
+            # ORAS mode doesn't reduce the active Pokémon at all, so on
+            # failure it just keeps its full, already-calculated `exp`.
 
     msg = ""
 

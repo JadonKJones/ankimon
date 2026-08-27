@@ -249,6 +249,13 @@ def on_review_card(*args):
         except (ValueError, TypeError):
             cash_interval = 10
             cash_amount = 100
+        # Amulet Coin / Lucky Incense: both double prize money in the mainline
+        # games (yes, identically — held either doubles the payout, not
+        # stacking if you somehow had both). There's no "trainer battle" here
+        # to key off of, so the effect applies to Ankimon's own cash-reward
+        # interval instead.
+        if getattr(main_pokemon, "held_item", None) in ("amulet-coin", "luck-incense"):
+            cash_amount *= 2
         if cash_interval > 0 and total_reviews % cash_interval == 0:
             from datetime import date
             today_str = str(date.today())
