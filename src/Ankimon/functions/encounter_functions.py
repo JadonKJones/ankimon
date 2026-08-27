@@ -1329,12 +1329,19 @@ def save_main_pokemon_progress(
         )
         return
 
-    # Fresh-moveset holder for both evolution checks below: filled while the
-    # level-up attack merge runs, so move-based evolutions evaluate against the
-    # moves learned on THIS level (not the stale DB row). Bound at function
-    # scope because a defeat can reach the friendship check with zero level-ups
-    # (the loop body never runs) — None then means "no fresh list; use stored".
-    attacks = None
+    # Moveset both evolution checks below evaluate. Seeded from the record
+    # loaded above — the SAME captured_pokemon row the checkers would re-read
+    # for themselves (get_main_pokemon() selects is_main = 1, get_pokemon()
+    # selects that row by individual_id), so the seed is identical to their
+    # fallback's result while sparing the review path one query on every
+    # no-level-up victory. The level-up merge below rebinds this to the live
+    # mainpkmndata["attacks"] list, so moves learned on THIS level are seen too.
+    # This is NOT main_pokemon.attacks — see the note at the friendship check.
+    # Stays None only when there is no stored record at all, which keeps the
+    # checkers' own lookup for that broken-save path.
+    attacks = (
+        list(main_pokemon_data.get("attacks") or []) if main_pokemon_data else None
+    )
     evolution_prompted = False
     levels_gained = 0
     while int(
@@ -1592,18 +1599,19 @@ def save_main_pokemon_progress(
                 main_pokemon.everstone,
                 main_pokemon.friendship,
                 getattr(main_pokemon, "evolution_rejected", False),
-                # The fresh post-level-up list when this defeat produced one;
-                # None otherwise, which sends the checker to the DB for the
-                # stored moveset. That read is deliberate — do NOT "optimize" it
-                # into `main_pokemon.attacks`. The level-up merge above writes
-                # the learned move to mainpkmndata (the DB dict) only, so the
-                # in-memory PokemonObject's moveset goes stale on the first
-                # level-up and never re-syncs for the rest of the session
-                # (update_main_pokemon only runs at boot / on an evolution / from
-                # the profile+shop screens). Feeding that stale list to the CSV
-                # known_move_type gate would stop offering Sylveon to an Eevee
-                # that HAS learned a Fairy move — and flip-flop, since the rarer
-                # level-up defeats still pass the fresh list.
+                # The stored moveset, refreshed by the level-up merge above
+                # when this defeat produced one. Do NOT "optimize" this into
+                # `main_pokemon.attacks` (reverted once already, 9a54562f): the
+                # merge writes the learned move to mainpkmndata (the DB dict)
+                # only, so the in-memory PokemonObject's moveset goes stale on
+                # the first level-up and never re-syncs for the rest of the
+                # session (update_main_pokemon only runs at boot / on an
+                # evolution / from the profile+shop screens). Feeding that stale
+                # list to the CSV known_move_type gate stops offering Sylveon to
+                # an Eevee that HAS learned a Fairy move — and flip-flops, since
+                # the rarer level-up defeats still pass the fresh list. The
+                # stored record is safe where the object is not: it is the very
+                # row this checker's own fallback would re-read.
                 attacks=attacks,
                 # The defeat count, unlike the moveset, IS accurate in memory —
                 # it was incremented for this battle a few lines above — so pass
