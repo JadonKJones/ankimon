@@ -1924,15 +1924,17 @@ class AnkimonItemsWeb(QDialog):
         # Compute new stock + write to DB first; only deduct cash once the
         # write succeeds. Otherwise a DB failure could swallow the reroll
         # cost with nothing to show for it.
-        from ..pyobj.ankimon_shop import DAILY_ITEMS_POOL
+        from ..pyobj.ankimon_shop import get_daily_items_pool
+
+        daily_items_pool = get_daily_items_pool()
 
         random.seed()
         # Clamp sample sizes — random.sample raises if asked for more entries
         # than the pool contains, which would crash the bridge call.
         tm_pool = sm.get_tm_pool()
-        num_items = min(sm.number_of_daily_items, len(DAILY_ITEMS_POOL))
+        num_items = min(sm.number_of_daily_items, len(daily_items_pool))
         num_tms = min(sm.number_of_daily_items, len(tm_pool))
-        new_items = random.sample(DAILY_ITEMS_POOL, num_items)
+        new_items = random.sample(daily_items_pool, num_items)
         new_tms = random.sample(tm_pool, num_tms)
 
         try:
