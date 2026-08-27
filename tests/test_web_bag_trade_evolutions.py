@@ -74,6 +74,63 @@ def _trade_item_species():
 TRADE_ITEM_SPECIES = _trade_item_species()
 
 
+def _install_qt_stubs():
+    """Make ``shop_obj``'s module-top Qt imports resolvable in a headless run.
+
+    Two separate obstacles, both of which used to land in the ``pytest.skip``
+    below — so this whole file, the Rhydon/Protector regression included,
+    quietly never executed anywhere but a developer box with Anki installed:
+
+    * ``shop_obj`` does ``from aqt import QDialog, ... QWebEngineView`` and
+      subclasses those. Anki is absent from every CI run (AGENTS.md installs
+      only pytest/pytest-qt/PyQt6/markdown). Plain empty classes are enough —
+      nothing here constructs a widget; the tests call ``get_pokemon_choices``
+      unbound against ``_StubHost``.
+    * Earlier test modules in the suite replace ``PyQt6`` with a ``MagicMock``,
+      which turns ``from PyQt6.QtWebChannel import QWebChannel`` into
+      "PyQt6 is not a package". Dropping those entries lets the genuine PyQt6
+      (a documented test dependency) load instead.
+
+    Returns the previous ``sys.modules`` entries so the caller can put them back.
+    """
+    from unittest.mock import MagicMock
+
+    saved = {name: sys.modules.get(name) for name in ("aqt", "aqt.qt", "aqt.utils")}
+    saved.update(
+        {
+            name: mod
+            for name, mod in sys.modules.items()
+            if name.split(".")[0] == "PyQt6"
+        }
+    )
+    for name in list(saved):
+        if name.split(".")[0] == "PyQt6":
+            del sys.modules[name]
+
+    aqt = types.ModuleType("aqt")
+    aqt.__path__ = []
+    for cls_name in ("QDialog", "QVBoxLayout", "QWebEngineView", "QWebEnginePage"):
+        setattr(
+            aqt,
+            cls_name,
+            type(cls_name, (), {"__init__": lambda self, *a, **k: None}),
+        )
+    aqt.mw = MagicMock()
+
+    aqt_qt = types.ModuleType("aqt.qt")
+    for name in ("Qt", "QUrl", "QFrame", "QWebEngineProfile"):
+        setattr(aqt_qt, name, MagicMock())
+
+    aqt_utils = types.ModuleType("aqt.utils")
+    aqt_utils.tooltip = lambda *a, **k: None
+    aqt_utils.showInfo = lambda *a, **k: None
+
+    sys.modules["aqt"] = aqt
+    sys.modules["aqt.qt"] = aqt_qt
+    sys.modules["aqt.utils"] = aqt_utils
+    return saved
+
+
 @pytest.fixture(scope="module")
 def shop_obj():
     """Import the real web-shell host once, headlessly.
@@ -96,10 +153,29 @@ def shop_obj():
             mod.__path__ = [str(_SRC / pkg.replace(".", "/"))]
             mod.__package__ = pkg
             sys.modules[pkg] = mod
+
+    saved = _install_qt_stubs()
+    sys.modules.pop("Ankimon.ankimon_items_web.shop_obj", None)
     try:
-        return importlib.import_module("Ankimon.ankimon_items_web.shop_obj")
+        module = importlib.import_module("Ankimon.ankimon_items_web.shop_obj")
     except Exception as e:  # pragma: no cover - environment guard
+        for name, previous in saved.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
         pytest.skip(f"web-shell host not importable headlessly: {e}")
+
+    yield module
+
+    # The module keeps direct references to the names it imported, so handing
+    # `aqt` back to whatever owned it is safe and keeps the stub from leaking
+    # into the rest of the suite.
+    for name, previous in saved.items():
+        if previous is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
 
 
 class _StubHost:
