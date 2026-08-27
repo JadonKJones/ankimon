@@ -512,6 +512,13 @@ def format_lore_name(name: str) -> str:
     if name.lower() == "eternatus-eternamax":
         return "Eternamax"
 
+    # Ash-Greninja has its own name; Battle-Bond Greninja is shown as plain
+    # "Greninja" in the games (the Ash form is battle-only).
+    if "-Ash" in name:
+        return "Ash-" + name.replace("-Ash", "")
+    if "-Bond" in name:
+        return name.replace("-Bond", "")
+
     # Order matters: check more specific ones first
     if "-Mega-X" in name:
         return "Mega " + name.replace("-Mega-X", " X")
@@ -750,11 +757,23 @@ _FORM_NAME_LOCALIZATION = {
         1: ("ゲンシ", ""), 3: ("원시 ", ""), 4: ("原始", ""),
         5: ("Primo-", ""), 6: ("Proto-", ""), 7: ("", " primigenio"), 8: ("", " Primevo"),
     },
+    # Ash-Greninja — a distinct localized name in the games.
+    "-Ash": {
+        1: ("サトシ", ""), 3: ("지우 ", ""), 4: ("小智", ""),
+        5: ("", " Sacha"), 6: ("", "-Ash"), 7: ("", " Ash"), 8: ("", " Ash"),
+    },
 }
+
+# Battle-only / cosmetic forms with no distinct name in any language — show the
+# plain species name.
+_FORM_BASE_ONLY = {"-Bond", "-Totem", "-Meteor", "-Zen", "-Gulping", "-Gorging",
+                   "-Busted", "-Noice", "-Hangry", "-Ash-Gmax"}
 
 
 def _localize_form_name(base_lang_name: str, suffix: str, language: int):
     """Return a localized regional-form name, or None to fall back to English glue."""
+    if suffix in _FORM_BASE_ONLY:
+        return base_lang_name
     mapping = _FORM_NAME_LOCALIZATION.get(suffix)
     if not mapping or language not in mapping:
         return None

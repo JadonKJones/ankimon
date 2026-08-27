@@ -240,41 +240,48 @@ def _build_card_html(pokemon: dict[str, Any], id_prefix: str) -> str:
     Returns:
         An HTML string representing one ``.poke-item`` element.
     """
-    from ..functions.pokedex_functions import format_lore_name, get_pokemon_diff_lang_name
+    from ..functions.pokedex_functions import (
+        format_lore_name,
+        get_pokemon_diff_lang_name,
+        get_pretty_name_for_name,
+    )
     from ..type_names import format_type_list
 
     name = pokemon.get("name", "Unknown")
-    nickname = pokemon.get("nickname", "")
+    nickname = pokemon.get("nickname", "") or ""
 
-    def _localized_species_name() -> str:
+    def _resolved_display_name() -> str:
+        """Mirror PokemonObject.display_name: localized species / regional-form
+        name, but keep a genuinely custom nickname. The catch flow auto-stores
+        the *English* pretty name as the nickname regardless of language, so it
+        is compared against the internal, localized AND English names before
+        being treated as custom."""
         try:
+            lang = 9
             from ..services import services
-            lang = int(services.settings.get("misc.language", 9))
-            localized = get_pokemon_diff_lang_name(int(pokemon.get("id", 0)), lang)
-            if localized and localized != "No Translation in this language":
-                return localized
+            if services.settings is not None:
+                lang = int(services.settings.get("misc.language", 9))
+
+            localized = get_pokemon_diff_lang_name(int(pokemon.get("id", 0) or 0), lang)
+            english = get_pretty_name_for_name(name)
+            if not localized or localized == "No Translation in this language":
+                localized = english
+
+            if nickname:
+                def norm(s):
+                    return "".join(c for c in str(s).lower() if c.isalnum())
+
+                if norm(nickname) not in (norm(name), norm(localized), norm(english)):
+                    return nickname
+            return localized
         except Exception:
-            pass
-        return format_lore_name(name)
+            return nickname or format_lore_name(name)
 
-    species_name = _localized_species_name()
-
-    def _nickname_is_custom() -> bool:
-        # Mirror PokemonObject.display_name: the catch flow stores the English
-        # species name as the "nickname", so only treat it as custom when it
-        # differs from both the internal name and the (localized) species name.
-        if not nickname:
-            return False
-        norm = lambda s: "".join(
-            c for c in str(s).lower() if c.isalnum()
-        )
-        return norm(nickname) not in (norm(name), norm(species_name))
-
-    # The nickname is player-controlled (rename flow) and Pokémon dicts can also
+    # The name is player-controlled (rename flow) and Pokémon dicts can also
     # arrive from external channels (trade codes / monthly-challenge payloads),
     # so HTML-escape every user-facing string before it is interpolated into the
     # raw markup rendered by Anki's QtWebEngine Deck Browser / Overview webview.
-    display_name = html.escape(nickname if _nickname_is_custom() else species_name)
+    display_name = html.escape(_resolved_display_name())
     level = pokemon.get("level", 1)
     gender = pokemon.get("gender", "M")
     current_hp = pokemon.get("current_hp", 0)
