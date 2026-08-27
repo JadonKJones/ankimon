@@ -14,6 +14,16 @@ _desktop_session_revlog_ids: set[int] = set()
 _desktop_session_card_ids: set[int] = set()
 MOBILE_QUEUE_CAP = 10_000
 
+def _mobile_battle_language() -> str:
+    """Short language code (jp / sp / es_latam / en / ...) for the mobile battle
+    narration. Mirrors move_names._current_lang_code; never raises."""
+    try:
+        from ..move_names import _current_lang_code
+        return _current_lang_code()
+    except Exception:
+        return "en"
+
+
 def _mobile_sync_configured(settings) -> bool:
     """Whether the durable desktop-processed dedup record must be written.
 
@@ -951,9 +961,10 @@ def _run_mobile_battles_impl(
             comp_hp_after = max(0, comp_hp_val)
             enemy_hp_after = max(0, enemy_hp_val)
 
+            from ..move_names import format_move_name
             turns_log.append({
-                "user_attack": user_attack.title(),
-                "enemy_attack": enemy_attack.title(),
+                "user_attack": format_move_name(user_attack),
+                "enemy_attack": format_move_name(enemy_attack),
                 "comp_hp_pct": int((comp_hp_after * 100) / companion_max_hp),
                 "enemy_hp_pct": int((enemy_hp_after * 100) / enemy_max_hp),
             })
@@ -1007,6 +1018,7 @@ def _run_mobile_battles_impl(
             "companion_id": getattr(main_pokemon_clone, "individual_id", ""),
             "xp_gained": battle_xp,
             "turns": turns_log,
+            "language": _mobile_battle_language(),
         }
 
         # Return state to commit later

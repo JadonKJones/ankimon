@@ -710,6 +710,33 @@ def get_pokemon_descriptions(species_id, language):
         return "Description not found."
 
 
+# Regional / alternate form names in the languages we localize battle text for.
+# format_lore_name already handles English; this only covers the forms the games
+# give a distinct, well-known localized name to. Japanese prefixes the region
+# onto the base name (アローラ + ロコン); Spanish appends it (Vulpix + " de Alola").
+# Keys are the "-Suffix" chunk of the internal pokedex name; language ids are
+# _normalize_language_id output (1 = Japanese, 7 = Spanish incl. LatAm).
+_FORM_NAME_LOCALIZATION = {
+    "-Alola": {1: ("アローラ", ""), 7: ("", " de Alola")},
+    "-Galar": {1: ("ガラル", ""), 7: ("", " de Galar")},
+    "-Hisui": {1: ("ヒスイ", ""), 7: ("", " de Hisui")},
+    "-Paldea": {1: ("パルデア", ""), 7: ("", " de Paldea")},
+    "-Mega": {1: ("メガ", ""), 7: ("Mega-", "")},
+    "-Mega-X": {1: ("メガ", "Ｘ"), 7: ("Mega-", " X")},
+    "-Mega-Y": {1: ("メガ", "Ｙ"), 7: ("Mega-", " Y")},
+    "-Primal": {1: ("ゲンシ", ""), 7: ("", " primigenio")},
+}
+
+
+def _localize_form_name(base_lang_name: str, suffix: str, language: int):
+    """Return a localized regional-form name, or None to fall back to English glue."""
+    mapping = _FORM_NAME_LOCALIZATION.get(suffix)
+    if not mapping or language not in mapping:
+        return None
+    prefix, tail = mapping[language]
+    return f"{prefix}{base_lang_name}{tail}"
+
+
 def get_pokemon_diff_lang_name(pokemon_id: int, language: int):
     """Get pokemon name in specified language from cache."""
     language = _normalize_language_id(language)
@@ -737,6 +764,9 @@ def get_pokemon_diff_lang_name(pokemon_id: int, language: int):
                 # If we have a hyphenated name, reconstruct with translated base
                 if "-" in raw_pokedex_name:
                     suffix = raw_pokedex_name[raw_pokedex_name.find("-") :]
+                    localized = _localize_form_name(base_lang_name, suffix, language)
+                    if localized:
+                        return localized
                     return format_lore_name(base_lang_name + suffix)
                 return format_lore_name(base_lang_name)
 
