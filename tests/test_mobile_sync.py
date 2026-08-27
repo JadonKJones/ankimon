@@ -366,12 +366,12 @@ def test_parse_cards_per_round(value, expected):
 
 
 @pytest.mark.parametrize("earned,earner,share_id,expected", [
-    (100, "A", "B", (50, 50)),      # even split
-    (101, "A", "B", (51, 50)),      # earner keeps the odd remainder, no XP lost
+    (100, "A", "B", (100, 100)),    # ORAS-style: both get the full amount
+    (101, "A", "B", (101, 101)),    # odd numbers aren't split either, so no remainder logic needed
     (100, "A", "A", (100, 0)),      # can't share with yourself
     (100, "A", None, (100, 0)),     # XP-Share not configured
     (0, "A", "B", (0, 0)),          # nothing to split
-    (100, "A", "b", (50, 50)),      # distinct ids -> split applies
+    (100, "A", "b", (100, 100)),    # distinct ids -> share applies
 ])
 def test_xp_share_split(earned, earner, share_id, expected):
     assert ms._xp_share_split(earned, earner, share_id) == expected
@@ -379,10 +379,11 @@ def test_xp_share_split(earned, earner, share_id, expected):
 
 def test_commit_replay_defeat_applies_xp_share(monkeypatch):
     """XP-Share parity on the MANUAL replay-resolve path: commit_replay_outcome
-    ('defeat', ...) must split the battling companion's XP 50/50 with the
-    configured trainer.xp_share target, exactly like the bulk-resolve commit
-    block. Without the split this path grants the companion 100% and the
-    XP-Share target nothing (finding: mobile_sync commit_replay_outcome)."""
+    ('defeat', ...) must also grant the configured trainer.xp_share target its
+    ORAS-style full share of the battling companion's XP, exactly like the
+    bulk-resolve commit block. Without this the path grants the companion
+    100% and the XP-Share target nothing (finding: mobile_sync
+    commit_replay_outcome)."""
     class _S:
         def __init__(self, d): self._d = dict(d)
         def get(self, k, default=None): return self._d.get(k, default)
@@ -419,9 +420,10 @@ def test_commit_replay_defeat_applies_xp_share(monkeypatch):
 
     res = ms.commit_replay_outcome("defeat", outcome_data, db, settings, None, None)
     assert res.get("success") is True
-    # Companion keeps half; the XP-Share target receives the other half.
-    assert ("COMP", 50) in calls
-    assert ("TARGET", 50) in calls
+    # ORAS-style: the companion keeps its full XP, and the XP-Share target
+    # also earns that same full amount — neither side is reduced.
+    assert ("COMP", 100) in calls
+    assert ("TARGET", 100) in calls
 
 
 def test_commit_replay_defeat_no_share_when_unset(monkeypatch):
