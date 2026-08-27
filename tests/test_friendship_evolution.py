@@ -1291,3 +1291,70 @@ def test_check_friendship_evolution_survives_an_unbound_settings_seam(no_setting
 def test_settings_helper_falls_back_to_defaults(no_settings):
     assert fe._settings().get("evolution.day_start_hour", 6) == 6
     assert fe._settings().get("anything.at.all") is None
+
+
+# --------------------------------------------------------------------------- #
+# The same gender split, on the MANUAL readiness path. The two paths must agree:
+# a female Espurr the automatic level-up offers Meowstic-F must not be offered
+# the male Meowstic by the PC box's "Evolve now" button.
+# --------------------------------------------------------------------------- #
+def test_female_espurr_readiness_offers_the_female_meowstic_form():
+    result = fe.evolution_readiness(_lvl(677, 30, "F"), now=_NOON)
+    assert result["evo_id"] == 10025
+    assert result["ready"] is True
+    assert result["status_text"] == "Ready to evolve into Meowstic-F!"
+
+
+def test_male_espurr_readiness_offers_the_male_meowstic_form():
+    assert fe.evolution_readiness(_lvl(677, 30, "M"), now=_NOON)["evo_id"] == 678
+
+
+def test_female_lechonk_readiness_offers_the_female_oinkologne_form():
+    assert fe.evolution_readiness(_lvl(915, 25, "F"), now=_NOON)["evo_id"] == 10254
+
+
+def test_male_lechonk_readiness_offers_the_male_oinkologne_form():
+    assert fe.evolution_readiness(_lvl(915, 25, "M"), now=_NOON)["evo_id"] == 916
+
+
+def test_split_forms_without_a_gender_keep_the_lowest_id():
+    assert fe.evolution_readiness(_lvl(677, 30), now=_NOON)["evo_id"] == 678
+
+
+def test_lone_gendered_target_stays_ready_for_either_gender():
+    # Bounsweet -> Steenee: a single female-labelled target is a species
+    # property, not a gate. Narrowing on it would strand a save whose stored
+    # gender disagrees with its own species.
+    for gender in ("M", "F", None):
+        result = fe.evolution_readiness(_lvl(761, 25, gender), now=_NOON)
+        assert result["evo_id"] == 762
+        assert result["ready"] is True, gender
+
+
+def test_form_split_never_flips_gender_ok_or_the_status_line():
+    # The form filter narrows the choice; it must not feed `ready`/`required_
+    # gender`, which stay driven by the CSV gate alone.
+    for species_id, level in ((677, 30), (915, 25)):
+        for gender in ("M", "F"):
+            result = fe.evolution_readiness(_lvl(species_id, level, gender), now=_NOON)
+            assert result["ready"] is True
+            assert "Needs to be" not in result["status_text"]
+
+
+def test_manual_and_automatic_paths_agree_on_the_split():
+    """The regression this whole gate exists to prevent: two paths, one answer."""
+    from Ankimon.functions import pokedex_functions as _pf
+
+    class _Win:
+        def ask_pokemon_evo(self, *args):
+            pass
+
+    for species_id, level in ((677, 25), (915, 18), (412, 20)):
+        for gender in ("M", "F"):
+            manual = fe.evolution_readiness(_lvl(species_id, level, gender), now=_NOON)[
+                "evo_id"
+            ]
+            auto = _pf.check_evolution_for_pokemon(
+                "iid", species_id, level, _Win(), gender=gender, current_attacks=[]
+            )
+            assert manual == auto, (species_id, gender, manual, auto)

@@ -333,3 +333,108 @@ def test_pokedex_entries_carry_an_id_the_gender_gate_can_resolve():
     ):
         entry = pokedex[species]
         assert entry.get("actual_id") or entry.get("species_id")
+
+
+# --------------------------------------------------------------------------- #
+# Gender SPLITS the CSV cannot express (pokedex.json `gender` on the forms).
+#
+# veekun models Espurr -> Meowstic/Meowstic-F and Lechonk -> Oinkologne/
+# Oinkologne-F as two FORMS of one species rather than as two gendered
+# evolutions, so pokemon_evolution.csv carries no gender_id row for evolved
+# species 678 or 916 and the CSV gate sees no split at all. The lowest-evo_id
+# tie-break then handed EVERY Espurr the male Meowstic and every Lechonk the
+# male Oinkologne — the same failure the CSV gate fixes for Burmy, and
+# irreversible once accepted. pokedex.json does carry the split.
+#
+# pick_random_gender falls through to random.choice(["M", "F"]) for both
+# species (neither has a genderRatio or a fixed gender), so ~half of all
+# captures hit it.
+# --------------------------------------------------------------------------- #
+def test_female_espurr_evolves_into_the_female_meowstic_form():
+    win = _FakeEvoWindow()
+    assert pf.check_evolution_for_pokemon("ind-f", 677, 25, win, gender="F") == 10025
+    assert win.calls == [("ind-f", 677, 10025)]
+
+
+def test_male_espurr_evolves_into_the_male_meowstic_form():
+    win = _FakeEvoWindow()
+    assert pf.check_evolution_for_pokemon("ind-m", 677, 25, win, gender="M") == 678
+
+
+def test_female_lechonk_evolves_into_the_female_oinkologne_form():
+    win = _FakeEvoWindow()
+    assert pf.check_evolution_for_pokemon("ind-f", 915, 18, win, gender="F") == 10254
+
+
+def test_male_lechonk_evolves_into_the_male_oinkologne_form():
+    win = _FakeEvoWindow()
+    assert pf.check_evolution_for_pokemon("ind-m", 915, 18, win, gender="M") == 916
+
+
+def test_split_forms_without_a_gender_keep_historical_behavior():
+    # No gender on the record -> no narrowing, lowest evo_id as before.
+    win = _FakeEvoWindow()
+    assert pf.check_evolution_for_pokemon("ind", 677, 25, win, gender=None) == 678
+
+
+def test_lone_gendered_target_never_blocks_an_evolution():
+    # Bounsweet (761) -> Steenee (762) is a SINGLE target that pokedex.json
+    # labels female-only. That is a species property, not an evolution gate:
+    # narrowing on it would strand any save whose stored gender disagrees with
+    # its own species. Both sexes must still evolve.
+    for gender in ("M", "F", None):
+        win = _FakeEvoWindow()
+        assert pf.check_evolution_for_pokemon("ind", 761, 20, win, gender=gender) == 762
+
+
+def test_same_gender_siblings_are_not_treated_as_a_split():
+    # Tyrogue (236) has three targets, all labelled male-only in pokedex.json.
+    # No disagreement -> no narrowing -> the pre-existing choice is preserved.
+    without = pf.check_evolution_for_pokemon("ind", 236, 25, _FakeEvoWindow())
+    for gender in ("M", "F"):
+        assert (
+            pf.check_evolution_for_pokemon(
+                "ind", 236, 25, _FakeEvoWindow(), gender=gender
+            )
+            == without
+        )
+
+
+def test_burmy_split_still_resolved_by_the_csv_gate():
+    # The CSV gate runs first and already resolves Burmy; the form filter must
+    # not disturb it.
+    assert (
+        pf.check_evolution_for_pokemon("i", 412, 20, _FakeEvoWindow(), gender="M")
+        == 414
+    )
+    assert (
+        pf.check_evolution_for_pokemon("i", 412, 20, _FakeEvoWindow(), gender="F")
+        == 413
+    )
+
+
+def test_filter_gender_split_forms_semantics():
+    # Espurr's pair disagrees -> narrows.
+    assert pf.filter_gender_split_forms([678, 10025], "F") == [10025]
+    assert pf.filter_gender_split_forms([678, 10025], "M") == [678]
+    # Unrecognised / missing gender -> untouched.
+    for junk in (None, "Genderless", "N", "", "x"):
+        assert pf.filter_gender_split_forms([678, 10025], junk) == [678, 10025]
+    # Fewer than two candidates -> untouched, whatever the label says.
+    assert pf.filter_gender_split_forms([762], "M") == [762]
+    # Siblings that agree -> untouched.
+    assert pf.filter_gender_split_forms([106, 107, 237], "F") == [106, 107, 237]
+    # Unlabelled siblings survive alongside the matching label.
+    assert pf.filter_gender_split_forms([678, 10025, 1], "M") == [678, 1]
+    # Never empties the list.
+    assert pf.filter_gender_split_forms([678, 10025], "F") != []
+
+
+def test_pokedex_form_gender_reads_the_bundled_data():
+    assert pf._pokedex_form_gender(678) == "M"  # Meowstic
+    assert pf._pokedex_form_gender(10025) == "F"  # Meowstic-F
+    assert pf._pokedex_form_gender(916) == "M"  # Oinkologne
+    assert pf._pokedex_form_gender(10254) == "F"  # Oinkologne-F
+    assert pf._pokedex_form_gender(1) is None  # Bulbasaur: no gender field
+    for junk in (None, "x", 0, -1, 99999):
+        assert pf._pokedex_form_gender(junk) is None

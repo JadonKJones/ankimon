@@ -936,6 +936,67 @@ def _evolution_row_gender_id_cached(species_ref: int, trigger_ids) -> Optional[i
     return None
 
 
+def _pokedex_form_gender(species_ref) -> Optional[str]:
+    """Return ``"M"``/``"F"`` when pokedex.json marks a species/form single-gender.
+
+    This is the ``gender`` field on the *evolved* entry (e.g. ``meowstic`` -> M,
+    ``meowsticf`` -> F). ``None`` for anything unlabelled or unresolvable.
+    """
+    try:
+        name = search_pokedex_by_id(species_ref)
+    except Exception:
+        return None
+    if not name or name == "Pokémon not found":
+        return None
+    entry = (_load_pokedex_cache() or {}).get(name)
+    if not isinstance(entry, dict):
+        return None
+    form_gender = entry.get("gender")
+    return form_gender if form_gender in ("M", "F") else None
+
+
+def filter_gender_split_forms(evo_ids, gender):
+    """Narrow sibling evolution targets to the ones this gender can reach.
+
+    A SECOND gender source, needed because ``pokemon_evolution.csv`` cannot see
+    every split. veekun models Espurr -> Meowstic and Lechonk -> Oinkologne as
+    two *forms of one species* rather than as two gendered evolutions, so those
+    rows carry no ``gender_id`` and :func:`_evolution_row_gender_id` answers
+    "no gate" for both candidates — leaving the lowest-``evo_id`` tie-break to
+    hand every Espurr the MALE Meowstic and every Lechonk the MALE Oinkologne,
+    which is the exact failure the CSV gate fixes for Burmy. pokedex.json does
+    carry the split, on the evolved forms' own ``gender`` field.
+
+    Deliberately applied ONLY as a tie-break between siblings whose labels
+    disagree. A lone target carrying a ``gender`` (Bounsweet -> Steenee, both
+    female-only) is stating a species property, not an evolution requirement,
+    and must never block an evolution — every such line in the bundled data has
+    a single-gender pre-evolution anyway, so gating on it could only ever hurt a
+    save whose stored gender disagrees with its own species. Unlabelled siblings
+    are kept, and a gender matching no sibling falls back to the full set, so
+    this can never empty the candidate list.
+
+    Args:
+        evo_ids: Candidate evolved-species ids (form ids >= 10000 included).
+        gender: The Pokémon's gender (``"M"``/``"F"``/...); unrecognised values
+            disable the filter.
+
+    Returns:
+        The surviving ids, in the order given.
+    """
+    ids = list(evo_ids)
+    caller_gender_id = _csv_gender_id(gender)
+    if caller_gender_id is None or len(ids) < 2:
+        return ids
+    labels = {evo_id: _pokedex_form_gender(evo_id) for evo_id in ids}
+    if len({label for label in labels.values() if label}) < 2:
+        # Siblings agree (or none is labelled): a species property, not a split.
+        return ids
+    wanted = "M" if caller_gender_id == 2 else "F"
+    matching = [evo_id for evo_id in ids if labels.get(evo_id) in (wanted, None)]
+    return matching or ids
+
+
 def check_evolution_by_item(pokemon_id, item_id, gender=None):
     """
     Check if a Pokémon evolves using a specific item.
@@ -1390,6 +1451,31 @@ def check_evolution_for_pokemon(
                                         eligible_evos.append(target_data)
 
                 if eligible_evos:
+                    # Second gender source for splits the CSV cannot express as
+                    # gendered rows (Espurr -> Meowstic/Meowstic-F, Lechonk ->
+                    # Oinkologne/Oinkologne-F are FORMS in the veekun schema).
+                    # Narrows siblings only; never empties the list.
+                    by_id = {}
+                    for candidate in eligible_evos:
+                        by_id.setdefault(
+                            safe_int(
+                                candidate.get("actual_id")
+                                or candidate.get("species_id")
+                            ),
+                            candidate,
+                        )
+                    kept = set(filter_gender_split_forms(list(by_id), gender))
+                    if kept:
+                        eligible_evos = [
+                            candidate
+                            for candidate in eligible_evos
+                            if safe_int(
+                                candidate.get("actual_id")
+                                or candidate.get("species_id")
+                            )
+                            in kept
+                        ]
+
                     eligible_evos.sort(key=lambda x: 0 if x.get("evoRegion") else 1)
                     target_data = eligible_evos[0]
                     evo_id = safe_int(
