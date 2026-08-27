@@ -72,9 +72,13 @@ class SafeWebEnginePage(QWebEnginePage):
 
 from ..functions.pokedex_functions import (
     find_details_move,
+    _ITEM_EVO_TRIGGERS,
+    _csv_gender_id,
+    _evolution_row_gender_id,
     _load_pokedex_cache,
     check_evolution_by_item,
     return_id_for_item_name,
+    safe_int,
 )
 from ..business import calculate_cp_from_dict
 from ..ankimon_profile_web.profile_data import ProfileData
@@ -2069,6 +2073,14 @@ class AnkimonItemsWeb(QDialog):
 
                 # Evolution eligibility (Optimized inline to avoid file I/O)
                 if is_evo_item and item_name and p_details:
+                    # Gender gate, mirroring check_evolution_by_item: Gallade
+                    # needs a male Kirlia, Froslass a female Snorunt. Without it
+                    # this picker flags a Pokemon that Check_Evo_Item then
+                    # refuses — and shop.js filters the list to e === 1, so the
+                    # player is offered the one candidate the actual use will
+                    # turn down. The CSV lookup behind it is lru_cached, so this
+                    # keeps the picker free of per-row file I/O.
+                    caller_gender_id = _csv_gender_id(data.get("gender"))
                     evo_list = p_details.get("evos")
                     if evo_list:
                         for target_evo_name in evo_list:
@@ -2088,6 +2100,20 @@ class AnkimonItemsWeb(QDialog):
                                 "useItem",
                                 "trade",
                             ):
+                                if caller_gender_id is not None:
+                                    required_gender_id = _evolution_row_gender_id(
+                                        safe_int(
+                                            target_data.get("actual_id")
+                                            or target_data.get("species_id")
+                                        ),
+                                        _ITEM_EVO_TRIGGERS,
+                                    )
+                                    if (
+                                        required_gender_id is not None
+                                        and caller_gender_id != required_gender_id
+                                    ):
+                                        continue
+
                                 # "trade" belongs here alongside "useItem": Ankimon has no
                                 # trading, so the trade-with-held-item species (Rhydon ->
                                 # Rhyperior via Protector, Onix -> Steelix via Metal Coat,

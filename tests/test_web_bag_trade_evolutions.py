@@ -206,3 +206,98 @@ def test_picker_agrees_with_canonical_helper(
     assert choices[mon["individual_id"]].get("e") == 1, (
         f"web bag picker hides {prevo_name} when using {item_identifier}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Gender-gated item evolutions must agree with the canonical helper too.
+#
+# ``check_evolution_by_item`` learned the CSV ``gender_id`` gate (Gallade needs
+# a male Kirlia, Froslass a female Snorunt), and ``Check_Evo_Item`` — which is
+# what ``handle_use_with_target`` ultimately calls — now passes the selected
+# Pokemon's gender. The picker's inline copy had to learn it as well: shop.js
+# filters this list to ``e === 1``, so leaving it out means the bag offers the
+# player exactly the Pokemon the use is about to refuse with "This Pokemon does
+# not need this item."
+# --------------------------------------------------------------------------- #
+_DAWN_STONE = "dawn-stone"
+
+
+def _gendered(name, pokedex_id, gender):
+    mon = _pokemon(name, pokedex_id)
+    mon["gender"] = gender
+    return mon
+
+
+def test_male_kirlia_is_offered_the_dawn_stone(shop_obj):
+    mon = _gendered("Kirlia", 281, "M")
+    choices = _choices(shop_obj, [mon], _DAWN_STONE)
+    assert choices[mon["individual_id"]].get("e") == 1
+
+
+def test_female_kirlia_is_not_offered_the_dawn_stone(shop_obj):
+    # Gallade (475) is the only Dawn Stone target Kirlia has, and it is male-only.
+    mon = _gendered("Kirlia", 281, "F")
+    choices = _choices(shop_obj, [mon], _DAWN_STONE)
+    assert "e" not in choices[mon["individual_id"]]
+
+
+def test_female_snorunt_is_offered_the_dawn_stone(shop_obj):
+    mon = _gendered("Snorunt", 361, "F")
+    choices = _choices(shop_obj, [mon], _DAWN_STONE)
+    assert choices[mon["individual_id"]].get("e") == 1
+
+
+def test_male_snorunt_is_not_offered_the_dawn_stone(shop_obj):
+    mon = _gendered("Snorunt", 361, "M")
+    choices = _choices(shop_obj, [mon], _DAWN_STONE)
+    assert "e" not in choices[mon["individual_id"]]
+
+
+def test_missing_gender_keeps_the_historical_no_check_behavior(shop_obj):
+    # Old saves without a stored gender must not lose access to the evolution.
+    mon = _pokemon("Kirlia", 281)  # no "gender" key at all
+    choices = _choices(shop_obj, [mon], _DAWN_STONE)
+    assert choices[mon["individual_id"]].get("e") == 1
+
+
+def test_genderless_value_degrades_to_no_check(shop_obj):
+    for junk in ("Genderless", "N", "", "x"):
+        mon = _gendered("Kirlia", 281, junk)
+        choices = _choices(shop_obj, [mon], _DAWN_STONE)
+        assert choices[mon["individual_id"]].get("e") == 1, junk
+
+
+def test_ungated_item_evolution_ignores_gender(shop_obj):
+    # A Thunder Stone on Pikachu carries no gender_id row; both sexes qualify.
+    for gender in ("M", "F"):
+        mon = _gendered("pikachu", 25, gender)
+        choices = _choices(shop_obj, [mon], "thunder-stone")
+        assert choices[mon["individual_id"]].get("e") == 1, gender
+
+
+@pytest.mark.parametrize(
+    "name,pokedex_id,gender,expected",
+    [
+        ("Kirlia", 281, "M", 475),
+        ("Snorunt", 361, "F", 478),
+        ("Kirlia", 281, "F", None),
+        ("Snorunt", 361, "M", None),
+    ],
+)
+def test_picker_agrees_with_canonical_helper_on_gender(
+    shop_obj, name, pokedex_id, gender, expected
+):
+    """Pin the two implementations to each other on the gender branch as well."""
+    item_id = shop_obj.return_id_for_item_name(_DAWN_STONE)
+    assert item_id, "dawn-stone is missing from items.csv"
+
+    helper = shop_obj.check_evolution_by_item(pokedex_id, item_id, gender=gender)
+    assert helper == expected
+
+    mon = _gendered(name, pokedex_id, gender)
+    choices = _choices(shop_obj, [mon], _DAWN_STONE)
+    flagged = choices[mon["individual_id"]].get("e") == 1
+
+    assert flagged is (expected is not None), (
+        f"picker and helper disagree for a {gender} {name}"
+    )
