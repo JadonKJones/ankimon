@@ -135,11 +135,25 @@ def _install_qt_stubs():
 def shop_obj():
     """Import the real web-shell host once, headlessly.
 
-    Only the package stubs conftest already installs are needed; everything else
-    (pokedex cache, items.csv, the CP formula) is loaded for real so the test
-    exercises the shipped data. No mock is left in ``sys.modules``: the module
-    imported here is the genuine one, and the ``services`` seam is swapped
-    per-test with an auto-reverting ``patch.object``.
+    The module under test is the GENUINE one — the pokedex cache, items.csv and
+    the CP formula are all loaded for real so the tests exercise the shipped
+    data, and the ``services`` seam is swapped per-test with an auto-reverting
+    ``patch.object``.
+
+    What is faked is only ``shop_obj``'s Qt import surface, and only because
+    Anki is absent headlessly: :func:`_install_qt_stubs` installs three
+    synthetic ``aqt`` modules (including ``MagicMock``s for ``aqt.mw``, ``Qt``,
+    ``QUrl``, ``QFrame`` and ``QWebEngineProfile``) and drops any mocked
+    ``PyQt6`` entries so the genuine package loads. Both are restored on
+    teardown.
+
+    **If you add a Qt import to shop_obj.py, extend `_install_qt_stubs` to
+    match.** An import failure here is a hard error, not a skip: PyQt6 is a
+    documented test dependency and ``aqt`` is supplied by this fixture, so
+    nothing is left that an unimportable module could legitimately mean except
+    that the stub set has drifted. Skipping instead is how all 31 of these tests
+    — the Rhydon/Protector regression included — went years without running
+    anywhere but a developer box with Anki installed.
     """
     for pkg in (
         "Ankimon",
@@ -158,13 +172,19 @@ def shop_obj():
     sys.modules.pop("Ankimon.ankimon_items_web.shop_obj", None)
     try:
         module = importlib.import_module("Ankimon.ankimon_items_web.shop_obj")
-    except Exception as e:  # pragma: no cover - environment guard
+    except Exception as e:
         for name, previous in saved.items():
             if previous is None:
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = previous
-        pytest.skip(f"web-shell host not importable headlessly: {e}")
+        # Deliberately NOT pytest.skip: see the docstring. A skip here reports
+        # green while every test in this file silently stops running.
+        raise AssertionError(
+            "shop_obj is no longer importable with this file's Qt stubs — "
+            "extend _install_qt_stubs() to cover its new imports "
+            f"(rather than letting these tests silently skip). Original error: {e!r}"
+        ) from e
 
     yield module
 

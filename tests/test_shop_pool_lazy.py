@@ -70,9 +70,18 @@ def download_sprites():
     sys.modules.pop("Ankimon.gui_entities", None)
     try:
         module = importlib.import_module("Ankimon.pyobj.download_sprites")
-    except Exception as e:  # pragma: no cover - environment guard
+    except Exception as e:
         sys.modules.update(saved)
-        pytest.skip(f"download_sprites not importable: {e}")
+        # Deliberately NOT pytest.skip. PyQt6 is a documented test dependency
+        # and `aqt` is supplied by this fixture, so an import failure means the
+        # stub set has drifted from what the module imports — and a skip would
+        # report that as green with every test here silently disabled, which is
+        # the exact failure mode this file's own subject matter is about.
+        raise AssertionError(
+            "download_sprites is no longer importable with this fixture's Qt "
+            "stubs — extend them to cover its new imports rather than letting "
+            f"these tests silently skip. Original error: {e!r}"
+        ) from e
     yield module
     sys.modules.update(saved)
 
