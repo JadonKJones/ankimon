@@ -78,11 +78,16 @@ class ShowInfoLogger:
                 # The try/except alone is NOT enough, and this is the seam where
                 # that matters: PyQt6 being importable is not the same as an
                 # application running. Constructing a QWidget without a
-                # QApplication makes Qt call abort() — a process death, not an
-                # exception — so a dev box that happens to have PyQt6 installed
-                # would kill the harness here rather than fall through to the
-                # event-only path this comment promises.
-                if QApplication.instance() is None:
+                # widget-capable QApplication makes Qt call abort() — a process
+                # death, not an exception — so a dev box that happens to have
+                # PyQt6 installed would kill the harness here rather than fall
+                # through to the event-only path this comment promises.
+                #
+                # isinstance, not `is None`: QApplication.instance() is inherited
+                # from QCoreApplication and hands back whatever application
+                # exists, so a console-only QCoreApplication reads as non-None
+                # and a QWidget built after it aborts just the same.
+                if not isinstance(QApplication.instance(), QApplication):
                     return
 
                 msg_box = QMessageBox()

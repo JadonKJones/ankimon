@@ -26,6 +26,8 @@ from unittest.mock import patch
 
 import pytest
 
+from conftest import isolated_modules
+
 _SRC = Path(__file__).parent.parent / "src"
 _POKEDEX = json.loads(
     (_SRC / "Ankimon" / "data_files" / "pokedex.json").read_text(encoding="utf-8")
@@ -75,37 +77,25 @@ TRADE_ITEM_SPECIES = _trade_item_species()
 
 
 def _install_qt_stubs():
-    """Make ``shop_obj``'s module-top Qt imports resolvable in a headless run.
+    """Install the Qt names ``shop_obj`` imports at module top.
 
-    Two separate obstacles, both of which used to land in the ``pytest.skip``
-    below — so this whole file, the Rhydon/Protector regression included,
-    quietly never executed anywhere but a developer box with Anki installed:
+    Two separate obstacles, both of which used to land in a ``pytest.skip`` — so
+    this whole file, the Rhydon/Protector regression included, quietly never
+    executed anywhere but a developer box with Anki installed:
 
     * ``shop_obj`` does ``from aqt import QDialog, ... QWebEngineView`` and
       subclasses those. Anki is absent from every CI run (AGENTS.md installs
       only pytest/pytest-qt/PyQt6/markdown). Plain empty classes are enough —
       nothing here constructs a widget; the tests call ``get_pokemon_choices``
       unbound against ``_StubHost``.
-    * Earlier test modules in the suite replace ``PyQt6`` with a ``MagicMock``,
-      which turns ``from PyQt6.QtWebChannel import QWebChannel`` into
-      "PyQt6 is not a package". Dropping those entries lets the genuine PyQt6
-      (a documented test dependency) load instead.
+    * Earlier test modules replace ``PyQt6`` with a ``MagicMock``, which turns
+      ``from PyQt6.QtWebChannel import QWebChannel`` into "PyQt6 is not a
+      package".
 
-    Returns the previous ``sys.modules`` entries so the caller can put them back.
+    Clearing and restoring both namespaces is ``isolated_modules``' job around
+    the caller, so this only installs; it never has to clean up.
     """
     from unittest.mock import MagicMock
-
-    saved = {name: sys.modules.get(name) for name in ("aqt", "aqt.qt", "aqt.utils")}
-    saved.update(
-        {
-            name: mod
-            for name, mod in sys.modules.items()
-            if name.split(".")[0] == "PyQt6"
-        }
-    )
-    for name in list(saved):
-        if name.split(".")[0] == "PyQt6":
-            del sys.modules[name]
 
     aqt = types.ModuleType("aqt")
     aqt.__path__ = []
@@ -128,7 +118,6 @@ def _install_qt_stubs():
     sys.modules["aqt"] = aqt
     sys.modules["aqt.qt"] = aqt_qt
     sys.modules["aqt.utils"] = aqt_utils
-    return saved
 
 
 @pytest.fixture(scope="module")
@@ -141,19 +130,21 @@ def shop_obj():
     ``patch.object``.
 
     What is faked is only ``shop_obj``'s Qt import surface, and only because
-    Anki is absent headlessly: :func:`_install_qt_stubs` installs three
-    synthetic ``aqt`` modules (including ``MagicMock``s for ``aqt.mw``, ``Qt``,
-    ``QUrl``, ``QFrame`` and ``QWebEngineProfile``) and drops any mocked
-    ``PyQt6`` entries so the genuine package loads. Both are restored on
-    teardown.
+    Anki is absent headlessly: :func:`_install_qt_stubs` supplies the four
+    ``aqt`` names the module subclasses, while ``isolated_modules`` drops any
+    mocked ``PyQt6`` so the genuine package loads — and restores ``sys.modules``
+    EXACTLY on the way out, including removing the synthetic ``aqt`` modules and
+    the PyQt6 submodules imported inside. Without that last part a later test
+    that installs a mocked ``PyQt6`` parent would inherit genuine children such
+    as ``PyQt6.QtWebChannel`` from here, which is order-dependent and miserable
+    to debug.
 
     **If you add a Qt import to shop_obj.py, extend `_install_qt_stubs` to
     match.** An import failure here is a hard error, not a skip: PyQt6 is a
     documented test dependency and ``aqt`` is supplied by this fixture, so
     nothing is left that an unimportable module could legitimately mean except
     that the stub set has drifted. Skipping instead is how all 31 of these tests
-    — the Rhydon/Protector regression included — went years without running
-    anywhere but a developer box with Anki installed.
+    went years without running anywhere but a developer box with Anki installed.
     """
     for pkg in (
         "Ankimon",
@@ -168,34 +159,23 @@ def shop_obj():
             mod.__package__ = pkg
             sys.modules[pkg] = mod
 
-    saved = _install_qt_stubs()
-    sys.modules.pop("Ankimon.ankimon_items_web.shop_obj", None)
-    try:
-        module = importlib.import_module("Ankimon.ankimon_items_web.shop_obj")
-    except Exception as e:
-        for name, previous in saved.items():
-            if previous is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = previous
-        # Deliberately NOT pytest.skip: see the docstring. A skip here reports
-        # green while every test in this file silently stops running.
-        raise AssertionError(
-            "shop_obj is no longer importable with this file's Qt stubs — "
-            "extend _install_qt_stubs() to cover its new imports "
-            f"(rather than letting these tests silently skip). Original error: {e!r}"
-        ) from e
+    with isolated_modules(
+        "PyQt6", "aqt", extra=("Ankimon.ankimon_items_web.shop_obj",)
+    ):
+        _install_qt_stubs()
+        try:
+            module = importlib.import_module("Ankimon.ankimon_items_web.shop_obj")
+        except Exception as e:
+            # Deliberately NOT pytest.skip: see the docstring. A skip here
+            # reports green while every test in this file silently stops
+            # running.
+            raise AssertionError(
+                "shop_obj is no longer importable with this file's Qt stubs — "
+                "extend _install_qt_stubs() to cover its new imports (rather "
+                f"than letting these tests silently skip). Original error: {e!r}"
+            ) from e
 
-    yield module
-
-    # The module keeps direct references to the names it imported, so handing
-    # `aqt` back to whatever owned it is safe and keeps the stub from leaking
-    # into the rest of the suite.
-    for name, previous in saved.items():
-        if previous is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = previous
+        yield module
 
 
 class _StubHost:

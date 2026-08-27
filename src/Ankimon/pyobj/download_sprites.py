@@ -546,7 +546,10 @@ def show_agreement_and_download_dialog(force_download=False):
     # agent harness imports these modules directly, and PyQt6 being importable
     # is not the same as a running application. Degrade to "no download
     # offered" instead of killing the interpreter.
-    if QApplication.instance() is None:
+    # isinstance, not `is None`: QApplication.instance() is inherited from
+    # QCoreApplication and returns whatever application exists, so a console-only
+    # QCoreApplication reads as non-None and the dialog below would still abort.
+    if not isinstance(QApplication.instance(), QApplication):
         try:
             logger = services.logger
             if logger is not None:
