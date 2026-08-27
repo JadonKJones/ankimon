@@ -326,7 +326,8 @@ class MovePickerDialog(QDialog):
             t_icon_path = type_icon_path(m_type.lower())
             if t_icon_path.exists():
                 type_item.setIcon(QIcon(str(t_icon_path)))
-            type_item.setToolTip(m_type)
+            from ..localized_text import type_name as _type_name
+            type_item.setToolTip(_type_name(m_type, m_type))
 
             self.table.setItem(row_idx, 0, name_item)
             self.table.setItem(row_idx, 1, type_item)
