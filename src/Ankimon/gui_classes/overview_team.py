@@ -256,11 +256,25 @@ def _build_card_html(pokemon: dict[str, Any], id_prefix: str) -> str:
         except Exception:
             pass
         return format_lore_name(name)
+
+    species_name = _localized_species_name()
+
+    def _nickname_is_custom() -> bool:
+        # Mirror PokemonObject.display_name: the catch flow stores the English
+        # species name as the "nickname", so only treat it as custom when it
+        # differs from both the internal name and the (localized) species name.
+        if not nickname:
+            return False
+        norm = lambda s: "".join(
+            c for c in str(s).lower() if c.isalnum()
+        )
+        return norm(nickname) not in (norm(name), norm(species_name))
+
     # The nickname is player-controlled (rename flow) and Pokémon dicts can also
     # arrive from external channels (trade codes / monthly-challenge payloads),
     # so HTML-escape every user-facing string before it is interpolated into the
     # raw markup rendered by Anki's QtWebEngine Deck Browser / Overview webview.
-    display_name = html.escape(nickname or _localized_species_name())
+    display_name = html.escape(nickname if _nickname_is_custom() else species_name)
     level = pokemon.get("level", 1)
     gender = pokemon.get("gender", "M")
     current_hp = pokemon.get("current_hp", 0)
