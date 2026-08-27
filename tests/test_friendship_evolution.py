@@ -1226,3 +1226,68 @@ def test_pokemon_gender_reads_dicts_and_objects():
         gender = "M"
 
     assert fe._pokemon_gender(_Obj()) == "M"
+
+
+# --------------------------------------------------------------------------- #
+# The settings seam may be unbound (early boot, profile swap in flight, a
+# partially-wired headless run). Every read in this module is a preference with
+# a default, and both entry points sit on paths that otherwise degrade rather
+# than raise — so `services.settings is None` must not turn into AttributeError.
+# `pokedex_functions.get_time_of_day` already makes this exact check; this
+# module did not.
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def no_settings():
+    from Ankimon.services import services
+
+    previous = services.settings
+    services.settings = None
+    yield
+    services.settings = previous
+
+
+def test_get_time_of_day_survives_an_unbound_settings_seam(no_settings):
+    # Defaults are day_start=6 / night_start=18.
+    assert fe.get_time_of_day(datetime(2024, 1, 1, 9, 0)) == "day"
+    assert fe.get_time_of_day(datetime(2024, 1, 1, 23, 0)) == "night"
+
+
+def test_evolution_readiness_survives_an_unbound_settings_seam(no_settings):
+    result = fe.evolution_readiness(
+        {"id": 133, "level": 20, "friendship": 200, "attacks": ["Tackle"]},
+        now=datetime(2024, 1, 1, 9, 0),
+    )
+    assert result["evolvable"] is True
+    assert result["evo_name"] == "Espeon"
+
+
+def test_current_time_label_survives_an_unbound_settings_seam(no_settings):
+    assert "Day" in fe.current_time_label(datetime(2024, 1, 1, 9, 0))
+
+
+def test_check_friendship_evolution_survives_an_unbound_settings_seam(no_settings):
+    # The toggle defaults to True, so the checker proceeds instead of raising.
+    class _Win:
+        def __init__(self):
+            self.calls = []
+
+        def ask_pokemon_evo(self, *args):
+            self.calls.append(args)
+
+    win = _Win()
+    result = fe.check_friendship_evolution_for_pokemon(
+        "iid",
+        133,
+        win,
+        friendship=200,
+        attacks=["Tackle"],
+        pokemon_defeated=0,
+        now=datetime(2024, 1, 1, 9, 0),
+    )
+    assert result == 196  # Espeon
+    assert win.calls == [("iid", 133, 196)]
+
+
+def test_settings_helper_falls_back_to_defaults(no_settings):
+    assert fe._settings().get("evolution.day_start_hour", 6) == 6
+    assert fe._settings().get("anything.at.all") is None

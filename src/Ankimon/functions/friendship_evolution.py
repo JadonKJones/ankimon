@@ -77,6 +77,38 @@ class LevelEvolution(NamedTuple):
     time_of_day: Optional[str] = None
 
 
+class _DefaultSettings:
+    """Answers every setting with the caller's default.
+
+    Stands in for an unbound ``services.settings``.
+    """
+
+    @staticmethod
+    def get(key, default=None):
+        return default
+
+
+_DEFAULT_SETTINGS = _DefaultSettings()
+
+
+def _settings():
+    """Return the settings seam, or a defaults-only stand-in when it is unset.
+
+    ``services.settings`` is ``None`` until the registry is populated — early
+    boot, a profile swap in flight, a partially-wired headless run — and a bare
+    ``services.settings.get(...)`` then raises ``AttributeError`` from
+    ``evolution_readiness`` / ``get_time_of_day``, both of which sit on render
+    and review paths that otherwise degrade rather than raise (they already
+    coerce junk ids, junk friendship and junk hours). Every setting read in this
+    module is a preference with a sensible default, so answering with that
+    default is strictly better than raising. Mirrors the explicit ``None``
+    check the sibling clock in ``pokedex_functions.get_time_of_day`` makes, and
+    the ``try/except`` in :func:`_active_region` below.
+    """
+    settings_obj = services.settings
+    return settings_obj if settings_obj is not None else _DEFAULT_SETTINGS
+
+
 def _now_in_configured_tz() -> datetime:
     """Return the current time in the user's configured time zone.
 
@@ -84,7 +116,7 @@ def _now_in_configured_tz() -> datetime:
     when ``evolution.timezone_auto`` is off, a fixed ``evolution.timezone_offset``
     (hours, clamped to ±14) is applied instead.
     """
-    settings_obj = services.settings  # registry-backed; no singletons/aqt import
+    settings_obj = _settings()  # registry-backed; no singletons/aqt import
 
     if settings_obj.get("evolution.timezone_auto", True):
         return datetime.now()
@@ -143,7 +175,7 @@ def get_time_of_day(now: Optional[datetime] = None) -> str:
     Returns:
         ``"day"`` or ``"night"``.
     """
-    settings_obj = services.settings  # registry-backed; no singletons/aqt import
+    settings_obj = _settings()  # registry-backed; no singletons/aqt import
 
     moment = now if now is not None else _now_in_configured_tz()
     hour = moment.hour
@@ -167,7 +199,7 @@ def current_time_label(now: Optional[datetime] = None) -> str:
         A short, emoji-prefixed label including the current ``HH:MM`` time (and
         the UTC offset when a manual time zone is configured).
     """
-    settings_obj = services.settings  # registry-backed; no singletons/aqt import
+    settings_obj = _settings()  # registry-backed; no singletons/aqt import
 
     moment = now if now is not None else _now_in_configured_tz()
     time_of_day = get_time_of_day(moment)
@@ -1163,7 +1195,7 @@ def check_friendship_evolution_for_pokemon(
     Returns:
         The evolved species id if the evolution was triggered, else ``None``.
     """
-    settings_obj = services.settings  # registry-backed; no singletons/aqt import
+    settings_obj = _settings()  # registry-backed; no singletons/aqt import
 
     if (
         not settings_obj.get("evolution.friendship_time_enabled", True)
