@@ -447,14 +447,12 @@ def _process_battle_effects(
                 target = "user" if key.startswith("user.") else "opponent"
                 pokemon_name = get_pokemon_name(target)
 
-                # Extract stat name from key and localize it (falls back to a
-                # prettified English name if the stat_name_* key is missing).
+                # Extract stat name from key and localize it (official game name
+                # per language, English-prettified fallback).
+                from ..localized_text import stat_name as _stat_name
+
                 stat_part = key.split(".")[-1].replace("_boost", "")
-                stat_name = safe_translate(f"stat_name_{stat_part}")
-                if stat_name == f"stat_name_{stat_part}" or stat_name.startswith(
-                    "Battle effect:"
-                ):
-                    stat_name = stat_part.replace("_", " ").title()
+                stat_name = _stat_name(stat_part, stat_part.replace("_", " ").title())
 
                 if isinstance(before, (int, float)) and isinstance(after, (int, float)):
                     change_amount = after - before
