@@ -23,6 +23,7 @@ from .pokedex_functions import (
     _csv_gender_id,
     _evolution_row_gender_id,
     _load_moves_cache,
+    filter_gender_split_forms,
     pokemon_evolves_from_id,
     return_name_for_id,
     rows_for_key_in_table,
@@ -942,10 +943,25 @@ def _level_readiness(
     # it back: when every target is gated to the other gender the representative
     # is kept only so the UI can say why, and ``gender_ok`` keeps it out of
     # ``ready``.
-    caller_gender_id = _csv_gender_id(_pokemon_gender(pokemon))
+    pokemon_gender = _pokemon_gender(pokemon)
+    caller_gender_id = _csv_gender_id(pokemon_gender)
     gendered = [e for e in level_evos if _level_gender_gate(e.evo_id, caller_gender_id)]
     if gendered:
         level_evos = tuple(gendered)
+
+    # Second gender source, for splits pokemon_evolution.csv cannot express as
+    # gendered rows: veekun models Espurr -> Meowstic/Meowstic-F and Lechonk ->
+    # Oinkologne/Oinkologne-F as FORMS of one species, so neither carries a
+    # gender_id and the gate above sees no split — leaving the lowest-evo_id
+    # tie-break to hand every Espurr the male Meowstic. pokedex.json does carry
+    # it, on each evolved form's own `gender`. Narrows siblings only (see
+    # filter_gender_split_forms), so it can never empty the candidate list and
+    # `gender_ok` below stays driven by the CSV gate alone.
+    split = set(
+        filter_gender_split_forms([e.evo_id for e in level_evos], pokemon_gender)
+    )
+    if split:
+        level_evos = tuple(e for e in level_evos if e.evo_id in split)
 
     # Among the surviving targets prefer one eligible right now (its time matches
     # or it has no time requirement); an explicit-time row beats a blank-time one.
