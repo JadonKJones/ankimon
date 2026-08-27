@@ -614,11 +614,11 @@ def test_meowth_readiness_uses_level_route():
 def test_rows_for_key_in_table_returns_all_matching_rows():
     # The underlying helper must return *every* row for an evolved species, not
     # just the first (this is what fixes the Sylveon/Persian first-match bug).
-    # Use the real function/path captured by the module under test at load time
-    # (`fe.rows_for_key_in_table` / `fe.poke_evo_path`) rather than re-importing
-    # from the package, whose sys.modules entries other test modules replace with
+    # Use the real helper captured by the module under test at load time
+    # (`fe.evolution_rows_for_evolved_species`) rather than re-importing from
+    # the package, whose sys.modules entries other test modules replace with
     # mocks when the whole suite runs.
-    rows = fe.rows_for_key_in_table("evolved_species_id", 700, fe.poke_evo_path)
+    rows = fe.evolution_rows_for_evolved_species(700)
     assert len(rows) >= 2
     # Exactly one of Sylveon's rows carries the friendship requirement.
     happiness = [r.get("minimum_happiness") for r in rows]
