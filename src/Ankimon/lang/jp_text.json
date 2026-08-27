@@ -465,5 +465,12 @@
   "evolve_now_button": "⇈ {evo_name}に進化させる！ ⇈",
   "badge_ready": "⇈ 進化の準備ができました！",
   "badge_wait_day": "☀️ 昼の間に進化できます",
-  "badge_wait_night": "🌙 夜の間に進化できます"
+  "badge_wait_night": "🌙 夜の間に進化できます",
+  "stat_name_attack": "こうげき",
+  "stat_name_defense": "ぼうぎょ",
+  "stat_name_special_attack": "とくこう",
+  "stat_name_special_defense": "とくぼう",
+  "stat_name_speed": "すばやさ",
+  "stat_name_accuracy": "めいちゅうりつ",
+  "stat_name_evasion": "かいひりつ"
 }

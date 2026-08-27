@@ -367,7 +367,10 @@ class MovePickerDialog(QDialog):
             self.table.setItem(row_idx, 5, pp_item)
 
             # Description
-            desc_item = QTableWidgetItem(move.get("shortDesc") or "")
+            from ..move_names import format_move_description
+            desc_item = QTableWidgetItem(
+                format_move_description(move_name, move.get("shortDesc") or "")
+            )
             self.table.setItem(row_idx, 6, desc_item)
 
             if is_known:

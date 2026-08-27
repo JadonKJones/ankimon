@@ -31,6 +31,7 @@ from ..functions.pokedex_functions import (
     get_base_experience,
     get_effort_values,
     get_growth_rate,
+    get_pokemon_diff_lang_name,
     get_pretty_name_for_name,
     return_name_for_id,
     safe_int,
@@ -44,6 +45,7 @@ from ..pyobj.error_handler import show_warning_with_traceback
 from ..functions.trainer_functions import xp_share_gain_exp
 from ..functions.badges_functions import check_for_badge, receive_badge
 from ..functions.drawing_utils import tooltipWithColour
+from ..move_names import format_move_name
 from ..utils import (
     get_ev_spread,
     is_alive,
@@ -80,6 +82,31 @@ settings_obj = None
 translator = None
 ankimon_db = None
 pokemon_pc = None
+
+
+def _disp_name(pokemon) -> str:
+    """Localized display name for a PokemonObject, with an English fallback."""
+    return getattr(pokemon, "display_name", None) or get_pretty_name_for_name(
+        getattr(pokemon, "name", "")
+    )
+
+
+def _lang_id() -> int:
+    try:
+        return int(services.settings.get("misc.language", 9))
+    except Exception:
+        return 9
+
+
+def _evo_display_name(evo_id, fallback: str) -> str:
+    """Localized name for an evolution target id; ``fallback`` if unavailable."""
+    try:
+        name = get_pokemon_diff_lang_name(int(evo_id), _lang_id())
+        if name and name != "No Translation in this language":
+            return name
+    except Exception:
+        pass
+    return fallback
 
 
 ALL_NATURES = [
@@ -1426,15 +1453,15 @@ def save_main_pokemon_progress(
                     msg = ""
                     msg += translator.translate(
                         "mainpokemon_can_learn_new_attack",
-                        main_pokemon_name=main_pokemon.name.capitalize(),
+                        main_pokemon_name=_disp_name(main_pokemon),
                     )
                 for new_attack in new_attacks:
                     if len(attacks) < 4 and new_attack not in attacks:
                         attacks.append(new_attack)
                         msg += translator.translate(
                             "mainpokemon_learned_new_attack",
-                            new_attack_name=new_attack,
-                            main_pokemon_name=main_pokemon.name.capitalize(),
+                            new_attack_name=format_move_name(new_attack),
+                            main_pokemon_name=_disp_name(main_pokemon),
                         )
                         color = "#6A4DAC"
                         if not _in_bulk_resolve():
@@ -1517,8 +1544,8 @@ def save_main_pokemon_progress(
                     "info",
                     translator.translate(
                         "pokemon_about_to_evolve",
-                        main_pokemon_name=main_pokemon.name,
-                        evo_pokemon_name=evo_display_name,
+                        main_pokemon_name=_disp_name(main_pokemon),
+                        evo_pokemon_name=_evo_display_name(evo_id, evo_display_name),
                         main_pokemon_level=main_pokemon.level,
                     ),
                 )
@@ -1533,7 +1560,7 @@ def save_main_pokemon_progress(
     msg = ""
     msg += translator.translate(
         "mainpokemon_gained_xp",
-        main_pokemon_name=main_pokemon.name,
+        main_pokemon_name=_disp_name(main_pokemon),
         exp=exp,
         experience_till_next_level=experience_till_next_level,
         main_pokemon_xp=main_pokemon.xp,
@@ -1667,8 +1694,8 @@ def save_main_pokemon_progress(
                         "info",
                         translator.translate(
                             "pokemon_about_to_evolve_friendship",
-                            main_pokemon_name=main_pokemon.name,
-                            evo_pokemon_name=friendship_evo_name,
+                            main_pokemon_name=_disp_name(main_pokemon),
+                            evo_pokemon_name=_evo_display_name(friendship_evo_id, friendship_evo_name),
                         ),
                     )
         mainpkmndata["pokemon_defeated"] = main_pokemon.pokemon_defeated
@@ -1897,7 +1924,9 @@ def catch_pokemon(
 
     msg = translator.translate(
         "caught_wild_pokemon",
-        enemy_pokemon_name=get_pretty_name_for_name(enemy_pokemon.name),
+        enemy_pokemon_name=getattr(
+            enemy_pokemon, "display_name", get_pretty_name_for_name(enemy_pokemon.name)
+        ),
     )
 
     if settings_obj.get("gui.pop_up_dialog_message_on_defeat") is True:
@@ -2168,7 +2197,10 @@ def handle_main_pokemon_faint(
     one, so this path does just the faint bookkeeping (heal + reset).
     """
     msg = translator.translate(
-        "pokemon_fainted", enemy_pokemon_name=main_pokemon.name.capitalize()
+        "pokemon_fainted",
+        enemy_pokemon_name=getattr(
+            main_pokemon, "display_name", main_pokemon.name.capitalize()
+        ),
     )
     tooltipWithColour(msg, "#E12939")
     events.emit("faint", who="main", pokemon=main_pokemon.name)

@@ -447,25 +447,21 @@ def _process_battle_effects(
                 target = "user" if key.startswith("user.") else "opponent"
                 pokemon_name = get_pokemon_name(target)
 
-                # Extract stat name from key
+                # Extract stat name from key and localize it (falls back to a
+                # prettified English name if the stat_name_* key is missing).
                 stat_part = key.split(".")[-1].replace("_boost", "")
-                stat_names = {
-                    "attack": "Attack",
-                    "defense": "Defense",
-                    "special_attack": "Special Attack",
-                    "special_defense": "Special Defense",
-                    "speed": "Speed",
-                    "accuracy": "Accuracy",
-                    "evasion": "Evasion",
-                }
-                stat_name = stat_names.get(
-                    stat_part, stat_part.replace("_", " ").title()
-                )
+                stat_name = safe_translate(f"stat_name_{stat_part}")
+                if stat_name == f"stat_name_{stat_part}" or stat_name.startswith(
+                    "Battle effect:"
+                ):
+                    stat_name = stat_part.replace("_", " ").title()
 
                 if isinstance(before, (int, float)) and isinstance(after, (int, float)):
                     change_amount = after - before
                     if change_amount != 0:
-                        direction = "increased" if change_amount > 0 else "decreased"
+                        direction = safe_translate(
+                            "stat_increased" if change_amount > 0 else "stat_decreased"
+                        )
                         message = safe_translate(
                             "effect_stat_change",
                             pokemon_name=pokemon_name,
