@@ -750,7 +750,10 @@ def _run_off_thread(fn, *args, **kwargs):
         except BaseException as exc:  # surfaced on the calling thread below
             box["error"] = exc
 
-    worker = _threading.Thread(target=_target)
+    # daemon so a deadlocked fn cannot keep the interpreter alive at exit —
+    # the join(timeout) below already gave up on it, and a live non-daemon
+    # thread would hang the whole suite on shutdown anyway.
+    worker = _threading.Thread(target=_target, daemon=True)
     worker.start()
     worker.join(timeout=30)
     assert not worker.is_alive(), "worker thread hung"
@@ -870,6 +873,91 @@ def test_off_main_thread_move_learn_is_queued_not_dropped(monkeypatch):
     assert db.rows["OFFTHREAD"]["attacks"] == [
         "tackle", "growl", "quick-attack", "thunder-shock",
     ]
+
+
+def test_flush_landing_mid_attribution_cannot_lose_the_move(monkeypatch):
+    """A queued decision must not be drained before its own row is written.
+
+    The queue is process-wide and every flush drains all of it, but each
+    attribution only schedules its flush after its own ``save_pokemon()``. A
+    grant earlier in the same batch can therefore have a ``run_on_main``
+    callback already in flight when the worker reaches the next grant — and
+    that callback lands on the GUI thread whenever Anki gets round to it,
+    including in the window between this grant queuing its decision and
+    writing its row. Draining there means the flush saves the swap and this
+    grant's in-flight ``save_pokemon()`` immediately overwrites it with the
+    pre-swap snapshot: the move is gone, with the queue empty and nothing
+    logged. The decision is held locally until the row is written instead.
+
+    The interleave is forced deterministically (no second thread, no sleeps)
+    by flushing from inside ``save_pokemon`` — exactly the moment that is
+    unsafe.
+    """
+    from Ankimon import utils as _utils
+
+    # Same submodule object mobile_sync's function-local import resolves; the
+    # explicit import keeps this test runnable on its own (``-k`` a single
+    # name), not just after whichever earlier test happened to pull it in.
+    import Ankimon.functions.pokemon_functions  # noqa: F401
+
+    _pf = sys.modules["Ankimon.functions.pokemon_functions"]
+    monkeypatch.setattr(
+        _pf, "find_experience_for_level", lambda *a, **k: 50, raising=False
+    )
+    monkeypatch.setattr(
+        _pf,
+        "get_levelup_move_for_pokemon",
+        lambda name, level: ["thunderbolt"],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        services, "main_pokemon", _FakeCompanionSingleton("RACE"), raising=False
+    )
+    monkeypatch.setattr(_utils, "in_bulk_resolve", False, raising=False)
+    # The flush under test is the interleaved one below, not whatever the
+    # scheduler would manage in a stubbed-Qt environment.
+    monkeypatch.setattr(ms, "_schedule_move_learn_flush", lambda **kw: None)
+
+    class _InterleavingDB(_FakeCompanionDB):
+        """Stands in for the earlier grant's GUI callback firing mid-save."""
+
+        def __init__(self, *rows):
+            super().__init__(*rows)
+            self.interleaved = False
+
+        def save_pokemon(self, pkmndata):
+            if not self.interleaved:
+                self.interleaved = True  # set first: flush saves through here too
+                ms.flush_pending_move_learns(db=self, logger=_Logger())
+            super().save_pokemon(pkmndata)
+
+    class _Presenter:
+        def choose_attack_to_replace(self, attacks, new_attack):
+            return "growl"
+
+    monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+
+    db = _InterleavingDB(_full_moveset_row("RACE"))
+
+    _run_off_thread(
+        ms._attribute_xp_and_evs_to_companion,
+        "RACE",
+        100,
+        {},
+        _Settings(),
+        db=db,
+    )
+
+    assert db.interleaved, "the mid-save flush never ran — test proves nothing"
+
+    # The next GUI-thread pass, now that the row is written.
+    ms.flush_pending_move_learns(db=db, logger=_Logger())
+
+    assert db.rows["RACE"]["attacks"] == [
+        "tackle", "thunderbolt", "quick-attack", "thunder-shock",
+    ]
+    with ms._pending_move_learns_lock:
+        assert ms._pending_move_learns == []
 
 
 def test_queued_move_learns_are_deduped(mobile_db):

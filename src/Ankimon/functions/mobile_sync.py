@@ -2345,6 +2345,10 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
     color = "#6A4DAC"
 
     levels_gained = 0
+    # Move-replacement decisions this call has to defer to the GUI thread.
+    # Held here and only published to the shared queue once this companion's
+    # row has been saved — see the enqueue site below for why.
+    deferred_move_learns = []
     # level-ups
     while int(find_experience_for_level(growth_rate, level, remove_cap)) < xp and (level_cap is None or level < level_cap):
         if levels_gained >= 10:
@@ -2428,9 +2432,15 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
                                 idx = attacks.index(selected_attack)
                                 attacks[idx] = new_attack
                         else:
-                            _queue_move_learn_prompt(
-                                companion_id, pkmndata.get("name", ""), new_attack
-                            )
+                            # Parked LOCALLY, not on the global queue, until
+                            # this row is written further down. The queue is
+                            # process-wide and every flush drains all of it,
+                            # so publishing here would let an earlier
+                            # companion's already-scheduled run_on_main
+                            # callback pick this entry up, save the move
+                            # swap, and then have our own save_pokemon()
+                            # below overwrite it with this pre-swap snapshot.
+                            deferred_move_learns.append(new_attack)
             pkmndata["attacks"] = attacks
 
     pkmndata["level"] = level
@@ -2543,6 +2553,12 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
         mp.invalidate_cp_cache()
 
     # Only now — the row this function owns is written, so the flush's own
-    # save_pokemon() for a move swap can no longer be clobbered by it.
+    # save_pokemon() for a move swap can no longer be clobbered by it. Both
+    # steps belong here for the same reason: publishing only after the save
+    # is what keeps the process-wide queue free of decisions whose row is
+    # still in flight, so a flush scheduled by an earlier grant can drain it
+    # at any point without racing this one.
+    for pending_attack in deferred_move_learns:
+        _queue_move_learn_prompt(companion_id, pkmndata.get("name", ""), pending_attack)
     _schedule_move_learn_flush(db=db, logger=logger)
 
