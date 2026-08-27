@@ -279,6 +279,11 @@ def test_setting_the_companion_repaints_an_open_ankimon_window(pd_module):
     mod, fake_services = pd_module
     window = _FakeTestWindow()
     fake_services.test_window = window
+    # A distinct sentinel, NOT the None both sides already default to: the
+    # window has to receive the battler this save promoted, and `is None`
+    # would hold just as well if the branch never assigned anything at all.
+    battler = object()
+    fake_services.main_pokemon = battler
     pd = _make_pd(pd_module)
 
     result = pd.handle_save_team(["a", "b"], "", "b")
@@ -286,17 +291,24 @@ def test_setting_the_companion_repaints_an_open_ankimon_window(pd_module):
     assert result["ok"] is True
     assert fake_services.db.set_main_calls == ["b"]
     assert window.force_display_calls == 1
-    assert window.main_pokemon is fake_services.main_pokemon
+    assert window.main_pokemon is battler
 
 
 def test_a_window_off_the_battle_view_is_updated_but_not_repainted(pd_module):
-    """The death/catch screen must not be painted over by a team save."""
+    """The death/catch screen must not be painted over by a team save.
+
+    The window still takes the new battler — it just isn't repainted until it
+    is back on the battle view, so the next render shows the right Pokémon.
+    """
     mod, fake_services = pd_module
     window = _FakeTestWindow(current_view="death")
     fake_services.test_window = window
+    battler = object()
+    fake_services.main_pokemon = battler
     pd = _make_pd(pd_module)
 
     assert pd.handle_save_team(["a", "b"], "", "b")["ok"] is True
+    assert window.main_pokemon is battler
     assert window.force_display_calls == 0
 
 
