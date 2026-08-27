@@ -4,6 +4,7 @@ Stub the Ankimon package in sys.modules so that individual submodules can be
 imported without triggering Ankimon/__init__.py, which depends on Anki internals.
 """
 
+import contextlib
 import sys
 import types
 from pathlib import Path
@@ -131,3 +132,47 @@ def restore_package_stubs():
     do_restore()
     yield
     do_restore()
+
+
+@contextlib.contextmanager
+def isolated_modules(*prefixes, extra=()):
+    """Clear the named module namespaces, then restore ``sys.modules`` EXACTLY.
+
+    Several tests have to import a module against the *genuine* PyQt6 (and a
+    synthetic ``aqt``) even though earlier suite modules have replaced those
+    entries with ``MagicMock``s. Dropping the mocks is the easy half; putting
+    things back is the half that is easy to get wrong.
+
+    Restoring only the saved keys is not enough. A block that drops ``PyQt6.*``
+    so the real package can load leaves the freshly imported submodules behind,
+    so a later test that installs a mocked ``PyQt6`` parent ends up with that
+    mock and genuine children such as ``PyQt6.QtWebChannel`` hanging off it —
+    order-dependent, and dependent on which test ran first. Likewise a fixture
+    that installs synthetic ``aqt``/``aqt.qt``/``aqt.utils`` modules must take
+    them away again.
+
+    So: on entry every module whose top-level name is in ``prefixes`` (plus any
+    exact name in ``extra``) is removed; on exit everything added under those
+    same names is removed and the original entries are put back. Untracked
+    namespaces are left alone. Exceptions still restore, so an import failure
+    inside the block cannot leak state either.
+
+    Args:
+        *prefixes: Top-level package names to isolate (e.g. ``"PyQt6"``).
+        extra: Exact module names to isolate as well (e.g. a single submodule
+            that must be re-executed against the swapped-in dependencies).
+    """
+    tracked = set(extra)
+
+    def _is_tracked(name):
+        return name.split(".")[0] in prefixes or name in tracked
+
+    saved = {name: mod for name, mod in sys.modules.items() if _is_tracked(name)}
+    for name in saved:
+        del sys.modules[name]
+    try:
+        yield
+    finally:
+        for name in [n for n in list(sys.modules) if _is_tracked(n) and n not in saved]:
+            del sys.modules[name]
+        sys.modules.update(saved)

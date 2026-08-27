@@ -23,6 +23,8 @@ import types
 
 import pytest
 
+from conftest import isolated_modules
+
 
 @pytest.fixture
 def download_sprites():
@@ -30,60 +32,56 @@ def download_sprites():
 
     Earlier modules in the suite replace ``PyQt6`` with a ``MagicMock``, which
     turns ``from PyQt6.QtWidgets import QTextEdit`` (via ``gui_entities``) into
-    an ImportError and would silently skip these tests. Drop those entries for
-    the duration so the real package — a documented test dependency — loads,
-    then hand them back.
+    an ImportError. ``isolated_modules`` drops those entries for the duration so
+    the real package — a documented test dependency — loads, and restores
+    ``sys.modules`` EXACTLY afterwards: the submodules imported inside the block
+    and the synthetic ``aqt`` modules installed below are removed again, so a
+    later test that installs a mocked ``PyQt6`` parent cannot end up with
+    genuine children hanging off it.
     """
-    saved = {
-        name: mod
-        for name, mod in sys.modules.items()
-        if name.split(".")[0] in ("PyQt6", "aqt")
-    }
-    for name in saved:
-        del sys.modules[name]
+    with isolated_modules(
+        "PyQt6",
+        "aqt",
+        extra=("Ankimon.pyobj.download_sprites", "Ankimon.gui_entities"),
+    ):
+        # `gui_entities` (imported transitively) wants `aqt.qt.QDialog/qconnect`
+        # and `aqt.utils`; Anki is absent from CI, so forward to the real PyQt6
+        # the way Anki's own `aqt.qt` does.
+        import PyQt6.QtCore
+        import PyQt6.QtGui
+        import PyQt6.QtWidgets
 
-    # `gui_entities` (imported transitively) wants `aqt.qt.QDialog/qconnect` and
-    # `aqt.utils`; Anki is absent from CI, so forward to the real PyQt6 the way
-    # Anki's own `aqt.qt` does.
-    import PyQt6.QtCore
-    import PyQt6.QtGui
-    import PyQt6.QtWidgets
+        aqt = types.ModuleType("aqt")
+        aqt.__path__ = []
+        aqt.mw = None
+        aqt_qt = types.ModuleType("aqt.qt")
+        for source in (PyQt6.QtCore, PyQt6.QtGui, PyQt6.QtWidgets):
+            for name in dir(source):
+                if not name.startswith("_"):
+                    setattr(aqt_qt, name, getattr(source, name))
+        aqt_qt.qconnect = lambda signal, slot: signal.connect(slot)
+        aqt_utils = types.ModuleType("aqt.utils")
+        aqt_utils.showWarning = lambda *a, **k: None
+        aqt_utils.showInfo = lambda *a, **k: None
+        aqt_utils.tooltip = lambda *a, **k: None
+        sys.modules["aqt"] = aqt
+        sys.modules["aqt.qt"] = aqt_qt
+        sys.modules["aqt.utils"] = aqt_utils
 
-    aqt = types.ModuleType("aqt")
-    aqt.__path__ = []
-    aqt.mw = None
-    aqt_qt = types.ModuleType("aqt.qt")
-    for source in (PyQt6.QtCore, PyQt6.QtGui, PyQt6.QtWidgets):
-        for name in dir(source):
-            if not name.startswith("_"):
-                setattr(aqt_qt, name, getattr(source, name))
-    aqt_qt.qconnect = lambda signal, slot: signal.connect(slot)
-    aqt_utils = types.ModuleType("aqt.utils")
-    aqt_utils.showWarning = lambda *a, **k: None
-    aqt_utils.showInfo = lambda *a, **k: None
-    aqt_utils.tooltip = lambda *a, **k: None
-    sys.modules["aqt"] = aqt
-    sys.modules["aqt.qt"] = aqt_qt
-    sys.modules["aqt.utils"] = aqt_utils
-
-    sys.modules.pop("Ankimon.pyobj.download_sprites", None)
-    sys.modules.pop("Ankimon.gui_entities", None)
-    try:
-        module = importlib.import_module("Ankimon.pyobj.download_sprites")
-    except Exception as e:
-        sys.modules.update(saved)
-        # Deliberately NOT pytest.skip. PyQt6 is a documented test dependency
-        # and `aqt` is supplied by this fixture, so an import failure means the
-        # stub set has drifted from what the module imports — and a skip would
-        # report that as green with every test here silently disabled, which is
-        # the exact failure mode this file's own subject matter is about.
-        raise AssertionError(
-            "download_sprites is no longer importable with this fixture's Qt "
-            "stubs — extend them to cover its new imports rather than letting "
-            f"these tests silently skip. Original error: {e!r}"
-        ) from e
-    yield module
-    sys.modules.update(saved)
+        try:
+            module = importlib.import_module("Ankimon.pyobj.download_sprites")
+        except Exception as e:
+            # Deliberately NOT pytest.skip. PyQt6 is a documented test
+            # dependency and `aqt` is supplied right here, so an import failure
+            # means the stub set has drifted from what the module imports — and
+            # a skip would report that as green with every test in this file
+            # silently disabled, which is this file's own subject matter.
+            raise AssertionError(
+                "download_sprites is no longer importable with this fixture's "
+                "Qt stubs — extend them to cover its new imports rather than "
+                f"letting these tests silently skip. Original error: {e!r}"
+            ) from e
+        yield module
 
 
 def _fresh_import(monkeypatch, calls):
@@ -152,17 +150,17 @@ def test_download_dialog_still_runs_when_a_qapplication_exists(
             built.append(1)
             return object()  # never equals QDialog.DialogCode.Accepted
 
+    # A stand-in that satisfies the guard's isinstance check: patch the class
+    # the module looks up AND make instance() hand back one of it.
     class _App:
-        # pytest-qt's teardown hook calls processEvents() on whatever
-        # QApplication.instance() hands back, so the stand-in needs it.
-        def processEvents(self, *args, **kwargs):
-            pass
+        @staticmethod
+        def instance():
+            return _app
 
-    fake_app = _App()
+    _app = _App()
+
     monkeypatch.setattr(download_sprites, "AgreementDialog", _Dialog)
-    monkeypatch.setattr(
-        download_sprites.QApplication, "instance", staticmethod(lambda: fake_app)
-    )
+    monkeypatch.setattr(download_sprites, "QApplication", _App)
 
     download_sprites.show_agreement_and_download_dialog()
     assert built == [1], "the guard swallowed a legitimate GUI-mode call"

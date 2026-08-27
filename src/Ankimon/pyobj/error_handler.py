@@ -308,7 +308,10 @@ def show_warning_with_traceback(
     # Tier-1 harness that turned any recoverable error into a force-close —
     # exactly inverting this module's purpose, which is to make errors
     # observable. Headless we stop after the log + error event above.
-    if QApplication.instance() is None:
+    # isinstance, not `is None`: QApplication.instance() is inherited from
+    # QCoreApplication and returns whatever application exists, so a console-only
+    # QCoreApplication reads as non-None and the QDialog below aborts anyway.
+    if not isinstance(QApplication.instance(), QApplication):
         return
 
     # Constructing a QWidget/QDialog off the Qt GUI thread is a hard Qt violation

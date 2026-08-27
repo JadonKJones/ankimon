@@ -15,10 +15,16 @@ out any headless play-through that got that far.
 """
 
 import importlib
+import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from conftest import isolated_modules
+
+_SRC = Path(__file__).parent.parent / "src"
 
 
 @pytest.fixture
@@ -30,35 +36,34 @@ def logger_env(tmp_path):
     (so ``QApplication.instance()`` answers with a mock instead of ``None``,
     and the dialog class is a mock too) and may leave a stale ``InfoLogger``
     bound to it. Without this the tests silently pass or silently miss.
-    """
-    saved = {
-        name: mod for name, mod in sys.modules.items() if name.split(".")[0] == "PyQt6"
-    }
-    for name in saved:
-        del sys.modules[name]
-    sys.modules.pop("Ankimon.pyobj.InfoLogger", None)
-    try:
-        widgets = importlib.import_module("PyQt6.QtWidgets")
-        module = importlib.import_module("Ankimon.pyobj.InfoLogger")
-    except Exception as e:
-        sys.modules.update(saved)
-        # Deliberately NOT pytest.skip — see tests/test_web_bag_trade_evolutions
-        # .py's fixture docstring. PyQt6 is a documented test dependency, so an
-        # import failure here is drift to fix, not an environment to tolerate.
-        raise AssertionError(
-            "InfoLogger / PyQt6.QtWidgets no longer importable for this guard "
-            f"test — fix the fixture rather than skipping. Original error: {e!r}"
-        ) from e
 
-    logger = module.ShowInfoLogger(
-        name=f"test-{tmp_path.name}", log_filename=str(tmp_path / "app.log")
-    )
-    # `module.events` is the bus the logger actually emits on — importing
-    # `Ankimon.events` separately can hand back a different (mocked) object.
-    yield SimpleNamespace(
-        module=module, logger=logger, widgets=widgets, events=module.events
-    )
-    sys.modules.update(saved)
+    ``isolated_modules`` puts ``sys.modules`` back exactly, including removing
+    the submodules imported inside the block, so nothing here can make a later
+    test order-dependent.
+    """
+    with isolated_modules("PyQt6", extra=("Ankimon.pyobj.InfoLogger",)):
+        try:
+            widgets = importlib.import_module("PyQt6.QtWidgets")
+            module = importlib.import_module("Ankimon.pyobj.InfoLogger")
+        except Exception as e:
+            # Deliberately NOT pytest.skip — see the fixture docstring in
+            # tests/test_web_bag_trade_evolutions.py. PyQt6 is a documented test
+            # dependency, so an import failure here is drift to fix, not an
+            # environment to tolerate.
+            raise AssertionError(
+                "InfoLogger / PyQt6.QtWidgets no longer importable for this "
+                f"guard test — fix the fixture rather than skipping. Original "
+                f"error: {e!r}"
+            ) from e
+
+        logger = module.ShowInfoLogger(
+            name=f"test-{tmp_path.name}", log_filename=str(tmp_path / "app.log")
+        )
+        # `module.events` is the bus the logger actually emits on — importing
+        # `Ankimon.events` separately can hand back a different (mocked) object.
+        yield SimpleNamespace(
+            module=module, logger=logger, widgets=widgets, events=module.events
+        )
 
 
 def test_log_and_showinfo_builds_no_dialog_without_an_application(
@@ -100,9 +105,10 @@ def test_log_and_showinfo_shows_the_dialog_when_an_application_exists(
     monkeypatch, logger_env
 ):
     built = []
+    widgets = logger_env.widgets
 
     class _MessageBox:
-        Icon = logger_env.widgets.QMessageBox.Icon
+        Icon = widgets.QMessageBox.Icon
 
         def setWindowTitle(self, *a):
             pass
@@ -116,16 +122,17 @@ def test_log_and_showinfo_shows_the_dialog_when_an_application_exists(
         def exec(self):
             built.append(1)
 
+    # A stand-in for QApplication that satisfies the guard's isinstance check:
+    # patch the class the module looks up AND make instance() return one of it.
     class _App:
-        # pytest-qt's teardown hook calls processEvents() on the instance.
-        def processEvents(self, *args, **kwargs):
-            pass
+        @staticmethod
+        def instance():
+            return _app
 
-    fake_app = _App()
-    monkeypatch.setattr(logger_env.widgets, "QMessageBox", _MessageBox)
-    monkeypatch.setattr(
-        logger_env.widgets.QApplication, "instance", staticmethod(lambda: fake_app)
-    )
+    _app = _App()
+
+    monkeypatch.setattr(widgets, "QMessageBox", _MessageBox)
+    monkeypatch.setattr(widgets, "QApplication", _App)
 
     logger_env.logger.log_and_showinfo("info", "gui mode")
     assert built == [1], "the guard swallowed a legitimate GUI-mode popup"
@@ -142,19 +149,12 @@ def test_log_and_showinfo_shows_the_dialog_when_an_application_exists(
 @pytest.fixture
 def error_handler():
     """`error_handler` re-imported on a genuine PyQt6 (see `logger_env`)."""
-    saved = {
-        name: mod for name, mod in sys.modules.items() if name.split(".")[0] == "PyQt6"
-    }
-    for name in saved:
-        del sys.modules[name]
-    sys.modules.pop("Ankimon.pyobj.error_handler", None)
-    try:
-        module = importlib.import_module("Ankimon.pyobj.error_handler")
-    except Exception as e:
-        sys.modules.update(saved)
-        raise AssertionError(f"error_handler no longer importable: {e!r}") from e
-    yield module
-    sys.modules.update(saved)
+    with isolated_modules("PyQt6", extra=("Ankimon.pyobj.error_handler",)):
+        try:
+            module = importlib.import_module("Ankimon.pyobj.error_handler")
+        except Exception as e:
+            raise AssertionError(f"error_handler no longer importable: {e!r}") from e
+        yield module
 
 
 def test_error_dialog_is_not_built_without_a_qapplication(monkeypatch, error_handler):
@@ -205,17 +205,17 @@ def test_error_dialog_is_still_built_when_an_application_exists(
     reached = []
 
     class _App:
-        def processEvents(self, *args, **kwargs):
-            pass
+        @staticmethod
+        def instance():
+            return _app
+
+    _app = _App()
 
     def _record(*args, **kwargs):
         reached.append(1)
         raise RuntimeError("stop here — past the guard is all we need to prove")
 
-    fake_app = _App()
-    monkeypatch.setattr(
-        error_handler.QApplication, "instance", staticmethod(lambda: fake_app)
-    )
+    monkeypatch.setattr(error_handler, "QApplication", _App)
     monkeypatch.setattr(error_handler, "load_error_images", _record)
 
     with pytest.raises(RuntimeError):
@@ -223,3 +223,107 @@ def test_error_dialog_is_still_built_when_an_application_exists(
             exception=ValueError("boom"), message="gui mode"
         )
     assert reached == [1], "the guard swallowed a legitimate GUI-mode error dialog"
+
+
+# --------------------------------------------------------------------------- #
+# The other half of the guard: QApplication.instance() is inherited from
+# QCoreApplication and returns whatever application exists, so a console-only
+# QCoreApplication comes back NON-None. A guard written as `instance() is None`
+# therefore passes and the QWidget built after it aborts anyway.
+#
+# Run in subprocesses: the failure mode is SIGABRT, which cannot be caught
+# in-process, and only a fresh interpreter can create a QCoreApplication (Qt
+# permits one application object per process, and the suite may already have a
+# QApplication from pytest-qt). A non-zero exit IS the regression.
+# --------------------------------------------------------------------------- #
+_QCORE_STUBS = """
+import sys, types
+sys.path.insert(0, {src!r})
+from unittest.mock import MagicMock
+
+# Package stubs so relative imports resolve without running Ankimon/__init__.py.
+for pkg in ("Ankimon", "Ankimon.pyobj", "Ankimon.functions"):
+    m = types.ModuleType(pkg)
+    m.__path__ = [{src!r} + "/Ankimon" + pkg[len("Ankimon"):].replace(".", "/")]
+    m.__package__ = pkg
+    sys.modules[pkg] = m
+
+# `aqt` stub forwarding to the real PyQt6, so this matches CI (no Anki) and does
+# not drag in QtWebEngineWidgets, which Qt requires to be imported before any
+# application object exists.
+import PyQt6.QtCore, PyQt6.QtGui, PyQt6.QtWidgets
+aqt = types.ModuleType("aqt"); aqt.__path__ = []; aqt.mw = None
+aqt_qt = types.ModuleType("aqt.qt")
+for _src in (PyQt6.QtCore, PyQt6.QtGui, PyQt6.QtWidgets):
+    for _n in dir(_src):
+        if not _n.startswith("_"):
+            setattr(aqt_qt, _n, getattr(_src, _n))
+aqt_qt.qconnect = lambda sig, slot: sig.connect(slot)
+aqt_utils = types.ModuleType("aqt.utils")
+aqt_utils.showWarning = aqt_utils.showInfo = aqt_utils.tooltip = lambda *a, **k: None
+sys.modules["aqt"] = aqt
+sys.modules["aqt.qt"] = aqt_qt
+sys.modules["aqt.utils"] = aqt_utils
+"""
+
+_QCORE_APP = """
+# Import the module under test BEFORE the application exists — that is the real
+# load order, and Qt forbids importing some modules after an app is created.
+{imports}
+
+from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtWidgets import QApplication
+_app = QCoreApplication([])
+assert QApplication.instance() is not None, (
+    "premise: a QCoreApplication reads as non-None"
+)
+assert not isinstance(QApplication.instance(), QApplication), (
+    "premise: a QCoreApplication is not widget-capable"
+)
+"""
+
+
+def _run_under_qcoreapplication(imports, body):
+    """Run ``body`` in a fresh interpreter that owns only a QCoreApplication.
+
+    A non-zero exit IS the regression: the failure mode is Qt calling abort(),
+    which no in-process assertion could observe.
+    """
+    code = (
+        _QCORE_STUBS.format(src=str(_SRC)) + _QCORE_APP.format(imports=imports) + body
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=300
+    )
+    assert proc.returncode == 0, (
+        f"guard failed under a QCoreApplication (exit {proc.returncode}; "
+        "-6 is SIGABRT / 'Must construct a QApplication before a QWidget')\n"
+        f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+    )
+    assert "OK" in proc.stdout, f"body did not complete: {proc.stdout}{proc.stderr}"
+    return proc
+
+
+def test_log_and_showinfo_survives_a_qcoreapplication_only_process(tmp_path):
+    _run_under_qcoreapplication(
+        "from Ankimon.pyobj.InfoLogger import ShowInfoLogger",
+        "log = ShowInfoLogger(name='qcore', "
+        f"log_filename={str(tmp_path / 'a.log')!r})\n"
+        "log.log_and_showinfo('info', 'no widgets available here')\n"
+        "print('OK')\n",
+    )
+
+
+def test_error_dialog_survives_a_qcoreapplication_only_process():
+    _run_under_qcoreapplication(
+        "from Ankimon.pyobj.error_handler import show_warning_with_traceback",
+        "show_warning_with_traceback(exception=ValueError('boom'), message='qcore')\n"
+        "print('OK')\n",
+    )
+
+
+def test_sprite_download_survives_a_qcoreapplication_only_process():
+    _run_under_qcoreapplication(
+        "from Ankimon.pyobj.download_sprites import show_agreement_and_download_dialog",
+        "show_agreement_and_download_dialog()\nprint('OK')\n",
+    )
