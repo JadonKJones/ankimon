@@ -32,6 +32,10 @@ def _load_move_name_lookups(lang_code: str):
     return base_lookup, localized_lookup
 
 
+def _normalize_move_key(move: str) -> str:
+    return move.replace(" ", "").replace("-", "").replace("_", "").lower()
+
+
 def format_move_name(move: str) -> str:
     """
     Look up the move name using the normalized key.
@@ -39,9 +43,30 @@ def format_move_name(move: str) -> str:
     """
     lang_code = _current_lang_code()
     base_lookup, localized_lookup = _load_move_name_lookups(lang_code)
-    key = move.replace(" ", "").replace("-", "").replace("_", "").lower()
+    key = _normalize_move_key(move)
     return (
         localized_lookup.get(key)
         or base_lookup.get(key)
         or " ".join(word.capitalize() for word in move.replace("_", " ").split())
     )
+
+
+@lru_cache(maxsize=None)
+def _load_move_desc_lookup(lang_code: str) -> dict:
+    """Localized in-game move descriptions (move_desc_<lang>.json), or {}."""
+    path = move_names_file_path.with_name(f"move_desc_{lang_code}.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def format_move_description(move: str, english_fallback: str = "") -> str:
+    """
+    Localized in-game description for a move. Returns ``english_fallback`` (the
+    caller's English shortDesc/desc) when no localized text is available, so
+    English users and untranslated moves are unaffected.
+    """
+    localized = _load_move_desc_lookup(_current_lang_code())
+    return localized.get(_normalize_move_key(move)) or english_fallback

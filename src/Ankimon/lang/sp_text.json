@@ -464,5 +464,12 @@
   "evolve_now_button": "⇈ ¡Evolucionar a {evo_name} ahora! ⇈",
   "badge_ready": "⇈ ¡Listo para evolucionar!",
   "badge_wait_day": "☀️ Listo para evolucionar durante el día",
-  "badge_wait_night": "🌙 Listo para evolucionar durante la noche"
+  "badge_wait_night": "🌙 Listo para evolucionar durante la noche",
+  "stat_name_attack": "Ataque",
+  "stat_name_defense": "Defensa",
+  "stat_name_special_attack": "Ataque Especial",
+  "stat_name_special_defense": "Defensa Especial",
+  "stat_name_speed": "Velocidad",
+  "stat_name_accuracy": "precisión",
+  "stat_name_evasion": "evasión"
 }
