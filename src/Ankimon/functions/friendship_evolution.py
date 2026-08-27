@@ -23,12 +23,11 @@ from .pokedex_functions import (
     _csv_gender_id,
     _evolution_row_gender_id,
     _load_moves_cache,
+    evolution_rows_for_evolved_species,
     filter_gender_split_forms,
     pokemon_evolves_from_id,
     return_name_for_id,
-    rows_for_key_in_table,
 )
-from ..resources import poke_evo_path
 from ..services import services
 
 # Reference value for friendship progress bars: the bar reads "full" at this
@@ -308,7 +307,7 @@ def get_friendship_evolutions_for_species(
         # scan them all and keep the one carrying a positive minimum_happiness.
         # check_key_in_table's first-match would miss e.g. Sylveon, whose blank
         # row precedes its friendship row in the CSV.
-        rows = rows_for_key_in_table("evolved_species_id", evo, poke_evo_path)
+        rows = evolution_rows_for_evolved_species(evo)
         # If this evolved species is also reachable by levelling up, leave it to
         # the level path instead of offering a friendship evolution. The bundled
         # CSV carries no Pokémon *form* data, so it conflates e.g. Kantonian
@@ -463,7 +462,7 @@ def get_level_evolutions_for_species(
         # plain level-up row. An evolved species may carry several method rows
         # (e.g. a level-up row *and* a friendship row), so first-match would pick
         # the wrong one when the level row isn't listed first.
-        for row in rows_for_key_in_table("evolved_species_id", evo, poke_evo_path):
+        for row in evolution_rows_for_evolved_species(evo):
             # Level-up trigger only (item/trade/etc. evolutions are out of scope).
             try:
                 trigger_id = int(row.get("evolution_trigger_id", 0))

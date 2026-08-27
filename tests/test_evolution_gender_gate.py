@@ -243,37 +243,98 @@ def test_plain_level_evolvers_unaffected_by_gender_argument():
 
 
 # --------------------------------------------------------------------------- #
-# The gender lookup sits on the review path (a level-up runs it per candidate)
-# and rows_for_key_in_table re-opens + re-parses the whole ~500-row CSV on every
-# call. Pin the lru_cache that keeps that off the hot path, and the trigger
+# The gender lookup sits on the review path (a level-up runs it per candidate).
+# Repo rule: "No synchronous disk I/O in the review path — static data is parsed
+# once at startup." The rows now come from an in-memory index built once from
+# _load_poke_evo_cache, so eligibility checks must open NO file at all; the
+# lru_cache on top saves the scan rather than the parse. Also pin the trigger
 # scoping that keeps one evolution method's gate from leaking onto another.
 # --------------------------------------------------------------------------- #
-def test_evolution_row_gender_id_reads_the_csv_only_once_per_key():
-    # Repo rule: "No synchronous disk I/O in the review path — static data is
-    # parsed once at startup." Without the cache this was one full CSV parse per
-    # level-up per candidate (~0.5 ms each, measured 175x slower than cached).
-    pf._evolution_row_gender_id_cached.cache_clear()
-    opens = []
-    real_open = pf.open if hasattr(pf, "open") else open
-
+def _count_evolution_csv_opens(fn):
+    """Run ``fn`` and return how many times pokemon_evolution.csv was opened."""
     import builtins
+
+    opens = []
+    original = builtins.open
 
     def counting_open(file, *args, **kwargs):
         if str(file).endswith("pokemon_evolution.csv"):
             opens.append(str(file))
-        return real_open(file, *args, **kwargs)
+        return original(file, *args, **kwargs)
 
-    original = builtins.open
     builtins.open = counting_open
     try:
-        first = pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS)
-        for _ in range(24):
-            assert pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS) == first
+        result = fn()
     finally:
         builtins.open = original
+    return result, opens
+
+
+def test_evolution_row_gender_id_opens_no_file_once_initialised():
+    # This used to be "one parse per cache miss" — the lru_cache suppressed
+    # repeats of the same key but every NEW (species, trigger) pair still
+    # re-opened and re-parsed the whole ~500-row CSV mid-review. Measured across
+    # the dex that was 372 parses for 966 level-evolution checks.
+    pf._evolution_row_gender_id_cached.cache_clear()
+    pf._load_poke_evo_index()  # what startup does
+
+    def _probe():
+        first = pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS)
+        # 24 repeats of the same key, then a spread of DISTINCT keys — the case
+        # the lru_cache alone could never cover.
+        for _ in range(24):
+            assert pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS) == first
+        for species_id in (413, 414, 758, 475, 478, 1, 25, 133, 700, 10004):
+            for triggers in (pf._LEVEL_EVO_TRIGGERS, pf._ITEM_EVO_TRIGGERS):
+                pf._evolution_row_gender_id(species_id, triggers)
+        return first
+
+    first, opens = _count_evolution_csv_opens(_probe)
 
     assert first == 1  # Vespiquen is female-only
-    assert len(opens) == 1, f"expected 1 CSV parse for 25 calls, got {len(opens)}"
+    assert opens == [], f"eligibility checks re-parsed the CSV {len(opens)}x"
+
+
+def test_evolution_index_matches_the_csv_scan_for_every_species_and_key_type():
+    """The index must be a drop-in for rows_for_key_in_table on this column.
+
+    A silent str/int key mismatch would return () and quietly stop offering
+    evolutions with no error — the same shape of failure as the reverted
+    stale-moveset optimisation (9a54562f). The two caller families genuinely
+    pass different types: ``_evolution_row_gender_id_cached`` passes an int,
+    while ``get_friendship_evolutions_for_species`` passes the strings
+    ``pokemon_evolves_from_id`` returns. Sweep every id, both key types.
+    """
+    rows = pf._load_poke_evo_cache()
+    ids = {r["evolved_species_id"] for r in rows if r.get("evolved_species_id")}
+    assert len(ids) > 400, "sanity: the bundled CSV should carry ~479 species"
+
+    for raw in ids:
+        scanned = tuple(
+            pf.rows_for_key_in_table("evolved_species_id", raw, pf.poke_evo_path)
+        )
+        assert pf.evolution_rows_for_evolved_species(raw) == scanned
+        assert pf.evolution_rows_for_evolved_species(int(raw)) == scanned
+
+    # Sylveon carries two rows; both must survive (the first-match bug).
+    assert len(pf.evolution_rows_for_evolved_species(700)) == 2
+    # Misses and malformed keys stay empty, exactly as the scan does. "0700"
+    # matters: int-normalising the key would silently make it match Sylveon.
+    for miss in (0, -1, 99999, "0700", "", "junk", None):
+        assert pf.evolution_rows_for_evolved_species(miss) == ()
+
+
+def test_clearing_the_pokedex_caches_also_clears_the_evolution_index():
+    # The index holds references into the rows _load_poke_evo_cache built, so
+    # leaving it warm past a clear would keep the pre-clear rows alive. Parity
+    # with _pokedex_id_index, which is already in the clear list.
+    pf._load_poke_evo_index()
+    assert pf._poke_evo_index is not None
+    pf.clear_pokedex_caches()
+    assert pf._poke_evo_cache is None
+    assert pf._poke_evo_index is None
+    # And it rebuilds correctly afterwards.
+    assert len(pf.evolution_rows_for_evolved_species(700)) == 2
 
 
 def test_evolution_row_gender_id_is_scoped_to_the_calling_trigger():

@@ -255,6 +255,48 @@ def _load_poke_evo_cache():
     return _poke_evo_cache
 
 
+_poke_evo_index = None
+
+
+def _load_poke_evo_index():
+    """Index the evolution rows by ``evolved_species_id`` for O(1) lookup.
+
+    Same lazy-module-global shape as :func:`_load_pokedex_id_index`, and built
+    FROM :func:`_load_poke_evo_cache`, so the CSV is parsed once and the rows
+    exist once — the index holds references, not copies.
+
+    Keys are ``str`` and lookups stringify, reproducing
+    :func:`rows_for_key_in_table`'s ``str(row[col]) == str(value)`` exactly.
+    Callers pass both ints (:func:`_evolution_row_gender_id_cached`) and the
+    strings :func:`pokemon_evolves_from_id` returns, and a zero-padded
+    ``"0700"`` must keep matching nothing — so do NOT ``safe_int`` the key.
+    """
+    global _poke_evo_index
+    if _poke_evo_index is None:
+        buckets = {}
+        for row in _load_poke_evo_cache():
+            # `"col" in row` mirrors rows_for_key_in_table's guard exactly.
+            if "evolved_species_id" not in row:
+                continue
+            buckets.setdefault(str(row["evolved_species_id"]), []).append(row)
+        _poke_evo_index = {key: tuple(rows) for key, rows in buckets.items()}
+    return _poke_evo_index
+
+
+def evolution_rows_for_evolved_species(evolved_species_id):
+    """Every ``pokemon_evolution.csv`` row for one evolved species.
+
+    In-memory equivalent of ``rows_for_key_in_table("evolved_species_id", ...,
+    poke_evo_path)`` — same rows, same order, same string comparison — without
+    the synchronous re-parse. Use this on the review path (repo rule: no
+    synchronous disk I/O mid-review; static data is parsed once at startup).
+
+    Returns a tuple of the SHARED row dicts; treat them as read-only, the same
+    contract :func:`_load_poke_evo_cache` already has.
+    """
+    return _load_poke_evo_index().get(str(evolved_species_id), ())
+
+
 def _load_moves_cache():
     """Cache moves.json to avoid repeated file I/O"""
     global _moves_cache
@@ -336,6 +378,7 @@ def clear_pokedex_caches():
         _pokemon_csv_cache, \
         _stats_csv_cache, \
         _poke_evo_cache, \
+        _poke_evo_index, \
         _moves_cache, \
         _pokedex_id_index, \
         _pokemon_names_cache, \
@@ -345,6 +388,10 @@ def clear_pokedex_caches():
     _pokemon_csv_cache = None
     _stats_csv_cache = None
     _poke_evo_cache = None
+    # Reset with its source cache: the index holds references into the rows
+    # _load_poke_evo_cache built, so leaving it warm past a clear would keep
+    # the pre-clear rows alive (parity with _pokedex_id_index above).
+    _poke_evo_index = None
     _moves_cache = None
     _pokedex_id_index = None
     _pokemon_names_cache = {}
@@ -894,9 +941,11 @@ def _evolution_row_gender_id_cached(species_ref: int, trigger_ids) -> Optional[i
     >= 10000 must be resolved to their base species via check_id_ok()").
 
     ``lru_cache``d because this sits on the review path: a level-up runs it for
-    every eligible evolution candidate, and ``rows_for_key_in_table`` re-opens
-    and re-parses the whole ~500-row CSV on each call (coding guideline: no
-    synchronous disk I/O mid-review — static data is parsed once at startup).
+    every eligible evolution candidate. The rows now come from the startup-built
+    in-memory index (:func:`evolution_rows_for_evolved_species`) rather than a
+    fresh ~500-row CSV parse per cache miss, so the cache saves the scan rather
+    than the file I/O (coding guideline: no synchronous disk I/O mid-review —
+    static data is parsed once at startup).
     ``poke_evo_path`` points into the shipped, read-only ``data_files`` dir, so
     the CSV really is immutable for the process and the memoized
     ``Optional[int]`` is safe to share. The key space is bounded by
@@ -915,11 +964,7 @@ def _evolution_row_gender_id_cached(species_ref: int, trigger_ids) -> Optional[i
         if base_species > 0:
             species_ref = base_species
     wanted_triggers = {str(t) for t in trigger_ids} if trigger_ids is not None else None
-    for csv_row in rows_for_key_in_table(
-        "evolved_species_id",
-        species_ref,
-        poke_evo_path,
-    ):
+    for csv_row in evolution_rows_for_evolved_species(species_ref):
         if (
             wanted_triggers is not None
             and (csv_row.get("evolution_trigger_id") or "").strip()
