@@ -37,20 +37,47 @@ _MODULE_NAME = "Ankimon.ankimon_profile_web.profile_data"
 
 
 class _FakeDB:
-    def __init__(self):
+    def __init__(self, set_main_result=True):
         self.saved_team = None
         self.set_main_calls = []
         self.clear_main_calls = 0
+        # The real set_main_pokemon() returns False when individual_id has no
+        # captured_pokemon row, which handle_save_team has to treat as "nothing
+        # was written" rather than a successful change.
+        self.set_main_result = set_main_result
 
     def save_team(self, team_data):
         self.saved_team = team_data
 
     def set_main_pokemon(self, individual_id):
         self.set_main_calls.append(individual_id)
-        return True
+        return self.set_main_result
 
     def clear_main_pokemon(self):
         self.clear_main_calls += 1
+
+
+class _FakeTestWindow:
+    """Stands in for the Ankimon Window on the companion repaint branch.
+
+    Only the attributes that branch touches: ``is_alive()`` probes
+    ``objectName()``, and the repaint is gated on visibility + the battle view.
+    """
+
+    def __init__(self, *, visible=True, current_view="battle"):
+        self._visible = visible
+        self.current_view = current_view
+        self.main_pokemon = None
+        self.force_display_calls = 0
+
+    def objectName(self):
+        return "AnkimonWindow"
+
+    def isVisible(self):
+        return self._visible
+
+    def force_display_battle(self):
+        self.force_display_calls += 1
 
 
 class _FakeSettings:
@@ -91,6 +118,12 @@ def pd_module(monkeypatch, tmp_path):
     utils_mod = types.ModuleType("Ankimon.utils")
     utils_mod.get_all_sprites = lambda *a, **k: []
     utils_mod.POKEMON_NAME_LOOKUP = {}
+    # handle_save_team does `from ..utils import is_alive` inside a bare
+    # `except Exception: pass` on the companion repaint branch. Without this
+    # stub that import raises ImportError, the except swallows it, and the
+    # repaint branch silently no-ops on EVERY test in this file — a regression
+    # there would never be caught.
+    utils_mod.is_alive = lambda obj: obj is not None
     monkeypatch.setitem(sys.modules, "Ankimon.utils", utils_mod)
 
     resources_mod = types.ModuleType("Ankimon.resources")
@@ -231,6 +264,65 @@ def test_valid_companion_sets_main_pokemon(pd_module):
 
     assert result["ok"] is True
     assert fake_services.db.set_main_calls == ["a"]
+    assert fake_services.db.clear_main_calls == 0
+
+
+def test_setting_the_companion_repaints_an_open_ankimon_window(pd_module):
+    """The repaint branch is real code, so pin that it actually runs.
+
+    It sits behind `from ..utils import is_alive` inside a bare
+    `except Exception: pass`, which means any import or attribute error in
+    there degrades to a silent no-op — the failure mode is "the crown changes
+    but the battle scene keeps showing the old battler until the next turn",
+    which no other assertion in this file would notice.
+    """
+    mod, fake_services = pd_module
+    window = _FakeTestWindow()
+    fake_services.test_window = window
+    pd = _make_pd(pd_module)
+
+    result = pd.handle_save_team(["a", "b"], "", "b")
+
+    assert result["ok"] is True
+    assert fake_services.db.set_main_calls == ["b"]
+    assert window.force_display_calls == 1
+    assert window.main_pokemon is fake_services.main_pokemon
+
+
+def test_a_window_off_the_battle_view_is_updated_but_not_repainted(pd_module):
+    """The death/catch screen must not be painted over by a team save."""
+    mod, fake_services = pd_module
+    window = _FakeTestWindow(current_view="death")
+    fake_services.test_window = window
+    pd = _make_pd(pd_module)
+
+    assert pd.handle_save_team(["a", "b"], "", "b")["ok"] is True
+    assert window.force_display_calls == 0
+
+
+def test_a_vanished_companion_row_is_not_reported_as_a_change(pd_module):
+    """set_main_pokemon() returning False means nothing was written.
+
+    companion_id is only validated against the team team.js just sent, never
+    against captured_pokemon — so an id released (or dropped by a stale roster
+    cache) between page load and save reaches the DB and is refused there. The
+    old is_main row still stands, so this save changed nothing: reporting a
+    ``companion`` back would make team.js park its crown on a Pokémon the DB
+    never accepted, and the repaint would advertise a switch that didn't
+    happen.
+    """
+    mod, fake_services = pd_module
+    fake_services.db.set_main_result = False
+    window = _FakeTestWindow()
+    fake_services.test_window = window
+    pd = _make_pd(pd_module)
+
+    result = pd.handle_save_team(["a", "b"], "", "a")
+
+    assert result["ok"] is True
+    assert fake_services.db.set_main_calls == ["a"]  # it was attempted...
+    assert "companion" not in result  # ...and reported as unchanged
+    assert window.force_display_calls == 0
     assert fake_services.db.clear_main_calls == 0
 
 

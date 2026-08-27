@@ -16,35 +16,54 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# --- Tier-1 bootstrap: real addon modules, faked Anki/Qt runtime ------------
 _SRC = Path(__file__).resolve().parent.parent / "src"
 
-for _name in (
+_RUNTIME_STUBS = (
     "aqt", "aqt.qt", "aqt.utils", "aqt.gui_hooks", "aqt.operations",
     "aqt.theme", "aqt.sound", "aqt.webview", "aqt.main",
     "anki", "anki.hooks", "anki.collection", "anki.utils",
     "PyQt6", "PyQt6.QtGui", "PyQt6.QtWidgets", "PyQt6.QtCore",
     "PyQt6.QtWebChannel", "PyQt6.QtWebEngineWidgets",
-):
-    sys.modules.setdefault(_name, MagicMock())
-
-for _pkg in ("Ankimon", "Ankimon.functions", "Ankimon.pyobj"):
-    _existing = sys.modules.get(_pkg)
-    if _existing is None or not hasattr(_existing, "__path__"):
-        _mod = types.ModuleType(_pkg)
-        _mod.__path__ = [str(_SRC / _pkg.replace(".", "/"))]
-        _mod.__package__ = _pkg
-        sys.modules[_pkg] = _mod
-
-if str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
+)
+_ADDON_PKGS = ("Ankimon", "Ankimon.functions", "Ankimon.pyobj")
 
 _MODULE_NAME = "Ankimon.functions.drawing_utils"
 _MODULE_PATH = _SRC / "Ankimon" / "functions" / "drawing_utils.py"
 
 
 @pytest.fixture
-def drawing_utils(monkeypatch):
+def _tier1_runtime(monkeypatch):
+    """Fake Anki/Qt runtime + real addon packages, torn down after each test.
+
+    This bootstrap used to run at import time, which made it collection-order
+    pollution rather than test setup: the ``MagicMock`` it puts at
+    ``sys.modules["PyQt6"]`` outlived this file and was still installed when a
+    later module ran, so ``test_test_window_gui.py``'s
+    ``pytest.importorskip("PyQt6")`` could bind the mock instead of the real
+    binding and run its Qt characterization tests against a MagicMock. Doing it
+    per-test through ``monkeypatch`` puts every entry back afterwards.
+
+    ``setdefault`` semantics are deliberately preserved: in a Qt-capable run the
+    real module wins and is left untouched — a stub is only installed where
+    nothing is imported yet.
+    """
+    for name in _RUNTIME_STUBS:
+        if name not in sys.modules:
+            monkeypatch.setitem(sys.modules, name, MagicMock())
+
+    for pkg in _ADDON_PKGS:
+        existing = sys.modules.get(pkg)
+        if existing is None or not hasattr(existing, "__path__"):
+            mod = types.ModuleType(pkg)
+            mod.__path__ = [str(_SRC / pkg.replace(".", "/"))]
+            mod.__package__ = pkg
+            monkeypatch.setitem(sys.modules, pkg, mod)
+
+    monkeypatch.syspath_prepend(str(_SRC))
+
+
+@pytest.fixture
+def drawing_utils(monkeypatch, _tier1_runtime):
     """The REAL module, whatever the rest of the suite left in ``sys.modules``.
 
     Several other test files pre-stub ``Ankimon.functions.drawing_utils`` (and
@@ -60,20 +79,13 @@ def drawing_utils(monkeypatch):
     """
     import importlib.util
 
-    previous = sys.modules.get(_MODULE_NAME)
     spec = importlib.util.spec_from_file_location(_MODULE_NAME, _MODULE_PATH)
     module = importlib.util.module_from_spec(spec)
-    sys.modules[_MODULE_NAME] = module
-    try:
-        spec.loader.exec_module(module)
-        monkeypatch.setattr(module, "_HAVE_QT", True, raising=False)
-        monkeypatch.setattr(module, "services", _FakeServices(), raising=False)
-        yield module
-    finally:
-        if previous is not None:
-            sys.modules[_MODULE_NAME] = previous
-        else:
-            sys.modules.pop(_MODULE_NAME, None)
+    monkeypatch.setitem(sys.modules, _MODULE_NAME, module)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "_HAVE_QT", True, raising=False)
+    monkeypatch.setattr(module, "services", _FakeServices(), raising=False)
+    return module
 
 
 class _FakeServices:

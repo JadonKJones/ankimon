@@ -1025,3 +1025,101 @@ def test_static_scene_assets_are_decoded_once_per_window(make_window, tw_module)
     win.pokemon_display_battle()
     for key, pixmap in cached.items():
         assert win._pixmap_cache[key] is pixmap  # same decoded instance reused
+
+
+# --- shake invalidation (row F51 follow-up) --------------------------------
+#
+# _shake_sprites() queues five QTimer.singleShot steps. Nothing holds a handle
+# to them, so anything that replaces the scene inside that ~225 ms window
+# leaves the tail of the chain still in flight, aimed at sprites that are no
+# longer the ones that attacked.
+
+
+def _drain_timers(qapp, ms=400):
+    """Let the queued singleShot steps actually fire."""
+    from PyQt6.QtCore import QDeadlineTimer, QEventLoop
+
+    deadline = QDeadlineTimer(ms)
+    while not deadline.hasExpired():
+        qapp.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
+
+
+def test_a_new_encounter_retires_the_previous_turn_s_shake(make_window, qapp):
+    """The killing blow's shake must not follow the replacement Pokémon in.
+
+    ``current_view`` alone cannot retire these steps: a faint calls
+    ``new_pokemon()`` -> ``display_first_encounter()``, which sets the view
+    straight back to ``"battle"``, so a step queued for the fight that just
+    ended sails through the view check and jitters the fresh encounter for an
+    attack it was never part of.
+    """
+    win = make_window()
+    win.current_view = "battle"
+
+    win._shake_sprites(["enemy"])
+    win.display_first_encounter()
+
+    painted = []
+    win.force_display_battle = lambda *a, **k: painted.append(1)
+
+    _drain_timers(qapp)
+
+    assert painted == [], "a stale shake step repainted the new encounter"
+    assert win._enemy_shake_offset == (0, 0)
+    assert win._main_shake_offset == (0, 0)
+
+
+def test_the_death_screen_is_not_repainted_by_an_in_flight_shake(make_window, qapp):
+    """Manual mode leaves the death screen up until the player answers it."""
+    win = make_window()
+    win.current_view = "battle"
+
+    win._shake_sprites(["main"])
+    win.display_pokemon_death()
+    assert win.current_view == "death"
+
+    painted = []
+    win.force_display_battle = lambda *a, **k: painted.append(1)
+
+    _drain_timers(qapp)
+
+    assert painted == []
+    assert win.current_view == "death"
+
+
+def test_closing_the_window_retires_a_shake_in_flight(make_window, qapp):
+    win = make_window()
+    win.current_view = "battle"
+
+    win._shake_sprites(["enemy", "main"])
+    win.close()
+
+    painted = []
+    win.force_display_battle = lambda *a, **k: painted.append(1)
+
+    _drain_timers(qapp)
+
+    assert painted == []
+    # Offsets settle even though the chain's own settle step never ran — a
+    # frozen mid-shake offset would render the sprites off-centre on reopen.
+    assert win._enemy_shake_offset == (0, 0)
+    assert win._main_shake_offset == (0, 0)
+
+
+def test_an_uninterrupted_shake_still_animates_and_settles(make_window, qapp):
+    """The guard must not switch the animation off altogether."""
+    win = make_window()
+    win.current_view = "battle"
+
+    painted = []
+    win.force_display_battle = lambda *a, **k: painted.append(
+        (win._enemy_shake_offset, win._main_shake_offset)
+    )
+
+    win._shake_sprites(["enemy"])
+    _drain_timers(qapp)
+
+    assert len(painted) == 5, f"expected all five steps, got {painted}"
+    assert any(offset != (0, 0) for offset, _ in painted), "nothing ever moved"
+    assert win._enemy_shake_offset == (0, 0)  # settled
+    assert win._main_shake_offset == (0, 0)   # never touched — enemy attacked

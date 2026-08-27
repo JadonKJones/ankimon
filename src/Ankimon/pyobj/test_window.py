@@ -117,6 +117,10 @@ class TestWindow(QWidget):
         self.last_message_text = ""
         self._enemy_shake_offset = (0, 0)
         self._main_shake_offset = (0, 0)
+        # Bumped by anything that replaces what the window is showing, so the
+        # QTimer steps of a shake queued for the PREVIOUS scene can recognise
+        # themselves as stale and drop out — see _shake_sprites().
+        self._shake_generation = 0
         # Per-window render caches — see _cached_pixmap()/_scaled_sprite().
         self._pixmap_cache = {}
         self._sprite_cache = {}
@@ -1178,6 +1182,10 @@ class TestWindow(QWidget):
         return pkmnimage_label, kill_button, catch_button, nickname_input
 
     def display_first_encounter(self):
+        # A fresh encounter replaces both sprites, so any shake still stepping
+        # belongs to the fight that just ended — it must not follow the new
+        # Pokémon in.
+        self._cancel_shakes()
         self.ankimon_tracker_obj.pokemon_encounter = 0
         # Clear the debounce timestamp so a fresh encounter's first battle
         # render is never dropped as a same-view repeat of the PREVIOUS
@@ -1260,6 +1268,19 @@ class TestWindow(QWidget):
         """Shake a single side — thin wrapper over :meth:`_shake_sprites`."""
         self._shake_sprites((side,), magnitude=magnitude, step_ms=step_ms)
 
+    def _cancel_shakes(self):
+        """Retire every in-flight shake and settle both sprites back to rest.
+
+        Resetting the offsets is not optional housekeeping: the settle-to-(0,0)
+        step is the LAST one in the chain, so the same invalidation that stops
+        a stale animation also stops it from ever settling. Without this the
+        replacement scene would inherit whatever mid-shake offset the old one
+        was frozen at and render permanently off-centre.
+        """
+        self._shake_generation += 1
+        self._enemy_shake_offset = (0, 0)
+        self._main_shake_offset = (0, 0)
+
     def _shake_sprites(self, sides, magnitude=7, step_ms=45):
         """Jitter the attacking Pokémon's sprite in place — the one that
         actually attacked this turn, not the whole window. Diagonal, not
@@ -1290,8 +1311,17 @@ class TestWindow(QWidget):
             (0, 0),
         ]
 
+        # The view check alone is not enough to retire these steps: a faint
+        # replaces the encounter and puts current_view straight back to
+        # "battle", so a step queued for the fight that just ended would sail
+        # through it and jitter the NEW Pokémon for an attack it never took.
+        # Pin the steps to the scene they were queued for instead.
+        generation = self._shake_generation
+
         def _step(offset):
             try:
+                if self._shake_generation != generation:
+                    return  # queued for a scene this window has moved on from
                 for attr in attrs:
                     setattr(self, attr, offset)
                 if self.current_view == "battle":
@@ -1341,6 +1371,12 @@ class TestWindow(QWidget):
         if self._same_view_debounced("death"):
             return
 
+        # The death screen replaces the battle scene, and manual mode leaves it
+        # up until the player answers it. A shake step surviving into that wait
+        # would call force_display_battle() the moment anything set current_view
+        # back, so retire the chain here.
+        self._cancel_shakes()
+
         img_label, kill_btn, catch_btn, nick_input = self.pokemon_display_dead_pokemon()
 
         # Update the image
@@ -1379,6 +1415,10 @@ class TestWindow(QWidget):
                 widget.deleteLater()
 
     def closeEvent(self, event):
+        # Nothing cancels the singleShot timers on close, so a shake mid-flight
+        # keeps calling force_display_battle() on a window the player just shut
+        # — and leaves the offsets frozen for the next time it is reopened.
+        self._cancel_shakes()
         self.pkmn_window = False
 
     def _reset_window_title(self, callback_func=None):

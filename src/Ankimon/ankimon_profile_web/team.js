@@ -21,6 +21,13 @@
         xpShare: null,         // individual_id of the XP Share holder (any owned Pokémon)
         xpShareInfo: null,     // display stub for the holder (may be benched)
         companionId: null,     // individual_id of the Active Companion (must be a team slot member)
+        // The last companion the BACKEND confirmed — the page load's value, or
+        // whatever a save reported back. companionId above is optimistic the
+        // moment the crown is clicked, and handle_save_team can refuse the
+        // change (id not in the saved team, nothing to promote, row already
+        // released) while still saving the team; reverting to this is what
+        // keeps the ⚔ badge showing the DB's battler instead of a wish.
+        companionConfirmedId: null,
         // Whether THIS session actually changed the companion (crown toggle,
         // or an implicit clear because the companion's slot got removed/
         // replaced) — vs. simply never having touched it. Only a touched
@@ -591,6 +598,7 @@
             return Promise.resolve({ ok: true });
         }
         const companionArg = state.companionTouched ? (state.companionId || '') : COMPANION_UNCHANGED;
+        const companionWasTouched = state.companionTouched;
         return teamBridge.saveTeam(JSON.stringify(ids), state.xpShare || '', companionArg).then((res) => {
             if (res && res.ok) {
                 state.dirty = false;
@@ -607,6 +615,18 @@
                 // on screen matches the DB without a reload.
                 if (res.companion !== undefined) {
                     state.companionId = res.companion ? String(res.companion) : null;
+                    state.companionConfirmedId = state.companionId;
+                    renderTeam();
+                } else if (companionWasTouched) {
+                    // The team saved but the companion change did NOT: the
+                    // backend omits the key on every outcome that leaves the
+                    // existing is_main row alone (id not on the saved team,
+                    // an empty team with nobody to promote, or a row already
+                    // released). companionTouched has just been cleared, so
+                    // nothing would ever re-send this id — keeping it on
+                    // screen would leave the ⚔ badge pointing at a Pokémon
+                    // that is not the DB's battler until a page reload.
+                    state.companionId = state.companionConfirmedId;
                     renderTeam();
                 }
                 updateSaveUI();
@@ -638,6 +658,7 @@
         state.xpShare = data.xp_share ? String(data.xp_share) : null;
         state.xpShareInfo = data.xp_share_info || null;
         state.companionId = data.companion ? String(data.companion) : null;
+        state.companionConfirmedId = state.companionId;   // straight from the DB
         state.companionTouched = false;   // fresh load — nothing changed yet
         state.spriteMode = data.sprite_mode || 'static';
         state.teamCycleCount = data.team_cycle_count || 3;

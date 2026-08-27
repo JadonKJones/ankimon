@@ -1080,3 +1080,95 @@ def test_flush_without_a_presenter_reports_instead_of_silently_dropping(mobile_d
     assert db.get_pokemon("NOUI")["attacks"] == [
         "tackle", "growl", "quick-attack", "thunder-shock",
     ]
+
+
+def test_flush_requeues_an_entry_whose_save_blew_up(mobile_db, monkeypatch):
+    """A failed replay must stay pending, not vanish.
+
+    flush drains the whole queue up front, so before this every exception below
+    the drain took the parked decision with it: the player was told nothing, the
+    move was never written, and there was no entry left for a later pass to
+    retry — the same silent loss the deferral mechanism exists to prevent, just
+    moved one step later.
+    """
+    db, _ = mobile_db
+    _full_moveset_companion(db, "BOOM")
+    monkeypatch.setattr(services, "main_pokemon", None, raising=False)
+
+    class _Presenter:
+        def choose_attack_to_replace(self, attacks, new_attack):
+            return "growl"
+
+    monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+
+    def _explode(_pkmndata):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(db, "save_pokemon", _explode)
+
+    errors = []
+
+    class _ErrLogger(_Logger):
+        def log(self, level, msg, *a, **k):
+            errors.append((level, msg))
+
+    ms._queue_move_learn_prompt("BOOM", "Pikachu", "thunderbolt")
+    ms.flush_pending_move_learns(db=db, logger=_ErrLogger())
+
+    assert any(level == "error" and "BOOM" in msg for level, msg in errors)
+    with ms._pending_move_learns_lock:
+        parked = [(p["individual_id"], p["new_attack"]) for p in ms._pending_move_learns]
+    assert parked == [("BOOM", "thunderbolt")], "the failed entry was dropped"
+
+
+def test_flush_retries_a_requeued_entry_on_the_next_pass(mobile_db, monkeypatch):
+    """Requeueing is only worth anything if the retry actually lands."""
+    db, _ = mobile_db
+    _full_moveset_companion(db, "RETRY")
+    monkeypatch.setattr(services, "main_pokemon", None, raising=False)
+
+    class _Presenter:
+        def choose_attack_to_replace(self, attacks, new_attack):
+            return "growl"
+
+    monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+
+    real_save = db.save_pokemon
+    calls = []
+
+    def _fail_once(pkmndata):
+        calls.append(pkmndata["individual_id"])
+        if len(calls) == 1:
+            raise RuntimeError("database is locked")
+        return real_save(pkmndata)
+
+    monkeypatch.setattr(db, "save_pokemon", _fail_once)
+
+    ms._queue_move_learn_prompt("RETRY", "Pikachu", "thunderbolt")
+    ms.flush_pending_move_learns(db=db, logger=_Logger())   # fails, requeues
+    ms.flush_pending_move_learns(db=db, logger=_Logger())   # succeeds
+
+    assert db.get_pokemon("RETRY")["attacks"] == [
+        "tackle", "thunderbolt", "quick-attack", "thunder-shock",
+    ]
+    with ms._pending_move_learns_lock:
+        assert ms._pending_move_learns == []  # drained for good this time
+
+
+def test_flush_does_not_requeue_a_declined_prompt(mobile_db, monkeypatch):
+    """Declining is a DECISION, not a failure — re-asking every pass would nag."""
+    db, _ = mobile_db
+    _full_moveset_companion(db, "NONAG")
+    monkeypatch.setattr(services, "main_pokemon", None, raising=False)
+
+    class _Presenter:
+        def choose_attack_to_replace(self, attacks, new_attack):
+            return None  # player closed the dialog
+
+    monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+    ms._queue_move_learn_prompt("NONAG", "Pikachu", "thunderbolt")
+
+    ms.flush_pending_move_learns(db=db, logger=_Logger())
+
+    with ms._pending_move_learns_lock:
+        assert ms._pending_move_learns == []

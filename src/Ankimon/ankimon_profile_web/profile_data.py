@@ -781,13 +781,16 @@ class ProfileData:
         Anything else is a companion *change*, and a change never ends with
         the game having no battler at all: a real, valid team-member id is a
         set, and an explicit clear promotes the first member of the team being
-        saved. The two ways a change can't be honoured — an id that isn't in
-        the team being saved (bad input), and a clear with an empty team
-        (nobody to promote) — both fall back to leaving the existing is_main
-        row exactly where it is. This method never drops it: zero is_main=1
-        rows makes the next load fall through ``update_main_pokemon()`` to
-        ``MAIN_POKEMON_DEFAULT``, the level-5 Ditto named "Please Restart
-        Anki", and a stale-but-real battler beats that in every case.
+        saved. The three ways a change can't be honoured — an id that isn't in
+        the team being saved (bad input), a clear with an empty team (nobody to
+        promote), and an id whose captured_pokemon row is gone by the time
+        set_main_pokemon() runs (released, or a stale roster cache) — all fall
+        back to leaving the existing is_main row exactly where it is, and none
+        of them report a ``companion`` back. This method never drops it: zero
+        is_main=1 rows makes the next load fall through
+        ``update_main_pokemon()`` to ``MAIN_POKEMON_DEFAULT``, the level-5
+        Ditto named "Please Restart Anki", and a stale-but-real battler beats
+        that in every case.
 
         Whenever the companion is actually set, the live ``main_pokemon``
         object is reloaded from the DB and the reviewer HUD + Ankimon Window
@@ -848,8 +851,17 @@ class ProfileData:
             # all been folded into "leave the existing is_main row alone".
             if not companion_touched:
                 pass  # leave whatever main Pokémon is already set alone
+            elif not services.db.set_main_pokemon(companion_id):
+                # set_main_pokemon() returns False when the individual_id has
+                # no captured_pokemon row — the id was only checked against the
+                # team team.js just sent, so a release or a stale roster cache
+                # between page load and save lands here. Nothing was written:
+                # the old is_main row still stands, so this is the same
+                # "unchanged" outcome as a rejected id, and reporting a
+                # companion back would make team.js show a crown the DB never
+                # got.
+                companion_touched = False
             else:
-                services.db.set_main_pokemon(companion_id)
                 from ..functions.update_main_pokemon import update_main_pokemon
 
                 update_main_pokemon(services.main_pokemon)

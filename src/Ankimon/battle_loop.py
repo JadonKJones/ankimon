@@ -413,7 +413,18 @@ def on_review_card(*args):
             # enemy_pokemon with a fresh wild encounter, so this frame would
             # show the NEXT enemy at full HP standing over the tipped-out main
             # Pokémon under the previous fight's log line.
-            if live_main_faint_window is not None and not encounter_replaced:
+            #
+            # The current_view check mirrors the enemy-faint branch above, and
+            # a same-turn double faint is exactly when it earns its keep: in
+            # manual mode handle_enemy_faint() puts the death/catch screen up
+            # and returns False, so encounter_replaced stays False and this
+            # paint_now repaint would flash the battle scene over the screen
+            # the player still has to answer.
+            if (
+                live_main_faint_window is not None
+                and not encounter_replaced
+                and getattr(live_main_faint_window, "current_view", None) == "battle"
+            ):
                 try:
                     # Mirror of the enemy-faint frame above, and it has to
                     # happen HERE: handle_main_pokemon_faint() heals the main

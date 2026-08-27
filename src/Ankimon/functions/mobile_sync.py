@@ -2177,6 +2177,14 @@ def flush_pending_move_learns(db=None, logger=None) -> None:
     level/XP/EV/stat changes for the same row, so the authoritative move list is
     whatever landed there — and a slot may even have opened up in the meantime,
     in which case there is nothing to ask about and the move is just learned.
+
+    An entry whose replay RAISES is put back on the queue. The drain below
+    empties the list before any DB work runs, so a transient failure (a locked
+    DB, a mid-flush collection close) would otherwise discard the learned move
+    for good — the exact silent loss this whole mechanism exists to prevent.
+    Entries that simply have nothing to do (row gone, move already known, the
+    player declining the swap) are NOT requeued: those are decisions, not
+    failures.
     """
     with _pending_move_learns_lock:
         pending = list(_pending_move_learns)
@@ -2189,14 +2197,14 @@ def flush_pending_move_learns(db=None, logger=None) -> None:
 
     if db is None:
         db = services.db
-    # The queue is drained before any of this runs, so anything that goes
-    # wrong below loses that entry for good — fall back to the shared logger
-    # rather than letting a caller that passed logger=None (the common case:
-    # _attribute_xp_and_evs_to_companion's own default) swallow it silently.
+    # Fall back to the shared logger rather than letting a caller that passed
+    # logger=None (the common case: _attribute_xp_and_evs_to_companion's own
+    # default) swallow a failure silently.
     if logger is None:
         logger = getattr(services, "logger", None)
     ui = getattr(services, "ui", None)
     main_pokemon_singleton = services.main_pokemon
+    failed = []
 
     for entry in pending:
         individual_id = entry["individual_id"]
@@ -2252,11 +2260,20 @@ def flush_pending_move_learns(db=None, logger=None) -> None:
                 main_pokemon_singleton.attacks = list(attacks)
             tooltipWithColour(f"{name} learned {new_attack}!", "#6A4DAC")
         except Exception as e:
+            failed.append(entry)
             if logger:
                 logger.log(
                     "error",
                     f"Deferred move-learn prompt failed for {individual_id}: {e}",
                 )
+
+    # Requeue AFTER the loop, never inside it: _queue_move_learn_prompt takes
+    # the same lock, and re-adding mid-drain could hand a concurrent flush an
+    # entry this one is still working on.
+    for entry in failed:
+        _queue_move_learn_prompt(
+            entry["individual_id"], entry.get("name", ""), entry["new_attack"]
+        )
 
 
 def _schedule_move_learn_flush(db=None, logger=None) -> None:
