@@ -263,3 +263,98 @@ if __name__ == "__main__":
     test_battle_loop_survives_dead_windows()
     test_victory_path_move_gate_sees_moves_learned_at_level_up()
     print("headless harness tests: OK")
+
+
+def test_victory_path_seeds_the_moveset_from_the_stored_record():
+    """The victory-time gate should not need its own DB read on a healthy save.
+
+    `save_main_pokemon_progress` already loads the main Pokemon's record at the
+    top. Seeding `attacks` from it means the friendship checker never falls back
+    to `services.db.get_pokemon()` mid-review — the repo rule is no synchronous
+    I/O on the review path.
+
+    Safe where the reverted 9a54562f change was not: the seed is the stored
+    RECORD (the same captured_pokemon row the fallback would re-read), not the
+    in-memory PokemonObject, whose moveset goes stale on the first level-up.
+    `test_victory_path_move_gate_sees_moves_learned_at_level_up` above is what
+    pins that distinction; this test pins that the read is actually gone.
+    """
+    result = _subrun(
+        "from harness.driver import Driver\n"
+        "import random\n"
+        "random.seed(0)\n"
+        "d = Driver(seed={'main': {'species': 'Eevee', 'level': 14, 'gender': 'M',\n"
+        "                          'friendship': 300,\n"
+        "                          'attacks': ['Tackle', 'Growl']}},\n"
+        "           settings_overrides={'battle.cards_per_round': 1},\n"
+        "           evolution_policy='ignore')\n"
+        "import Ankimon.functions.encounter_functions as ef\n"
+        "import Ankimon.functions.friendship_evolution as fe\n"
+        "passed_none = []\n"
+        "_real = fe.check_friendship_evolution_for_pokemon\n"
+        "def spy(*a, **kw):\n"
+        "    passed_none.append(kw.get('attacks') is None)\n"
+        "    return _real(*a, **kw)\n"
+        "ef.check_friendship_evolution_for_pokemon = spy\n"
+        "for _ in range(400):\n"
+        "    d.answer('good')\n"
+        "    if d.services.enemy_pokemon.hp <= 0:\n"
+        "        d.defeat()\n"
+        "print(%r + json.dumps({\n"
+        "    'checks': len(passed_none),\n"
+        "    'fell_back_to_db': sum(passed_none),\n"
+        "}))" % _MARKER
+    )
+    assert result["checks"] > 0, "no victory-time friendship checks ran"
+    assert result["fell_back_to_db"] == 0, (
+        f"{result['fell_back_to_db']} of {result['checks']} victory checks still "
+        "sent the checker to the DB for a moveset the caller already had"
+    )
+
+
+def test_victory_path_still_consults_the_store_when_there_is_no_main_record():
+    """With no is_main row there is nothing to seed from — keep the lookup.
+
+    The obvious one-liner (`(main_pokemon_data or {}).get("attacks") or []`)
+    passes an EMPTY LIST here instead of None. `check_evolution_for_pokemon`
+    treats a non-None `current_attacks` as authoritative and skips its own
+    `db.get_pokemon()` fallback entirely, so a `levelMove` evolution that is
+    currently still offered on such a save would be silently suppressed. That
+    call site sits outside the `if main_pokemon_data:` guard, so it really is
+    reachable. `None` is the only value that reaches the fallback.
+    """
+    result = _subrun(
+        "from harness.driver import Driver\n"
+        "import random\n"
+        "random.seed(0)\n"
+        "d = Driver(seed={'main': {'species': 'Eevee', 'level': 14, 'gender': 'M',\n"
+        "                          'friendship': 300,\n"
+        "                          'attacks': ['Tackle', 'Growl']}},\n"
+        "           settings_overrides={'battle.cards_per_round': 1},\n"
+        "           evolution_policy='ignore')\n"
+        "import Ankimon.functions.encounter_functions as ef\n"
+        "seen = []\n"
+        "_real = ef.check_evolution_for_pokemon\n"
+        "def spy(*a, **kw):\n"
+        "    seen.append(kw.get('current_attacks'))\n"
+        "    return _real(*a, **kw)\n"
+        "ef.check_evolution_for_pokemon = spy\n"
+        # Break the save the way a missing is_main row would.
+        "ef.services.db.execute('UPDATE captured_pokemon SET is_main = 0')\n"
+        "ef.services.db._get_connection().commit()\n"
+        "for _ in range(400):\n"
+        "    d.answer('good')\n"
+        "    if d.services.enemy_pokemon.hp <= 0:\n"
+        "        d.defeat()\n"
+        "print(%r + json.dumps({\n"
+        "    'level_checks': len(seen),\n"
+        "    'none_passed': sum(1 for v in seen if v is None),\n"
+        "    'empty_list_passed': sum(1 for v in seen if v == []),\n"
+        "}))" % _MARKER
+    )
+    assert result["level_checks"] > 0, "no level-up evolution checks ran"
+    assert result["empty_list_passed"] == 0, (
+        "an empty list was passed where the store should have been consulted — "
+        "this fails the levelMove gate closed instead of letting it look"
+    )
+    assert result["none_passed"] == result["level_checks"]
