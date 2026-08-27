@@ -2135,6 +2135,169 @@ def _resolve_internal(mode="all", companion_id="", limit=None, db=None, settings
             utils.in_bulk_resolve = False
 
 
+# Move-replacement decisions that could not be put to the player when they
+# came up.
+#
+# _attribute_xp_and_evs_to_companion runs on a QueryOp worker thread on every
+# real mobile sync (resolve_next's run_sim, commit_replay_outcome's do_db_work),
+# and a QDialog cannot be constructed or exec()'d off Qt's GUI thread. Simply
+# skipping the prompt there threw the learned move away silently: the companion
+# kept its old four moves with no tooltip, no log line and nothing queued, so
+# the player was never told a move had been learned and lost. Park the decision
+# here instead and replay it on the GUI thread — see _schedule_move_learn_flush.
+_pending_move_learns = []
+_pending_move_learns_lock = threading.Lock()
+
+
+def _queue_move_learn_prompt(individual_id, name, new_attack) -> None:
+    """Park one deferred move-replacement decision. Safe off the GUI thread."""
+    if not individual_id or not new_attack:
+        return
+    with _pending_move_learns_lock:
+        for pending in _pending_move_learns:
+            if (pending["individual_id"], pending["new_attack"]) == (
+                individual_id,
+                new_attack,
+            ):
+                return  # already queued — a bulk resolve can re-learn the same move
+        _pending_move_learns.append(
+            {
+                "individual_id": individual_id,
+                "name": name,
+                "new_attack": new_attack,
+            }
+        )
+
+
+def flush_pending_move_learns(db=None, logger=None) -> None:
+    """Replay every deferred move-replacement prompt. GUI thread only.
+
+    Each Pokémon is re-read from the DB rather than trusting the snapshot the
+    worker thread took: after parking the decision that worker went on to write
+    level/XP/EV/stat changes for the same row, so the authoritative move list is
+    whatever landed there — and a slot may even have opened up in the meantime,
+    in which case there is nothing to ask about and the move is just learned.
+    """
+    with _pending_move_learns_lock:
+        pending = list(_pending_move_learns)
+        del _pending_move_learns[:]
+    if not pending:
+        return
+
+    from ..services import services
+    from .drawing_utils import tooltipWithColour
+
+    if db is None:
+        db = services.db
+    # The queue is drained before any of this runs, so anything that goes
+    # wrong below loses that entry for good — fall back to the shared logger
+    # rather than letting a caller that passed logger=None (the common case:
+    # _attribute_xp_and_evs_to_companion's own default) swallow it silently.
+    if logger is None:
+        logger = getattr(services, "logger", None)
+    ui = getattr(services, "ui", None)
+    main_pokemon_singleton = services.main_pokemon
+
+    for entry in pending:
+        individual_id = entry["individual_id"]
+        new_attack = entry["new_attack"]
+        try:
+            pkmndata = db.get_pokemon(individual_id) if db is not None else None
+            if not pkmndata:
+                continue
+
+            attacks = pkmndata.get("attacks", [])
+            if isinstance(attacks, str):
+                try:
+                    attacks = json.loads(attacks)
+                except Exception:
+                    attacks = []
+            attacks = list(attacks or [])
+            if new_attack in attacks:
+                continue
+
+            name = str(entry.get("name") or pkmndata.get("name") or "Pokemon").capitalize()
+
+            if len(attacks) < 4:
+                attacks.append(new_attack)
+            elif ui is not None:
+                selected_attack = ui.choose_attack_to_replace(attacks, new_attack)
+                if selected_attack not in attacks:
+                    continue  # the player chose to keep the current move set
+                attacks[attacks.index(selected_attack)] = new_attack
+            else:
+                # Nothing can put the choice to the player. Tell them what was
+                # learned and where to act on it, rather than dropping the move
+                # on the floor without a trace the way the guard this replaces
+                # did.
+                tooltipWithColour(
+                    f"{name} learned {new_attack}, but already knows four moves — "
+                    "swap it in from Pokémon Details.",
+                    "#6A4DAC",
+                )
+                if logger:
+                    logger.log(
+                        "warning",
+                        f"{name} learned {new_attack} during mobile sync, but no UI "
+                        "was available to choose which move it replaces.",
+                    )
+                continue
+
+            pkmndata["attacks"] = attacks
+            db.save_pokemon(pkmndata)
+            if (
+                main_pokemon_singleton is not None
+                and getattr(main_pokemon_singleton, "individual_id", None) == individual_id
+            ):
+                main_pokemon_singleton.attacks = list(attacks)
+            tooltipWithColour(f"{name} learned {new_attack}!", "#6A4DAC")
+        except Exception as e:
+            if logger:
+                logger.log(
+                    "error",
+                    f"Deferred move-learn prompt failed for {individual_id}: {e}",
+                )
+
+
+def _schedule_move_learn_flush(db=None, logger=None) -> None:
+    """Get flush_pending_move_learns() onto the GUI thread.
+
+    Only ever called AFTER this companion's db.save_pokemon(), so the worker's
+    own write cannot land on top of the move swap the flush persists.
+    """
+    with _pending_move_learns_lock:
+        if not _pending_move_learns:
+            return
+
+    # Deliberately the SAME predicate the enqueue above uses. utils.is_main_thread()
+    # would be wrong here: it answers True whenever Qt isn't loaded or there is no
+    # QApplication yet, so the two could disagree and the flush would open
+    # AttackDialog on the very worker thread this whole mechanism exists to keep
+    # dialogs off.
+    if threading.current_thread() is threading.main_thread():
+        flush_pending_move_learns(db=db, logger=logger)
+        return
+
+    try:
+        from aqt import mw
+
+        mw.taskman.run_on_main(lambda: flush_pending_move_learns(db=db, logger=logger))
+    except Exception:
+        # No Anki to marshal onto (harness, headless callers). The entries stay
+        # queued for the next main-thread pass rather than being lost — and it
+        # is logged, because "stays queued" can still mean "gone at exit".
+        active_logger = logger
+        if active_logger is None:
+            from ..services import services
+
+            active_logger = getattr(services, "logger", None)
+        if active_logger:
+            active_logger.log(
+                "warning",
+                "Move-replacement prompt deferred: no GUI thread available to show it.",
+            )
+
+
 def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yield_gained: dict, settings_obj, battles_fought=1, db=None, logger=None) -> None:
     """Apply mobile-battle XP/EVs to one companion, leveling/evolving it and
     prompting for a move replacement when it outgrows its 4 known moves."""
@@ -2234,48 +2397,40 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
                     # This function is reachable from a QueryOp worker thread
                     # (resolve_next's run_sim / commit_replay_outcome's
                     # do_db_work both call it off the main thread in
-                    # production). Constructing and .exec()'ing a QDialog off
-                    # the GUI thread is undefined behavior in Qt — so the move
-                    # swap only ever prompts when this call actually landed on
-                    # the main thread (the PYTEST_CURRENT_TEST synchronous
-                    # path, or any future main-thread caller). Off the main
-                    # thread the Pokémon just keeps its current moves; the
-                    # player can still swap moves later from Pokémon Details.
-                    if (
-                        is_active
-                        and not in_bulk
-                        and threading.current_thread() is threading.main_thread()
-                        and getattr(services, "ui", None) is not None
-                    ):
-                        # Reached only when the main-thread check above passed
-                        # — in production that's the PYTEST_CURRENT_TEST
-                        # synchronous path or a future main-thread caller.
-                        # resolve_next's run_sim / commit_replay_outcome's
-                        # do_db_work both invoke this function from a QueryOp
-                        # worker thread, so on that (the common) path the
-                        # condition is False and this whole block, including
-                        # services.ui.choose_attack_to_replace(...), is
-                        # skipped entirely — never reached off the main
-                        # thread. Routed through the services.ui presenter
-                        # port (same seam pokemon_details.py/gui_presenter.py
-                        # use) rather than constructing AttackDialog directly
-                        # — keeps this module aqt-free at import time and
-                        # testable against HeadlessPresenter, and production's
-                        # QtPresenter still does the identical parent=mw/
-                        # raise_/activateWindow dialog under the hood.
-                        # Guarded on services.ui being present so a sparse/
-                        # partial services object (an incomplete test double,
-                        # a mid-reload state) falls through to the no-prompt
-                        # path below instead of raising here and aborting
-                        # before pkmndata["attacks"] is even assigned — an
-                        # uncaught exception here would lose the whole XP/EV
-                        # grant for the turn, not just the move choice.
-                        selected_attack = services.ui.choose_attack_to_replace(
-                            attacks, new_attack
-                        )
-                        if selected_attack in attacks:
-                            idx = attacks.index(selected_attack)
-                            attacks[idx] = new_attack
+                    # production), and constructing or .exec()'ing a QDialog
+                    # off the GUI thread is undefined behavior in Qt. So the
+                    # prompt runs inline only when this call actually landed
+                    # on the main thread (the PYTEST_CURRENT_TEST synchronous
+                    # path, or any future main-thread caller); otherwise the
+                    # decision is parked and replayed on the GUI thread once
+                    # this companion's row has been written — never dropped.
+                    #
+                    # The prompt goes through the services.ui presenter port
+                    # (the same seam pokemon_details.py / gui_presenter.py
+                    # use) rather than constructing AttackDialog directly:
+                    # keeps this module aqt-free at import time and testable
+                    # against HeadlessPresenter, while production's QtPresenter
+                    # still shows the identical parent=mw dialog. Guarded on
+                    # services.ui being present so a sparse/partial services
+                    # object (an incomplete test double, a mid-reload state)
+                    # queues instead of raising here — an uncaught exception
+                    # would lose the whole XP/EV grant for the turn, not just
+                    # the move choice.
+                    if is_active and not in_bulk:
+                        if (
+                            threading.current_thread() is threading.main_thread()
+                            and getattr(services, "ui", None) is not None
+                        ):
+                            selected_attack = services.ui.choose_attack_to_replace(
+                                attacks, new_attack
+                            )
+                            if selected_attack in attacks:
+                                idx = attacks.index(selected_attack)
+                                attacks[idx] = new_attack
+                        else:
+                            _queue_move_learn_prompt(
+                                companion_id, pkmndata.get("name", ""), new_attack
+                            )
             pkmndata["attacks"] = attacks
 
     pkmndata["level"] = level
@@ -2386,4 +2541,8 @@ def _attribute_xp_and_evs_to_companion(companion_id: str, xp_gained: int, ev_yie
         if "attacks" in pkmndata:
             mp.attacks = list(pkmndata["attacks"])
         mp.invalidate_cp_cache()
+
+    # Only now — the row this function owns is written, so the flush's own
+    # save_pokemon() for a move swap can no longer be clobbered by it.
+    _schedule_move_learn_flush(db=db, logger=logger)
 

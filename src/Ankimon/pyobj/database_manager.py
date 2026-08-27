@@ -1208,16 +1208,21 @@ class AnkimonDB:
 
     def clear_main_pokemon(self) -> None:
         """Clears the is_main flag from whichever Pokémon currently holds it,
-        leaving no main Pokémon persisted. Used when the Active Companion
-        selection is explicitly cleared (or invalidated) on save — without
-        this, the stale is_main=1 row would survive and a later reload could
-        restore a companion no longer in the saved team.
+        leaving no main Pokémon persisted.
 
         Deliberately does not touch the live in-memory main_pokemon singleton
         for the current session — this only affects what the NEXT load reads
         back, the same way get_main_pokemon() already tolerates returning
         None (a brand-new save with no starter picked yet is this exact
-        state)."""
+        state).
+
+        NOTE: nothing in the add-on calls this today. It used to back the Team
+        screen's "companion cleared" case, but leaving zero is_main=1 rows
+        makes the next load fall through update_main_pokemon() to
+        MAIN_POKEMON_DEFAULT — the level-5 Ditto named "Please Restart Anki" —
+        so handle_save_team now promotes another team member (or leaves the
+        existing row alone when it can't) instead. Kept as a primitive; think
+        hard about that fallback before wiring it to anything."""
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("UPDATE captured_pokemon SET is_main = 0 WHERE is_main = 1")

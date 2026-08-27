@@ -61,7 +61,6 @@ from ..resources import (
     addon_dir,
     icon_path,
     battlescene_path,
-    battlescene_path_without_dialog,
     battle_ui_path,
     user_path_sprites,
     frontdefault,
@@ -118,6 +117,9 @@ class TestWindow(QWidget):
         self.last_message_text = ""
         self._enemy_shake_offset = (0, 0)
         self._main_shake_offset = (0, 0)
+        # Per-window render caches — see _cached_pixmap()/_scaled_sprite().
+        self._pixmap_cache = {}
+        self._sprite_cache = {}
 
         self.init_ui()
         # self.update()
@@ -369,17 +371,15 @@ class TestWindow(QWidget):
         message_box_text = f"{self.translator.translate('wild_pokemon_appeared', enemy_pokemon_name=lang_name.capitalize())}"
         self.last_message_text = message_box_text
 
+        # Always the background WITH the dialog box baked in. The boxless
+        # variant used to be selected here whenever pokemon_encounter > 0,
+        # but display_first_encounter() — this method's only caller — sets
+        # that counter to 0 on the line before it calls us, so the branch
+        # could never be taken; pokemon_display_battle stopped switching
+        # backgrounds turn to turn for the same reason.
         bckgimage_path = battlescene_path / self.ankimon_tracker_obj.battlescene_file
 
-        if self.ankimon_tracker_obj.pokemon_encounter > 0:
-            bckgimage_path = (
-                battlescene_path_without_dialog
-                / self.ankimon_tracker_obj.battlescene_file
-            )
-
-        msg_font = load_custom_font(32, int(self.settings_obj.get("misc.language")))
-
-        image_label, msg_font = self.window_show(bckgimage_path, lang_name)
+        image_label = self.window_show(bckgimage_path, lang_name)
 
         return image_label
 
@@ -404,6 +404,65 @@ class TestWindow(QWidget):
                 Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap,
                 self.last_message_text,
             )
+
+    def _cached_pixmap(self, path):
+        """Decode a STATIC scene asset once per window instead of per repaint.
+
+        The battle background and the UI overlay were re-read from disk on
+        every composite, and one answered card triggers several composites
+        (the turn's own render plus every frame of the attack shake) on the
+        reviewer's hot path. Neither file changes while the add-on is loaded.
+        Nothing ever draws INTO these — they are only blitted FROM — so one
+        shared instance is safe. A failed load is deliberately not cached, so
+        an asset that appears later (the sprite download finishing) is picked
+        up rather than pinned to a null pixmap for the session.
+        """
+        key = str(path)
+        pixmap = self._pixmap_cache.get(key)
+        if pixmap is None:
+            pixmap = QPixmap()
+            pixmap.load(key)
+            if not pixmap.isNull():
+                self._pixmap_cache[key] = pixmap
+        return pixmap
+
+    def _scaled_sprite(self, pokemon, side):
+        """``_load_sprite`` + ``_fit_sprite``, memoized per sprite file.
+
+        Same hot-path reasoning as :meth:`_cached_pixmap`, but this one also
+        skips the KeepAspectRatio/SmoothTransformation scale, which is the
+        more expensive half. Keyed on the resolved sprite path, so a Pokémon
+        switching in — or a form/mega change on the same Pokémon — still
+        re-reads. Only cached when the Pokémon's OWN sprite file is on disk:
+        ``_load_sprite`` silently substitutes for a sprite the user has not
+        downloaded yet, and that substitute must not get pinned in place of
+        the real artwork for the rest of the session.
+        """
+        try:
+            sprite_path = str(pokemon.get_sprite_path(side, "png"))
+        except Exception:
+            sprite_path = None
+
+        if sprite_path is not None:
+            cached = self._sprite_cache.get((side, sprite_path))
+            if cached is not None:
+                return cached
+
+        pixmap, loaded_own = self._load_sprite_checked(pokemon, side)
+        pixmap = self._fit_sprite(pixmap)
+
+        # ``loaded_own``, not a path-exists check: a file that is present but
+        # unreadable/corrupt also falls back to the substitute, and caching
+        # THAT under the real sprite's key is exactly the pinning this guard
+        # is here to prevent.
+        if sprite_path is not None and loaded_own:
+            # Bounded: one window can outlive a lot of encounters, and every
+            # wild Pokémon adds an entry. Cheaper to rebuild than to grow
+            # without limit.
+            if len(self._sprite_cache) >= 32:
+                self._sprite_cache.clear()
+            self._sprite_cache[(side, sprite_path)] = pixmap
+        return pixmap
 
     @staticmethod
     def _fit_sprite(pixmap, max_w=120, max_h=120):
@@ -435,6 +494,17 @@ class TestWindow(QWidget):
         ``get_sprite_path`` stays inside the ``try`` so a raising lookup still
         reaches the substitute, exactly as before.
         """
+        pixmap, _loaded_own = self._load_sprite_checked(pokemon, side)
+        return pixmap
+
+    def _load_sprite_checked(self, pokemon, side):
+        """:meth:`_load_sprite`, plus whether the Pokémon's OWN sprite decoded.
+
+        A False second element means the caller is looking at the substitute —
+        either the file is missing or it is there but unreadable. Only
+        :meth:`_scaled_sprite` needs to know, so that it never memoizes a
+        substitute under the real sprite's cache key.
+        """
         pixmap = QPixmap()
         try:
             loaded = pixmap.load(str(pokemon.get_sprite_path(side, "png")))
@@ -442,7 +512,7 @@ class TestWindow(QWidget):
             loaded = False
         if not loaded:
             pixmap.load(str(self.default_path))
-        return pixmap
+        return pixmap, bool(loaded)
 
     def _draw_pokemon_sprite(self, painter, pixmap, x, y, w, h, fainted, tip_direction=1):
         """Draw one battler's sprite at (x, y), tipped over on its side when
@@ -467,27 +537,21 @@ class TestWindow(QWidget):
     def window_show(self, bckgimage_path, lang_name):
         """Composite the first-encounter frame (background, sprites, HP bars,
         CP/BP, message box) into a pixmap for the Ankimon Window."""
-        ui_path = battle_ui_path
-
-        pixmap_ui = QPixmap()
-        pixmap_ui.load(str(ui_path))
+        pixmap_ui = self._cached_pixmap(battle_ui_path)
 
         # Load the background image
-        pixmap_bckg = QPixmap()
-        pixmap_bckg.load(str(bckgimage_path))
+        pixmap_bckg = self._cached_pixmap(bckgimage_path)
 
         # Display the Pokémon image
         image_label = QLabel()
-        pixmap = self._load_sprite(self.enemy_pokemon, "front")
+
+        # Scaled to fit a fixed box, aspect preserved. Reading the dimensions
+        # back off the scaled pixmaps keeps the draw offsets correct even when
+        # a sprite is missing and cannot be scaled at all.
+        pixmap = self._scaled_sprite(self.enemy_pokemon, "front")
 
         # Display the Main Pokémon image
-        pixmap2 = self._load_sprite(self.main_pokemon, "back")
-
-        # Scale both to a fixed width, keeping the aspect ratio. Reading the
-        # dimensions back off the scaled pixmaps keeps the draw offsets correct
-        # even when a sprite is missing and cannot be scaled at all.
-        pixmap = self._fit_sprite(pixmap)
-        pixmap2 = self._fit_sprite(pixmap2)
+        pixmap2 = self._scaled_sprite(self.main_pokemon, "back")
 
         new_width, new_height = pixmap.width(), pixmap.height()
         new_width2, new_height2 = pixmap2.width(), pixmap2.height()
@@ -562,7 +626,6 @@ class TestWindow(QWidget):
         hp_enemy_text_font = load_custom_font(
             18, int(self.settings_obj.get("misc.language"))
         )
-        msg_font = load_custom_font(32, int(self.settings_obj.get("misc.language")))
 
         # Draw the text on top of the image
         # Adjust the font size as needed
@@ -627,7 +690,7 @@ class TestWindow(QWidget):
         # Set the merged image as the pixmap for the QLabel
         image_label.setPixmap(merged_pixmap)
 
-        return image_label, msg_font
+        return image_label
 
     @staticmethod
     def _safe_hp_pair(hp, max_hp):
@@ -677,28 +740,20 @@ class TestWindow(QWidget):
         # turn to turn, not the box itself.
         bckgimage_path = battlescene_path / self.ankimon_tracker_obj.battlescene_file
 
-        ui_path = battle_ui_path
-
-        pixmap_ui = QPixmap()
-        pixmap_ui.load(str(ui_path))
+        pixmap_ui = self._cached_pixmap(battle_ui_path)
 
         # Load the background image
-        pixmap_bckg = QPixmap()
-        pixmap_bckg.load(str(bckgimage_path))
+        pixmap_bckg = self._cached_pixmap(bckgimage_path)
 
         image_label = QLabel()
 
-        # Display the Pokémon image
-        pixmap = self._load_sprite(self.enemy_pokemon, "front")
+        # Scaled to fit a fixed box, aspect preserved. Reading the dimensions
+        # back off the scaled pixmaps keeps the draw offsets correct even when
+        # a sprite is missing and cannot be scaled at all.
+        pixmap = self._scaled_sprite(self.enemy_pokemon, "front")
 
         # Display the Main Pokémon image
-        pixmap2 = self._load_sprite(self.main_pokemon, "back")
-
-        # Scale both to a fixed width, keeping the aspect ratio. Reading the
-        # dimensions back off the scaled pixmaps keeps the draw offsets correct
-        # even when a sprite is missing and cannot be scaled at all.
-        pixmap = self._fit_sprite(pixmap)
-        pixmap2 = self._fit_sprite(pixmap2)
+        pixmap2 = self._scaled_sprite(self.main_pokemon, "back")
 
         new_width, new_height = pixmap.width(), pixmap.height()
         new_width2, new_height2 = pixmap2.width(), pixmap2.height()
@@ -785,7 +840,6 @@ class TestWindow(QWidget):
         hp_enemy_text_font = load_custom_font(
             18, int(self.settings_obj.get("misc.language"))
         )
-        msg_font = load_custom_font(28, int(self.settings_obj.get("misc.language")))
 
         # Draw the text on top of the image
         # Adjust the font size as needed
@@ -821,9 +875,6 @@ class TestWindow(QWidget):
 
         painter.drawText(max_hp_x, 238, str(main_max_hp))
         painter.drawText(hp_x, 238, str(main_hp))
-
-        painter.setFont(msg_font)
-        painter.setPen(QColor(31, 31, 39))  # Text color
 
         # Drawing enemy pokemon hp
         painter.setFont(hp_enemy_text_font)
@@ -1138,10 +1189,20 @@ class TestWindow(QWidget):
         self.setStyleSheet("background-color: rgb(44,44,44);")
         self.current_view = "battle"
 
-    def display_battle(self, message_text=None, shake_enemy=False, shake_main=False):
+    def display_battle(
+        self,
+        message_text=None,
+        shake_enemy=False,
+        shake_main=False,
+        paint_now=False,
+    ):
         """Repaint the battle scene, optionally updating the log text and
         triggering a shake on whichever side (``shake_enemy``/``shake_main``)
-        actually attacked this turn."""
+        actually attacked this turn.
+
+        ``paint_now`` forces the frame onto the screen synchronously — see
+        the comment at the call below for the one case that needs it.
+        """
         # Debounce: prevent flicker from duplicate hooks (especially during reloads)
         if self._same_view_debounced("battle"):
             return
@@ -1155,21 +1216,71 @@ class TestWindow(QWidget):
         self.button_widget.hide()
         self.current_view = "battle"
 
+        if paint_now:
+            # setPixmap only SCHEDULES a repaint. The faint frames the battle
+            # loop asks for are composited and then replaced inside the same
+            # synchronous call stack — the faint handlers run new_pokemon() ->
+            # display_first_encounter() (or the death screen) before Qt ever
+            # gets back to its event loop — so without forcing the paint here
+            # the killing blow's battle-log line and the fainted sprite's
+            # tip-over are composited and thrown away without being shown.
+            # repaint() paints this widget immediately and does NOT re-enter
+            # the event loop, so unlike processEvents() it is safe to call
+            # from inside the reviewer hook.
+            try:
+                self.main_label.repaint()
+            except RuntimeError:
+                pass
+
+        sides = []
         if shake_enemy:
-            self._shake_sprite("enemy")
+            sides.append("enemy")
         if shake_main:
-            self._shake_sprite("main")
+            sides.append("main")
+        if sides:
+            self._shake_sprites(sides)
+
+    def force_display_battle(self, message_text=None, paint_now=False):
+        """``display_battle`` with the same-view debounce bypassed.
+
+        Everything that repaints the battle view from outside a turn's own
+        render — the battle loop's faint frames, the catch/companion-switch
+        messages, the end-of-session text clear, the Team screen's companion
+        swap, and this window's own shake steps — legitimately fires inside
+        ``_same_view_debounced``'s 50 ms window and would otherwise be
+        swallowed. They were each reaching in and zeroing the private
+        ``_last_display_time`` first: the same three lines copy-pasted across
+        three packages, three of them poking at a private attribute of a
+        widget they do not own. One method instead.
+        """
+        self._last_display_time = 0
+        self.display_battle(message_text=message_text, paint_now=paint_now)
 
     def _shake_sprite(self, side, magnitude=7, step_ms=45):
-        """Jitter one Pokémon's sprite in place — the one actually attacking
-        this turn, not the whole window. Diagonal, not side-to-side: reads as
-        a little lunge/recoil rather than a plain horizontal wobble. Since
-        the scene is a single QPainter-composited image (no per-element
-        widgets to animate), this works by nudging that sprite's (dx, dy)
-        draw-offset through a few values via QTimer and forcing a redraw at
-        each step, then settling back to (0, 0).
+        """Shake a single side — thin wrapper over :meth:`_shake_sprites`."""
+        self._shake_sprites((side,), magnitude=magnitude, step_ms=step_ms)
+
+    def _shake_sprites(self, sides, magnitude=7, step_ms=45):
+        """Jitter the attacking Pokémon's sprite in place — the one that
+        actually attacked this turn, not the whole window. Diagonal, not
+        side-to-side: reads as a little lunge/recoil rather than a plain
+        horizontal wobble. Since the scene is a single QPainter-composited
+        image (no per-element widgets to animate), this works by nudging that
+        sprite's (dx, dy) draw-offset through a few values via QTimer and
+        forcing a redraw at each step, then settling back to (0, 0).
+
+        Every named side rides ONE timer chain. Both sides attack in the same
+        turn whenever neither fainted the other, and two independent chains
+        meant two full scene composites per animation step — ten extra
+        repaints on the reviewer's hot path for a single answered card, for an
+        animation that was already in lockstep (identical offsets, identical
+        timing). One chain costs one composite per step no matter how many
+        sprites are moving.
         """
-        attr = "_enemy_shake_offset" if side == "enemy" else "_main_shake_offset"
+        attrs = [
+            "_enemy_shake_offset" if side == "enemy" else "_main_shake_offset"
+            for side in sides
+        ]
         half = magnitude // 2
         offsets = [
             (magnitude, -half),
@@ -1181,10 +1292,10 @@ class TestWindow(QWidget):
 
         def _step(offset):
             try:
-                setattr(self, attr, offset)
+                for attr in attrs:
+                    setattr(self, attr, offset)
                 if self.current_view == "battle":
-                    self._last_display_time = 0
-                    self.display_battle()
+                    self.force_display_battle()
             except RuntimeError:
                 pass
 

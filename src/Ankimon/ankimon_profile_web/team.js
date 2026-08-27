@@ -594,6 +594,21 @@
         return teamBridge.saveTeam(JSON.stringify(ids), state.xpShare || '', companionArg).then((res) => {
             if (res && res.ok) {
                 state.dirty = false;
+                // The save is now the new baseline. companionTouched used to
+                // only ever clear in applyData() (page init), so after ONE
+                // companion edit every later save in the session kept sending
+                // an authoritative companion — and since the backend rewrites
+                // an empty one into "promote the first team member", editing
+                // slot 1 later would silently re-crown whoever landed there.
+                state.companionTouched = false;
+                // The backend reports what it actually left as the Active
+                // Companion whenever this save was authoritative, because a
+                // clear can come back as a promotion. Adopt it so the crown
+                // on screen matches the DB without a reload.
+                if (res.companion !== undefined) {
+                    state.companionId = res.companion ? String(res.companion) : null;
+                    renderTeam();
+                }
                 updateSaveUI();
                 toast(res.message || 'Team saved.', 'success');
                 return res;

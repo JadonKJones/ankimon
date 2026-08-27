@@ -157,14 +157,19 @@ def cycle_team_pokemon():
         # leaving it to the floating Anki tooltip below — with the window
         # open the two used to visually overlap/compete for the same
         # on-screen space.
+        shown_in_window = False
         try:
             from .functions.drawing_utils import show_in_ankimon_window
 
-            show_in_ankimon_window(switch_msg)
+            shown_in_window = show_in_ankimon_window(switch_msg)
         except Exception as e:
             print(f"Error updating Ankimon Window: {e}")
 
-        tooltip(switch_msg)
+        # Only float the tooltip when the window did NOT take the message —
+        # otherwise the same sentence appears twice at once, which is the
+        # overlap show_in_ankimon_window() exists to remove.
+        if not shown_in_window:
+            tooltip(switch_msg)
 
     except Exception as e:
         print(f"Unexpected error: {e}")

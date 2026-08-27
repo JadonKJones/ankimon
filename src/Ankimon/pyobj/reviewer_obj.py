@@ -64,12 +64,11 @@ class Reviewer_Manager:
             if is_alive(test_window):
                 test_window.last_message_text = ""
                 if test_window.current_view == "battle":
-                    # Bypass the render debounce: this fires right after the
-                    # turn's own display_battle() call, well inside the 50ms
-                    # window, so without resetting it the "clear" repaint
-                    # would silently no-op and the stale text stays on screen.
-                    test_window._last_display_time = 0
-                    test_window.display_battle()
+                    # force_ bypasses the render debounce: this fires right
+                    # after the turn's own display_battle() call, well inside
+                    # the 50ms window, so a plain display_battle() would
+                    # silently no-op and the stale text would stay on screen.
+                    test_window.force_display_battle()
         except Exception:
             pass
 

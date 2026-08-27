@@ -99,3 +99,69 @@ def test_status_transition_to_a_real_status_still_emits_a_message():
     )
 
     assert len(messages) == 1
+
+
+# ---------------------------------------------------------------------------
+# The PRIMARY producer of "X is affected by Fainted!" is not the status-diff
+# path above but process_battle_data's own special-status gate:
+# battle_loop.py sets main_pokemon.battle_status from validate_pokemon_status(),
+# which returns "fainted" for any hp <= 0, and process_battle_data then routed
+# that straight into _handle_special_battle_status -> the generic
+# "pokemon_special_condition" template. So the line survived on every turn the
+# player's Pokemon actually went down, even with the _process_battle_effects
+# fix in place.
+# ---------------------------------------------------------------------------
+
+
+def _battle_data_kwargs(battle_status, translator, main_pokemon, enemy_pokemon):
+    return dict(
+        battle_info={"instructions": []},
+        multiplier=1.0,
+        main_pokemon=main_pokemon,
+        enemy_pokemon=enemy_pokemon,
+        user_attack="tackle",
+        enemy_attack="",
+        dmg_from_user_move=10,
+        dmg_from_enemy_move=12,
+        user_hp_after=0,
+        opponent_hp_after=5,
+        battle_status=battle_status,
+        pokemon_encounter=1,
+        translator=translator,
+        changes=[],
+    )
+
+
+def test_process_battle_data_does_not_announce_a_fainted_special_condition():
+    from Ankimon.functions.battle_functions import process_battle_data
+
+    main_pokemon = _FakePokemon("Pikachu")
+    enemy_pokemon = _FakePokemon("Rattata")
+    translator = _translator_spy()
+
+    message = process_battle_data(
+        **_battle_data_kwargs("fainted", translator, main_pokemon, enemy_pokemon)
+    )
+
+    requested_keys = [call.args[0] for call in translator.translate.call_args_list]
+    assert "pokemon_special_condition" not in requested_keys
+    # The move announcement is what should print on that turn instead.
+    assert "player_attack_announcement" in requested_keys
+    assert "[player_attack_announcement]" in message
+
+
+def test_process_battle_data_still_announces_a_real_special_condition():
+    """Sanity check: a genuine status still routes through the status path."""
+    from Ankimon.functions.battle_functions import process_battle_data
+
+    main_pokemon = _FakePokemon("Pikachu")
+    enemy_pokemon = _FakePokemon("Rattata")
+    translator = _translator_spy()
+
+    process_battle_data(
+        **_battle_data_kwargs("slp", translator, main_pokemon, enemy_pokemon)
+    )
+
+    requested_keys = [call.args[0] for call in translator.translate.call_args_list]
+    assert "pokemon_is_sleeping" in requested_keys
+    assert "player_attack_announcement" not in requested_keys

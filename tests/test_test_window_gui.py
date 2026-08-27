@@ -279,7 +279,7 @@ def test_no_view_is_cropped(make_window, qapp, view):
         win.ankimon_tracker_obj.pokemon_encounter = 0  # the 556x371 scene
         win.display_first_encounter()
     elif view == "battle":
-        win.ankimon_tracker_obj.pokemon_encounter = 3  # the 555x258 scene
+        win.ankimon_tracker_obj.pokemon_encounter = 3
         win.display_battle()
     else:
         win.display_pokemon_death()
@@ -845,3 +845,183 @@ def test_pokemon_display_battle_tips_the_fainted_side(make_window):
     # calculation blowing up the paint pass, not a specific pixel assertion.
     win.display_battle()
     assert not win.main_label.pixmap().isNull()
+
+
+# ---------------------------------------------------------------------------
+# force_display_battle — the one debounce-bypassing entry point. It replaces
+# four copies of "reach in, zero the private _last_display_time, repaint"
+# spread across three packages (drawing_utils, reviewer_obj, profile_data and
+# this window's own shake steps).
+# ---------------------------------------------------------------------------
+
+
+def test_force_display_battle_bypasses_the_same_view_debounce(make_window, monkeypatch):
+    win = make_window()
+    clock = _FakeClock()
+    monkeypatch.setattr(sys.modules[_MODULE_NAME], "time", clock)
+
+    win.display_first_encounter()
+    win.display_battle()
+
+    renders = []
+    monkeypatch.setattr(
+        win, "pokemon_display_battle", lambda: renders.append(1) or win.main_label
+    )
+
+    win.display_battle(message_text="dropped")  # same instant -> debounced away
+    assert renders == []
+
+    win.force_display_battle(message_text="shown")
+    assert renders == [1]
+    assert win.last_message_text == "shown"
+
+
+# ---------------------------------------------------------------------------
+# paint_now — the faint frames the battle loop asks for are replaced inside the
+# same synchronous call stack (the faint handler runs new_pokemon() ->
+# display_first_encounter(), or the death screen, before Qt returns to its
+# event loop), so a scheduled repaint would never actually reach the screen.
+# ---------------------------------------------------------------------------
+
+
+def test_paint_now_paints_the_frame_synchronously(make_window, monkeypatch):
+    win = make_window()
+    clock = _FakeClock()
+    monkeypatch.setattr(sys.modules[_MODULE_NAME], "time", clock)
+
+    painted = []
+    monkeypatch.setattr(win.main_label, "repaint", lambda: painted.append(1))
+
+    win.display_battle()
+    assert painted == []  # ordinary turns just schedule, as before
+
+    win.force_display_battle(message_text="Rattata fainted!", paint_now=True)
+    assert painted == [1]
+    assert win.last_message_text == "Rattata fainted!"
+
+
+# ---------------------------------------------------------------------------
+# Render cost on the reviewer's hot path. Every composite re-read both scene
+# PNGs from disk and re-ran a SmoothTransformation scale of both sprites, and
+# both sides shaking ran two independent timer chains — ~11 full composites for
+# a single answered card.
+# ---------------------------------------------------------------------------
+
+
+def test_both_sides_shaking_share_one_render_chain(make_window, monkeypatch):
+    win = make_window()
+    win.show()
+
+    monkeypatch.setattr(
+        sys.modules[_MODULE_NAME].QTimer,
+        "singleShot",
+        staticmethod(lambda _delay, fn: fn()),
+    )
+
+    renders = []
+    monkeypatch.setattr(
+        win, "pokemon_display_battle", lambda: renders.append(1) or win.main_label
+    )
+
+    win.display_battle(message_text="both attacked", shake_enemy=True, shake_main=True)
+
+    # 1 turn render + 5 animation steps. Two independent chains cost 11.
+    assert len(renders) == 6
+    assert win._enemy_shake_offset == (0, 0)
+    assert win._main_shake_offset == (0, 0)
+
+    win.hide()
+
+
+def _count_sprite_loads(win, monkeypatch):
+    """Record every real sprite decode the window performs."""
+    loads = []
+    real = win._load_sprite_checked
+    monkeypatch.setattr(
+        win,
+        "_load_sprite_checked",
+        lambda pokemon, side: (loads.append(side), real(pokemon, side))[1],
+    )
+    return loads
+
+
+def test_sprite_scaling_is_memoized_across_repaints(make_window, monkeypatch):
+    win = make_window()
+
+    loads = _count_sprite_loads(win, monkeypatch)
+
+    win.pokemon_display_battle()
+    win.pokemon_display_battle()
+    win.pokemon_display_battle()
+
+    # One read per side for the whole session, not one per composite.
+    assert sorted(loads) == ["back", "front"]
+
+
+def test_a_missing_sprite_is_never_cached(make_window, missing_sprite, monkeypatch):
+    """A sprite the user has not downloaded yet must not pin the substitute.
+
+    ``_load_sprite`` silently substitutes for a file that isn't there, so
+    caching that result would keep showing the substitute for the rest of the
+    session even once the real artwork lands.
+    """
+    main = _FakePokemon("scatterbug", 664, sprite_path=missing_sprite)
+    win = make_window(main=main)
+    win.default_path = _REAL_SPRITE
+
+    loads = _count_sprite_loads(win, monkeypatch)
+
+    win.pokemon_display_battle()
+    win.pokemon_display_battle()
+
+    assert loads.count("back") == 2  # retried, not cached
+    assert loads.count("front") == 1  # the enemy's real sprite still is
+
+
+def test_an_unreadable_sprite_file_is_never_cached(make_window, tmp_path, monkeypatch):
+    """A file that EXISTS but will not decode also falls back to the substitute.
+
+    A path-exists check would call that a successful load and pin the
+    substitute under the real sprite's key — the exact pinning the
+    missing-file case is guarded against. The liveness test is whether the
+    Pokémon's own sprite actually decoded, not whether a file is on disk.
+    """
+    corrupt = tmp_path / "back_default" / "664.png"
+    corrupt.parent.mkdir(parents=True, exist_ok=True)
+    corrupt.write_bytes(b"this is not a PNG")
+    assert corrupt.exists()
+
+    main = _FakePokemon("scatterbug", 664, sprite_path=corrupt)
+    win = make_window(main=main)
+    win.default_path = _REAL_SPRITE
+
+    loads = _count_sprite_loads(win, monkeypatch)
+
+    win.pokemon_display_battle()
+    win.pokemon_display_battle()
+
+    assert loads.count("back") == 2  # retried, not pinned to the substitute
+    assert loads.count("front") == 1
+
+
+def test_static_scene_assets_are_decoded_once_per_window(make_window, tw_module):
+    """The battle background is decoded once, not on every composite.
+
+    Only assets that actually load are cached — a failed load must stay
+    retryable, so ``_pixmap_cache`` holds whichever of the two scene assets
+    resolved on this install rather than a fixed count.
+    """
+    win = make_window()
+
+    win.pokemon_display_battle()
+    cached = dict(win._pixmap_cache)
+
+    background = str(
+        tw_module.battlescene_path / win.ankimon_tracker_obj.battlescene_file
+    )
+    assert background in cached
+    assert not cached[background].isNull()
+
+    win.pokemon_display_battle()
+    for key, pixmap in cached.items():
+        assert win._pixmap_cache[key] is pixmap  # same decoded instance reused

@@ -42,7 +42,7 @@ from ..functions.friendship_evolution import (
 from ..pyobj.error_handler import show_warning_with_traceback
 from ..functions.trainer_functions import xp_share_gain_exp
 from ..functions.badges_functions import check_for_badge, receive_badge
-from ..functions.drawing_utils import tooltipWithColour, show_in_ankimon_window
+from ..functions.drawing_utils import tooltipWithColour
 from ..utils import (
     get_ev_spread,
     is_alive,
@@ -1280,14 +1280,26 @@ def new_pokemon(
         max_hp=pokemon.max_hp,
     )
 
-    display_name = getattr(pokemon, "display_name", pokemon.name)
-    shiny_prefix = "✨ Shiny " if pokemon.shiny else ""
-    tooltipWithColour(
-        translator.translate(
-            "wild_pokemon_appeared", enemy_pokemon_name=f"{shiny_prefix}{display_name}"
-        ),
-        "#F7DC6F",
+    # display_first_encounter() above already paints exactly this line into
+    # the Ankimon Window's own message box, so float it over the reviewer
+    # only when that window can't show it — an open window would otherwise
+    # get the same sentence twice at once, which is precisely the overlap
+    # show_in_ankimon_window() was added to this PR to remove.
+    window_shows_it = (
+        test_window is not None
+        and is_alive(test_window)
+        and test_window.isVisible()
     )
+    if not window_shows_it:
+        display_name = getattr(pokemon, "display_name", pokemon.name)
+        shiny_prefix = "✨ Shiny " if pokemon.shiny else ""
+        tooltipWithColour(
+            translator.translate(
+                "wild_pokemon_appeared",
+                enemy_pokemon_name=f"{shiny_prefix}{display_name}",
+            ),
+            "#F7DC6F",
+        )
 
     # Re-render the reviewer HUD. refresh_hud() grabs the live webview under
     # Anki and is a recorded no-op headless.
@@ -1835,8 +1847,13 @@ def catch_pokemon(
 
     color = "#a17cf7"  # 6A4DAC" #pokemon leveling info color for tooltip
     try:
+        # Tooltip only. A show_in_ankimon_window(msg) here is dead on both
+        # paths: every auto branch calls new_pokemon() on the next statement,
+        # whose display_first_encounter() overwrites last_message_text with
+        # "A wild Y appeared!" before a single frame is painted, and the
+        # manual path has already switched the window to the death view, which
+        # show_in_ankimon_window() no-ops on.
         tooltipWithColour(msg, color)
-        show_in_ankimon_window(msg)
     except Exception as e:
         if logger is not None:
             show_warning_with_traceback(

@@ -8,8 +8,16 @@ selection, PC box) team.js never knew about.
 
 The fix: team.js now sends a distinct ``_COMPANION_UNCHANGED`` sentinel when
 the companion selection was never touched this session, and handle_save_team
-leaves the DB's is_main row completely alone in that case. An empty/invalid
-value is still an explicit clear, but only when the frontend actually says so.
+leaves the DB's is_main row completely alone in that case.
+
+A companion *change* never ends with the game having no battler at all,
+either — ``update_main_pokemon()`` falls back to ``MAIN_POKEMON_DEFAULT`` (the
+level-5 Ditto named "Please Restart Anki") the moment ``get_main_pokemon()``
+returns None, so any path to zero ``is_main=1`` rows is user-hostile. An
+explicit clear therefore promotes the first member of the team being saved, and
+the two changes that cannot be honoured — an id that isn't in the team being
+saved, and a clear with an empty team — both leave the existing is_main row
+exactly where it is. handle_save_team never drops it.
 
 Loads profile_data.py directly with its own dependencies stubbed (it's a
 plain, non-Qt data layer per its own module docstring), so this pins the
@@ -17,6 +25,7 @@ branching logic without needing a real Qt/services stack.
 """
 
 import importlib.util
+import re
 import sys
 import types
 from pathlib import Path
@@ -138,16 +147,80 @@ def test_unchanged_sentinel_leaves_existing_main_pokemon_alone(pd_module):
     assert fake_services.db.set_main_calls == []
 
 
-def test_empty_companion_when_touched_clears_main_pokemon(pd_module):
-    """An explicit clear (user toggled the crown off) still works."""
+def test_empty_companion_when_touched_promotes_the_first_team_member(pd_module):
+    """An explicit clear means "somebody else battles now", not "nobody does".
+
+    Un-crowning used to call clear_main_pokemon(), leaving zero is_main rows —
+    and the next Anki start then handed the game MAIN_POKEMON_DEFAULT, the
+    level-5 Ditto named "Please Restart Anki". The same destructive path was
+    reachable without ever touching the crown: team.js marks the companion
+    touched and sends "" whenever the slot holding it is removed or replaced,
+    which is an ordinary team edit.
+    """
     mod, fake_services = pd_module
     pd = _make_pd(pd_module)
 
     result = pd.handle_save_team(["a", "b"], "", "")
 
     assert result["ok"] is True
-    assert fake_services.db.clear_main_calls == 1
+    assert fake_services.db.set_main_calls == ["a"]
+    assert fake_services.db.clear_main_calls == 0
+
+
+def test_empty_companion_with_an_empty_team_leaves_main_pokemon_alone(pd_module):
+    """Clearing the last team member must not leave the game with no battler.
+
+    There is nobody to promote here, so the save simply doesn't touch is_main.
+    Dropping the row instead would hand the next Anki start
+    MAIN_POKEMON_DEFAULT — a stale-but-real battler beats the placeholder
+    Ditto in every case, and a player who empties their whole team to rebuild
+    it should not lose their Pokémon over it.
+    """
+    mod, fake_services = pd_module
+    pd = _make_pd(pd_module)
+
+    result = pd.handle_save_team([], "", "")
+
+    assert result["ok"] is True
+    assert fake_services.db.clear_main_calls == 0
     assert fake_services.db.set_main_calls == []
+    # Nothing authoritative happened, so nothing to report back to team.js.
+    assert "companion" not in result
+
+
+def test_handle_save_team_never_clears_the_main_pokemon(pd_module):
+    """No input reaches clear_main_pokemon() — the placeholder-Ditto path is
+    closed off entirely, not just narrowed."""
+    mod, fake_services = pd_module
+    pd = _make_pd(pd_module)
+
+    for team_ids, companion in (
+        (["a", "b"], mod.ProfileData._COMPANION_UNCHANGED),
+        (["a", "b"], ""),
+        (["a", "b"], "a"),
+        (["a", "b"], "not-on-team"),
+        ([], ""),
+        ([], mod.ProfileData._COMPANION_UNCHANGED),
+        ([], "not-on-team"),
+    ):
+        assert pd.handle_save_team(team_ids, "", companion)["ok"] is True
+
+    assert fake_services.db.clear_main_calls == 0
+
+
+def test_the_resulting_companion_is_reported_back_to_team_js(pd_module):
+    """A clear can come back as a promotion, so the page has to be told what
+    the save actually left set or its crown silently diverges from the DB."""
+    mod, fake_services = pd_module
+    pd = _make_pd(pd_module)
+
+    assert pd.handle_save_team(["a", "b"], "", "b")["companion"] == "b"
+    assert pd.handle_save_team(["a", "b"], "", "")["companion"] == "a"
+    # Nothing authoritative: no key at all, so team.js keeps what it has.
+    assert "companion" not in pd.handle_save_team(
+        ["a", "b"], "", mod.ProfileData._COMPANION_UNCHANGED
+    )
+    assert "companion" not in pd.handle_save_team(["a", "b"], "", "not-on-team")
 
 
 def test_valid_companion_sets_main_pokemon(pd_module):
@@ -161,9 +234,14 @@ def test_valid_companion_sets_main_pokemon(pd_module):
     assert fake_services.db.clear_main_calls == 0
 
 
-def test_companion_not_in_saved_team_is_rejected_and_cleared(pd_module):
-    """A companion id that isn't actually part of the team being saved is
-    invalid — must fall back to a clear, not silently set it anyway."""
+def test_companion_not_in_saved_team_is_rejected_without_touching_is_main(pd_module):
+    """A companion id that isn't part of the team being saved is bad INPUT.
+
+    It must not be set (it isn't on the team) — but it must not be treated as
+    a clear either: a bridge race, a stale cached team.js or a third-party
+    caller sending a known-good-but-benched id would otherwise delete the
+    player's battler. Reject the field, change nothing.
+    """
     mod, fake_services = pd_module
     pd = _make_pd(pd_module)
 
@@ -171,4 +249,34 @@ def test_companion_not_in_saved_team_is_rejected_and_cleared(pd_module):
 
     assert result["ok"] is True
     assert fake_services.db.set_main_calls == []
-    assert fake_services.db.clear_main_calls == 1
+    assert fake_services.db.clear_main_calls == 0
+
+
+def test_sentinel_literal_is_mirrored_in_team_js():
+    """The protocol sentinel is hand-duplicated in team.js and profile_data.py.
+
+    Nothing at runtime asserts the two literals match, and a rename on either
+    side silently makes ``companion_touched`` True on every ordinary save —
+    resurrecting the exact regression this file exists to pin. Read the JS off
+    disk and require the Python literal to appear in it.
+    """
+    profile_data_src = (
+        _SRC / "Ankimon" / "ankimon_profile_web" / "profile_data.py"
+    ).read_text(encoding="utf-8")
+    team_js = (_SRC / "Ankimon" / "ankimon_profile_web" / "team.js").read_text(
+        encoding="utf-8"
+    )
+
+    # Pulled straight out of the source text so this test needs none of the
+    # module's import-time dependencies stubbed.
+    match = re.search(
+        r"_COMPANION_UNCHANGED\s*=\s*[\"\'](?P<literal>[^\"\']+)[\"\']",
+        profile_data_src,
+    )
+    assert match, "profile_data.py no longer defines _COMPANION_UNCHANGED"
+    literal = match.group("literal")
+
+    assert f"'{literal}'" in team_js or f'"{literal}"' in team_js, (
+        f"team.js does not send the {literal!r} sentinel profile_data.py expects "
+        "— the two hand-duplicated literals have diverged"
+    )

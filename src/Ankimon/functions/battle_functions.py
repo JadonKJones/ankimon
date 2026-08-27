@@ -681,8 +681,20 @@ def process_battle_data(
 
         # 3. User attack section
         if user_attack and user_attack != constants.DO_NOTHING_MOVE:
-            # Handle special battle statuses first
-            if battle_status and battle_status != "fighting":
+            # Handle special battle statuses first.
+            #
+            # "fainted" is excluded for the same reason _process_battle_effects
+            # excludes it: there is no status_fainted_* / pokemon_is_fainted
+            # key, so it fell through to the generic "pokemon_special_condition"
+            # template and printed "X is affected by Fainted!" — and it is the
+            # PRIMARY producer of that line, not the status-diff path.
+            # battle_loop.py sets battle_status from validate_pokemon_status(),
+            # which returns "fainted" for any hp <= 0, so this fired on every
+            # single turn the player's Pokemon went down. Fainting already has
+            # its own dedicated message (player_pokemon_fainted, raised by
+            # handle_main_pokemon_faint), so skip the special-status branch and
+            # let the normal "X used Y!" announcement print instead.
+            if battle_status and battle_status not in ("fighting", "fainted"):
                 status_msg = _handle_special_battle_status(
                     main_pokemon, battle_status, translator
                 )

@@ -717,3 +717,278 @@ def test_attribute_xp_and_evs_defaults_missing_iv_to_15_and_ev_to_0(mobile_db, m
     assert updated["ev"] == {"hp": 0, "atk": 0, "def": 0, "spa": 0, "spd": 0, "spe": 0}
 
 
+
+
+# --- deferred move-replacement prompts (off the GUI thread) ------------------
+#
+# _attribute_xp_and_evs_to_companion runs on a QueryOp worker thread on every
+# real mobile sync, and a QDialog cannot be built or exec()'d there. The guard
+# that recognised this used to just skip the prompt, which silently threw the
+# learned move away: the companion kept its old four moves with no tooltip, no
+# log line and nothing queued. The decision is now parked and replayed on the
+# GUI thread instead.
+
+import threading as _threading
+
+
+@pytest.fixture(autouse=True)
+def _drain_pending_move_learns():
+    """Never leak a parked decision into the next test."""
+    with ms._pending_move_learns_lock:
+        del ms._pending_move_learns[:]
+    yield
+    with ms._pending_move_learns_lock:
+        del ms._pending_move_learns[:]
+
+
+def _run_off_thread(fn, *args, **kwargs):
+    box = {}
+
+    def _target():
+        try:
+            box["value"] = fn(*args, **kwargs)
+        except BaseException as exc:  # surfaced on the calling thread below
+            box["error"] = exc
+
+    worker = _threading.Thread(target=_target)
+    worker.start()
+    worker.join(timeout=30)
+    assert not worker.is_alive(), "worker thread hung"
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def _full_moveset_row(individual_id="OFFTHREAD"):
+    return {
+        "individual_id": individual_id,
+        "name": "Pikachu",
+        "id": 25,
+        "level": 5,
+        "xp": 0,
+        "attacks": ["tackle", "growl", "quick-attack", "thunder-shock"],
+        "base_stats": {"hp": 35, "atk": 55, "def": 40, "spa": 50, "spd": 50, "spe": 90},
+        "growth_rate": "medium-fast",
+    }
+
+
+def _full_moveset_companion(db, individual_id="OFFTHREAD"):
+    pkmndata = _full_moveset_row(individual_id)
+    db.save_pokemon(pkmndata)
+    return pkmndata
+
+
+class _FakeCompanionDB:
+    """Just the two accessors _attribute_xp_and_evs_to_companion touches."""
+
+    def __init__(self, *rows):
+        self.rows = {row["individual_id"]: dict(row) for row in rows}
+
+    def get_pokemon(self, individual_id):
+        row = self.rows.get(individual_id)
+        return dict(row) if row else None
+
+    def save_pokemon(self, pkmndata):
+        self.rows[pkmndata["individual_id"]] = dict(pkmndata)
+
+
+class _FakeCompanionSingleton:
+    def __init__(self, individual_id):
+        self.individual_id = individual_id
+        self.attacks = []
+        self.xp = 0
+        self.level = 1
+        self.ev = {}
+        self.friendship = 0
+        self.pokemon_defeated = 0
+
+    def invalidate_cp_cache(self):
+        pass
+
+
+def test_off_main_thread_move_learn_is_queued_not_dropped(monkeypatch):
+    """The regression: off the GUI thread the learned move used to vanish.
+
+    The production path this stands in for: resolve_next (mode="next", which
+    unlike resolve_all never sets utils.in_bulk_resolve) -> run_mobile_battles'
+    XP-Share grant, when the XP Share holder IS the main Pokemon — that is the
+    one call reaching this branch with is_active True and in_bulk False, and it
+    runs on a QueryOp worker thread.
+
+    Driven against a fake DB and a pinned level-up table so it stays hermetic —
+    several other files in this suite leave stubs for the pokedex/pokemon
+    modules in ``sys.modules``, and the point here is the thread guard, not the
+    XP curve.
+    """
+    from Ankimon import utils as _utils
+
+    # The real submodule object mobile_sync's function-local
+    # ``from .pokemon_functions import ...`` resolves — NOT
+    # ``Ankimon.functions.pokemon_functions`` as an attribute of the package,
+    # which other test files in this suite replace with a MagicMock.
+    _pf = sys.modules["Ankimon.functions.pokemon_functions"]
+    monkeypatch.setattr(
+        _pf, "find_experience_for_level", lambda *a, **k: 50, raising=False
+    )
+    monkeypatch.setattr(
+        _pf,
+        "get_levelup_move_for_pokemon",
+        lambda name, level: ["thunderbolt"],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        services, "main_pokemon", _FakeCompanionSingleton("OFFTHREAD"), raising=False
+    )
+    # This is about the GUI-thread guard, not bulk mode — and in_bulk_resolve is
+    # module-level state a failed resolve_all elsewhere in the suite can leave
+    # set, which would suppress the prompt for an unrelated reason.
+    monkeypatch.setattr(_utils, "in_bulk_resolve", False, raising=False)
+    # Assert on the queue itself, not on whatever the scheduler manages to do
+    # with it in a stubbed-Qt test environment.
+    monkeypatch.setattr(ms, "_schedule_move_learn_flush", lambda **kw: None)
+
+    db = _FakeCompanionDB(_full_moveset_row("OFFTHREAD"))
+
+    _run_off_thread(
+        ms._attribute_xp_and_evs_to_companion,
+        "OFFTHREAD",
+        100,
+        {},
+        _Settings(),
+        db=db,
+    )
+
+    with ms._pending_move_learns_lock:
+        parked = list(ms._pending_move_learns)
+
+    assert [(p["individual_id"], p["new_attack"]) for p in parked] == [
+        ("OFFTHREAD", "thunderbolt")
+    ]
+    # The level-up itself still landed...
+    assert db.rows["OFFTHREAD"]["level"] == 6
+    # ...and the existing four moves are untouched until the player chooses.
+    assert db.rows["OFFTHREAD"]["attacks"] == [
+        "tackle", "growl", "quick-attack", "thunder-shock",
+    ]
+
+
+def test_queued_move_learns_are_deduped(mobile_db):
+    ms._queue_move_learn_prompt("A", "Pikachu", "thunderbolt")
+    ms._queue_move_learn_prompt("A", "Pikachu", "thunderbolt")
+    ms._queue_move_learn_prompt("A", "Pikachu", "iron-tail")
+    ms._queue_move_learn_prompt("", "Pikachu", "thunderbolt")  # no id -> ignored
+
+    with ms._pending_move_learns_lock:
+        parked = [(p["individual_id"], p["new_attack"]) for p in ms._pending_move_learns]
+
+    assert parked == [("A", "thunderbolt"), ("A", "iron-tail")]
+
+
+def test_flush_prompts_persists_the_swap_and_syncs_the_singleton(mobile_db, monkeypatch):
+    db, _ = mobile_db
+    _full_moveset_companion(db, "FLUSH")
+    singleton = _FakeCompanionSingleton("FLUSH")
+    monkeypatch.setattr(services, "main_pokemon", singleton, raising=False)
+
+    asked = []
+
+    class _Presenter:
+        def choose_attack_to_replace(self, attacks, new_attack):
+            asked.append((list(attacks), new_attack))
+            return "growl"
+
+    monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+    ms._queue_move_learn_prompt("FLUSH", "Pikachu", "thunderbolt")
+
+    ms.flush_pending_move_learns(db=db, logger=_Logger())
+
+    assert asked == [
+        (["tackle", "growl", "quick-attack", "thunder-shock"], "thunderbolt")
+    ]
+    assert db.get_pokemon("FLUSH")["attacks"] == [
+        "tackle", "thunderbolt", "quick-attack", "thunder-shock",
+    ]
+    assert singleton.attacks == [
+        "tackle", "thunderbolt", "quick-attack", "thunder-shock",
+    ]
+    with ms._pending_move_learns_lock:
+        assert ms._pending_move_learns == []  # drained
+
+
+def test_flush_declined_prompt_keeps_the_current_moves(mobile_db, monkeypatch):
+    db, _ = mobile_db
+    _full_moveset_companion(db, "DECLINE")
+    monkeypatch.setattr(services, "main_pokemon", None, raising=False)
+
+    class _Presenter:
+        def choose_attack_to_replace(self, attacks, new_attack):
+            return None  # player closed the dialog
+
+    monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+    ms._queue_move_learn_prompt("DECLINE", "Pikachu", "thunderbolt")
+
+    ms.flush_pending_move_learns(db=db, logger=_Logger())
+
+    assert db.get_pokemon("DECLINE")["attacks"] == [
+        "tackle", "growl", "quick-attack", "thunder-shock",
+    ]
+
+
+def test_flush_rereads_the_db_and_just_learns_when_a_slot_opened_up(mobile_db, monkeypatch):
+    """The worker wrote more rows after parking the decision, and the player may
+    have freed a slot in between — re-read rather than trusting the snapshot."""
+    db, _ = mobile_db
+    _full_moveset_companion(db, "SLOT")
+    monkeypatch.setattr(services, "main_pokemon", None, raising=False)
+
+    asked = []
+
+    class _Presenter:
+        def choose_attack_to_replace(self, attacks, new_attack):
+            asked.append(new_attack)
+            return attacks[0]
+
+    monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+    ms._queue_move_learn_prompt("SLOT", "Pikachu", "thunderbolt")
+
+    # The player drops a move from Pokémon Details before the flush runs.
+    pkmndata = db.get_pokemon("SLOT")
+    pkmndata["attacks"] = ["tackle", "growl", "quick-attack"]
+    db.save_pokemon(pkmndata)
+
+    ms.flush_pending_move_learns(db=db, logger=_Logger())
+
+    assert asked == []  # nothing to choose between
+    assert db.get_pokemon("SLOT")["attacks"] == [
+        "tackle", "growl", "quick-attack", "thunderbolt",
+    ]
+
+
+def test_flush_without_a_presenter_reports_instead_of_silently_dropping(mobile_db, monkeypatch):
+    db, _ = mobile_db
+    _full_moveset_companion(db, "NOUI")
+    monkeypatch.setattr(services, "main_pokemon", None, raising=False)
+    monkeypatch.setattr(services, "ui", None, raising=False)
+
+    from Ankimon.functions import drawing_utils as _drawing_utils
+
+    seen = []
+    monkeypatch.setattr(
+        _drawing_utils, "tooltipWithColour", lambda msg, *a, **k: seen.append(msg)
+    )
+
+    warnings = []
+
+    class _WarnLogger(_Logger):
+        def log(self, level, msg, *a, **k):
+            warnings.append((level, msg))
+
+    ms._queue_move_learn_prompt("NOUI", "Pikachu", "thunderbolt")
+    ms.flush_pending_move_learns(db=db, logger=_WarnLogger())
+
+    assert any("thunderbolt" in msg for msg in seen)
+    assert any(level == "warning" and "thunderbolt" in msg for level, msg in warnings)
+    # Nothing guessed on the player's behalf.
+    assert db.get_pokemon("NOUI")["attacks"] == [
+        "tackle", "growl", "quick-attack", "thunder-shock",
+    ]

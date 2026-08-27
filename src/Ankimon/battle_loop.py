@@ -168,6 +168,16 @@ def on_review_card(*args):
         if battle_sounds == True and ankimon_tracker_obj.general_card_count_for_battle == 1:
             play_sound(enemy_pokemon.id, settings_obj)
 
+        # This turn's battle-log line and per-side damage. Only the
+        # cards-per-round batch below actually runs the poke_engine
+        # simulation, so on every other review they keep these defaults —
+        # bound here rather than read back out of locals() by name further
+        # down, where a rename would silently disable the message box and
+        # both shakes instead of raising.
+        formatted_battle_log = None
+        true_dmg_from_user_move = 0
+        true_dmg_from_enemy_move = 0
+
         if ankimon_tracker_obj.cards_battle_round >= _get_cards_per_round():
             ankimon_tracker_obj.cards_battle_round = 0
             ankimon_tracker_obj.attack_counter = 0
@@ -330,9 +340,35 @@ def on_review_card(*args):
                 # raising "wrapped C/C++ object deleted".
                 faint_window = services.test_window
                 live_faint_window = faint_window if is_alive(faint_window) else None
-                if live_faint_window is not None:
+                # Only when the window is actually showing the battle view.
+                # Manual mode (the shipped default) never sets
+                # faint_processed, so while the catch/defeat screen is up this
+                # block is re-entered on every completed round — and with
+                # paint_now that would flash the battle scene over the death
+                # screen each time before handle_enemy_faint() restored it.
+                if (
+                    live_faint_window is not None
+                    and getattr(live_faint_window, "current_view", None) == "battle"
+                ):
                     try:
-                        live_faint_window.display_battle()
+                        # The killing blow's own frame: this turn's log line
+                        # over the enemy sprite tipped on its side at 0 HP.
+                        # It has to carry message_text — the end-of-turn
+                        # repaint further down is skipped on exactly the
+                        # turns a side faints, so without it the message box
+                        # would show the PREVIOUS turn's text on the frame
+                        # where the enemy actually died, and the last line of
+                        # every battle would never be shown at all.
+                        # force_ + paint_now because the faint handler
+                        # replaces this frame (fresh encounter, or the death
+                        # screen) inside this same call stack, well within
+                        # the debounce window and long before Qt would paint
+                        # on its own. No shake: the animation's timer steps
+                        # would land on the NEXT encounter and jitter the
+                        # wrong sprites.
+                        live_faint_window.force_display_battle(
+                            message_text=formatted_battle_log, paint_now=True
+                        )
                     except RuntimeError:
                         live_faint_window = None
                 evo = services.evo_window
@@ -366,13 +402,35 @@ def on_review_card(*args):
             play_sound(enemy_pokemon.id, settings_obj)
 
         if main_pokemon.hp < 1:
+            main_pokemon.hp = 0
             # Liveness guard (F24): hand the faint handler a live window or None
             # (new_pokemon already None-checks before painting).
             main_faint_window = services.test_window
+            live_main_faint_window = (
+                main_faint_window if is_alive(main_faint_window) else None
+            )
+            # Not on a double faint: handle_enemy_faint() has already replaced
+            # enemy_pokemon with a fresh wild encounter, so this frame would
+            # show the NEXT enemy at full HP standing over the tipped-out main
+            # Pokémon under the previous fight's log line.
+            if live_main_faint_window is not None and not encounter_replaced:
+                try:
+                    # Mirror of the enemy-faint frame above, and it has to
+                    # happen HERE: handle_main_pokemon_faint() heals the main
+                    # Pokémon back to full HP as one of its first statements,
+                    # so this is the only moment its sprite can be drawn
+                    # tipped over at 0 HP, and the only moment the killing
+                    # blow's log line can reach the message box before
+                    # new_pokemon() paints the replacement encounter.
+                    live_main_faint_window.force_display_battle(
+                        message_text=formatted_battle_log, paint_now=True
+                    )
+                except RuntimeError:
+                    live_main_faint_window = None
             handle_main_pokemon_faint(
                 main_pokemon,
                 enemy_pokemon,
-                main_faint_window if is_alive(main_faint_window) else None,
+                live_main_faint_window,
                 reviewer_obj,
                 translator,
             )
@@ -391,22 +449,15 @@ def on_review_card(*args):
         # deleted-but-non-None widget can't raise on the end-of-turn repaint.
         final_window = services.test_window
         if not encounter_replaced and is_alive(final_window) and enemy_pokemon.hp > 0:
-            # formatted_battle_log/true_dmg_from_*_move are only set on turns
-            # where the cards-per-round batch actually ran the poke_engine
-            # simulation above (the `if cards_battle_round >= ...` block) — on
-            # other turns they're simply not in scope, so read them defensively.
-            _turn_text = locals().get("formatted_battle_log")
             # The ATTACKER shakes, not the one hit: main dealing damage means
             # main attacked (shake main's sprite), enemy dealing damage means
             # enemy attacked (shake enemy's sprite) — both can be true in the
             # same turn if neither side fainted the other first.
-            _shake_main = bool(locals().get("true_dmg_from_user_move"))
-            _shake_enemy = bool(locals().get("true_dmg_from_enemy_move"))
             try:
                 final_window.display_battle(
-                    message_text=_turn_text,
-                    shake_enemy=_shake_enemy,
-                    shake_main=_shake_main,
+                    message_text=formatted_battle_log,
+                    shake_enemy=bool(true_dmg_from_enemy_move),
+                    shake_main=bool(true_dmg_from_user_move),
                 )
             except RuntimeError:
                 pass
