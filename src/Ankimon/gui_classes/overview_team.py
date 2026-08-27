@@ -240,20 +240,32 @@ def _build_card_html(pokemon: dict[str, Any], id_prefix: str) -> str:
     Returns:
         An HTML string representing one ``.poke-item`` element.
     """
-    from ..functions.pokedex_functions import format_lore_name
+    from ..functions.pokedex_functions import format_lore_name, get_pokemon_diff_lang_name
+    from ..type_names import format_type_list
 
     name = pokemon.get("name", "Unknown")
     nickname = pokemon.get("nickname", "")
+
+    def _localized_species_name() -> str:
+        try:
+            from ..services import services
+            lang = int(services.settings.get("misc.language", 9))
+            localized = get_pokemon_diff_lang_name(int(pokemon.get("id", 0)), lang)
+            if localized and localized != "No Translation in this language":
+                return localized
+        except Exception:
+            pass
+        return format_lore_name(name)
     # The nickname is player-controlled (rename flow) and Pokémon dicts can also
     # arrive from external channels (trade codes / monthly-challenge payloads),
     # so HTML-escape every user-facing string before it is interpolated into the
     # raw markup rendered by Anki's QtWebEngine Deck Browser / Overview webview.
-    display_name = html.escape(nickname or format_lore_name(name))
+    display_name = html.escape(nickname or _localized_species_name())
     level = pokemon.get("level", 1)
     gender = pokemon.get("gender", "M")
     current_hp = pokemon.get("current_hp", 0)
     types: list = pokemon.get("type", [])
-    type_str = html.escape("/".join(types) if types else "Normal")
+    type_str = html.escape(format_type_list(types))
 
     safe_id = f"{id_prefix}-{name.lower().replace(' ', '-')}"
 
