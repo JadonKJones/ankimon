@@ -607,6 +607,11 @@ class ItemWindow(QWidget):
         self.main_pokemon.hp += heal_points
         if self.main_pokemon.hp > (self.main_pokemon.max_hp):
             self.main_pokemon.hp = self.main_pokemon.max_hp
+        # Keep the persisted mirror in step. to_dict() writes ``hp`` and
+        # ``current_hp`` independently and update_main_pokemon
+        # ._normalize_loaded_hp reads ``current_hp`` first, so bumping ``hp``
+        # alone makes the heal disappear the next time this record is loaded.
+        self.main_pokemon.current_hp = self.main_pokemon.hp
         self.delete_item(item_name)
         play_effect_sound(self.settings_obj, "HpHeal")
         self.logger.log_and_showinfo("info", f"{prevo_name} was healed for {heal_points}")
