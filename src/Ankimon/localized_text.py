@@ -44,17 +44,19 @@ def _load(category: str, lang_code: str) -> dict:
         return {}
 
 
-def localized(category: str, key: str, fallback: str = "") -> str:
+def localized(category: str, key: str, fallback: str = "", prettify: bool = True) -> str:
     """Localized string for ``key`` in ``category`` for the current language.
 
-    Returns ``fallback`` (or a prettified ``key``) when there is no localized
-    entry — English users and untranslated entries are unaffected.
+    Returns ``fallback`` when there is no localized entry — English users and
+    untranslated entries are unaffected. If ``fallback`` is empty and
+    ``prettify`` is set (names, not descriptions), a prettified ``key`` is
+    returned instead of an empty string.
     """
     table = _load(category, current_lang_code())
     hit = table.get(normalize_key(key))
     if hit:
         return hit
-    if fallback:
+    if fallback or not prettify:
         return fallback
     return " ".join(w.capitalize() for w in str(key).replace("-", " ").replace("_", " ").split())
 
@@ -66,7 +68,7 @@ def move_name(move: str, fallback: str = "") -> str:
 
 
 def move_description(move: str, fallback: str = "") -> str:
-    return localized("move_desc", move, fallback)
+    return localized("move_desc", move, fallback, prettify=False)
 
 
 def ability_name(ability: str, fallback: str = "") -> str:
@@ -74,7 +76,7 @@ def ability_name(ability: str, fallback: str = "") -> str:
 
 
 def ability_description(ability: str, fallback: str = "") -> str:
-    return localized("ability_desc", ability, fallback)
+    return localized("ability_desc", ability, fallback, prettify=False)
 
 
 def item_name(item: str, fallback: str = "") -> str:
@@ -82,7 +84,7 @@ def item_name(item: str, fallback: str = "") -> str:
 
 
 def item_description(item: str, fallback: str = "") -> str:
-    return localized("item_desc", item, fallback)
+    return localized("item_desc", item, fallback, prettify=False)
 
 
 def type_name(type_: str, fallback: str = "") -> str:
