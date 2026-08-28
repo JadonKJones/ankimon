@@ -40,30 +40,35 @@ def MainPokemon(
         if main_pokemon is not None and getattr(main_pokemon, "individual_id", None) and db.get_main_pokemon():
             # Use main_pokemon.to_dict() to capture in-memory stats like xp.
             db.save_pokemon(main_pokemon.to_dict())
-    except Exception:
-        pass  # If no main pokemon exists, just continue
+    except Exception as exc:
+        # Keep going -- a failure here must not block the switch -- but do not
+        # swallow it silently: since the incoming main is no longer full-healed,
+        # this save is the only thing preserving the outgoing Pokemon's HP.
+        logger.log("error", f"Could not save outgoing main pokemon: {exc}")
 
     # --- Now proceed to set the new mainpokemon as before ---
     pokemon_id = pokemon_data.get("id")
     pokemon_name = search_pokedex_by_id(pokemon_id)
     base_stats = search_pokedex(pokemon_name, "baseStats")
-    # HP: hand the constructor the PERSISTED values and let PokemonObject
-    # normalize them. Passing a freshly computed max-HP stat here (the old
+    # HP: hand the constructor the PERSISTED value and let PokemonObject
+    # normalize it. Passing a freshly computed max-HP stat here (the old
     # behaviour) silently full-healed the incoming main and, via
     # db.save_main_pokemon(to_dict()) below, persisted that full HP.
     #
-    # ``hp`` is the live field -- to_dict() labels it "Current HP", and
-    # battle_loop/item_window write it -- with ``current_hp`` as its mirror.
-    # Partially migrated records can carry one without the other (see
-    # update_main_pokemon._normalize_loaded_hp), so fall back to the mirror
-    # when ``hp`` is missing or null; otherwise _normalize_hp resolves a None
-    # ``hp`` to full max HP and we re-persist the very heal this fixes.
-    # Deliberately NOT _normalize_loaded_hp's current_hp-first order:
-    # item_window.Check_Heal_Item bumps ``hp`` alone, so preferring the mirror
-    # would silently undo a potion used just before the switch.
-    persisted_hp = pokemon_data.get("hp")
+    # ``current_hp`` FIRST, matching update_main_pokemon._normalize_loaded_hp --
+    # the function that reads this row back at the next Anki launch. On a stored
+    # record ``current_hp`` is the authoritative field and ``hp`` is the one that
+    # goes stale, because every writer that refreshes a single key refreshes
+    # ``current_hp``: encounter_functions.save_main_pokemon_progress after each
+    # defeat, evolution_window when a Pokemon evolves, and the fossil/trade
+    # record builders, which emit ``current_hp`` with no ``hp`` key at all.
+    # Reading ``hp`` first would resurrect that stale value -- re-picking the
+    # current main right after a win would still be a free heal, which is the
+    # bug this whole change exists to remove. ``hp`` stays as the fallback for
+    # rows written before the mirror existed.
+    persisted_hp = pokemon_data.get("current_hp")
     if persisted_hp is None:
-        persisted_hp = pokemon_data.get("current_hp")
+        persisted_hp = pokemon_data.get("hp")
 
     # Create NEW PokemonObject instance using class constructor
     new_main_pokemon = PokemonObject(
@@ -80,8 +85,12 @@ def MainPokemon(
         # ``or`` not a get() default: a record holding an explicit null nature
         # would otherwise reach get_nature_stat_mult() and blow up on None.lower().
         nature=pokemon_data.get("nature") or "serious",
+        # One resolved value into BOTH fields. to_dict() persists them
+        # independently, so letting them diverge here writes a row whose two HP
+        # keys disagree, and whichever one _normalize_loaded_hp does not pick is
+        # silently discarded at the next launch.
         hp=persisted_hp,
-        current_hp=pokemon_data.get("current_hp"),
+        current_hp=persisted_hp,
         gender=pokemon_data.get("gender", "N"),
         shiny=pokemon_data.get("shiny", False),
         individual_id=pokemon_data.get("individual_id", str(uuid.uuid4())),
@@ -101,20 +110,16 @@ def MainPokemon(
         is_favorite=pokemon_data.get("is_favorite", False),
         held_item=pokemon_data.get("held_item"),
     )
-    # Set any additional fields not in constructor
-    extra_fields = [
-        "captured_date",
-        "tier",
-        "friendship",
-        "pokemon_defeated",
-        "everstone",
-        "mega",
-        "special_form",
-        "base_experience",
-    ]
-    for attr in extra_fields:
-        if attr in pokemon_data:
-            setattr(new_main_pokemon, attr, pokemon_data[attr])
+    # ``mega`` and ``special_form`` are the only fields the constructor does not
+    # assign -- they fall into **kwargs and are dropped -- so they have to be set
+    # here. Set them UNCONDITIONALLY: __dict__.update() below cannot clear an
+    # attribute that new_main_pokemon does not carry, so skipping the assignment
+    # for a record that lacks the key leaves the OUTGOING Pokemon's value on the
+    # object and save_main_pokemon() then writes it onto the INCOMING Pokemon's
+    # row. The six other fields this loop used to copy are all real constructor
+    # parameters, already assigned above from the same pokemon_data.
+    new_main_pokemon.mega = pokemon_data.get("mega", False)
+    new_main_pokemon.special_form = pokemon_data.get("special_form", None)
 
     # Update existing reference
     main_pokemon.__dict__.update(new_main_pokemon.__dict__)
@@ -131,10 +136,10 @@ def MainPokemon(
 
     # Update UI components. refresh_hud() is Reviewer_Manager's single entry
     # point for a repaint: it builds the reviewer shim itself and is guarded, so
-    # no reviewer/webview is a silent no-op instead of an AttributeError that
-    # would abort the rest of this function. No extra bookkeeping is needed
-    # here: reviewer_obj.main_pokemon IS the object line above mutated in place,
-    # and db.save_main_pokemon() already invalidated the HUD cache via
+    # no reviewer/webview is a silent no-op rather than an AttributeError on
+    # mw.reviewer.web. No extra bookkeeping is needed here:
+    # reviewer_obj.main_pokemon IS the object mutated in place above, and
+    # db.save_main_pokemon() already invalidated the HUD cache via
     # _clear_reviewer_ownership_cache().
     reviewer_obj.refresh_hud()
 
