@@ -1168,6 +1168,9 @@ def test_flush_schedules_its_own_retry_after_a_failure(mobile_db, monkeypatch):
             return "growl"
 
     monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+    from Ankimon.functions import drawing_utils as _du
+
+    monkeypatch.setattr(_du, "tooltipWithColour", lambda *a, **k: None)
 
     scheduled = []
     fake_qt = types.ModuleType("aqt.qt")
@@ -1206,7 +1209,8 @@ def test_flush_schedules_its_own_retry_after_a_failure(mobile_db, monkeypatch):
 
 
 def test_flush_gives_up_after_the_retry_ceiling(mobile_db, monkeypatch):
-    """A row that fails every attempt is dropped with a log, not retried forever."""
+    """A row that fails every attempt is dropped with a give-up log, and no
+    further retry is scheduled once the ceiling is hit."""
     db, _ = mobile_db
     _full_moveset_companion(db, "DOOMED")
     monkeypatch.setattr(services, "main_pokemon", None, raising=False)
@@ -1216,21 +1220,42 @@ def test_flush_gives_up_after_the_retry_ceiling(mobile_db, monkeypatch):
             return "growl"
 
     monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+
+    scheduled = []
     monkeypatch.setitem(
         sys.modules,
         "aqt.qt",
-        types.SimpleNamespace(QTimer=types.SimpleNamespace(singleShot=lambda *a: None)),
+        types.SimpleNamespace(
+            QTimer=types.SimpleNamespace(
+                singleShot=lambda delay, cb: scheduled.append((delay, cb))
+            )
+        ),
     )
     monkeypatch.setattr(
         db, "save_pokemon", lambda *_a: (_ for _ in ()).throw(RuntimeError("locked"))
     )
 
+    records = []
+
+    class _CapturingLogger:
+        def log(self, *args, **kwargs):
+            records.append(args)
+
     ms._queue_move_learn_prompt("DOOMED", "Pikachu", "thunderbolt")
-    for _ in range(ms._MOVE_LEARN_MAX_RETRIES):
-        ms.flush_pending_move_learns(db=db, logger=_Logger())
+    for _ in range(ms._MOVE_LEARN_MAX_ATTEMPTS):
+        ms.flush_pending_move_learns(db=db, logger=_CapturingLogger())
 
     with ms._pending_move_learns_lock:
         assert ms._pending_move_learns == []
+
+    # The final pass logged a give-up line for the exhausted entry...
+    assert any(
+        "DOOMED" in str(rec) and "giving up" in str(rec) for rec in records
+    ), records
+    # ...and scheduled exactly the retries for the passes BEFORE the ceiling,
+    # never one after it.
+    assert len(scheduled) == ms._MOVE_LEARN_MAX_ATTEMPTS - 1
+    assert all(delay == ms._MOVE_LEARN_RETRY_DELAY_MS for delay, _ in scheduled)
 
 
 def test_flush_does_not_requeue_a_declined_prompt(mobile_db, monkeypatch):

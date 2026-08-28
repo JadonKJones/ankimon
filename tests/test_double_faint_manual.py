@@ -20,7 +20,7 @@ _SRC = Path(__file__).resolve().parent.parent / "src"
 
 
 @pytest.fixture
-def bl(monkeypatch):
+def bl(monkeypatch, request):
     monkeypatch.syspath_prepend(str(_SRC))
     for name in ("Ankimon", "Ankimon.functions", "Ankimon.pyobj"):
         mod = sys.modules.get(name)
@@ -32,8 +32,30 @@ def bl(monkeypatch):
 
     import importlib
 
+    # Force a fresh import and fully undo it on teardown — restore both the
+    # sys.modules entry and the attribute the import machinery binds on the
+    # parent package — so a later test re-imports cleanly instead of inheriting
+    # this module's patched state.
+    parent = sys.modules["Ankimon"]
+    prev_module = sys.modules.get("Ankimon.battle_loop")
+    had_attr = "battle_loop" in vars(parent)
+    prev_attr = getattr(parent, "battle_loop", None)
+
+    def _restore():
+        if prev_module is not None:
+            sys.modules["Ankimon.battle_loop"] = prev_module
+        else:
+            sys.modules.pop("Ankimon.battle_loop", None)
+        if had_attr:
+            parent.battle_loop = prev_attr
+        else:
+            vars(parent).pop("battle_loop", None)
+
+    request.addfinalizer(_restore)
+
+    sys.modules.pop("Ankimon.battle_loop", None)
     module = importlib.import_module("Ankimon.battle_loop")
-    monkeypatch.setattr(module, "_main_faint_deferred", False, raising=False)
+    module._main_faint_deferred = False
     return module
 
 

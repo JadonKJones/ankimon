@@ -2150,9 +2150,10 @@ _pending_move_learns_lock = threading.Lock()
 
 # A replay that RAISES (locked DB, collection closing mid-flush) is retried, but
 # only a bounded number of times: a row that fails every attempt would otherwise
-# bounce between the queue and a self-rescheduled flush forever. After this many
-# failed passes the entry is dropped with an error log rather than retried again.
-_MOVE_LEARN_MAX_RETRIES = 3
+# bounce between the queue and a self-rescheduled flush forever. This counts
+# TOTAL attempts (the first pass plus retries); once a row has failed this many
+# times it is dropped with an error log rather than retried again.
+_MOVE_LEARN_MAX_ATTEMPTS = 3
 # Delay before a failure-triggered retry, so a transiently locked DB has a moment
 # to free up instead of the retry racing straight back into the same lock.
 _MOVE_LEARN_RETRY_DELAY_MS = 2000
@@ -2192,7 +2193,7 @@ def flush_pending_move_learns(db=None, logger=None) -> None:
     scheduled onto the GUI thread — a failure with no other mobile-sync
     attribution behind it (the common case at shutdown) would otherwise sit in
     memory with nothing left to ever drain it. Retries are bounded by
-    ``_MOVE_LEARN_MAX_RETRIES``; past that the entry is dropped with an error
+    ``_MOVE_LEARN_MAX_ATTEMPTS``; past that the entry is dropped with an error
     log rather than looping forever. Entries that simply have nothing to do (row
     gone, move already known, the player declining the swap) are NOT requeued:
     those are decisions, not failures.
@@ -2272,13 +2273,24 @@ def flush_pending_move_learns(db=None, logger=None) -> None:
             tooltipWithColour(f"{name} learned {new_attack}!", "#6A4DAC")
         except Exception as e:
             attempts = int(entry.get("retries", 0)) + 1
-            if attempts >= _MOVE_LEARN_MAX_RETRIES:
+            if attempts >= _MOVE_LEARN_MAX_ATTEMPTS:
                 if logger:
                     logger.log(
                         "error",
                         f"Deferred move-learn prompt for {individual_id} failed "
                         f"{attempts} times, giving up: {e}",
                     )
+                # Own try: a tooltip failure here must not abort the entries
+                # still to be processed in this loop.
+                try:
+                    name = str(entry.get("name") or "A Pokémon")
+                    tooltipWithColour(
+                        f"{name} couldn't learn {new_attack} — the sync kept "
+                        "failing, so the move was discarded.",
+                        "#E12939",
+                    )
+                except Exception:
+                    pass
             else:
                 entry["retries"] = attempts
                 failed.append(entry)
