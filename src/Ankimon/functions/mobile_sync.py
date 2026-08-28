@@ -2148,6 +2148,15 @@ def _resolve_internal(mode="all", companion_id="", limit=None, db=None, settings
 _pending_move_learns = []
 _pending_move_learns_lock = threading.Lock()
 
+# A replay that RAISES (locked DB, collection closing mid-flush) is retried, but
+# only a bounded number of times: a row that fails every attempt would otherwise
+# bounce between the queue and a self-rescheduled flush forever. After this many
+# failed passes the entry is dropped with an error log rather than retried again.
+_MOVE_LEARN_MAX_RETRIES = 3
+# Delay before a failure-triggered retry, so a transiently locked DB has a moment
+# to free up instead of the retry racing straight back into the same lock.
+_MOVE_LEARN_RETRY_DELAY_MS = 2000
+
 
 def _queue_move_learn_prompt(individual_id, name, new_attack) -> None:
     """Park one deferred move-replacement decision. Safe off the GUI thread."""
@@ -2165,6 +2174,7 @@ def _queue_move_learn_prompt(individual_id, name, new_attack) -> None:
                 "individual_id": individual_id,
                 "name": name,
                 "new_attack": new_attack,
+                "retries": 0,
             }
         )
 
@@ -2178,13 +2188,14 @@ def flush_pending_move_learns(db=None, logger=None) -> None:
     whatever landed there — and a slot may even have opened up in the meantime,
     in which case there is nothing to ask about and the move is just learned.
 
-    An entry whose replay RAISES is put back on the queue. The drain below
-    empties the list before any DB work runs, so a transient failure (a locked
-    DB, a mid-flush collection close) would otherwise discard the learned move
-    for good — the exact silent loss this whole mechanism exists to prevent.
-    Entries that simply have nothing to do (row gone, move already known, the
-    player declining the swap) are NOT requeued: those are decisions, not
-    failures.
+    An entry whose replay RAISES is put back on the queue AND a delayed retry is
+    scheduled onto the GUI thread — a failure with no other mobile-sync
+    attribution behind it (the common case at shutdown) would otherwise sit in
+    memory with nothing left to ever drain it. Retries are bounded by
+    ``_MOVE_LEARN_MAX_RETRIES``; past that the entry is dropped with an error
+    log rather than looping forever. Entries that simply have nothing to do (row
+    gone, move already known, the player declining the swap) are NOT requeued:
+    those are decisions, not failures.
     """
     with _pending_move_learns_lock:
         pending = list(_pending_move_learns)
@@ -2260,20 +2271,59 @@ def flush_pending_move_learns(db=None, logger=None) -> None:
                 main_pokemon_singleton.attacks = list(attacks)
             tooltipWithColour(f"{name} learned {new_attack}!", "#6A4DAC")
         except Exception as e:
-            failed.append(entry)
-            if logger:
-                logger.log(
-                    "error",
-                    f"Deferred move-learn prompt failed for {individual_id}: {e}",
-                )
+            attempts = int(entry.get("retries", 0)) + 1
+            if attempts >= _MOVE_LEARN_MAX_RETRIES:
+                if logger:
+                    logger.log(
+                        "error",
+                        f"Deferred move-learn prompt for {individual_id} failed "
+                        f"{attempts} times, giving up: {e}",
+                    )
+            else:
+                entry["retries"] = attempts
+                failed.append(entry)
+                if logger:
+                    logger.log(
+                        "error",
+                        f"Deferred move-learn prompt failed for {individual_id} "
+                        f"(attempt {attempts}): {e}",
+                    )
 
-    # Requeue AFTER the loop, never inside it: _queue_move_learn_prompt takes
-    # the same lock, and re-adding mid-drain could hand a concurrent flush an
-    # entry this one is still working on.
-    for entry in failed:
-        _queue_move_learn_prompt(
-            entry["individual_id"], entry.get("name", ""), entry["new_attack"]
+    if not failed:
+        return
+
+    # Requeue AFTER the loop, never inside it: the lock is shared and re-adding
+    # mid-drain could hand a concurrent flush an entry this one is still working
+    # on. Preserve the retry count rather than routing back through
+    # _queue_move_learn_prompt, which would reset it to 0.
+    with _pending_move_learns_lock:
+        for entry in failed:
+            if not any(
+                (p["individual_id"], p["new_attack"])
+                == (entry["individual_id"], entry["new_attack"])
+                for p in _pending_move_learns
+            ):
+                _pending_move_learns.append(entry)
+
+    # A raised replay has no other attribution event guaranteed behind it, so
+    # schedule our own bounded retry instead of waiting for the next mobile sync.
+    try:
+        from aqt.qt import QTimer
+
+        # singleShot fires on the GUI thread (this whole function is GUI-thread
+        # only), so it can call the flush directly.
+        QTimer.singleShot(
+            _MOVE_LEARN_RETRY_DELAY_MS,
+            lambda: flush_pending_move_learns(db=db, logger=logger),
         )
+    except Exception:
+        # Headless / no Anki: the entries stay queued for the next main-thread
+        # pass. Logged, because "stays queued" can still mean "gone at exit".
+        if logger:
+            logger.log(
+                "warning",
+                "Move-learn retry could not be scheduled: no GUI thread available.",
+            )
 
 
 def _schedule_move_learn_flush(db=None, logger=None) -> None:

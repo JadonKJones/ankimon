@@ -1155,6 +1155,84 @@ def test_flush_retries_a_requeued_entry_on_the_next_pass(mobile_db, monkeypatch)
         assert ms._pending_move_learns == []  # drained for good this time
 
 
+def test_flush_schedules_its_own_retry_after_a_failure(mobile_db, monkeypatch):
+    """A raised replay has no other attribution event guaranteed behind it, so
+    the flush must arrange its own bounded retry rather than leave the entry to
+    rot in memory until shutdown."""
+    db, _ = mobile_db
+    _full_moveset_companion(db, "SELFRETRY")
+    monkeypatch.setattr(services, "main_pokemon", None, raising=False)
+
+    class _Presenter:
+        def choose_attack_to_replace(self, attacks, new_attack):
+            return "growl"
+
+    monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+
+    scheduled = []
+    fake_qt = types.ModuleType("aqt.qt")
+    fake_qt.QTimer = types.SimpleNamespace(
+        singleShot=lambda ms_delay, cb: scheduled.append((ms_delay, cb))
+    )
+    monkeypatch.setitem(sys.modules, "aqt.qt", fake_qt)
+
+    fail = {"on": True}
+    real_save = db.save_pokemon
+
+    def _save(pkmndata):
+        if fail["on"]:
+            raise RuntimeError("database is locked")
+        return real_save(pkmndata)
+
+    monkeypatch.setattr(db, "save_pokemon", _save)
+
+    ms._queue_move_learn_prompt("SELFRETRY", "Pikachu", "thunderbolt")
+    ms.flush_pending_move_learns(db=db, logger=_Logger())
+
+    # Entry kept AND a retry queued onto the GUI-thread timer.
+    with ms._pending_move_learns_lock:
+        assert [e["individual_id"] for e in ms._pending_move_learns] == ["SELFRETRY"]
+    assert len(scheduled) == 1
+    assert scheduled[0][0] == ms._MOVE_LEARN_RETRY_DELAY_MS
+
+    # Let the scheduled retry run against a now-healthy DB: it lands.
+    fail["on"] = False
+    scheduled[0][1]()
+    assert db.get_pokemon("SELFRETRY")["attacks"] == [
+        "tackle", "thunderbolt", "quick-attack", "thunder-shock",
+    ]
+    with ms._pending_move_learns_lock:
+        assert ms._pending_move_learns == []
+
+
+def test_flush_gives_up_after_the_retry_ceiling(mobile_db, monkeypatch):
+    """A row that fails every attempt is dropped with a log, not retried forever."""
+    db, _ = mobile_db
+    _full_moveset_companion(db, "DOOMED")
+    monkeypatch.setattr(services, "main_pokemon", None, raising=False)
+
+    class _Presenter:
+        def choose_attack_to_replace(self, attacks, new_attack):
+            return "growl"
+
+    monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "aqt.qt",
+        types.SimpleNamespace(QTimer=types.SimpleNamespace(singleShot=lambda *a: None)),
+    )
+    monkeypatch.setattr(
+        db, "save_pokemon", lambda *_a: (_ for _ in ()).throw(RuntimeError("locked"))
+    )
+
+    ms._queue_move_learn_prompt("DOOMED", "Pikachu", "thunderbolt")
+    for _ in range(ms._MOVE_LEARN_MAX_RETRIES):
+        ms.flush_pending_move_learns(db=db, logger=_Logger())
+
+    with ms._pending_move_learns_lock:
+        assert ms._pending_move_learns == []
+
+
 def test_flush_does_not_requeue_a_declined_prompt(mobile_db, monkeypatch):
     """Declining is a DECISION, not a failure — re-asking every pass would nag."""
     db, _ = mobile_db

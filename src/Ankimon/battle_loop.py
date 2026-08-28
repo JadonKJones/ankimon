@@ -35,6 +35,57 @@ from .pyobj.error_handler import show_warning_with_traceback
 main_pokemon = None
 enemy_pokemon = None
 settings_obj = None
+
+# Set while a manual-mode double faint is waiting on the player's enemy
+# catch/defeat choice, so a later battle round doesn't register a second
+# resolution callback for the same pending main faint.
+_main_faint_deferred = False
+
+
+def _defer_main_faint_until_enemy_resolved(
+    main_pokemon, enemy_pokemon, reviewer_obj, translator
+):
+    """Manual-mode double faint: run handle_main_pokemon_faint() only after the
+    player answers the enemy catch/defeat screen that handle_enemy_faint() left
+    open. Doing it now would heal the main Pokémon and spawn a fresh encounter
+    over that screen before the choice is made.
+    """
+    global _main_faint_deferred
+    if _main_faint_deferred:
+        return
+    _main_faint_deferred = True
+
+    from . import hook_registry
+
+    def _resolve():
+        global _main_faint_deferred
+        if not _main_faint_deferred:
+            return
+        _main_faint_deferred = False
+        for bucket in (
+            hook_registry.catch_pokemon_hooks,
+            hook_registry.defeat_pokemon_hooks,
+        ):
+            try:
+                bucket.remove(_resolve)
+            except ValueError:
+                pass
+        resolve_window = services.test_window
+        handle_main_pokemon_faint(
+            main_pokemon,
+            enemy_pokemon,
+            resolve_window if is_alive(resolve_window) else None,
+            reviewer_obj,
+            translator,
+            spawn_replacement=False,
+        )
+        try:
+            reviewer_obj.refresh_hud()
+        except Exception:
+            pass
+
+    hook_registry.add_catch_pokemon_hook(_resolve)
+    hook_registry.add_defeat_pokemon_hook(_resolve)
 reviewer_obj = None
 ankimon_tracker_obj = None
 test_window = None
@@ -438,14 +489,33 @@ def on_review_card(*args):
                     )
                 except RuntimeError:
                     live_main_faint_window = None
-            handle_main_pokemon_faint(
-                main_pokemon,
-                enemy_pokemon,
-                live_main_faint_window,
-                reviewer_obj,
-                translator,
+            # Manual-mode double faint: handle_enemy_faint() has put the enemy
+            # catch/defeat screen up (encounter_replaced is False, current_view
+            # is now "death") and is waiting on the player. Running
+            # handle_main_pokemon_faint() now would heal main and spawn a fresh
+            # encounter over that screen before they answer it. Defer the
+            # main-faint bookkeeping until the choice completes.
+            enemy_decision_pending = (
+                not encounter_replaced
+                and enemy_pokemon.hp < 1
+                and getattr(live_main_faint_window, "current_view", None) == "death"
             )
+            if enemy_decision_pending:
+                _defer_main_faint_until_enemy_resolved(
+                    main_pokemon, enemy_pokemon, reviewer_obj, translator
+                )
+            else:
+                handle_main_pokemon_faint(
+                    main_pokemon,
+                    enemy_pokemon,
+                    live_main_faint_window,
+                    reviewer_obj,
+                    translator,
+                )
             s.mutator_full_reset = 1
+            # Either a fresh encounter now stands in enemy_pokemon's place, or
+            # (deferred double faint) the enemy death screen is up — neither
+            # wants the end-of-turn repaint below.
             # handle_main_pokemon_faint() heals main and, via new_pokemon(),
             # replaces enemy_pokemon with a fresh wild encounter AND already
             # painted that encounter's own intro frame. Below, the final
