@@ -240,11 +240,7 @@ def _build_card_html(pokemon: dict[str, Any], id_prefix: str) -> str:
     Returns:
         An HTML string representing one ``.poke-item`` element.
     """
-    from ..functions.pokedex_functions import (
-        format_lore_name,
-        get_pokemon_diff_lang_name,
-        get_pretty_name_for_name,
-    )
+    from ..functions.pokedex_functions import format_lore_name
     from ..type_names import format_type_list
 
     name = pokemon.get("name", "Unknown")
@@ -257,6 +253,11 @@ def _build_card_html(pokemon: dict[str, Any], id_prefix: str) -> str:
         is compared against the internal, localized AND English names before
         being treated as custom."""
         try:
+            from ..functions.pokedex_functions import (
+                get_pokemon_diff_lang_name,
+                get_pretty_name_for_name,
+            )
+
             lang = 9
             from ..services import services
             if services.settings is not None:
