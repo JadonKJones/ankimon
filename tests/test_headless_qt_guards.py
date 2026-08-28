@@ -327,3 +327,101 @@ def test_sprite_download_survives_a_qcoreapplication_only_process():
         "from Ankimon.pyobj.download_sprites import show_agreement_and_download_dialog",
         "show_agreement_and_download_dialog()\nprint('OK')\n",
     )
+
+
+# --------------------------------------------------------------------------- #
+# isolated_modules itself: sys.modules is not the whole of a module's identity.
+#
+# These use a throwaway package written to tmp_path rather than a real Ankimon
+# submodule. Not squeamishness: the suite's other modules register MagicMocks
+# straight into ``sys.modules["Ankimon.pyobj.*"]``, so ``import_module`` on a
+# real name can hand back a mock without ever binding the parent attribute, and
+# the assertions below would then be measuring test-order rather than the helper.
+# A package on disk gives a genuine import with a starting state this test owns.
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def probe_package(tmp_path, monkeypatch):
+    """A real, importable ``iso_probe_pkg.child`` that leaves nothing behind."""
+    pkg_dir = tmp_path / "iso_probe_pkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "child.py").write_text("VALUE = 1\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    try:
+        yield SimpleNamespace(parent="iso_probe_pkg", child="iso_probe_pkg.child")
+    finally:
+        for name in [n for n in list(sys.modules) if n.startswith("iso_probe_pkg")]:
+            del sys.modules[name]
+
+
+def test_isolated_modules_restores_the_parent_package_attribute(probe_package):
+    """Both identities of a re-imported submodule must come back together.
+
+    Importing ``a.b`` binds ``b`` onto package ``a`` as well as into
+    ``sys.modules``. Restoring only ``sys.modules`` leaves the attribute pointing
+    at the module imported inside the block while ``sys.modules[...]`` points at
+    the original — and which one a later test sees depends on whether it writes
+    ``from a import b`` or ``import a.b``. That is exactly the order-dependent
+    breakage this helper exists to prevent.
+    """
+    parent = importlib.import_module(probe_package.parent)
+    before = importlib.import_module(probe_package.child)
+    assert parent.child is before  # what a real import binds
+
+    with isolated_modules(extra=(probe_package.child,)):
+        reimported = importlib.import_module(probe_package.child)
+        assert reimported is not before  # the block really did re-execute it
+        assert parent.child is reimported  # ...and rebound the parent attribute
+
+    assert sys.modules[probe_package.child] is before
+    assert parent.child is before
+
+
+def test_isolated_modules_removes_an_attribute_it_created(probe_package):
+    """A submodule absent beforehand must leave no attribute behind either.
+
+    The same leak in reverse: nothing to restore, so the binding the block's
+    import created has to be deleted rather than left on the parent.
+    """
+    parent = importlib.import_module(probe_package.parent)
+    assert not hasattr(parent, "child")
+
+    with isolated_modules(extra=(probe_package.child,)):
+        importlib.import_module(probe_package.child)
+        assert hasattr(parent, "child")
+
+    assert probe_package.child not in sys.modules
+    assert not hasattr(parent, "child")
+
+
+def test_isolated_modules_restores_on_an_exception(probe_package):
+    parent = importlib.import_module(probe_package.parent)
+    before = importlib.import_module(probe_package.child)
+
+    with pytest.raises(RuntimeError):
+        with isolated_modules(extra=(probe_package.child,)):
+            importlib.import_module(probe_package.child)
+            raise RuntimeError("boom")
+
+    assert sys.modules[probe_package.child] is before
+    assert parent.child is before
+
+
+def test_isolated_modules_cleans_up_when_the_parent_is_imported_inside(probe_package):
+    """The parent itself arriving mid-block must not leave a dangling name.
+
+    Importing the child imports the parent too; the parent is untracked, so it
+    survives the block. Without an entry for it, it survives holding a ``child``
+    attribute bound to a module that is no longer in ``sys.modules`` — the same
+    split identity, just created rather than overwritten.
+    """
+    assert probe_package.parent not in sys.modules
+
+    with isolated_modules(extra=(probe_package.child,)):
+        importlib.import_module(probe_package.child)
+
+    assert probe_package.child not in sys.modules
+    parent = sys.modules.get(probe_package.parent)
+    if parent is not None:
+        assert not hasattr(parent, "child")

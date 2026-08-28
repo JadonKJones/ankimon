@@ -134,6 +134,10 @@ def restore_package_stubs():
     do_restore()
 
 
+# Sentinel for "this parent package had no such attribute before the block".
+_MISSING = object()
+
+
 @contextlib.contextmanager
 def isolated_modules(*prefixes, extra=()):
     """Clear the named module namespaces, then restore ``sys.modules`` EXACTLY.
@@ -153,9 +157,12 @@ def isolated_modules(*prefixes, extra=()):
 
     So: on entry every module whose top-level name is in ``prefixes`` (plus any
     exact name in ``extra``) is removed; on exit everything added under those
-    same names is removed and the original entries are put back. Untracked
-    namespaces are left alone. Exceptions still restore, so an import failure
-    inside the block cannot leak state either.
+    same names is removed and the original entries are put back, along with the
+    parent-package ATTRIBUTE for any tracked module whose parent outlives the
+    block (see the comment on ``saved_attrs`` — ``sys.modules`` alone leaves
+    ``Ankimon.pyobj.InfoLogger`` and ``sys.modules[...]`` disagreeing).
+    Untracked namespaces are left alone. Exceptions still restore, so an import
+    failure inside the block cannot leak state either.
 
     Args:
         *prefixes: Top-level package names to isolate (e.g. ``"PyQt6"``).
@@ -168,6 +175,37 @@ def isolated_modules(*prefixes, extra=()):
         return name.split(".")[0] in prefixes or name in tracked
 
     saved = {name: mod for name, mod in sys.modules.items() if _is_tracked(name)}
+
+    # ``sys.modules`` is not the whole story: importing ``a.b`` also binds ``b``
+    # as an attribute of package ``a``. Restoring only ``sys.modules`` therefore
+    # leaves the two identities disagreeing whenever a tracked module's parent
+    # SURVIVES the block — ``Ankimon.pyobj.InfoLogger`` the attribute would keep
+    # pointing at the module re-imported in here while
+    # ``sys.modules["Ankimon.pyobj.InfoLogger"]`` points at the original. Which
+    # one a later test sees depends on whether it writes ``from ..pyobj import
+    # InfoLogger`` (attribute) or ``import Ankimon.pyobj.InfoLogger``
+    # (sys.modules), and that is precisely the order-dependent breakage this
+    # helper exists to prevent.
+    #
+    # A tracked parent needs none of this: it is restored as a whole object and
+    # brings its own attributes back with it. Parents are re-resolved by name on
+    # the way out so a parent that was itself swapped mid-block (conftest's
+    # ``restore_package_stubs`` rebuilds the Ankimon stubs) is not written to
+    # through a stale reference.
+    saved_attrs = []
+    for name in set(saved) | tracked:
+        parent_name, _, attr = name.rpartition(".")
+        if not parent_name or _is_tracked(parent_name):
+            continue
+        parent = sys.modules.get(parent_name)
+        # A parent that isn't imported yet still gets an entry: importing the
+        # child in here imports the parent too and binds the attribute, and the
+        # parent — being untracked — then survives the block carrying a name
+        # bound to a module that is no longer in sys.modules. Recording
+        # _MISSING makes the exit path delete it.
+        previous = _MISSING if parent is None else getattr(parent, attr, _MISSING)
+        saved_attrs.append((parent_name, attr, previous))
+
     for name in saved:
         del sys.modules[name]
     try:
@@ -176,3 +214,16 @@ def isolated_modules(*prefixes, extra=()):
         for name in [n for n in list(sys.modules) if _is_tracked(n) and n not in saved]:
             del sys.modules[name]
         sys.modules.update(saved)
+        for parent_name, attr, previous in saved_attrs:
+            parent = sys.modules.get(parent_name)
+            if parent is None:
+                continue
+            if previous is _MISSING:
+                # The attribute did not exist before; an import in here created
+                # it. Leaving it behind is the same leak in reverse.
+                try:
+                    delattr(parent, attr)
+                except AttributeError:
+                    pass
+            else:
+                setattr(parent, attr, previous)

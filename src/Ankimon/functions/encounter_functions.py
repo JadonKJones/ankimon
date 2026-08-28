@@ -1330,17 +1330,40 @@ def save_main_pokemon_progress(
         return
 
     # Moveset both evolution checks below evaluate. Seeded from the record
-    # loaded above — the SAME captured_pokemon row the checkers would re-read
-    # for themselves (get_main_pokemon() selects is_main = 1, get_pokemon()
-    # selects that row by individual_id), so the seed is identical to their
-    # fallback's result while sparing the review path one query on every
-    # no-level-up victory. The level-up merge below rebinds this to the live
-    # mainpkmndata["attacks"] list, so moves learned on THIS level are seen too.
-    # This is NOT main_pokemon.attacks — see the note at the friendship check.
-    # Stays None only when there is no stored record at all, which keeps the
-    # checkers' own lookup for that broken-save path.
+    # loaded above — normally the SAME captured_pokemon row the checkers would
+    # re-read for themselves (get_main_pokemon() selects is_main = 1,
+    # get_pokemon() selects that row by individual_id), so the seed is identical
+    # to their fallback's result while sparing the review path one query on
+    # every no-level-up victory. The level-up merge below rebinds this to the
+    # live mainpkmndata["attacks"] list, so moves learned on THIS level are seen
+    # too. This is NOT main_pokemon.attacks — see the note at the friendship
+    # check.
+    #
+    # "Normally" is why the identity is CHECKED below rather than assumed.
+    # is_main carries no uniqueness constraint (db_diagnostics.py exists to hunt
+    # for duplicate rows) and get_main_pokemon() fetchone()s whatever it finds,
+    # so the stored main row and the in-memory main_pokemon can name different
+    # Pokemon — the level-up merge below guards itself against exactly that, by
+    # name, before touching the moveset. Handing a mismatched row's moves to the
+    # checkers would evaluate a levelMove or known_move_type gate against ANOTHER
+    # Pokemon, and unlike the merge they have no guard of their own. Passing None
+    # on a mismatch costs one query and restores each checker's
+    # get_pokemon(individual_id) lookup, which is keyed correctly by
+    # construction — the same fallback a wholly missing record already takes.
     attacks = (
         list(main_pokemon_data.get("attacks") or []) if main_pokemon_data else None
+    )
+    # Compared as strings because individual_id is TEXT in the schema but has
+    # reached this code as an int from callers; a genuine match must not be
+    # declined over the type alone. Two missing ids are NOT a match — with
+    # nothing to compare the identity is unverified, which is the case this
+    # exists to refuse.
+    _main_individual_id = getattr(main_pokemon, "individual_id", None)
+    stored_row_is_main_pokemon = (
+        bool(main_pokemon_data)
+        and _main_individual_id is not None
+        and main_pokemon_data.get("individual_id") is not None
+        and str(main_pokemon_data.get("individual_id")) == str(_main_individual_id)
     )
     evolution_prompted = False
     levels_gained = 0
@@ -1471,7 +1494,7 @@ def save_main_pokemon_progress(
             evo_window,
             main_pokemon.everstone,
             getattr(main_pokemon, "evolution_rejected", False),
-            current_attacks=attacks,
+            current_attacks=attacks if stored_row_is_main_pokemon else None,
             gender=getattr(main_pokemon, "gender", None),
         )
         if evo_id is not None:
@@ -1611,8 +1634,9 @@ def save_main_pokemon_progress(
                 # an Eevee that HAS learned a Fairy move — and flip-flops, since
                 # the rarer level-up defeats still pass the fresh list. The
                 # stored record is safe where the object is not: it is the very
-                # row this checker's own fallback would re-read.
-                attacks=attacks,
+                # row this checker's own fallback would re-read — as long as it
+                # really is this Pokemon's row, which is what the flag checks.
+                attacks=attacks if stored_row_is_main_pokemon else None,
                 # The defeat count, unlike the moveset, IS accurate in memory —
                 # it was incremented for this battle a few lines above — so pass
                 # it and spare the checker that half of the lookup.

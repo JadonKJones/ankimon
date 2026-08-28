@@ -25,6 +25,7 @@ from .pokedex_functions import (
     _load_moves_cache,
     evolution_rows_for_evolved_species,
     filter_gender_split_forms,
+    gender_allows_evolution,
     pokemon_evolves_from_id,
     return_name_for_id,
 )
@@ -588,11 +589,12 @@ def _level_gender_gate(evo_id: int, caller_gender_id: Optional[int]) -> bool:
     ``check_evolution_by_item`` use for their gender gates, and deliberately the
     opposite of the fail-closed move-type gate: a missing moveset is a fact we
     could not read, while a missing gender is a save that never stored one.
+
+    Thin wrapper over ``pokedex_functions.gender_allows_evolution`` so the PC's
+    manual "Evolve now" readiness and the automatic level-up path can't drift
+    apart on what the gate means; only the level trigger scope is fixed here.
     """
-    if caller_gender_id is None:
-        return True
-    required = _evolution_row_gender_id(evo_id, _LEVEL_EVO_TRIGGERS)
-    return required is None or required == caller_gender_id
+    return gender_allows_evolution(evo_id, caller_gender_id, _LEVEL_EVO_TRIGGERS)
 
 
 def _satisfies_move_gate(
@@ -1030,11 +1032,21 @@ def _level_readiness(
 
     if everstone:
         status_text = "Everstone prevents evolution"
-    elif required_gender:
+    elif not gender_ok:
         # Nothing the player does changes a Pokémon's gender, so this outranks
         # the level/move/defeat lines below — none of them are actionable while
         # it holds.
-        status_text = f"Needs to be {required_gender} to evolve into {evo_name}"
+        #
+        # Branch on gender_ok, NOT on the label: an unrecognised CSV gender_id
+        # (nothing in the bundled data carries one, but the file is regenerated
+        # from upstream) leaves `required_gender` None while `ready` is already
+        # False, and keying on the label would then fall through to a cheerful
+        # "Ready to evolve into ..." line contradicting the button beside it.
+        status_text = (
+            f"Needs to be {required_gender} to evolve into {evo_name}"
+            if required_gender
+            else f"{evo_name} has a gender requirement this Pokémon doesn't meet"
+        )
     elif not knows_move and required_move:
         status_text = f"Needs to learn {required_move} to evolve"
     elif not defeated_ok and required_defeated:

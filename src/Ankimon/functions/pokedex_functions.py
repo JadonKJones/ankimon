@@ -392,6 +392,12 @@ def clear_pokedex_caches():
     # _load_poke_evo_cache built, so leaving it warm past a clear would keep
     # the pre-clear rows alive (parity with _pokedex_id_index above).
     _poke_evo_index = None
+    # ...and so does the memo built ON TOP of that index. _evolution_row_gender_id_cached
+    # answers from _poke_evo_index (and, for form ids >= 10000, from
+    # _pokedex_cache via search_pokedex_by_id), so a clear that leaves it warm
+    # keeps serving pre-clear verdicts for the rest of the session — the gender
+    # gate would then contradict the reloaded data it is supposed to read.
+    _evolution_row_gender_id_cached.cache_clear()
     _moves_cache = None
     _pokedex_id_index = None
     _pokemon_names_cache = {}
@@ -981,6 +987,60 @@ def _evolution_row_gender_id_cached(species_ref: int, trigger_ids) -> Optional[i
     return None
 
 
+def gender_allows_evolution(evolved_species_id, caller_gender_id, trigger_ids) -> bool:
+    """Return whether a gender may take one evolution, per the CSV gate.
+
+    The single place the gate's semantics live, so the three call sites that
+    apply it to a ``pokedex.json`` entry (:func:`check_evolution_by_item`,
+    :func:`check_evolution_for_pokemon` and the web bag's inline eligibility
+    loop) and the one that applies it to a bare id
+    (``friendship_evolution._level_gender_gate``) cannot drift apart.
+
+    ``caller_gender_id is None`` — no gender, or one :func:`_csv_gender_id`
+    doesn't recognise, "Genderless" included — fails **open**, keeping the
+    historical no-check behavior for callers and saves without gender data. A
+    species whose rows carry no ``gender_id`` is likewise unrestricted.
+
+    Args:
+        evolved_species_id: National Pokédex id of the *evolved* species.
+        caller_gender_id: The Pokémon's gender as a CSV id (1 = female,
+            2 = male), or ``None`` for "unknown — don't gate".
+        trigger_ids: Trigger scope to consult (:data:`_ITEM_EVO_TRIGGERS` /
+            :data:`_LEVEL_EVO_TRIGGERS`), so one method's gate never leaks
+            onto another.
+    """
+    if caller_gender_id is None:
+        return True
+    required_gender_id = _evolution_row_gender_id(evolved_species_id, trigger_ids)
+    return required_gender_id is None or required_gender_id == caller_gender_id
+
+
+def evolution_target_species_id(target_data) -> int:
+    """National id of the evolved species a ``pokedex.json`` entry describes.
+
+    ``actual_id`` carries it for base species and forms alike; ``species_id``
+    is the fallback for entries that predate it. ``0`` when neither resolves.
+    """
+    if not isinstance(target_data, dict):
+        return 0
+    return safe_int(target_data.get("actual_id") or target_data.get("species_id"))
+
+
+def evolution_gender_allows(target_data, gender, trigger_ids) -> bool:
+    """:func:`gender_allows_evolution` for a ``pokedex.json`` evolution entry.
+
+    Takes the raw Ankimon gender string (``"M"``/``"F"``/``"Genderless"``/
+    ``None``) and the evolved species' own pokedex entry, so callers holding a
+    ``target_data`` dict apply the gate identically without restating the
+    id-extraction and the comparison.
+    """
+    return gender_allows_evolution(
+        evolution_target_species_id(target_data),
+        _csv_gender_id(gender),
+        trigger_ids,
+    )
+
+
 def _pokedex_form_gender(species_ref) -> Optional[str]:
     """Return ``"M"``/``"F"`` when pokedex.json marks a species/form single-gender.
 
@@ -1107,20 +1167,10 @@ def check_evolution_by_item(pokemon_id, item_id, gender=None):
                             # RECOGNISED gender ("M"/"F"); None/unrecognised
                             # keeps the historical no-check behavior so
                             # callers without gender data are unaffected.
-                            caller_gender_id = _csv_gender_id(gender)
-                            if caller_gender_id is not None:
-                                required_gender_id = _evolution_row_gender_id(
-                                    safe_int(
-                                        target_data.get("actual_id")
-                                        or target_data.get("species_id")
-                                    ),
-                                    _ITEM_EVO_TRIGGERS,
-                                )
-                                if (
-                                    required_gender_id is not None
-                                    and caller_gender_id != required_gender_id
-                                ):
-                                    continue
+                            if not evolution_gender_allows(
+                                target_data, gender, _ITEM_EVO_TRIGGERS
+                            ):
+                                continue
 
                             # Normalize both sides by stripping spaces, hyphens and
                             # apostrophes so pokedex.json display names (e.g.
@@ -1433,20 +1483,10 @@ def check_evolution_for_pokemon(
                             # RECOGNISED gender ("M"/"F"); None/unrecognised
                             # keeps the historical no-check behavior so
                             # callers without gender data are unaffected.
-                            caller_gender_id = _csv_gender_id(gender)
-                            if caller_gender_id is not None:
-                                required_gender_id = _evolution_row_gender_id(
-                                    safe_int(
-                                        target_data.get("actual_id")
-                                        or target_data.get("species_id")
-                                    ),
-                                    _LEVEL_EVO_TRIGGERS,
-                                )
-                                if (
-                                    required_gender_id is not None
-                                    and caller_gender_id != required_gender_id
-                                ):
-                                    continue
+                            if not evolution_gender_allows(
+                                target_data, gender, _LEVEL_EVO_TRIGGERS
+                            ):
+                                continue
 
                             time_of_day = None
                             if "day" in condition:
@@ -1503,22 +1543,14 @@ def check_evolution_for_pokemon(
                     by_id = {}
                     for candidate in eligible_evos:
                         by_id.setdefault(
-                            safe_int(
-                                candidate.get("actual_id")
-                                or candidate.get("species_id")
-                            ),
-                            candidate,
+                            evolution_target_species_id(candidate), candidate
                         )
                     kept = set(filter_gender_split_forms(list(by_id), gender))
                     if kept:
                         eligible_evos = [
                             candidate
                             for candidate in eligible_evos
-                            if safe_int(
-                                candidate.get("actual_id")
-                                or candidate.get("species_id")
-                            )
-                            in kept
+                            if evolution_target_species_id(candidate) in kept
                         ]
 
                     eligible_evos.sort(key=lambda x: 0 if x.get("evoRegion") else 1)
