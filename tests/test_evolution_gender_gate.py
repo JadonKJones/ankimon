@@ -499,3 +499,107 @@ def test_pokedex_form_gender_reads_the_bundled_data():
     assert pf._pokedex_form_gender(1) is None  # Bulbasaur: no gender field
     for junk in (None, "x", 0, -1, 99999):
         assert pf._pokedex_form_gender(junk) is None
+
+
+# --------------------------------------------------------------------------- #
+# Cache invalidation: the memo built ON TOP of the evolution index.
+# --------------------------------------------------------------------------- #
+def test_clearing_the_pokedex_caches_also_clears_the_gender_memo():
+    """``clear_pokedex_caches`` must invalidate every layer, not just the data.
+
+    ``_evolution_row_gender_id_cached`` answers from ``_poke_evo_index`` (and,
+    for form ids >= 10000, from ``_pokedex_cache`` via ``search_pokedex_by_id``).
+    Clearing those two while leaving the memo warm keeps serving pre-clear
+    verdicts for the rest of the session, so the gate contradicts the very data
+    it is supposed to read. ``clear_pokedex_caches`` is the registered
+    profile-close hook, so "the rest of the session" spans a profile swap.
+    """
+    pf._evolution_row_gender_id_cached.cache_clear()
+    assert pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS) == 1
+    assert pf._evolution_row_gender_id_cached.cache_info().currsize > 0
+
+    pf.clear_pokedex_caches()
+    assert pf._evolution_row_gender_id_cached.cache_info().currsize == 0
+
+    # Still correct once rebuilt from the reloaded data.
+    assert pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS) == 1
+    assert pf._evolution_row_gender_id(475, pf._ITEM_EVO_TRIGGERS) == 2
+
+
+def test_a_reloaded_csv_changes_the_gender_verdict():
+    """The observable consequence of the memo surviving a clear.
+
+    Swap the parsed rows for ones that gate Vespiquen on MALE, clear, and the
+    gate must follow the new data. Before the fix the stale ``1`` came straight
+    back out of the memo and a female Combee stayed the only one that could
+    evolve, whatever the reloaded file said.
+    """
+    pf.clear_pokedex_caches()
+    assert pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS) == 1
+
+    swapped = [
+        dict(row, gender_id="2") if row.get("evolved_species_id") == "416" else row
+        for row in pf._load_poke_evo_cache()
+    ]
+    try:
+        pf.clear_pokedex_caches()
+        pf._poke_evo_cache = swapped
+        assert pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS) == 2
+    finally:
+        pf.clear_pokedex_caches()
+
+    assert pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS) == 1
+
+
+# --------------------------------------------------------------------------- #
+# One gate, one implementation.
+# --------------------------------------------------------------------------- #
+def test_gender_allows_evolution_semantics():
+    # Unknown gender fails open; an ungated species is unrestricted; a gated one
+    # matches only its own id, and only within the calling trigger scope.
+    assert pf.gender_allows_evolution(416, None, pf._LEVEL_EVO_TRIGGERS) is True
+    assert pf.gender_allows_evolution(1, 2, pf._LEVEL_EVO_TRIGGERS) is True
+    assert pf.gender_allows_evolution(416, 1, pf._LEVEL_EVO_TRIGGERS) is True
+    assert pf.gender_allows_evolution(416, 2, pf._LEVEL_EVO_TRIGGERS) is False
+    # Vespiquen's gate lives on a level row, so the item scope must not see it.
+    assert pf.gender_allows_evolution(416, 2, pf._ITEM_EVO_TRIGGERS) is True
+
+
+def test_evolution_target_species_id_prefers_actual_id():
+    assert pf.evolution_target_species_id({"actual_id": 10004}) == 10004
+    assert pf.evolution_target_species_id({"species_id": 413}) == 413
+    assert pf.evolution_target_species_id({"actual_id": 0, "species_id": 413}) == 413
+    for junk in (None, {}, [], "nope", {"actual_id": "x"}):
+        assert pf.evolution_target_species_id(junk) == 0
+
+
+def test_evolution_gender_allows_wraps_the_raw_ankimon_gender_string():
+    gallade = pf._load_pokedex_cache()["gallade"]
+    assert pf.evolution_gender_allows(gallade, "M", pf._ITEM_EVO_TRIGGERS) is True
+    assert pf.evolution_gender_allows(gallade, "F", pf._ITEM_EVO_TRIGGERS) is False
+    for junk in (None, "Genderless", "", "x"):
+        assert pf.evolution_gender_allows(gallade, junk, pf._ITEM_EVO_TRIGGERS) is True
+
+
+def test_item_and_level_paths_route_through_the_shared_gate(monkeypatch):
+    """Both in-module gate sites must call the helper, not a private copy.
+
+    The gate was hand-copied into three places (both paths here and the web
+    bag's inline eligibility loop). Copies drift; a test that only checks the
+    verdicts agree today cannot see a copy that stops matching tomorrow. Force
+    the shared helper to refuse everything and require both call sites to go
+    quiet — a surviving copy keeps answering and fails this.
+    """
+    monkeypatch.setattr(pf, "evolution_gender_allows", lambda *a, **k: False)
+
+    # Item path: Dawn Stone on a male Kirlia is the canonical accept.
+    assert pf.check_evolution_by_item(281, _DAWN_STONE_ID, gender="M") is None
+
+    # Level path: a female Combee at 21 is the canonical accept.
+    evo_window = mock.MagicMock()
+    with mock.patch.object(pf.services, "db", mock.MagicMock()):
+        assert (
+            pf.check_evolution_for_pokemon("combee-1", 415, 21, evo_window, gender="F")
+            is None
+        )
+    evo_window.ask_pokemon_evo.assert_not_called()

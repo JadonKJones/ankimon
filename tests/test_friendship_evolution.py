@@ -1358,3 +1358,50 @@ def test_manual_and_automatic_paths_agree_on_the_split():
                 "iid", species_id, level, _Win(), gender=gender, current_attacks=[]
             )
             assert manual == auto, (species_id, gender, manual, auto)
+
+
+def test_unlabelled_gender_gate_never_reads_as_ready(monkeypatch):
+    """``status_text`` must follow ``gender_ok``, not the label lookup.
+
+    ``_GENDER_LABELS`` only knows the veekun ids 1 and 2. Nothing in the bundled
+    CSV carries anything else, but the file is regenerated from upstream, and a
+    gender_id the labels don't cover used to leave ``ready`` False while the
+    branch below cheerfully rendered "Ready to evolve into ..." — a status line
+    contradicting the disabled button beside it. Simulate that by making both the
+    gate and the label lookup answer from an unlabelled id.
+    """
+    from Ankimon.functions import pokedex_functions as _pf
+
+    monkeypatch.setattr(_pf, "_evolution_row_gender_id", lambda *a, **k: 3)
+    monkeypatch.setattr(fe, "_evolution_row_gender_id", lambda *a, **k: 3)
+
+    result = fe.evolution_readiness(_lvl(1, 20, "M"), now=_NOON)
+
+    assert result["ready"] is False
+    assert "Ready to evolve" not in result["status_text"]
+    assert "gender requirement" in result["status_text"]
+    assert "Ivysaur" in result["status_text"]
+
+
+def test_labelled_gender_gate_still_names_the_gender(monkeypatch):
+    # The unlabelled fallback must not swallow the informative line.
+    result = fe.evolution_readiness(_lvl(415, 21, "M"), now=_NOON)
+    assert result["ready"] is False
+    assert result["status_text"] == "Needs to be Female to evolve into Vespiquen"
+
+
+def test_level_gender_gate_delegates_to_the_shared_helper(monkeypatch):
+    """One gate, one implementation — the PC path must not keep a private copy.
+
+    ``check_evolution_for_pokemon`` (automatic) and ``_level_readiness`` (the
+    PC's manual "Evolve now") have to answer identically or the button becomes a
+    way around the gate. Force the shared helper to refuse and require the manual
+    path to follow; a re-inlined copy would keep saying yes.
+    """
+    from Ankimon.functions import pokedex_functions as _pf
+
+    monkeypatch.setattr(_pf, "gender_allows_evolution", lambda *a, **k: False)
+    monkeypatch.setattr(fe, "gender_allows_evolution", lambda *a, **k: False)
+
+    assert fe._level_gender_gate(416, 1) is False
+    assert fe.evolution_readiness(_lvl(1, 20, "M"), now=_NOON)["ready"] is False
