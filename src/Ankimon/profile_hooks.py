@@ -1,4 +1,5 @@
 from anki.hooks import addHook
+
 try:
     from anki.hooks import remHook
 except ImportError:
@@ -14,7 +15,10 @@ from .pyobj.pokemon_trade import check_and_award_monthly_pokemon
 from .pyobj.error_handler import show_warning_with_traceback
 from .functions.pokedex_functions import clear_pokedex_caches, warm_evolution_caches
 from .functions.learnset_retrieval import clear_learnset_cache
-from .functions.encounter_functions import clear_encounter_cache, clear_auto_battle_override
+from .functions.encounter_functions import (
+    clear_encounter_cache,
+    clear_auto_battle_override,
+)
 
 sync_dialog = None
 
@@ -90,7 +94,10 @@ def _on_profile_did_open(online_connectivity):
                 # Run detection immediately to catch reviews pulled in by startup sync
                 if settings_obj.get("mobile.enabled", True):
                     try:
-                        from .functions.mobile_sync import process_mobile_reviews_after_sync
+                        from .functions.mobile_sync import (
+                            process_mobile_reviews_after_sync,
+                        )
+
                         process_mobile_reviews_after_sync(
                             col=col,
                             ankimon_db=db,
@@ -98,7 +105,10 @@ def _on_profile_did_open(online_connectivity):
                             logger=logger,
                         )
                     except Exception as sync_err:
-                        logger.log("error", f"Failed to run startup mobile reviews sync: {sync_err}")
+                        logger.log(
+                            "error",
+                            f"Failed to run startup mobile reviews sync: {sync_err}",
+                        )
 
                 # Restore badge — show pending count from previous session
                 pending = db.get_pending_mobile_count()
@@ -132,6 +142,7 @@ def _on_profile_did_open(online_connectivity):
         # and adds them to the candidates list for later review
         try:
             from .functions.badges_functions import check_unleeched_cards
+
             check_unleeched_cards(
                 services.col if services.col is not None else mw.col,
                 services.db,
@@ -176,12 +187,15 @@ def _on_profile_did_open(online_connectivity):
                     )
                 elif not is_online:
                     logger.log(
-                        "info", "No connection - AnkiWeb file-sync disabled for this session"
+                        "info",
+                        "No connection - AnkiWeb file-sync disabled for this session",
                     )
                 else:
                     global sync_dialog
                     sync_dialog = check_and_sync_pokemon_data(settings_obj, logger)
-                    logger.log("info", "Ankimon file-sync system initialized successfully")
+                    logger.log(
+                        "info", "Ankimon file-sync system initialized successfully"
+                    )
             except Exception as e:
                 show_warning_with_traceback(
                     parent=mw, exception=e, message="Error setting up sync system:"

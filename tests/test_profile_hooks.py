@@ -90,7 +90,8 @@ def _exec_profile_hooks(monkeypatch, gui_hooks):
         ),
     )
     monkeypatch.setitem(
-        sys.modules, "Ankimon.utils",
+        sys.modules,
+        "Ankimon.utils",
         _stub_module("Ankimon.utils", test_online_connectivity=lambda: False),
     )
     monkeypatch.setitem(
