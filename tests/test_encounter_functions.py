@@ -24,6 +24,7 @@ for module in [
     "Ankimon.functions.trainer_functions",
     "Ankimon.functions.badges_functions",
     "Ankimon.functions.drawing_utils",
+    "Ankimon.move_names",
     "Ankimon.utils",
     "Ankimon.business",
     "Ankimon.const",
