@@ -393,7 +393,9 @@ class EvoWindow(QWidget):
                     if len(attacks) < 4:
                         attacks.append(new_attack)
                     else:
-                        dialog = AttackDialog(attacks, new_attack)
+                        dialog = AttackDialog(attacks, new_attack, parent=self)
+                        dialog.raise_()
+                        dialog.activateWindow()
                         if dialog.exec() == QDialog.DialogCode.Accepted:
                             selected_attack = dialog.selected_attack
                             try:
@@ -601,7 +603,9 @@ class EvoWindow(QWidget):
                     if len(attacks) < 4:
                         attacks.append(new_attack)
                     else:
-                        dialog = AttackDialog(attacks, new_attack)
+                        dialog = AttackDialog(attacks, new_attack, parent=self)
+                        dialog.raise_()
+                        dialog.activateWindow()
                         if dialog.exec() == QDialog.DialogCode.Accepted:
                             selected_attack = dialog.selected_attack
                             try:

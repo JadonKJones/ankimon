@@ -3,7 +3,7 @@ import json
 from typing import Any, Callable
 import re
 
-from aqt import qconnect
+from aqt import mw, qconnect
 from PyQt6.QtGui import QPixmap, QPainter, QIcon, QColor, QPolygonF, QPen, QBrush
 from PyQt6.QtCore import (
     Qt,
@@ -1439,7 +1439,9 @@ def remember_attack(
             msg += f"\n Your {pokemon_data['name'].capitalize()} has learned {new_attack} !"
             logger.log_and_showinfo("info", f"{msg}")
         else:
-            dialog = AttackDialog(attacks, new_attack)
+            dialog = AttackDialog(attacks, new_attack, parent=mw)
+            dialog.raise_()
+            dialog.activateWindow()
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 selected_attack = dialog.selected_attack
                 try:
