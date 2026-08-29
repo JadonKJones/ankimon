@@ -382,6 +382,63 @@ def test_missing_hp_falls_back_to_current_hp(collection_dialog):
     assert main.hp == main.current_hp == 9
 
 
+@pytest.mark.parametrize("junk", ["", "??", "12.5", {}, [], float("nan"), object()])
+def test_malformed_current_hp_falls_back_to_valid_hp(collection_dialog, junk):
+    """A corrupted ``current_hp`` must not discard a perfectly good ``hp``.
+
+    Only ``None`` used to fall through to ``hp``.  Anything else -- an empty
+    string, a leftover dict, a NaN -- went straight into the constructor, where
+    ``PokemonObject._normalize_hp`` cannot parse it either and quietly swaps in
+    max HP.  ``db.save_main_pokemon()`` then writes that free full heal over the
+    valid HP the row still held, so the corruption is not merely tolerated, it
+    is made permanent.  ``update_main_pokemon._normalize_loaded_hp``, which
+    reads the same row at the next launch, has always preferred the parseable
+    ``hp`` here.
+    """
+    main, db = _call(collection_dialog, _stored_pokemon(hp=7, current_hp=junk))
+
+    assert main.hp == main.current_hp == 7
+    assert main.hp != main.max_hp, "the malformed value triggered a full heal"
+    saved = db.saved_main[-1]
+    assert saved["hp"] == saved["current_hp"] == 7
+
+
+@pytest.mark.parametrize("junk", ["", "??", {}, float("nan")])
+def test_malformed_hp_falls_back_to_valid_current_hp(collection_dialog, junk):
+    """The fallback runs in both directions: a usable ``current_hp`` still wins."""
+    main, db = _call(collection_dialog, _stored_pokemon(hp=junk, current_hp=12))
+
+    assert main.hp == main.current_hp == 12
+    assert db.saved_main[-1]["current_hp"] == 12
+
+
+def test_both_hp_fields_malformed_restores_full_hp(collection_dialog):
+    """With no usable value anywhere, full HP is the correct last resort.
+
+    Same final fallback as ``_normalize_loaded_hp``: better a healed Pokemon
+    than a crash or a nonsense bar.
+    """
+    main, db = _call(collection_dialog, _stored_pokemon(hp="??", current_hp="??"))
+
+    assert main.hp == main.current_hp == main.max_hp
+    assert db.saved_main[-1]["hp"] == main.max_hp
+
+
+def test_malformed_current_hp_preserves_a_fainted_hp(collection_dialog):
+    """``hp`` of 0 is a real answer, not an empty one, when ``current_hp`` is junk."""
+    main, db = _call(collection_dialog, _stored_pokemon(hp=0, current_hp="??"))
+
+    assert main.hp == main.current_hp == 0
+    assert db.saved_main[-1]["hp"] == 0
+
+
+def test_string_digit_hp_is_accepted(collection_dialog):
+    """A stringified number is parseable, so it is used rather than skipped."""
+    main, _db = _call(collection_dialog, _stored_pokemon(hp=181, current_hp="9"))
+
+    assert main.hp == main.current_hp == 9
+
+
 def test_null_nature_falls_back_to_serious(collection_dialog):
     """An explicit null nature must not reach ``get_nature_stat_mult``."""
     main, _db = _call(collection_dialog, _stored_pokemon(nature=None))
