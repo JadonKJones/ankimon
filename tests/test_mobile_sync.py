@@ -1208,9 +1208,14 @@ def test_flush_schedules_its_own_retry_after_a_failure(mobile_db, monkeypatch):
         assert ms._pending_move_learns == []
 
 
-def test_flush_gives_up_after_the_retry_ceiling(mobile_db, monkeypatch):
-    """A row that fails every attempt is dropped with a give-up log, and no
-    further retry is scheduled once the ceiling is hit."""
+def test_flush_stops_retrying_at_the_ceiling_but_keeps_the_move(mobile_db, monkeypatch):
+    """Hitting the retry ceiling must stop retrying, NOT discard the move.
+
+    The in-memory queue alone used to drop the entry here, telling the player
+    the move "was discarded" -- with the mobile battle already resolved there
+    was nothing left to reconstruct it from. The durable pending_move_learns
+    row must survive so a later pass can still offer the swap.
+    """
     db, _ = mobile_db
     _full_moveset_companion(db, "DOOMED")
     monkeypatch.setattr(services, "main_pokemon", None, raising=False)
@@ -1231,6 +1236,7 @@ def test_flush_gives_up_after_the_retry_ceiling(mobile_db, monkeypatch):
             )
         ),
     )
+    working_save = db.save_pokemon
     monkeypatch.setattr(
         db, "save_pokemon", lambda *_a: (_ for _ in ()).throw(RuntimeError("locked"))
     )
@@ -1241,21 +1247,82 @@ def test_flush_gives_up_after_the_retry_ceiling(mobile_db, monkeypatch):
         def log(self, *args, **kwargs):
             records.append(args)
 
-    ms._queue_move_learn_prompt("DOOMED", "Pikachu", "thunderbolt")
+    ms._queue_move_learn_prompt("DOOMED", "Pikachu", "thunderbolt", db=db)
     for _ in range(ms._MOVE_LEARN_MAX_ATTEMPTS):
         ms.flush_pending_move_learns(db=db, logger=_CapturingLogger())
 
+    # The in-memory queue is drained (no unbounded loop) and no further retry
+    # is scheduled once the ceiling is hit.
     with ms._pending_move_learns_lock:
         assert ms._pending_move_learns == []
-
-    # The final pass logged a give-up line for the exhausted entry...
-    assert any(
-        "DOOMED" in str(rec) and "giving up" in str(rec) for rec in records
-    ), records
-    # ...and scheduled exactly the retries for the passes BEFORE the ceiling,
-    # never one after it.
     assert len(scheduled) == ms._MOVE_LEARN_MAX_ATTEMPTS - 1
     assert all(delay == ms._MOVE_LEARN_RETRY_DELAY_MS for delay, _ in scheduled)
+    assert any(
+        "DOOMED" in str(rec) and "parked" in str(rec) for rec in records
+    ), records
+
+    # THE POINT: the decision is still on disk, so the move is not lost.
+    parked = db.get_pending_move_learns()
+    assert [(r["individual_id"], r["new_attack"]) for r in parked] == [
+        ("DOOMED", "thunderbolt")
+    ]
+
+    # A later pass, once the database is writable again, still lands the swap.
+    monkeypatch.setattr(db, "save_pokemon", working_save)
+    ms.flush_pending_move_learns(db=db, logger=_CapturingLogger())
+
+    assert db.get_pokemon("DOOMED")["attacks"] == [
+        "tackle", "thunderbolt", "quick-attack", "thunder-shock",
+    ]
+    assert db.get_pending_move_learns() == []  # settled, so the row is gone
+
+
+def test_a_move_parked_before_a_crash_is_recovered_on_the_next_flush(
+    mobile_db, monkeypatch
+):
+    """The crash case: the process goes away between parking the decision and
+    showing the prompt, so the in-memory queue is gone. The durable row must
+    bring it back."""
+    db, _ = mobile_db
+    _full_moveset_companion(db, "CRASHED")
+    monkeypatch.setattr(services, "main_pokemon", None, raising=False)
+
+    ms._queue_move_learn_prompt("CRASHED", "Pikachu", "thunderbolt", db=db)
+
+    # Simulate the restart: everything in RAM is gone, the DB row is not.
+    with ms._pending_move_learns_lock:
+        del ms._pending_move_learns[:]
+    assert len(db.get_pending_move_learns()) == 1
+
+    asked = []
+
+    class _Presenter:
+        def choose_attack_to_replace(self, attacks, new_attack):
+            asked.append(new_attack)
+            return "growl"
+
+    monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+    ms.flush_pending_move_learns(db=db, logger=_Logger())
+
+    assert asked == ["thunderbolt"], "the parked decision was never re-offered"
+    assert db.get_pokemon("CRASHED")["attacks"] == [
+        "tackle", "thunderbolt", "quick-attack", "thunder-shock",
+    ]
+    assert db.get_pending_move_learns() == []
+
+
+def test_no_ui_available_keeps_the_decision_parked(mobile_db, monkeypatch):
+    """With nothing able to show the dialog the move is NOT settled -- the row
+    stays so a later pass with a UI can still put the choice to the player."""
+    db, _ = mobile_db
+    _full_moveset_companion(db, "NOUI")
+    monkeypatch.setattr(services, "main_pokemon", None, raising=False)
+    monkeypatch.setattr(services, "ui", None, raising=False)
+
+    ms._queue_move_learn_prompt("NOUI", "Pikachu", "thunderbolt", db=db)
+    ms.flush_pending_move_learns(db=db, logger=_Logger())
+
+    assert [r["new_attack"] for r in db.get_pending_move_learns()] == ["thunderbolt"]
 
 
 def test_flush_does_not_requeue_a_declined_prompt(mobile_db, monkeypatch):
