@@ -213,16 +213,23 @@ def details(qapp, tmp_path):
 
     class AttackDialog:
         # remember_attack() calls AttackDialog(attacks, new_attack, parent=mw)
-        # then .raise_()/.activateWindow() before .exec() (the battle-freeze
-        # fix: an unparented dialog could spawn invisibly) — the double needs
-        # to accept/tolerate all of that.
+        # then .show()/.raise_()/.activateWindow() before .exec(), and
+        # .deleteLater() in a finally (the battle-freeze fix: an unparented
+        # dialog could spawn invisibly, plus mw-parented dialog cleanup) —
+        # the double needs to accept/tolerate all of that.
         def __init__(self, attacks, new_attack, parent=None):
             self.selected_attack = attacks[0]
+
+        def show(self):
+            pass
 
         def raise_(self):
             pass
 
         def activateWindow(self):
+            pass
+
+        def deleteLater(self):
             pass
 
         def exec(self):
