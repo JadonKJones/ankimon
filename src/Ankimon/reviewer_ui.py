@@ -147,7 +147,16 @@ def cycle_team_pokemon():
 
         pkmn_name = pokemon_data.get("nickname") or pokemon_data.get("name", "Unknown")
         pkmn_level = pokemon_data.get("level", "?")
-        switch_msg = f"Switched to {pkmn_name}! LVL: {pkmn_level}"
+        # main_pokemon now holds the switched-in Pokémon (update_stats above), so
+        # its display_name gives the localized species / regional-form name and
+        # honours a genuinely custom nickname.
+        display_name = getattr(main_pokemon, "display_name", None) or pkmn_name
+        try:
+            switch_msg = services.translator.translate(
+                "switched_pokemon", pokemon_name=display_name, level=pkmn_level
+            )
+        except Exception:
+            switch_msg = f"Switched to {display_name}! Lv. {pkmn_level}"
 
         # The HUD refresh above only repaints the bottom-of-reviewer bars —
         # the separate Ankimon Window popup has its own sprite/name label and
