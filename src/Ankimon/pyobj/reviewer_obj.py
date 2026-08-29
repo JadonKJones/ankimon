@@ -282,7 +282,7 @@ class Reviewer_Manager:
             self.settings.get("misc.language"),
             _boost_snapshot(self.enemy_pokemon),
             _boost_snapshot(self.main_pokemon),
-            self.settings.get("gui.styling_in_reviewer"),
+            self.settings.get("gui.hud_styling", True),
             self.settings.get("gui.hud_player_sprite"),
             self.settings.get("gui.hud_enemy_sprite"),
             self.settings.get("gui.hud_xp_bar"),
@@ -446,7 +446,7 @@ class Reviewer_Manager:
         hud_html += "</div>"
 
         # Build hud_css
-        if self.settings.get("gui.styling_in_reviewer"):
+        if self.settings.get("gui.hud_styling", True):
             hud_css = create_css_for_reviewer(
                 int(self.settings.get("gui.show_mainpkmn_in_reviewer")),
                 pokemon_hp_percent,
@@ -499,8 +499,8 @@ class Reviewer_Manager:
                 padding: 4px 8px !important;
             }
 
-            .night_mode #xp_text {
-                font-color: rgba(0, 191, 255, 0.85)
+            .night_mode #ankimon-hud #xp_text {
+                color: rgba(0, 191, 255, 0.85) !important;
                 font-family: Arial, sans-serif;
                 background: #1f1f1f !important;
                 border-radius: 5px !important;
