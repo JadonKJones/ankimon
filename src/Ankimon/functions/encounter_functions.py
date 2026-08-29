@@ -1897,6 +1897,12 @@ def catch_pokemon(
 
     color = "#a17cf7"  # 6A4DAC" #pokemon leveling info color for tooltip
     try:
+        # Tooltip only. A show_in_ankimon_window(msg) here is dead on both
+        # paths: every auto branch calls new_pokemon() on the next statement,
+        # whose display_first_encounter() overwrites last_message_text with
+        # "A wild Y appeared!" before a single frame is painted, and the
+        # manual path has already switched the window to the death view, which
+        # show_in_ankimon_window() no-ops on.
         tooltipWithColour(msg, color)
     except Exception as e:
         if logger is not None:
@@ -1945,10 +1951,18 @@ def handle_enemy_faint(
     achievements: dict,
 ):
     """
-    Handles what automatically happens when the enemy Pokémon faints, based on auto-battle settings and user overrides.
+    Handles what automatically happens when the enemy Pokémon faints, based
+    on auto-battle settings and user overrides.
+
+    Returns True when this call replaced ``enemy_pokemon`` with a fresh wild
+    encounter (via new_pokemon(), which already painted that encounter's own
+    intro frame) — callers use this to skip a same-turn repaint that would
+    otherwise immediately overwrite the fresh intro with stale battle-log
+    text describing the fight that just ended. False/None otherwise (already
+    processed this turn, or manual mode showing the death/catch screen).
     """
     if ankimon_tracker_obj.faint_processed:
-        return
+        return False
 
     events.emit("faint", who="enemy", pokemon=enemy_pokemon.name, id=enemy_pokemon.id)
 
@@ -1975,7 +1989,7 @@ def handle_enemy_faint(
             ankimon_tracker_obj.general_card_count_for_battle = 0
         finally:
             clear_auto_battle_override()
-        return
+        return True
 
     elif _auto_battle_override == "defeat":
         # Override: Force defeat, unless the enemy is protected by an
@@ -2008,7 +2022,7 @@ def handle_enemy_faint(
             ankimon_tracker_obj.general_card_count_for_battle = 0
         finally:
             clear_auto_battle_override()
-        return
+        return True
     # --- END OVERRIDE CHECK ---
 
     # --- Wishlist fast-path (runs after override check) ---
@@ -2026,7 +2040,7 @@ def handle_enemy_faint(
         new_pokemon(enemy_pokemon, test_window, ankimon_tracker_obj, reviewer_obj)
         main_pokemon.reset_bonuses()
         ankimon_tracker_obj.general_card_count_for_battle = 0
-        return
+        return True
     # --- End wishlist fast-path ---
 
     # The "always auto-catch this tier" safety net is only needed by the
@@ -2037,6 +2051,9 @@ def handle_enemy_faint(
     should_catch_always = _enemy_protected_by_auto_catch(enemy_pokemon)
 
     # --- Normal auto-battle logic (no override) ---
+    # Every branch below except the manual-mode else calls new_pokemon(),
+    # so default to True and only the else overrides it.
+    replaced_encounter = True
     if auto_battle_setting == 3:  # Catch if uncollected
         enemy_id = enemy_pokemon.id
         # Check cache instead of file
@@ -2111,6 +2128,7 @@ def handle_enemy_faint(
                 test_window.display_pokemon_death()
             except RuntimeError:
                 pass
+        replaced_encounter = False
 
     main_pokemon.reset_bonuses()
     ankimon_tracker_obj.general_card_count_for_battle = 0
@@ -2118,6 +2136,7 @@ def handle_enemy_faint(
     # already called new_pokemon() (which clears it as its first statement) or
     # is the manual-mode branch, which already cleared it earlier in this
     # function when auto_battle_setting == 0 was detected.
+    return replaced_encounter
 
 
 def handle_main_pokemon_faint(
@@ -2126,9 +2145,16 @@ def handle_main_pokemon_faint(
     test_window: TestWindow,
     reviewer_obj: Reviewer_Manager,
     translator: Translator,
+    spawn_replacement: bool = True,
 ):
     """
     Handles what happens when the main Pokémon faints.
+
+    ``spawn_replacement`` is False only for the deferred manual-mode double
+    faint: there the enemy also fainted the same turn, its catch/defeat screen
+    is still open, and the player's answer to it runs ``new_pokemon()`` itself.
+    Calling it here as well would stack a second fresh encounter on top of that
+    one, so this path does just the faint bookkeeping (heal + reset).
     """
     msg = translator.translate(
         "pokemon_fainted", enemy_pokemon_name=main_pokemon.name.capitalize()
@@ -2141,6 +2167,7 @@ def handle_main_pokemon_faint(
     main_pokemon.current_hp = main_pokemon.max_hp
     main_pokemon.reset_bonuses()
 
-    new_pokemon(
-        enemy_pokemon, test_window, ankimon_tracker_obj, reviewer_obj
-    )  # Show a new random Pokémon
+    if spawn_replacement:
+        new_pokemon(
+            enemy_pokemon, test_window, ankimon_tracker_obj, reviewer_obj
+        )  # Show a new random Pokémon
