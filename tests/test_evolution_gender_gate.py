@@ -276,7 +276,7 @@ def test_evolution_row_gender_id_opens_no_file_once_initialised():
     # re-opened and re-parsed the whole ~500-row CSV mid-review. Measured across
     # the dex that was 372 parses for 966 level-evolution checks.
     pf._evolution_row_gender_id_cached.cache_clear()
-    pf._load_poke_evo_index()  # what startup does
+    pf.warm_evolution_caches()  # what startup does
 
     def _probe():
         first = pf._evolution_row_gender_id(416, pf._LEVEL_EVO_TRIGGERS)
@@ -335,6 +335,92 @@ def test_clearing_the_pokedex_caches_also_clears_the_evolution_index():
     assert pf._poke_evo_index is None
     # And it rebuilds correctly afterwards.
     assert len(pf.evolution_rows_for_evolved_species(700)) == 2
+
+
+def _fail_to_open_the_evolution_csv(fn):
+    """Run ``fn`` with every open of pokemon_evolution.csv raising."""
+    import builtins
+
+    original = builtins.open
+
+    def failing_open(file, *args, **kwargs):
+        if str(file).endswith("pokemon_evolution.csv"):
+            raise OSError("simulated read failure")
+        return original(file, *args, **kwargs)
+
+    builtins.open = failing_open
+    try:
+        return fn()
+    finally:
+        builtins.open = original
+
+
+def test_warming_the_evolution_caches_takes_the_parse_off_the_review_path():
+    """The index has to be built by STARTUP, not by the first level-up.
+
+    The lazy loaders are correct, but their first CALLER decides when the parse
+    happens — and every production caller of these rows (the gender gate here,
+    friendship_evolution's level and friendship lookups) runs inside
+    ``on_review_card``. Nothing outside the lookup itself ever built the index,
+    so the ~500-row parse landed mid-review the first time a Pokemon levelled
+    up: exactly the synchronous review-path I/O the docstrings on this path
+    already claimed was gone, and that AGENTS.md forbids.
+    """
+    pf.clear_pokedex_caches()
+    assert pf._poke_evo_index is None
+
+    indexed = pf.warm_evolution_caches()
+
+    assert indexed > 400, "the bundled CSV carries ~507 rows"
+    assert pf._poke_evo_cache is not None
+    assert pf._poke_evo_index is not None
+
+    # With the warm done, the review path's own lookups open nothing at all.
+    _, opens = _count_evolution_csv_opens(
+        lambda: [
+            pf._evolution_row_gender_id(species_id, pf._LEVEL_EVO_TRIGGERS)
+            for species_id in (416, 413, 758, 475, 478)
+        ]
+    )
+    assert opens == [], f"a warmed review path still parsed the CSV {len(opens)}x"
+
+
+def test_a_failed_warm_leaves_the_lazy_path_to_retry_instead_of_memoizing_empty():
+    """The warm is an optimization; it must not add a failure mode.
+
+    ``_load_poke_evo_cache`` swallows a read error and memoizes ``[]`` for the
+    session. Lazily that is survivable — the first read happens whenever the
+    game needs the data. Moving the first read to boot means a file that is
+    momentarily unavailable *then* (an add-on update mid-write, a cold network
+    drive) would freeze "this species has no evolution rows" in for the whole
+    session, silently disabling every gender gate and friendship lookup. So a
+    warm that comes back empty puts the globals back rather than keeping it.
+    """
+    pf.clear_pokedex_caches()
+
+    assert _fail_to_open_the_evolution_csv(pf.warm_evolution_caches) == 0
+    assert pf._poke_evo_cache is None
+    assert pf._poke_evo_index is None
+
+    # Nothing was memoized: the ordinary lazy path still reads real data.
+    assert len(pf.evolution_rows_for_evolved_species(700)) == 2
+
+
+def test_warming_twice_is_a_no_op_that_keeps_the_same_rows():
+    """Boot warms once per process and the profile-open hook warms again after
+    a profile switch cleared the caches, so back-to-back warms are normal. The
+    second must not re-parse or hand back different row objects — the index
+    holds references into the cached rows, and callers memoize verdicts from
+    them (``_evolution_row_gender_id_cached``)."""
+    pf.clear_pokedex_caches()
+    first_count = pf.warm_evolution_caches()
+    first_rows = pf.evolution_rows_for_evolved_species(700)
+
+    second_count, opens = _count_evolution_csv_opens(pf.warm_evolution_caches)
+
+    assert second_count == first_count
+    assert opens == []
+    assert pf.evolution_rows_for_evolved_species(700) is first_rows
 
 
 def test_evolution_row_gender_id_is_scoped_to_the_calling_trigger():

@@ -289,12 +289,51 @@ def evolution_rows_for_evolved_species(evolved_species_id):
     In-memory equivalent of ``rows_for_key_in_table("evolved_species_id", ...,
     poke_evo_path)`` — same rows, same order, same string comparison — without
     the synchronous re-parse. Use this on the review path (repo rule: no
-    synchronous disk I/O mid-review; static data is parsed once at startup).
+    synchronous disk I/O mid-review; static data is parsed once at startup) —
+    :func:`warm_evolution_caches` is what does that parsing at startup, so this
+    only ever reads memory once the boot has run.
 
     Returns a tuple of the SHARED row dicts; treat them as read-only, the same
     contract :func:`_load_poke_evo_cache` already has.
     """
     return _load_poke_evo_index().get(str(evolved_species_id), ())
+
+
+def warm_evolution_caches():
+    """Parse ``pokemon_evolution.csv`` and build its index, off the review path.
+
+    The loaders above are lazy, which leaves their FIRST caller deciding when
+    the ~500-row parse happens — and every production caller of these rows sits
+    on the review path: :func:`_evolution_row_gender_id_cached` for the gender
+    gate, ``friendship_evolution``'s level and friendship lookups, all reached
+    from ``on_review_card``. Left cold, the first level-up of a session opened
+    and parsed the CSV mid-review, which is the synchronous disk I/O the repo
+    rule forbids ("static data is parsed once at startup").
+
+    Two callers make that rule true. ``startup.run_startup_background_checks``
+    warms on the boot thread, before ``services.startup_finished`` opens the
+    review gate; ``profile_hooks``' did-open handler warms again, because a
+    profile switch runs :func:`clear_pokedex_caches` while the once-per-process
+    boot does not run a second time.
+
+    Purely an optimization, so it must not add a failure mode. Moving the first
+    read earlier means a file that is momentarily unreadable at boot (an add-on
+    update mid-write, a cold network drive) would otherwise let
+    :func:`_load_poke_evo_cache` memoize its empty fallback for the whole
+    session, silently answering "this species has no evolution rows" to every
+    gate. So an empty result puts both globals back to ``None`` and the lazy
+    path simply retries on first use, exactly as it does today.
+
+    Returns the number of rows indexed (0 if the CSV could not be read).
+    """
+    global _poke_evo_cache, _poke_evo_index
+    rows = _load_poke_evo_cache()
+    if rows:
+        _load_poke_evo_index()
+        return len(rows)
+    _poke_evo_cache = None
+    _poke_evo_index = None
+    return 0
 
 
 def _load_moves_cache():
