@@ -18,6 +18,37 @@ from ..pyobj.test_window import TestWindow
 from ..pyobj.reviewer_obj import Reviewer_Manager
 from ..functions.pokedex_functions import search_pokedex, search_pokedex_by_id
 
+
+def _resolve_persisted_hp(pokemon_data):
+    """Return the first HP field that survives integer conversion, else ``None``.
+
+    Mirrors ``update_main_pokemon._normalize_loaded_hp`` -- the function that
+    reads this row back at the next Anki launch -- so the switch path and the
+    load path agree on which stored field wins. Keep the two in sync.
+
+    A field is only usable once it converts to ``int``: a malformed
+    ``current_hp`` (``"??"``, ``{}``, ``float("nan")``) must fall through to a
+    valid ``hp`` rather than being handed to the constructor, where
+    ``PokemonObject._normalize_hp`` would silently swap it for max HP and
+    ``db.save_main_pokemon()`` would persist that free full heal.
+
+    Only ``None`` is skipped without a conversion attempt -- ``0`` is a fainted
+    Pokemon and is a perfectly valid answer. Clamping to the Pokemon's range is
+    left to the constructor, which does it for both fields anyway. ``None`` here
+    means "neither field is usable"; the constructor then fills in max HP, which
+    is what ``_normalize_loaded_hp`` falls back to as well.
+    """
+    for candidate in (pokemon_data.get("current_hp"), pokemon_data.get("hp")):
+        if candidate is None:
+            continue
+        try:
+            return int(candidate)
+        except (TypeError, ValueError, OverflowError):
+            continue
+
+    return None
+
+
 def MainPokemon(
     pokemon_data: dict,
     main_pokemon: PokemonObject,
@@ -65,10 +96,10 @@ def MainPokemon(
     # Reading ``hp`` first would resurrect that stale value -- re-picking the
     # current main right after a win would still be a free heal, which is the
     # bug this whole change exists to remove. ``hp`` stays as the fallback for
-    # rows written before the mirror existed.
-    persisted_hp = pokemon_data.get("current_hp")
-    if persisted_hp is None:
-        persisted_hp = pokemon_data.get("hp")
+    # rows written before the mirror existed -- and it has to catch a
+    # *malformed* ``current_hp`` too, not just a missing one, hence
+    # _resolve_persisted_hp rather than a plain ``is None`` check.
+    persisted_hp = _resolve_persisted_hp(pokemon_data)
 
     # Create NEW PokemonObject instance using class constructor
     new_main_pokemon = PokemonObject(
