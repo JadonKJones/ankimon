@@ -2145,6 +2145,21 @@ def _resolve_internal(mode="all", companion_id="", limit=None, db=None, settings
 # kept its old four moves with no tooltip, no log line and nothing queued, so
 # the player was never told a move had been learned and lost. Park the decision
 # here instead and replay it on the GUI thread — see _schedule_move_learn_flush.
+def _row_attacks(pkmndata) -> list:
+    """The move list on a captured_pokemon row, normalized to a plain list.
+
+    Rows persist ``attacks`` as either a JSON string or a list depending on
+    which write path last touched them, so every reader has to cope with both.
+    """
+    attacks = (pkmndata or {}).get("attacks", [])
+    if isinstance(attacks, str):
+        try:
+            attacks = json.loads(attacks)
+        except Exception:
+            attacks = []
+    return list(attacks or [])
+
+
 _pending_move_learns = []
 _pending_move_learns_lock = threading.Lock()
 
@@ -2226,13 +2241,7 @@ def flush_pending_move_learns(db=None, logger=None) -> None:
             if not pkmndata:
                 continue
 
-            attacks = pkmndata.get("attacks", [])
-            if isinstance(attacks, str):
-                try:
-                    attacks = json.loads(attacks)
-                except Exception:
-                    attacks = []
-            attacks = list(attacks or [])
+            attacks = _row_attacks(pkmndata)
             if new_attack in attacks:
                 continue
 
@@ -2244,18 +2253,36 @@ def flush_pending_move_learns(db=None, logger=None) -> None:
                 selected_attack = ui.choose_attack_to_replace(attacks, new_attack)
                 if selected_attack not in attacks:
                     continue  # the player chose to keep the current move set
-                attacks[attacks.index(selected_attack)] = new_attack
+
                 # choose_attack_to_replace() runs AttackDialog.exec() -- an
-                # open-ended modal wait. A sync QueryOp worker on its own
-                # connection can finish _attribute_xp_and_evs_to_companion for
-                # this same row while it is open, persisting new level / xp /
-                # EV / friendship / pokemon_defeated values. save_pokemon()
-                # below writes the WHOLE row, so the pre-dialog snapshot would
-                # silently revert every one of them. Re-read and carry only the
-                # player's move choice onto the current row.
-                fresh = db.get_pokemon(individual_id)
+                # open-ended modal wait. On its own connection a sync QueryOp
+                # worker can, while it is open, finish
+                # _attribute_xp_and_evs_to_companion for this same row (new
+                # level / xp / EV / friendship) or change its moves outright.
+                # save_pokemon() below writes the WHOLE row, so re-read it and
+                # re-apply the player's choice to the CURRENT move list --
+                # writing back the pre-dialog snapshot would silently revert
+                # every one of those fields.
+                fresh = db.get_pokemon(individual_id) if db is not None else None
                 if fresh:
                     pkmndata = fresh
+                    attacks = _row_attacks(pkmndata)
+                    if new_attack in attacks:
+                        continue  # something else taught it while we waited
+
+                if len(attacks) < 4:
+                    attacks.append(new_attack)  # a slot opened up during the wait
+                elif selected_attack in attacks:
+                    attacks[attacks.index(selected_attack)] = new_attack
+                else:
+                    # The move the player chose to discard is no longer on the
+                    # row, so their decision cannot be applied as given. Ask
+                    # again against the moves that are actually there rather
+                    # than guessing which one they would drop now.
+                    selected_attack = ui.choose_attack_to_replace(attacks, new_attack)
+                    if selected_attack not in attacks:
+                        continue
+                    attacks[attacks.index(selected_attack)] = new_attack
             else:
                 # Nothing can put the choice to the player. Tell them what was
                 # learned and where to act on it, rather than dropping the move

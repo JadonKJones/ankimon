@@ -1275,3 +1275,72 @@ def test_flush_does_not_requeue_a_declined_prompt(mobile_db, monkeypatch):
 
     with ms._pending_move_learns_lock:
         assert ms._pending_move_learns == []
+
+
+# --- The move choice must be applied to the CURRENT row, not a stale snapshot -
+#
+# choose_attack_to_replace() blocks on a modal, during which a sync worker on
+# its own connection can change the same row -- including its moves. Re-reading
+# the row is not enough on its own: the pre-dialog move list must not be written
+# back over it.
+
+
+def test_moves_changed_during_the_dialog_are_not_clobbered(mobile_db, monkeypatch):
+    db, _ = mobile_db
+    _full_moveset_companion(db, "RACE")
+    monkeypatch.setattr(services, "main_pokemon", None, raising=False)
+
+    prompts = []
+
+    class _Presenter:
+        def choose_attack_to_replace(self, attacks, new_attack):
+            prompts.append(list(attacks))
+            if len(prompts) == 1:
+                # A sync worker commits a different move set (and a level bump)
+                # for this same row while the modal is open.
+                row = db.get_pokemon("RACE")
+                row["attacks"] = ["surf", "growl", "quick-attack", "thunder-shock"]
+                row["level"] = 9
+                db.save_pokemon(row)
+                return "tackle"  # no longer on the row by the time we save
+            return "surf"
+
+    monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+    ms._queue_move_learn_prompt("RACE", "Pikachu", "thunderbolt")
+
+    ms.flush_pending_move_learns(db=db, logger=_Logger())
+
+    # The stale choice is re-put to the player against the CURRENT moves.
+    assert len(prompts) == 2, "a selection that vanished must trigger a re-prompt"
+    assert prompts[1] == ["surf", "growl", "quick-attack", "thunder-shock"]
+
+    row = db.get_pokemon("RACE")
+    # The worker's move rewrite survived -- "tackle" was not resurrected.
+    assert row["attacks"] == ["thunderbolt", "growl", "quick-attack", "thunder-shock"]
+    assert row["level"] == 9, "the concurrent level write must not be reverted"
+
+
+def test_a_slot_freed_during_the_dialog_just_learns_the_move(mobile_db, monkeypatch):
+    """If the worker dropped a move while the modal was open there is now room,
+    so the replacement the player picked is not needed at all."""
+    db, _ = mobile_db
+    _full_moveset_companion(db, "FREED")
+    monkeypatch.setattr(services, "main_pokemon", None, raising=False)
+
+    prompts = []
+
+    class _Presenter:
+        def choose_attack_to_replace(self, attacks, new_attack):
+            prompts.append(list(attacks))
+            row = db.get_pokemon("FREED")
+            row["attacks"] = ["tackle", "growl"]
+            db.save_pokemon(row)
+            return "tackle"
+
+    monkeypatch.setattr(services, "ui", _Presenter(), raising=False)
+    ms._queue_move_learn_prompt("FREED", "Pikachu", "thunderbolt")
+
+    ms.flush_pending_move_learns(db=db, logger=_Logger())
+
+    assert len(prompts) == 1, "no re-prompt is needed once a slot is free"
+    assert db.get_pokemon("FREED")["attacks"] == ["tackle", "growl", "thunderbolt"]

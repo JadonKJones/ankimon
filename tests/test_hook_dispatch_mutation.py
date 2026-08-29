@@ -49,12 +49,26 @@ def hooks(monkeypatch, request):
 
     import importlib
 
-    prev = sys.modules.get("Ankimon.hook_registry")
-    request.addfinalizer(
-        lambda: sys.modules.__setitem__("Ankimon.hook_registry", prev)
-        if prev is not None
-        else sys.modules.pop("Ankimon.hook_registry", None)
-    )
+    # Restore BOTH the sys.modules entry and the attribute the import machinery
+    # binds on the parent package. Restoring only sys.modules leaves
+    # ``Ankimon.hook_registry`` pointing at this test's replacement, so a later
+    # ``from Ankimon import hook_registry`` keeps resolving to it.
+    parent = sys.modules["Ankimon"]
+    prev_module = sys.modules.get("Ankimon.hook_registry")
+    had_attr = "hook_registry" in vars(parent)
+    prev_attr = getattr(parent, "hook_registry", None)
+
+    def _restore():
+        if prev_module is not None:
+            sys.modules["Ankimon.hook_registry"] = prev_module
+        else:
+            sys.modules.pop("Ankimon.hook_registry", None)
+        if had_attr:
+            parent.hook_registry = prev_attr
+        else:
+            vars(parent).pop("hook_registry", None)
+
+    request.addfinalizer(_restore)
     sys.modules.pop("Ankimon.hook_registry", None)
     return importlib.import_module("Ankimon.hook_registry")
 
