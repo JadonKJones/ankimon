@@ -692,22 +692,49 @@ class ItemWindow(QWidget):
             "info", f"{prevo_name} was healed for {heal_points}"
         )
 
-    def Check_Evo_Item(self, individual_id: str, prevo_id: str, item_name: str):
+    def Check_Evo_Item(
+        self,
+        individual_id: str,
+        prevo_id: str,
+        item_name: str,
+        pokemon_data: Optional[dict] = None,
+    ):
+        """Offer the item evolution for ``individual_id``, gender gate included.
+
+        ``pokemon_data`` is the stored record for ``individual_id`` when the
+        caller already holds one (the web bag loads it to resolve ``prevo_id``);
+        it is read here only when omitted, so that path costs one query, not two.
+        """
         try:
             item_id = return_id_for_item_name(item_name)
             # Gate on the SELECTED Pokémon's gender, not the active battle one:
             # the user can pick any Pokémon from their collection here, and
             # gender-gated evolutions from pokemon_evolution.csv (Gallade =
             # male Kirlia, Froslass = female Snorunt) would otherwise evaluate
-            # unrelated state. A missing/unknown gender degrades to the
-            # historical no-check behavior.
-            gender = None
-            try:
-                target_data = services.db.get_pokemon(individual_id)
-            except Exception:
-                target_data = None
-            if isinstance(target_data, dict):
-                gender = target_data.get("gender")
+            # unrelated state.
+            #
+            # A record that simply carries no gender still degrades to the
+            # historical no-check behavior (legacy saves predate the column) —
+            # but a record we could not READ must not: check_evolution_by_item
+            # treats gender=None as "unrestricted", so reporting a failed lookup
+            # that way would hand a female Kirlia the male-only Gallade the one
+            # time the database is busy. Refuse instead; the player can retry.
+            if pokemon_data is None:
+                try:
+                    pokemon_data = services.db.get_pokemon(individual_id)
+                except Exception as e:
+                    self.logger.log_and_showinfo(
+                        "error",
+                        f"Could not look up that Pokemon, so the item was not "
+                        f"used: {e}",
+                    )
+                    return
+            if not isinstance(pokemon_data, dict):
+                self.logger.log_and_showinfo(
+                    "error", "Could not find that Pokemon; the item was not used."
+                )
+                return
+            gender = pokemon_data.get("gender")
             evo_id = check_evolution_by_item(prevo_id, item_id, gender=gender)
             if evo_id:
                 # Perform your action when the item matches the Pokémon's evolution item

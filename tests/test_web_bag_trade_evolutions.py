@@ -377,3 +377,77 @@ def test_picker_agrees_with_canonical_helper_on_gender(
     assert flagged is (expected is not None), (
         f"picker and helper disagree for a {gender} {name}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# The web bag already holds the record, so it hands it to Check_Evo_Item.
+#
+# ``handle_use_with_target`` reads the selected Pokemon to resolve the pre-evo's
+# pokedex id. ``Check_Evo_Item`` then needs the same record's gender for the gate
+# — but re-reading it costs a second query AND lets the id and the gender come
+# from different snapshots. Worse, a failed re-read is indistinguishable from
+# "this Pokemon has no gender", which is the fail-open that hands a female Kirlia
+# the male-only Gallade (see tests/test_evolution_item_gender_lookup.py).
+#
+# Passing the record through is the fix; these pin the caller's half of it.
+# --------------------------------------------------------------------------- #
+class _UseHost:
+    """The slice of ``AnkimonItemsWeb`` that ``handle_use_with_target`` reads."""
+
+    def __init__(self, bag, item=None):
+        self.item_window = bag
+        self.profile_data = None
+        self._pokemon_choices_cache = None
+        self._item = item or {
+            "name": _DAWN_STONE,
+            "category": "evolution",
+            "owned_quantity": 1,
+        }
+
+    def _find_serialized(self, item_name):
+        return self._item if item_name == self._item["name"] else None
+
+    def _invalidate_pokemon_cache(self):
+        self._pokemon_choices_cache = None
+
+
+class _RecordingBag:
+    """Stands in for ``ItemWindow``, recording how Check_Evo_Item was called."""
+
+    def __init__(self):
+        self.calls = []
+
+    def Check_Evo_Item(self, individual_id, prevo_id, item_name, pokemon_data=None):
+        self.calls.append((individual_id, prevo_id, item_name, pokemon_data))
+
+
+def _use_on(shop_obj, record):
+    """Run the web bag's "use this item on that Pokemon" with one stored record."""
+    reads = []
+
+    def get_pokemon(individual_id):
+        reads.append(individual_id)
+        return record
+
+    bag = _RecordingBag()
+    services = types.SimpleNamespace(
+        db=types.SimpleNamespace(get_pokemon=get_pokemon),
+        settings=None,
+        logger=None,
+    )
+
+    with patch.object(shop_obj, "services", services):
+        result = shop_obj.AnkimonItemsWeb.handle_use_with_target(
+            _UseHost(bag), _DAWN_STONE, "kirlia-1"
+        )
+    return result, bag, reads
+
+
+def test_the_web_bag_hands_the_loaded_record_to_check_evo_item(shop_obj):
+    record = {"id": 281, "gender": "F", "name": "Kirlia"}
+    result, bag, reads = _use_on(shop_obj, record)
+
+    assert result["ok"] is True
+    assert bag.calls == [("kirlia-1", 281, _DAWN_STONE, record)]
+    # Exactly one read: the gender arrives with the id, not from a second query.
+    assert reads == ["kirlia-1"]

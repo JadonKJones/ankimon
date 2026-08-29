@@ -2242,7 +2242,12 @@ class AnkimonItemsWeb(QDialog):
                 pokedex_id = (pokemon_data or {}).get("id")
                 if not pokedex_id:
                     return {"ok": False, "message": "Could not look up that Pokémon."}
-                bag.Check_Evo_Item(individual_id, pokedex_id, item_name)
+                # Hand the record over rather than let Check_Evo_Item re-read it
+                # for the gender gate: one query, and the id and the gender are
+                # guaranteed to come from the same snapshot.
+                bag.Check_Evo_Item(
+                    individual_id, pokedex_id, item_name, pokemon_data=pokemon_data
+                )
                 return {"ok": True, "message": ""}
 
             # Held items (and anything else routed through the give-item
