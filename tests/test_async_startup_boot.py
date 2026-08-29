@@ -807,9 +807,7 @@ def boot_env(monkeypatch):
             "PyQt6.QtGui",
             QKeySequence=lambda *args: None,
             QShortcut=lambda *args, **kwargs: SimpleNamespace(
-                activated=SimpleNamespace(
-                    connect=rec("QShortcut.activated.connect")
-                ),
+                activated=SimpleNamespace(connect=rec("QShortcut.activated.connect")),
                 setEnabled=rec("QShortcut.setEnabled"),
             ),
         ),
