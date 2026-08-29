@@ -1440,9 +1440,14 @@ def remember_attack(
             logger.log_and_showinfo("info", f"{msg}")
         else:
             dialog = AttackDialog(attacks, new_attack, parent=mw)
+            dialog.show()
             dialog.raise_()
             dialog.activateWindow()
-            if dialog.exec() == QDialog.DialogCode.Accepted:
+            try:
+                result = dialog.exec()
+            finally:
+                dialog.deleteLater()
+            if result == QDialog.DialogCode.Accepted:
                 selected_attack = dialog.selected_attack
                 try:
                     index_to_replace = attacks.index(selected_attack)

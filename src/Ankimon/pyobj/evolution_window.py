@@ -394,9 +394,14 @@ class EvoWindow(QWidget):
                         attacks.append(new_attack)
                     else:
                         dialog = AttackDialog(attacks, new_attack, parent=self)
+                        dialog.show()
                         dialog.raise_()
                         dialog.activateWindow()
-                        if dialog.exec() == QDialog.DialogCode.Accepted:
+                        try:
+                            _accepted = dialog.exec() == QDialog.DialogCode.Accepted
+                        finally:
+                            dialog.deleteLater()
+                        if _accepted:
                             selected_attack = dialog.selected_attack
                             try:
                                 index_to_replace = attacks.index(selected_attack)
@@ -604,9 +609,14 @@ class EvoWindow(QWidget):
                         attacks.append(new_attack)
                     else:
                         dialog = AttackDialog(attacks, new_attack, parent=self)
+                        dialog.show()
                         dialog.raise_()
                         dialog.activateWindow()
-                        if dialog.exec() == QDialog.DialogCode.Accepted:
+                        try:
+                            _accepted = dialog.exec() == QDialog.DialogCode.Accepted
+                        finally:
+                            dialog.deleteLater()
+                        if _accepted:
                             selected_attack = dialog.selected_attack
                             try:
                                 index_to_replace = attacks.index(selected_attack)
