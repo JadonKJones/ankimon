@@ -224,3 +224,44 @@ def test_resolve_repaints_the_ankimon_window_after_healing(
         hook()
 
     assert repaints, "the Ankimon Window was never repainted after the heal"
+
+
+# --- The deferral must report whether it could actually arm ----------------
+#
+# hook_registry imports aqt. Where that import fails there is nothing to fire
+# the resolver, so deferring would park the main Pokemon at 0 HP permanently;
+# the caller has to fall back to handling the faint immediately.
+
+
+def test_defer_returns_true_when_it_arms(bl, hook_registry, spy_faint):
+    armed = bl._defer_main_faint_until_enemy_resolved(
+        _FakePokemon(hp=0), _FakePokemon("rattata", hp=0), _FakeReviewer(), None
+    )
+    assert armed is True
+    assert bl._main_faint_deferred is True
+    assert len(hook_registry.catch_pokemon_hooks) == 1
+
+
+def test_defer_reports_already_armed_as_still_deferred(bl, hook_registry, spy_faint):
+    main, enemy, rev = _FakePokemon(hp=0), _FakePokemon("rattata", hp=0), _FakeReviewer()
+    assert bl._defer_main_faint_until_enemy_resolved(main, enemy, rev, None) is True
+    # A second round must NOT stack a callback, but a deferral IS still in
+    # effect -- reporting False here would make the caller handle the faint
+    # immediately and heal main out from under the pending decision.
+    assert bl._defer_main_faint_until_enemy_resolved(main, enemy, rev, None) is True
+    assert len(hook_registry.catch_pokemon_hooks) == 1
+
+
+def test_defer_returns_false_and_stays_disarmed_without_a_hook_registry(
+    bl, monkeypatch, spy_faint
+):
+    # sys.modules[name] = None makes `from . import hook_registry` raise.
+    monkeypatch.setitem(sys.modules, "Ankimon.hook_registry", None)
+
+    armed = bl._defer_main_faint_until_enemy_resolved(
+        _FakePokemon(hp=0), _FakePokemon("rattata", hp=0), _FakeReviewer(), None
+    )
+    assert armed is False
+    assert bl._main_faint_deferred is False, (
+        "a deferral that could not register must not leave the flag armed"
+    )

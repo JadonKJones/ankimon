@@ -87,13 +87,24 @@ def _defer_main_faint_until_enemy_resolved(
     player answers the enemy catch/defeat screen that handle_enemy_faint() left
     open. Doing it now would heal the main Pokemon and spawn a fresh encounter
     over that screen before the choice is made.
+
+    Returns True when a deferral is in effect -- newly armed here, or already
+    armed by an earlier round -- and False when one could not be armed at all.
+    On False the caller MUST handle the faint immediately; a deferral nothing
+    can resolve would strand the main Pokemon at 0 HP forever.
     """
     global _main_faint_deferred, _main_faint_resolver
     if _main_faint_deferred:
-        return
-    _main_faint_deferred = True
+        return True
 
-    from . import hook_registry
+    try:
+        from . import hook_registry
+    except Exception:
+        # hook_registry imports aqt, so this is the headless / no-Anki case.
+        # Nothing there could ever fire the resolver, and deferring anyway
+        # would park the main Pokemon at 0 HP with no way back -- so report
+        # failure and let the caller handle the faint immediately.
+        return False
 
     def _resolve():
         if not _main_faint_deferred:
@@ -125,9 +136,11 @@ def _defer_main_faint_until_enemy_resolved(
         except Exception:
             pass
 
+    _main_faint_deferred = True
     _main_faint_resolver = _resolve
     hook_registry.add_catch_pokemon_hook(_resolve)
     hook_registry.add_defeat_pokemon_hook(_resolve)
+    return True
 reviewer_obj = None
 ankimon_tracker_obj = None
 test_window = None
@@ -531,35 +544,32 @@ def on_review_card(*args):
                     )
                 except RuntimeError:
                     live_main_faint_window = None
-            # Manual-mode double faint: handle_enemy_faint() has put the enemy
-            # catch/defeat screen up (encounter_replaced is False, current_view
-            # is now "death") and is waiting on the player. Running
-            # handle_main_pokemon_faint() now would heal main and spawn a fresh
-            # encounter over that screen before they answer it. Defer the
-            # main-faint bookkeeping until the choice completes.
+            # Manual-mode double faint: handle_enemy_faint() left the enemy
+            # catch/defeat decision to the player instead of replacing the
+            # encounter. Running handle_main_pokemon_faint() now would heal
+            # main and spawn a fresh encounter before they answer it, so defer
+            # the main-faint bookkeeping until the choice completes.
             #
-            # KNOWN GAP (deliberately not widened here): when the Ankimon
-            # Window is CLOSED the decision is still pending -- via the
-            # reviewer-side Catch/Defeat buttons -- but current_view is not
-            # "death", so the faint is handled immediately, new_pokemon()
-            # replaces the enemy, and the player's later Catch hits
-            # CatchPokemonHook's `enemy_pokemon.hp < 1` guard and silently does
-            # nothing. Dropping the current_view term alone is NOT the fix.
-            # A seeded, reproducible 600-answer harness run measured, purely
-            # from removing that term: 0 -> 5 error events, 0 -> 5 rounds spent
-            # battling with the main Pokemon still at 0 HP, and 83 -> 97
-            # encounters -- because main then stays fainted for the whole wait.
-            # Closing this gap needs the round-completion block gated on the
-            # pending deferral as well; both halves have to land together.
+            # "Enemy still fainted AND not replaced" is the whole condition.
+            # This also used to require the Ankimon Window to be alive and on
+            # its "death" view, which silently excluded the case where that
+            # window is CLOSED -- the decision is still pending there, just via
+            # the reviewer-side Catch/Defeat buttons (mw.catchpokemon /
+            # mw.defeatpokemon) rather than the popup. In that case the faint
+            # was handled immediately, new_pokemon() refreshed enemy_pokemon in
+            # place to full HP, and the player's later Catch hit
+            # CatchPokemonHook's `enemy_pokemon.hp < 1` guard and silently did
+            # nothing -- the fainted Pokemon was simply lost.
+            #
+            # Auto modes cannot reach here: they replace the encounter, so
+            # encounter_replaced is True by this point.
             enemy_decision_pending = (
-                not encounter_replaced
-                and enemy_pokemon.hp < 1
-                and getattr(live_main_faint_window, "current_view", None) == "death"
+                not encounter_replaced and enemy_pokemon.hp < 1
             )
-            if enemy_decision_pending:
-                _defer_main_faint_until_enemy_resolved(
-                    main_pokemon, enemy_pokemon, reviewer_obj, translator
-                )
+            if enemy_decision_pending and _defer_main_faint_until_enemy_resolved(
+                main_pokemon, enemy_pokemon, reviewer_obj, translator
+            ):
+                pass  # the resolver will run handle_main_pokemon_faint() later
             else:
                 # Handling the faint HERE supersedes any deferral still armed
                 # from an earlier round the player walked away from (they
