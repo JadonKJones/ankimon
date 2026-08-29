@@ -218,6 +218,9 @@ def details(qapp, tmp_path):
         def __init__(self, attacks, new_attack, parent=None):
             self.selected_attack = attacks[0]
 
+        def show(self):
+            pass
+
         def raise_(self):
             pass
 
