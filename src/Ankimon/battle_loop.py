@@ -40,6 +40,44 @@ settings_obj = None
 # catch/defeat choice, so a later battle round doesn't register a second
 # resolution callback for the same pending main faint.
 _main_faint_deferred = False
+# The callback currently registered on the catch/defeat hook buckets. Kept at
+# module scope so an ABANDONED deferral can be disarmed from outside _resolve()
+# itself -- see _cancel_main_faint_deferral().
+_main_faint_resolver = None
+
+
+def _cancel_main_faint_deferral():
+    """Disarm a pending main-faint deferral and unregister its callback.
+
+    ``_resolve()`` used to be the only thing that ever cleared
+    ``_main_faint_deferred`` or removed itself from the hook buckets. So a
+    deferral the player never answered -- they closed the Ankimon Window
+    instead of the death screen, and the next round healed the main Pokemon
+    through the immediate branch in on_review_card() -- stayed armed forever.
+    The stale callback then fired on the next unrelated catch/defeat and ran
+    handle_main_pokemon_faint() against a FULL-HP Pokemon: a bogus faint
+    message and sound, a spurious ``faint`` event, and reset_bonuses()
+    silently wiping that battle's stat boosts.
+
+    Safe to call unconditionally -- a no-op when nothing is armed.
+    """
+    global _main_faint_deferred, _main_faint_resolver
+
+    _main_faint_deferred = False
+    resolver, _main_faint_resolver = _main_faint_resolver, None
+    if resolver is None:
+        return
+
+    from . import hook_registry
+
+    for bucket in (
+        hook_registry.catch_pokemon_hooks,
+        hook_registry.defeat_pokemon_hooks,
+    ):
+        try:
+            bucket.remove(resolver)
+        except ValueError:
+            pass
 
 
 def _defer_main_faint_until_enemy_resolved(
@@ -47,10 +85,10 @@ def _defer_main_faint_until_enemy_resolved(
 ):
     """Manual-mode double faint: run handle_main_pokemon_faint() only after the
     player answers the enemy catch/defeat screen that handle_enemy_faint() left
-    open. Doing it now would heal the main Pokémon and spawn a fresh encounter
+    open. Doing it now would heal the main Pokemon and spawn a fresh encounter
     over that screen before the choice is made.
     """
-    global _main_faint_deferred
+    global _main_faint_deferred, _main_faint_resolver
     if _main_faint_deferred:
         return
     _main_faint_deferred = True
@@ -58,18 +96,12 @@ def _defer_main_faint_until_enemy_resolved(
     from . import hook_registry
 
     def _resolve():
-        global _main_faint_deferred
         if not _main_faint_deferred:
             return
-        _main_faint_deferred = False
-        for bucket in (
-            hook_registry.catch_pokemon_hooks,
-            hook_registry.defeat_pokemon_hooks,
-        ):
-            try:
-                bucket.remove(_resolve)
-            except ValueError:
-                pass
+        # Clears the flag AND unregisters this callback from both buckets
+        # before any of the work below, so an exception here cannot leave the
+        # deferral armed with a callback nothing will ever remove.
+        _cancel_main_faint_deferral()
         resolve_window = services.test_window
         handle_main_pokemon_faint(
             main_pokemon,
@@ -83,7 +115,17 @@ def _defer_main_faint_until_enemy_resolved(
             reviewer_obj.refresh_hud()
         except Exception:
             pass
+        # The catch/defeat that triggered this already ran new_pokemon(), which
+        # composited the fresh encounter's intro frame while main_pokemon.hp
+        # was still 0. Repaint so the healed main HP bar is visible now rather
+        # than only after the next answered card.
+        try:
+            if is_alive(resolve_window) and resolve_window.current_view == "battle":
+                resolve_window.force_display_battle()
+        except Exception:
+            pass
 
+    _main_faint_resolver = _resolve
     hook_registry.add_catch_pokemon_hook(_resolve)
     hook_registry.add_defeat_pokemon_hook(_resolve)
 reviewer_obj = None
@@ -495,6 +537,20 @@ def on_review_card(*args):
             # handle_main_pokemon_faint() now would heal main and spawn a fresh
             # encounter over that screen before they answer it. Defer the
             # main-faint bookkeeping until the choice completes.
+            #
+            # KNOWN GAP (deliberately not widened here): when the Ankimon
+            # Window is CLOSED the decision is still pending -- via the
+            # reviewer-side Catch/Defeat buttons -- but current_view is not
+            # "death", so the faint is handled immediately, new_pokemon()
+            # replaces the enemy, and the player's later Catch hits
+            # CatchPokemonHook's `enemy_pokemon.hp < 1` guard and silently does
+            # nothing. Dropping the current_view term alone is NOT the fix.
+            # A seeded, reproducible 600-answer harness run measured, purely
+            # from removing that term: 0 -> 5 error events, 0 -> 5 rounds spent
+            # battling with the main Pokemon still at 0 HP, and 83 -> 97
+            # encounters -- because main then stays fainted for the whole wait.
+            # Closing this gap needs the round-completion block gated on the
+            # pending deferral as well; both halves have to land together.
             enemy_decision_pending = (
                 not encounter_replaced
                 and enemy_pokemon.hp < 1
@@ -505,6 +561,12 @@ def on_review_card(*args):
                     main_pokemon, enemy_pokemon, reviewer_obj, translator
                 )
             else:
+                # Handling the faint HERE supersedes any deferral still armed
+                # from an earlier round the player walked away from (they
+                # closed the Ankimon Window rather than answering its death
+                # screen). Disarm it first, or its stale callback fires a
+                # phantom faint on the next unrelated catch/defeat.
+                _cancel_main_faint_deferral()
                 handle_main_pokemon_faint(
                     main_pokemon,
                     enemy_pokemon,

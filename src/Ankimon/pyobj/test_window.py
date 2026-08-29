@@ -1211,12 +1211,19 @@ class TestWindow(QWidget):
         ``paint_now`` forces the frame onto the screen synchronously — see
         the comment at the call below for the one case that needs it.
         """
+        # Store the new log line BEFORE the debounce check. The debounce only
+        # suppresses this FRAME; the text is state that outlives it, and
+        # formatted_battle_log is a per-turn local the battle loop never
+        # re-sends. Returning above this assignment discarded that turn's
+        # "X used Y!" line for good, leaving the previous turn's text on
+        # screen -- reachable whenever a repaint lands within 50 ms of the
+        # last one (a shake step, a duplicate reviewer hook, an add-on reload).
+        if message_text is not None:
+            self.last_message_text = message_text
+
         # Debounce: prevent flicker from duplicate hooks (especially during reloads)
         if self._same_view_debounced("battle"):
             return
-
-        if message_text is not None:
-            self.last_message_text = message_text
 
         # Update the existing label without clearing the layout
         new_label = self.pokemon_display_battle()
@@ -1310,6 +1317,17 @@ class TestWindow(QWidget):
             (-magnitude, half),
             (0, 0),
         ]
+
+        # Retire any chain still stepping from an earlier turn BEFORE capturing
+        # our generation. Nothing else bumped the counter between consecutive
+        # turns, so two overlapping chains shared one generation, both passed
+        # the staleness check below, and the OLDER chain's final
+        # settle-to-(0, 0) step landed in the middle of the newer animation --
+        # cutting it short after two frames while its own steps kept writing a
+        # side that did not attack this turn. _cancel_shakes() also settles both
+        # sprites, so a side the new chain does not cover cannot stay frozen at
+        # a mid-shake offset.
+        self._cancel_shakes()
 
         # The view check alone is not enough to retire these steps: a faint
         # replaces the encounter and puts current_view straight back to

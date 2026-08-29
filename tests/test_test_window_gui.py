@@ -1123,3 +1123,65 @@ def test_an_uninterrupted_shake_still_animates_and_settles(make_window, qapp):
     assert any(offset != (0, 0) for offset, _ in painted), "nothing ever moved"
     assert win._enemy_shake_offset == (0, 0)  # settled
     assert win._main_shake_offset == (0, 0)   # never touched — enemy attacked
+
+
+def test_a_debounced_render_still_keeps_the_new_battle_log_line(
+    make_window, monkeypatch
+):
+    """The debounce suppresses the FRAME, not the text.
+
+    ``display_battle()`` used to ``return`` on the debounce above the
+    ``last_message_text`` assignment, so a call landing inside the 50 ms
+    window threw that turn's log line away for good — ``formatted_battle_log``
+    is a per-turn local the battle loop never re-sends, so the window kept
+    showing the PREVIOUS turn's text. A shake step, a duplicate reviewer hook
+    or an add-on reload all land inside that window.
+    """
+    win = make_window()
+    clock = _FakeClock()
+    monkeypatch.setattr(sys.modules[_MODULE_NAME], "time", clock)
+
+    win.display_first_encounter()
+    win.display_battle(message_text="Oshawott used Tackle!")
+    assert win.last_message_text == "Oshawott used Tackle!"
+
+    renders = []
+    monkeypatch.setattr(
+        win, "pokemon_display_battle", lambda: renders.append(1) or win.main_label
+    )
+
+    # Same instant -> the frame is dropped, but the text must still be kept.
+    win.display_battle(message_text="Rattata used Quick Attack!")
+    assert renders == [], "frame should still be debounced"
+    assert win.last_message_text == "Rattata used Quick Attack!"
+
+    # The very next repaint therefore shows the CURRENT line, not a stale one.
+    clock.advance(0.1)
+    win.display_battle()
+    assert renders == [1]
+    assert win.last_message_text == "Rattata used Quick Attack!"
+
+
+def test_a_new_shake_retires_the_previous_turns_chain(make_window):
+    """Consecutive turns must not share a shake generation.
+
+    Nothing bumped ``_shake_generation`` between turns, so an in-flight chain
+    from turn N and a new chain from turn N+1 both passed the staleness check;
+    chain N's final settle-to-(0, 0) step then landed mid-animation and cut the
+    new shake short, while its own steps kept writing a side that did not
+    attack this turn.
+    """
+    win = make_window()
+    win.display_first_encounter()
+
+    win._shake_sprites(("main",))
+    first_generation = win._shake_generation
+
+    win._shake_sprites(("enemy",))
+    assert win._shake_generation != first_generation, (
+        "a new shake must invalidate the previous turn's queued steps"
+    )
+
+    # Retiring the old chain also settles both sprites, so the side the new
+    # chain does not cover cannot stay frozen at a mid-shake offset.
+    assert win._main_shake_offset == (0, 0)

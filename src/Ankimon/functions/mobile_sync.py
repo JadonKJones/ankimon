@@ -2245,6 +2245,17 @@ def flush_pending_move_learns(db=None, logger=None) -> None:
                 if selected_attack not in attacks:
                     continue  # the player chose to keep the current move set
                 attacks[attacks.index(selected_attack)] = new_attack
+                # choose_attack_to_replace() runs AttackDialog.exec() -- an
+                # open-ended modal wait. A sync QueryOp worker on its own
+                # connection can finish _attribute_xp_and_evs_to_companion for
+                # this same row while it is open, persisting new level / xp /
+                # EV / friendship / pokemon_defeated values. save_pokemon()
+                # below writes the WHOLE row, so the pre-dialog snapshot would
+                # silently revert every one of them. Re-read and carry only the
+                # player's move choice onto the current row.
+                fresh = db.get_pokemon(individual_id)
+                if fresh:
+                    pkmndata = fresh
             else:
                 # Nothing can put the choice to the player. Tell them what was
                 # learned and where to act on it, rather than dropping the move

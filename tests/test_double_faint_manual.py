@@ -142,3 +142,85 @@ def test_second_round_does_not_stack_another_callback(bl, hook_registry, spy_fai
     # After resolution the module is disarmed and can defer a fresh faint again.
     bl._defer_main_faint_until_enemy_resolved(main, enemy, reviewer, translator=object())
     assert len(hook_registry.catch_pokemon_hooks) == 1
+
+
+# --- Regression: an ABANDONED deferral must not fire a phantom faint --------
+#
+# _resolve() used to be the only thing that cleared _main_faint_deferred or
+# unregistered itself. A player who closed the Ankimon Window instead of
+# answering its death screen left the deferral armed forever, and the stale
+# callback then ran handle_main_pokemon_faint() against a full-HP Pokemon on
+# the next unrelated catch/defeat.
+
+
+def test_cancel_disarms_the_flag_and_unregisters_from_both_buckets(
+    bl, hook_registry, spy_faint
+):
+    main = _FakePokemon(hp=0)
+    enemy = _FakePokemon("rattata", hp=0)
+    bl._defer_main_faint_until_enemy_resolved(main, enemy, _FakeReviewer(), None)
+    assert bl._main_faint_deferred is True
+    assert len(hook_registry.catch_pokemon_hooks) == 1
+    assert len(hook_registry.defeat_pokemon_hooks) == 1
+
+    bl._cancel_main_faint_deferral()
+
+    assert bl._main_faint_deferred is False
+    assert hook_registry.catch_pokemon_hooks == []
+    assert hook_registry.defeat_pokemon_hooks == []
+    # Idempotent: calling it again with nothing armed is a no-op, not an error.
+    bl._cancel_main_faint_deferral()
+
+
+def test_abandoned_deferral_fires_no_phantom_faint_on_a_later_catch(
+    bl, hook_registry, spy_faint
+):
+    main = _FakePokemon(hp=0)
+    enemy = _FakePokemon("rattata", hp=0)
+    reviewer = _FakeReviewer()
+
+    # Round 1: double faint with the window open -> deferral armed.
+    bl._defer_main_faint_until_enemy_resolved(main, enemy, reviewer, None)
+
+    # Round 2: the player closed the window, so on_review_card takes the
+    # immediate branch, which now disarms the stale deferral first.
+    bl._cancel_main_faint_deferral()
+    bl.handle_main_pokemon_faint(main, enemy, None, reviewer, None)
+    settled = len(spy_faint)
+
+    # Healed and back in a normal battle.
+    main.hp = main.max_hp
+
+    # A later, unrelated catch must NOT resurrect the main faint.
+    for hook in list(hook_registry.catch_pokemon_hooks):
+        hook()
+    assert len(spy_faint) - settled == 0
+    for hook in list(hook_registry.defeat_pokemon_hooks):
+        hook()
+    assert len(spy_faint) - settled == 0
+
+
+def test_resolve_repaints_the_ankimon_window_after_healing(
+    bl, hook_registry, monkeypatch
+):
+    """new_pokemon() paints the new encounter while main hp is still 0, so the
+    resolver has to repaint or the main HP bar reads 0 until the next card."""
+    repaints = []
+    window = types.SimpleNamespace(
+        current_view="battle",
+        force_display_battle=lambda *a, **k: repaints.append(1),
+    )
+    monkeypatch.setattr(bl, "handle_main_pokemon_faint", lambda *a, **k: None)
+    monkeypatch.setattr(bl, "is_alive", lambda w: w is not None)
+    monkeypatch.setattr(
+        bl, "services", types.SimpleNamespace(test_window=window), raising=False
+    )
+
+    main = _FakePokemon(hp=0)
+    bl._defer_main_faint_until_enemy_resolved(
+        main, _FakePokemon("rattata", hp=0), _FakeReviewer(), None
+    )
+    for hook in list(hook_registry.catch_pokemon_hooks):
+        hook()
+
+    assert repaints, "the Ankimon Window was never repainted after the heal"
