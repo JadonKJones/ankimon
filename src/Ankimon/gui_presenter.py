@@ -12,6 +12,7 @@ never be imported headless. See :mod:`Ankimon.ui_port` for the contract.
 
 from __future__ import annotations
 
+from aqt import mw
 from aqt.qt import QDialog
 from aqt.utils import showInfo, showWarning
 
@@ -24,13 +25,24 @@ class QtPresenter:
     """Shows real Qt dialogs for the UI-port interactions."""
 
     def choose_move(self, attacks):
-        dialog = MoveSelectionDialog(list(attacks))
+        # Parent to mw and force it to the front: a parentless QDialog can
+        # spawn behind the main Anki window (or the Ankimon battle popup)
+        # with no taskbar/focus cue on some window managers — exec() still
+        # blocks the calling turn on it, so the battle silently freezes with
+        # nothing in the logs, since nothing actually failed; the dialog is
+        # just invisible. (finding: turns stopped advancing despite correct
+        # review answers, with controls.allow_to_choose_moves enabled.)
+        dialog = MoveSelectionDialog(list(attacks), parent=mw)
+        dialog.raise_()
+        dialog.activateWindow()
         if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_move:
             return dialog.selected_move
         return None
 
     def choose_attack_to_replace(self, attacks, new_attack):
-        dialog = AttackDialog(list(attacks), new_attack)
+        dialog = AttackDialog(list(attacks), new_attack, parent=mw)
+        dialog.raise_()
+        dialog.activateWindow()
         if dialog.exec() == QDialog.DialogCode.Accepted:
             return dialog.selected_attack
         return None
