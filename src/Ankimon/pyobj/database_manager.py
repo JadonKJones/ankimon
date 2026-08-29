@@ -125,19 +125,37 @@ class ConnectionWrapper:
                     self._conn.commit()
                 except sqlite3.DatabaseError as e:
                     msg = str(e).lower()
-                    # NOTE: Deliberately NO "closed database" retry here. Unlike
-                    # execute()/executemany(), commit() has nothing to replay:
-                    # sqlite rolled this connection's transaction back when it was
-                    # closed, so committing a *different* connection would be a
-                    # no-op that reports success for a write that no longer exists.
-                    # Let it raise -- see the __exit__ comment in database_manager.
+                    # NOTE: Deliberately NO retry that reports success here. Unlike
+                    # execute()/executemany(), commit() has nothing to replay, so
+                    # committing a *different* connection is a no-op that reports
+                    # success for a write that no longer exists. That holds for both
+                    # failures we know how to recognise:
+                    #
+                    #   "closed database" -- sqlite rolled this connection's
+                    #   transaction back when the connection was closed.
+                    #
+                    #   "malformed"/"disk image" -- repair_database() rebuilds the
+                    #   file from a *separate* connection's iterdump(), which cannot
+                    #   see this connection's uncommitted rows, then quiesces every
+                    #   registered connection and swaps the rebuilt file into place.
+                    #   The pending transaction does not survive either step.
+                    #
+                    # So heal the file -- leaving it corrupt helps nobody -- but let
+                    # the original failure propagate. Callers such as consume_item
+                    # hand out an effect on the strength of a successful commit: a
+                    # heal, a revived fossil. Reporting success for a decrement that
+                    # the repair threw away is exactly the free-heal those callers
+                    # exist to prevent. See the __exit__ comment below.
                     if self._db_mgr and ("malformed" in msg or "disk image" in msg) and not self._db_mgr._is_repairing:
                         self.release_lease()
                         lease_released = True
-                        self._db_mgr.repair_database()
-                        fresh = self._db_mgr._get_connection()
-                        fresh._conn.commit()
-                        return
+                        try:
+                            self._db_mgr.repair_database()
+                        except Exception:
+                            # repair_database() logs its own failure. Whether it
+                            # healed or not, the caller's transaction is gone; the
+                            # commit error is the one it needs to see.
+                            pass
                     raise
         finally:
             if not lease_released:
@@ -1384,6 +1402,71 @@ class AnkimonDB:
 
         conn.commit()
         return new_qty
+
+    def consume_item(self, item_name: str, count: int = 1) -> bool:
+        """Spend ``count`` units of ``item_name``. Returns whether they were.
+
+        ``update_item_quantity`` cannot answer "did I actually pay for this?":
+        it reads the quantity and writes it back in two steps, and its return
+        value collapses "the row was gone" and "you just spent your last one"
+        into the same 0. A caller that hands out an effect on the strength of
+        that -- a heal, a revived fossil -- can hand it out for free.
+
+        The decrement here is one conditional statement, so the row cannot
+        change between the check and the write: sqlite reports through
+        ``rowcount`` whether the ``quantity >= count`` guard actually matched.
+        The follow-up DELETE only tidies an emptied row and is idempotent;
+        both share the one transaction below.
+
+        Roll back if the commit fails, mirroring ``ConnectionWrapper.__exit__``.
+        A failed commit -- the busy_timeout expiring under write contention,
+        a full disk -- does not necessarily end sqlite's transaction, so the
+        decrement stays pending on this thread's connection. Nobody is paid:
+        ``consume_item`` never returns True, so ``Check_Heal_Item`` refuses the
+        heal. But the next unrelated write on the same connection commits, and
+        the pending decrement rides along with it -- the potion is gone and the
+        HP was never granted, which is precisely the half of the invariant this
+        method exists to hold. ``with conn:`` would also roll back, but its
+        ``__enter__`` issues an explicit BEGIN (which collides with exactly the
+        still-open transaction at issue) and its ``__exit__`` commits the raw
+        connection, ignoring the ``_disable_commit`` opt-out that mobile sync's
+        bulk resolve relies on. Roll back here instead and re-raise: a lost
+        write must not read as success.
+        """
+        if count <= 0:
+            self._log("warning", f"Refusing to consume {count} of '{item_name}'.")
+            return False
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE items SET quantity = quantity - ? "
+                "WHERE item_name = ? AND quantity >= ?",
+                (count, item_name, count)
+            )
+            consumed = cursor.rowcount == 1
+            if consumed:
+                cursor.execute(
+                    "DELETE FROM items WHERE item_name = ? AND quantity <= 0",
+                    (item_name,)
+                )
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                # Nothing better to do: the original failure is the one the
+                # caller needs, and a connection too broken to roll back has
+                # no pending decrement anybody can accidentally commit.
+                pass
+            raise
+        if not consumed:
+            self._log(
+                "warning",
+                f"Item '{item_name}' could not be consumed: fewer than {count} in inventory."
+            )
+        return consumed
 
     # --- Badge Operations ---
 
