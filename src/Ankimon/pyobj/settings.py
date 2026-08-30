@@ -33,6 +33,7 @@ DEFAULT_CONFIG = {
     "controls.allow_to_choose_moves": False,
     "gui.animate_time": True,
     "gui.gif_in_collection": True,
+    "gui.gif_in_ankimon_window": False,
     "gui.show_sprites_across_ankimon": True,
     "gui.styling_in_reviewer": True,
     "gui.pop_up_dialog_message_on_defeat": False,
