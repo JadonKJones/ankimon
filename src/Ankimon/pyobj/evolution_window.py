@@ -393,7 +393,13 @@ class EvoWindow(QWidget):
                     if len(attacks) < 4:
                         attacks.append(new_attack)
                     else:
-                        dialog = AttackDialog(attacks, new_attack, parent=self)
+                        # Parent to the Anki main window, not this evolution
+                        # popup. EvoWindow is a separate top-level window that
+                        # gets torn down/hidden mid-flow; a child dialog of it
+                        # can lose its focus/taskbar cue or misbehave on macOS.
+                        # Matches gui_presenter / pokemon_details, which parent
+                        # to mw.
+                        dialog = AttackDialog(attacks, new_attack, parent=mw)
                         dialog.show()
                         dialog.raise_()
                         dialog.activateWindow()
@@ -608,7 +614,13 @@ class EvoWindow(QWidget):
                     if len(attacks) < 4:
                         attacks.append(new_attack)
                     else:
-                        dialog = AttackDialog(attacks, new_attack, parent=self)
+                        # Parent to the Anki main window, not this evolution
+                        # popup. EvoWindow is a separate top-level window that
+                        # gets torn down/hidden mid-flow; a child dialog of it
+                        # can lose its focus/taskbar cue or misbehave on macOS.
+                        # Matches gui_presenter / pokemon_details, which parent
+                        # to mw.
+                        dialog = AttackDialog(attacks, new_attack, parent=mw)
                         dialog.show()
                         dialog.raise_()
                         dialog.activateWindow()
