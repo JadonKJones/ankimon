@@ -213,15 +213,10 @@ def details(qapp, tmp_path):
 
     class AttackDialog:
         # remember_attack() calls AttackDialog(attacks, new_attack, parent=mw)
-        # then .show()/.raise_()/.activateWindow() before .exec(), and
-        # .deleteLater() in a finally (the battle-freeze fix: an unparented
-        # dialog could spawn invisibly, plus mw-parented dialog cleanup) —
-        # the double needs to accept/tolerate all of that.
+        # then schedules .raise_()/.activateWindow() for the modal event loop,
+        # and .deleteLater() in a finally (the battle-freeze fix plus cleanup).
         def __init__(self, attacks, new_attack, parent=None):
             self.selected_attack = attacks[0]
-
-        def show(self):
-            pass
 
         def raise_(self):
             pass
@@ -758,6 +753,69 @@ def test_remember_attack_with_a_full_moveset_goes_through_the_replace_dialog(det
     # The dialog was declined (double's default), so the moveset is untouched
     # rather than silently growing past 4 or swapping something unintended.
     assert db.saved[-1]["attacks"] == ["tackle", "thunderbolt", "quick-attack", "growl"]
+
+
+def test_remember_attack_establishes_modality_before_showing_dialog(
+    details, monkeypatch
+):
+    """The fifth-move prompt must be modal before it becomes visible."""
+    events = []
+    callbacks = []
+
+    class ProbeTimer:
+        @staticmethod
+        def singleShot(interval, callback):
+            assert interval == 0
+            events.append("scheduled")
+            callbacks.append(callback)
+
+    class ModalProbeAttackDialog:
+        def __init__(self, attacks, new_attack, parent=None):
+            self.selected_attack = attacks[0]
+
+        def show(self):
+            events.append("show")
+
+        def raise_(self):
+            events.append("raise")
+
+        def activateWindow(self):
+            events.append("activate")
+
+        def exec(self):
+            events.append("exec")
+            while callbacks:
+                callbacks.pop(0)()
+            return 0
+
+        def deleteLater(self):
+            events.append("delete")
+
+    monkeypatch.setattr(details, "AttackDialog", ModalProbeAttackDialog)
+    monkeypatch.setattr(details, "QTimer", ProbeTimer, raising=False)
+    details._test_services.db = _FakeDB(
+        pokemon={
+            "uuid-1": {
+                "individual_id": "uuid-1",
+                "name": "pikachu",
+                "attacks": ["tackle", "thunderbolt", "quick-attack", "growl"],
+            }
+        },
+        main_pokemon={
+            "individual_id": "uuid-1",
+            "attacks": ["tackle", "thunderbolt", "quick-attack", "growl"],
+        },
+    )
+
+    details.remember_attack(
+        "uuid-1",
+        ["tackle", "thunderbolt", "quick-attack", "growl"],
+        "thunder",
+        _RecorderLogger(),
+        lambda: None,
+    )
+
+    assert events == ["scheduled", "exec", "raise", "activate", "delete"]
 
 
 def test_forget_attack_refuses_to_remove_last_move(details):

@@ -13,7 +13,7 @@ never be imported headless. See :mod:`Ankimon.ui_port` for the contract.
 from __future__ import annotations
 
 from aqt import mw
-from aqt.qt import QDialog
+from aqt.qt import QDialog, QTimer
 from aqt.utils import showInfo, showWarning
 
 from .classes.choose_move_dialog import MoveSelectionDialog
@@ -33,12 +33,16 @@ class QtPresenter:
         # just invisible. (finding: turns stopped advancing despite correct
         # review answers, with controls.allow_to_choose_moves enabled.)
         dialog = MoveSelectionDialog(list(attacks), parent=mw)
-        # show() first so raise_()/activateWindow() act on a real native
-        # window; deleteLater() in finally so the mw-parented dialog is not
-        # kept alive as a hidden child until Anki closes.
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        # Let exec() establish modality and show the dialog first, then raise
+        # and activate it on the next event-loop iteration so it cannot appear
+        # behind the Anki/battle windows.
+        QTimer.singleShot(
+            0,
+            lambda: (
+                dialog.raise_(),
+                dialog.activateWindow(),
+            ),
+        )
         try:
             if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_move:
                 return dialog.selected_move
@@ -48,9 +52,13 @@ class QtPresenter:
 
     def choose_attack_to_replace(self, attacks, new_attack):
         dialog = AttackDialog(list(attacks), new_attack, parent=mw)
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        QTimer.singleShot(
+            0,
+            lambda: (
+                dialog.raise_(),
+                dialog.activateWindow(),
+            ),
+        )
         try:
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 return dialog.selected_attack

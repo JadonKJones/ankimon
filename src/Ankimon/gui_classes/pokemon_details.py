@@ -11,6 +11,7 @@ from PyQt6.QtCore import (
     QRectF,
     QPropertyAnimation,
     QEasingCurve,
+    QTimer,
     pyqtProperty,
 )
 from PyQt6.QtWidgets import QScrollArea
@@ -1440,9 +1441,13 @@ def remember_attack(
             logger.log_and_showinfo("info", f"{msg}")
         else:
             dialog = AttackDialog(attacks, new_attack, parent=mw)
-            dialog.show()
-            dialog.raise_()
-            dialog.activateWindow()
+            QTimer.singleShot(
+                0,
+                lambda: (
+                    dialog.raise_(),
+                    dialog.activateWindow(),
+                ),
+            )
             try:
                 result = dialog.exec()
             finally:

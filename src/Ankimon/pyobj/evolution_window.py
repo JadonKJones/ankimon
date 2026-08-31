@@ -10,6 +10,7 @@ from aqt.qt import (
     QVBoxLayout,
     QWidget,
     QDialog,
+    QTimer,
     qconnect,
 )
 from PyQt6.QtGui import QColor, QPen
@@ -397,12 +398,16 @@ class EvoWindow(QWidget):
                         # popup. EvoWindow is a separate top-level window that
                         # gets torn down/hidden mid-flow; a child dialog of it
                         # can lose its focus/taskbar cue or misbehave on macOS.
-                        # Matches gui_presenter / pokemon_details, which parent
-                        # to mw.
+                        # Let exec() establish modality before the timer raises
+                        # and activates the visible dialog.
                         dialog = AttackDialog(attacks, new_attack, parent=mw)
-                        dialog.show()
-                        dialog.raise_()
-                        dialog.activateWindow()
+                        QTimer.singleShot(
+                            0,
+                            lambda: (
+                                dialog.raise_(),
+                                dialog.activateWindow(),
+                            ),
+                        )
                         try:
                             _accepted = dialog.exec() == QDialog.DialogCode.Accepted
                         finally:
@@ -618,12 +623,16 @@ class EvoWindow(QWidget):
                         # popup. EvoWindow is a separate top-level window that
                         # gets torn down/hidden mid-flow; a child dialog of it
                         # can lose its focus/taskbar cue or misbehave on macOS.
-                        # Matches gui_presenter / pokemon_details, which parent
-                        # to mw.
+                        # Let exec() establish modality before the timer raises
+                        # and activates the visible dialog.
                         dialog = AttackDialog(attacks, new_attack, parent=mw)
-                        dialog.show()
-                        dialog.raise_()
-                        dialog.activateWindow()
+                        QTimer.singleShot(
+                            0,
+                            lambda: (
+                                dialog.raise_(),
+                                dialog.activateWindow(),
+                            ),
+                        )
                         try:
                             _accepted = dialog.exec() == QDialog.DialogCode.Accepted
                         finally:
