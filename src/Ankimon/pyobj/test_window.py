@@ -160,9 +160,15 @@ class TestWindow(QWidget):
         self._main_gif_label = QLabel(self.main_label)
         for _gl in (self._enemy_gif_label, self._main_gif_label):
             _gl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            # Without this the label inherits the window's
+            # background-color: rgb(44,44,44) stylesheet and paints a solid
+            # dark box around the (transparent) sprite.
+            _gl.setStyleSheet("background: transparent;")
+            _gl.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
             _gl.hide()
         self._enemy_gif_movie = None
         self._main_gif_movie = None
+        self._gif_native = {"enemy": None, "main": None}
         self._gif_sprite_key = {"enemy": None, "main": None}
         self._gif_geom = {"enemy": None, "main": None}
         self._gif_path_exists = {}
@@ -630,6 +636,7 @@ class TestWindow(QWidget):
                 pass
             setattr(self, movie_attr, None)
         self._gif_sprite_key[side] = None
+        self._gif_native[side] = None
 
     def hide_gif_overlays(self):
         """Retire both overlays — call whenever main_label stops showing the
@@ -661,15 +668,33 @@ class TestWindow(QWidget):
                     self._gif_path_exists[path] = False
                     continue
                 movie.setCacheMode(QMovie.CacheMode.CacheAll)
-                movie.setScaledSize(QSize(int(w), int(h)))
+                movie.jumpToFrame(0)
+                native = movie.currentPixmap().size()
+                self._gif_native[side] = (
+                    (native.width(), native.height())
+                    if native.width() > 0 and native.height() > 0
+                    else (w, h)
+                )
                 label.setMovie(movie)
                 setattr(self, movie_attr, movie)
                 self._gif_sprite_key[side] = path
             else:
                 movie = getattr(self, movie_attr, None)
-                if movie is not None:
-                    movie.setScaledSize(QSize(int(w), int(h)))
-            label.setGeometry(int(x + ox), int(y + oy), int(w), int(h))
+                if movie is None:
+                    continue
+            # Fit the GIF's own frame into the slot the composite left,
+            # aspect preserved (GIF sheets are framed tighter than the PNGs,
+            # so forcing them to the PNG box stretched them). Centre it
+            # horizontally and sit it on the slot's baseline so it stands
+            # where the static sprite stood.
+            nw_src, nh_src = self._gif_native.get(side) or (w, h)
+            scale = min(w / nw_src, h / nh_src)
+            fw = max(1, int(nw_src * scale))
+            fh = max(1, int(nh_src * scale))
+            fx = x + (w - fw) // 2
+            fy = y + (h - fh)
+            movie.setScaledSize(QSize(fw, fh))
+            label.setGeometry(int(fx + ox), int(fy + oy), int(fw), int(fh))
             label.raise_()
             label.show()
             movie = getattr(self, movie_attr, None)
