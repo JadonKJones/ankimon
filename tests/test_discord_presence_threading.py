@@ -124,6 +124,11 @@ def _assert_queued_tooltip(env, message):
 def _presence_without_init(env):
     instance = object.__new__(env.module.DiscordPresence)
     instance.logger_obj = env.logger
+    # These tests simulate a presence that connected successfully and then hit
+    # a failure during a later RPC operation, so the guarded methods must see
+    # a live connection.
+    instance.connected = True
+    instance._last_connect_attempt = float("-inf")
     return instance
 
 
