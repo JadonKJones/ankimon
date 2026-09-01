@@ -162,13 +162,18 @@ class TestWindow(QWidget):
             _gl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             # Without this the label inherits the window's
             # background-color: rgb(44,44,44) stylesheet and paints a solid
-            # dark box around the (transparent) sprite.
+            # dark box around the (transparent) sprite. The stylesheet rule
+            # alone is enough — WA_TranslucentBackground on a *child* widget
+            # is flaky on real X11/Wayland (stale backing store: the QMovie
+            # advances frames but the label never repaints, so the sprite
+            # looks frozen), and it is not needed here since the parent is
+            # opaque.
             _gl.setStyleSheet("background: transparent;")
-            _gl.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
             _gl.hide()
         self._enemy_gif_movie = None
         self._main_gif_movie = None
         self._gif_native = {"enemy": None, "main": None}
+        self._gif_scaled = {"enemy": None, "main": None}
         self._gif_sprite_key = {"enemy": None, "main": None}
         self._gif_geom = {"enemy": None, "main": None}
         self._gif_path_exists = {}
@@ -424,16 +429,29 @@ class TestWindow(QWidget):
         t = self._MESSAGE_BOX_BORDER_THICKNESS
 
         if self.last_message_text:
-            battle_text_font = load_custom_font(
-                20, int(self.settings_obj.get("misc.language"))
+            lang = int(self.settings_obj.get("misc.language"))
+            text_rect = rect.adjusted(t + 8, t + 6, -(t + 8), -(t + 6))
+            flags = (
+                Qt.AlignmentFlag.AlignLeft
+                | Qt.AlignmentFlag.AlignVCenter
+                | Qt.TextFlag.TextWordWrap
             )
+            # Start at the size the old single-line message used (28) and
+            # shrink only if the wrapped text would spill out of the box —
+            # 20 flat looked cramped and undersized next to the rest of the
+            # scene's text.
+            size = 28
+            while size > 16:
+                battle_text_font = load_custom_font(size, lang)
+                bounds = QFontMetrics(battle_text_font).boundingRect(
+                    text_rect, flags, self.last_message_text
+                )
+                if bounds.height() <= text_rect.height():
+                    break
+                size -= 2
             painter.setFont(battle_text_font)
             painter.setPen(QColor(240, 240, 208))
-            painter.drawText(
-                rect.adjusted(t + 8, t + 6, -(t + 8), -(t + 6)),
-                Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap,
-                self.last_message_text,
-            )
+            painter.drawText(text_rect, flags, self.last_message_text)
 
     def _cached_pixmap(self, path):
         """Decode a STATIC scene asset once per window instead of per repaint.
@@ -637,6 +655,7 @@ class TestWindow(QWidget):
             setattr(self, movie_attr, None)
         self._gif_sprite_key[side] = None
         self._gif_native[side] = None
+        self._gif_scaled[side] = None
 
     def hide_gif_overlays(self):
         """Retire both overlays — call whenever main_label stops showing the
@@ -676,7 +695,12 @@ class TestWindow(QWidget):
                     else (w, h)
                 )
                 label.setMovie(movie)
+                # Belt-and-braces repaint: QLabel wires this internally, but a
+                # missed connection here is exactly what "the GIF doesn't move"
+                # looks like, so force it.
+                movie.frameChanged.connect(label.update)
                 setattr(self, movie_attr, movie)
+                self._gif_scaled[side] = None
                 self._gif_sprite_key[side] = path
             else:
                 movie = getattr(self, movie_attr, None)
@@ -693,15 +717,20 @@ class TestWindow(QWidget):
             fh = max(1, int(nh_src * scale))
             fx = x + (w - fw) // 2
             fy = y + (h - fh)
-            movie.setScaledSize(QSize(fw, fh))
+            # Only re-scale when the slot size actually changed. Calling
+            # setScaledSize() on every repaint (shakes fire it ~20x/turn)
+            # makes some Qt builds re-decode and visibly stutter.
+            if self._gif_scaled.get(side) != (fw, fh):
+                movie.setScaledSize(QSize(fw, fh))
+                self._gif_scaled[side] = (fw, fh)
             label.setGeometry(int(fx + ox), int(fy + oy), int(fw), int(fh))
             label.raise_()
             label.show()
-            movie = getattr(self, movie_attr, None)
-            if movie is not None and self.isVisible():
+            if self.isVisible():
                 try:
                     if movie.state() != QMovie.MovieState.Running:
                         movie.start()
+                    movie.setPaused(False)
                 except RuntimeError:
                     pass
 
@@ -1634,17 +1663,22 @@ class TestWindow(QWidget):
             movie = getattr(self, attr, None)
             if movie is not None:
                 try:
-                    movie.start()
+                    if movie.state() == QMovie.MovieState.NotRunning:
+                        movie.start()
+                    movie.setPaused(False)
                 except RuntimeError:
                     pass
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        # Pause, don't stop(): hideEvent also fires on occlusion / workspace
+        # switches on some WMs, and stop() rewinds to frame 0 with no matching
+        # showEvent to restart it — which is one way the sprite ends up frozen.
         for attr in ("_enemy_gif_movie", "_main_gif_movie"):
             movie = getattr(self, attr, None)
             if movie is not None:
                 try:
-                    movie.stop()
+                    movie.setPaused(True)
                 except RuntimeError:
                     pass
 
