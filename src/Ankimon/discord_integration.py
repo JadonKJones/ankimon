@@ -20,8 +20,10 @@ def setup_discord_hooks():
             mw.ankimon_presence = DiscordPresence(
                 CLIENT_ID, LARGE_IMAGE_URL, ankimon_tracker_obj, logger, settings_obj
             )
+        # start() manages .loop itself and (re)connects if Discord has since
+        # opened. Don't pre-set .loop here: a failed start would leave it True
+        # and block every later reconnect attempt.
         if mw.ankimon_presence.loop is False:
-            mw.ankimon_presence.loop = True
             mw.ankimon_presence.start()
 
     def on_reviewer_will_end(*args):
