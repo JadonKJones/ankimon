@@ -146,6 +146,9 @@ class DiscordPresence:
         except Exception as e:
             # Connection dropped (Discord was closed mid-session). Mark it so
             # the next start() re-attempts instead of silently staying dead.
+            # Clear self.loop too: this worker thread is about to exit, and the
+            # reviewer hook only re-calls start() while loop is False.
+            self.loop = False
             self.connected = False
             self.RPC = None
             self.logger_obj.log("error",f"Error with Discord Rich Presence: {e}")

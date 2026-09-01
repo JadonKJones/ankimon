@@ -173,6 +173,10 @@ def test_update_failure_queues_tooltip_from_worker(discord_env):
 
     assert discord_env.taskman.calling_threads == [worker.ident]
     assert worker.ident != main_thread
+    # The worker cleared both flags on failure so the reviewer hook, which
+    # only re-calls start() while loop is False, can restart the reconnect.
+    assert instance.loop is False
+    assert instance.connected is False
     _assert_queued_tooltip(
         discord_env,
         "Error with Discord Rich Presence. Is Discord running?",
