@@ -61,19 +61,50 @@ class DiscordPresence:
             "Gotta review ‘em all, Ankimon style!"
         ]
         self.state = random.choice(self.quotes)
+        self._client_id = client_id
+        self._checked_conflicts = False
+        # Throttle (re)connection attempts so a closed Discord doesn't make
+        # every answered card hammer the RPC socket. -inf => attempt on the
+        # first call; then at most once per RECONNECT_INTERVAL seconds.
+        self._last_connect_attempt = float("-inf")
+        self._connect(initial=True)
+
+    RECONNECT_INTERVAL = 60  # seconds between reconnection attempts
+
+    def _connect(self, initial: bool = False) -> bool:
+        """Try to open the RPC connection. Safe to call repeatedly: a no-op
+        when already connected, and rate-limited when not. Returns
+        ``self.connected``. This is what makes Discord opening *after* Anki
+        started still pick up — ``start()`` calls it on each review."""
+        if self.connected:
+            return True
+        now = time.time()
+        if not initial and now - self._last_connect_attempt < self.RECONNECT_INTERVAL:
+            return False
+        self._last_connect_attempt = now
         try:
-            self.RPC = Presence(client_id)
+            self.RPC = Presence(self._client_id)
             self.RPC.connect()
             self.connected = True
-            # Check for conflicting addons
+            self.start_time = time.time()
+        except Exception as e:
+            self.RPC = None
+            self.connected = False
+            self.logger_obj.log(
+                "error" if initial else "debug", f"Error with Discord setup: {e}"
+            )
+            if initial:
+                _show_discord_error("Error with Discord setup. Is Discord running?")
+            return False
+
+        # First successful connection only: warn about conflicting add-ons.
+        if not self._checked_conflicts:
+            self._checked_conflicts = True
             conflicting_addons = check_conflicting_discord_addons()
             if conflicting_addons:
                 conflict_list = ', '.join(conflicting_addons)
                 self.logger_obj.log_and_showinfo("warning", f"⚠️ Conflicting Discord Rich Presence addons detected: \n{conflict_list}\n\nPlease remove them to avoid issues with Ankimon's Discord status, or turn off Discord Rich Presence in Ankimon settings :) ")
-
-        except Exception as e:
-            self.logger_obj.log("error",f"Error with Discord setup: {e}")
-            _show_discord_error("Error with Discord setup. Is Discord running?")
+        return True
 
     def _get_special_quotes(self):
         return [
@@ -113,6 +144,10 @@ class DiscordPresence:
                 )
                 time.sleep(30)  # Sleep for 30 seconds before updating again
         except Exception as e:
+            # Connection dropped (Discord was closed mid-session). Mark it so
+            # the next start() re-attempts instead of silently staying dead.
+            self.connected = False
+            self.RPC = None
             self.logger_obj.log("error",f"Error with Discord Rich Presence: {e}")
             _show_discord_error(
                 "Error with Discord Rich Presence. Is Discord running?"
@@ -122,7 +157,7 @@ class DiscordPresence:
         """
         Start updating the Discord Rich Presence in a separate thread.
         """
-        if not self.connected:
+        if not self._connect():
             return
         try:
             if not hasattr(self, 'thread') or self.thread is None or not self.thread.is_alive():
