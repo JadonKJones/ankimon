@@ -36,28 +36,36 @@ class DiscordPresence:
     ):
         self.loop = False
         self.logger_obj = logger
+        self.connected = False
+        # Set every plain attribute BEFORE the RPC connect, which raises when
+        # Discord is not running. Previously they were assigned after connect(),
+        # so a failed connect left a half-built object whose start()/stop()/
+        # update_presence() then blew up with "no attribute 'settings'" /
+        # "no attribute 'large_image_url'".
+        self.RPC = None
+        self.large_image_url = large_image_url
+        self.ankimon_tracker: AnkimonTracker = ankimon_tracker
+        self.settings = settings_obj
+        self.start_time = time.time()
+        self.thread = None
+        self.quotes = [
+            "Study hard, your Ankimon is watching!",
+            "Ankimon, I choose you—let’s master this deck!",
+            "Your knowledge is super effective!",
+            "Critical hit! You mastered that concept.",
+            "Never give up! Every review gets you closer to evolution.",
+            "Your brain gained 50 XP! Keep going!",
+            "It’s dangerous to go alone—take your Ankimon deck!",
+            "A wild Flashcard appeared! What will you do?",
+            "Evolve your knowledge—level up with every session!",
+            "Gotta review ‘em all, Ankimon style!"
+        ]
+        self.state = random.choice(self.quotes)
         try:
             self.RPC = Presence(client_id)
             self.RPC.connect()
-            self.large_image_url = large_image_url
-            self.ankimon_tracker: AnkimonTracker = ankimon_tracker
-            self.settings = settings_obj
-            self.start_time = time.time()
-            self.thread = None
-            self.quotes = [
-                "Study hard, your Ankimon is watching!",
-                "Ankimon, I choose you—let’s master this deck!",
-                "Your knowledge is super effective!",
-                "Critical hit! You mastered that concept.",
-                "Never give up! Every review gets you closer to evolution.",
-                "Your brain gained 50 XP! Keep going!",
-                "It’s dangerous to go alone—take your Ankimon deck!",
-                "A wild Flashcard appeared! What will you do?",
-                "Evolve your knowledge—level up with every session!",
-                "Gotta review ‘em all, Ankimon style!"
-            ]
-            self.state = random.choice(self.quotes)
-                    # Check for conflicting addons
+            self.connected = True
+            # Check for conflicting addons
             conflicting_addons = check_conflicting_discord_addons()
             if conflicting_addons:
                 conflict_list = ', '.join(conflicting_addons)
@@ -94,6 +102,8 @@ class DiscordPresence:
         """
         Update the Discord Rich Presence with a new state message.
         """
+        if not self.connected:
+            return
         try:
             while self.loop:
                 self.RPC.update(
@@ -112,6 +122,8 @@ class DiscordPresence:
         """
         Start updating the Discord Rich Presence in a separate thread.
         """
+        if not self.connected:
+            return
         try:
             if not hasattr(self, 'thread') or self.thread is None or not self.thread.is_alive():
                 self.loop = True
@@ -127,8 +139,10 @@ class DiscordPresence:
         """
         Stop updating the Discord Rich Presence.
         """
+        self.loop = False
+        if not self.connected:
+            return
         try:
-            self.loop = False
             if hasattr(self, 'thread') and self.thread and self.thread.is_alive():
                 # self.thread.join() # Removed to prevent blocking
                 self.thread = None  # Reset the thread
@@ -143,8 +157,10 @@ class DiscordPresence:
         """
         Update the Discord Rich Presence to indicate a break when stopping.
         """
+        self.loop = False
+        if not self.connected:
+            return
         try:
-            self.loop = False
             if not self.loop:
                 self.RPC.update(
                     state="Break time! You’ve earned it.",
