@@ -3,7 +3,7 @@ import json
 from typing import Any, Callable
 import re
 
-from aqt import qconnect
+from aqt import mw, qconnect
 from PyQt6.QtGui import QPixmap, QPainter, QIcon, QColor, QPolygonF, QPen, QBrush
 from PyQt6.QtCore import (
     Qt,
@@ -11,6 +11,7 @@ from PyQt6.QtCore import (
     QRectF,
     QPropertyAnimation,
     QEasingCurve,
+    QTimer,
     pyqtProperty,
 )
 from PyQt6.QtWidgets import QScrollArea
@@ -1443,8 +1444,19 @@ def remember_attack(
             msg += f"\n Your {pokemon_data['name'].capitalize()} has learned {new_attack} !"
             logger.log_and_showinfo("info", f"{msg}")
         else:
-            dialog = AttackDialog(attacks, new_attack)
-            if dialog.exec() == QDialog.DialogCode.Accepted:
+            dialog = AttackDialog(attacks, new_attack, parent=mw)
+            QTimer.singleShot(
+                0,
+                lambda: (
+                    dialog.raise_(),
+                    dialog.activateWindow(),
+                ),
+            )
+            try:
+                result = dialog.exec()
+            finally:
+                dialog.deleteLater()
+            if result == QDialog.DialogCode.Accepted:
                 selected_attack = dialog.selected_attack
                 try:
                     index_to_replace = attacks.index(selected_attack)
