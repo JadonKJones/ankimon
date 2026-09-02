@@ -128,6 +128,8 @@ def _presence_without_init(env):
     # a failure during a later RPC operation, so the guarded methods must see
     # a live connection.
     instance.connected = True
+    instance.loop = False
+    instance.thread = None
     instance._last_connect_attempt = float("-inf")
     return instance
 
@@ -207,6 +209,8 @@ def test_stop_failure_queues_non_modal_tooltip(discord_env):
 
     instance.stop()
 
+    assert instance.connected is False
+    assert instance.RPC is None
     _assert_queued_tooltip(
         discord_env,
         "Error clearing Discord Rich Presence. Please check Logger for info.",
@@ -223,7 +227,61 @@ def test_stop_presence_failure_queues_non_modal_tooltip(discord_env):
 
     instance.stop_presence()
 
+    assert instance.connected is False
+    assert instance.RPC is None
     _assert_queued_tooltip(
         discord_env,
         "Error stopping Discord Rich Presence. Please check Logger for info.",
     )
+
+
+def test_worker_restart_after_failure_reconnects(discord_env, monkeypatch):
+    """A card answer that lands right after the worker's failure handler
+    must end with a fresh, usable RPC — not a half-torn-down one. Because
+    _connect() now runs only inside the worker, start() cannot race it."""
+    connect_calls = {"n": 0}
+
+    class _Presence:
+        def __init__(self, client_id):
+            self.update = MagicMock()
+            self.clear = MagicMock()
+
+        def connect(self):
+            connect_calls["n"] += 1
+
+    monkeypatch.setattr(discord_env.module, "Presence", _Presence)
+
+    instance = _presence_without_init(discord_env)
+    # Break the worker's update loop after one iteration instead of the real
+    # 30s sleep, so the thread finishes and its final state can be asserted.
+    monkeypatch.setattr(
+        discord_env.module.time,
+        "sleep",
+        lambda _s: setattr(instance, "loop", False),
+    )
+    instance.settings = types.SimpleNamespace(get=lambda key: 1)
+    instance.quotes = ["Reviewing"]
+    instance.large_image_url = "image"
+    instance.start_time = 0
+    instance._client_id = "client-id"
+    instance._checked_conflicts = True
+
+    # 1) worker hits a mid-session RPC failure and tears its own state down.
+    instance.loop = True
+    instance.RPC = types.SimpleNamespace(
+        update=MagicMock(side_effect=RuntimeError("connection lost"))
+    )
+    instance.update_presence()
+    assert instance.loop is False
+    assert instance.connected is False
+    assert instance.RPC is None
+
+    # 2) the next card answer restarts the worker; it reconnects cleanly.
+    instance._last_connect_attempt = float("-inf")
+    instance.start()
+    instance.thread.join(timeout=2)
+
+    assert instance.thread.is_alive() is False
+    assert connect_calls["n"] == 1
+    assert instance.connected is True
+    assert instance.RPC is not None

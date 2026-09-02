@@ -158,20 +158,37 @@ class DiscordPresence:
 
     def start(self):
         """
-        Start updating the Discord Rich Presence in a separate thread.
+        Spawn the presence worker (idempotent).
+
+        The worker owns the RPC connection end to end — ``_connect()`` runs
+        inside it, not here — so this call never blocks the caller
+        (``reviewer_did_answer_card`` runs on the UI thread and the RPC
+        handshake can stall), and every write to ``connected`` / ``RPC`` /
+        ``start_time`` stays on that one worker thread, with no main-thread
+        ``_connect()`` racing the worker's own teardown.
         """
-        if not self._connect():
-            return
         try:
-            if not hasattr(self, 'thread') or self.thread is None or not self.thread.is_alive():
-                self.loop = True
-                self.thread = threading.Thread(target=self.update_presence, daemon=True)
-                self.thread.start()
+            if self.loop:
+                return
+            if self.thread is not None and self.thread.is_alive():
+                return
+            self.loop = True
+            self.thread = threading.Thread(target=self._run, daemon=True)
+            self.thread.start()
         except Exception as e:
+            self.loop = False
             self.logger_obj.log("error",f"Error starting Discord Rich Presence: {e}")
             _show_discord_error(
                 "Error starting Discord Rich Presence. Is Discord running?"
             )
+
+    def _run(self):
+        """Worker body: connect, then loop updating presence. Off the UI
+        thread so a slow/blocking RPC handshake can't stall a card answer."""
+        if not self._connect():
+            self.loop = False
+            return
+        self.update_presence()
 
     def stop(self):
         """
@@ -186,6 +203,11 @@ class DiscordPresence:
                 self.thread = None  # Reset the thread
             self.RPC.clear()
         except Exception as e:
+            # A failing clear() means the connection is already broken — drop
+            # it so the next start() reconnects instead of trusting a stale
+            # self.connected (matches update_presence()'s failure path).
+            self.connected = False
+            self.RPC = None
             self.logger_obj.log("error",f"Error clearing Discord Rich Presence: {e}")
             _show_discord_error(
                 "Error clearing Discord Rich Presence. Please check Logger for info."
@@ -205,6 +227,8 @@ class DiscordPresence:
                     large_image=self.large_image_url
                 )
         except Exception as e:
+            self.connected = False
+            self.RPC = None
             self.logger_obj.log("error",f"Error stopping Discord Rich Presence: {e}")
             _show_discord_error(
                 "Error stopping Discord Rich Presence. Please check Logger for info."
