@@ -711,12 +711,25 @@ class TestWindow(QWidget):
             # so forcing them to the PNG box stretched them). Centre it
             # horizontally and sit it on the slot's baseline so it stands
             # where the static sprite stood.
+            #
+            # Never upscale past the sprite's own resolution: the gen5ani GIFs
+            # are small (~40-120px) and deliberately sized by species — blowing
+            # a 51px Cubchoo up to fill a 120px slot makes it blurry, oversized
+            # and floating off the platform. Only scale DOWN, for the rare GIF
+            # frame that is larger than the slot.
             nw_src, nh_src = self._gif_native.get(side) or (w, h)
-            scale = min(w / nw_src, h / nh_src)
+            scale = min(w / nw_src, h / nh_src, 1.0)
             fw = max(1, int(nw_src * scale))
             fh = max(1, int(nh_src * scale))
             fx = x + (w - fw) // 2
-            fy = y + (h - fh)
+            # Stand the sprite on the slot's baseline, but never let it cross
+            # into the message box: the PNG slot bottom (y + h) sits ~10px
+            # below the box's top edge and the PNGs get away with it only
+            # because of their transparent footer padding — the tight-cropped
+            # GIF frames have none, so bottom-aligning them there pokes real
+            # pixels into the text box.
+            baseline = min(y + h, self._MESSAGE_BOX_RECT.top())
+            fy = baseline - fh
             # Only re-scale when the slot size actually changed. Calling
             # setScaledSize() on every repaint (shakes fire it ~20x/turn)
             # makes some Qt builds re-decode and visibly stutter.
