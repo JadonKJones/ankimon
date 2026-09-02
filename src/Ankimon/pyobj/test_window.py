@@ -18,7 +18,7 @@ from aqt.qt import (
 
 from aqt.utils import showWarning
 
-from PyQt6.QtGui import QIcon, QColor, QFontMetrics, QPainterPath, QMovie
+from PyQt6.QtGui import QIcon, QColor, QFontMetrics, QPainterPath, QMovie, QRegion
 from PyQt6.QtCore import QTimer, QRect, QSize
 
 from PyQt6.QtWidgets import (
@@ -174,6 +174,7 @@ class TestWindow(QWidget):
         self._main_gif_movie = None
         self._gif_native = {"enemy": None, "main": None}
         self._gif_scaled = {"enemy": None, "main": None}
+        self._opaque_cache = {}
         self._gif_sprite_key = {"enemy": None, "main": None}
         self._gif_geom = {"enemy": None, "main": None}
         self._gif_path_exists = {}
@@ -615,13 +616,42 @@ class TestWindow(QWidget):
             return False
         return self._gif_sprite_path(pokemon, sprite_side) is not None
 
-    def _stash_gif_geom(self, side, pokemon, sprite_side, x, y, w, h, fainted):
+    def _opaque_rect(self, pixmap):
+        """Bounding box of the non-transparent pixels of ``pixmap``.
+
+        The gen5 PNG sprites carry transparent padding — notably a tall
+        footer, so the visible sprite stands ~15-20px above the canvas
+        bottom. The animated GIF frames are cropped tight, so the overlay
+        must be placed against THIS rect (where the PNG art actually is),
+        not the full canvas, or the GIF ends up sitting too low.
+        """
+        key = pixmap.cacheKey()
+        cached = self._opaque_cache.get(key)
+        if cached is None:
+            try:
+                r = QRegion(pixmap.mask()).boundingRect()
+            except Exception:
+                r = QRect()
+            if not r.isValid() or r.isEmpty():
+                r = pixmap.rect()
+            cached = self._opaque_cache[key] = r
+        return cached
+
+    def _stash_gif_geom(self, side, pokemon, sprite_side, pixmap, x, y, w, h, fainted):
         """Record where this frame's composite left a hole for an animated
         overlay (or clear it). Consumed by _sync_gif_overlays() after the
-        pixmap is on screen."""
+        pixmap is on screen. The stashed rect is the PNG's *visible* content
+        box, so the GIF stands exactly where the static sprite would."""
         if self._use_gif_for(pokemon, sprite_side, fainted):
             path = self._gif_sprite_path(pokemon, sprite_side)
-            self._gif_geom[side] = (path, x, y, w, h)
+            opq = self._opaque_rect(pixmap)
+            self._gif_geom[side] = (
+                path,
+                x + opq.left(),
+                y + opq.top(),
+                opq.width(),
+                opq.height(),
+            )
         else:
             self._gif_geom[side] = None
 
@@ -717,19 +747,18 @@ class TestWindow(QWidget):
             # a 51px Cubchoo up to fill a 120px slot makes it blurry, oversized
             # and floating off the platform. Only scale DOWN, for the rare GIF
             # frame that is larger than the slot.
+            # (x, y, w, h) is the PNG's visible content box (see
+            # _stash_gif_geom). Fit the GIF frame into it aspect-preserved,
+            # never upscaling — the gen5ani GIFs are small and species-sized,
+            # so blowing a 51px Cubchoo up to a 120px slot looks wrong. Then
+            # centre it on that box and stand it on its bottom edge, i.e.
+            # exactly where the static sprite's feet were.
             nw_src, nh_src = self._gif_native.get(side) or (w, h)
             scale = min(w / nw_src, h / nh_src, 1.0)
             fw = max(1, int(nw_src * scale))
             fh = max(1, int(nh_src * scale))
             fx = x + (w - fw) // 2
-            # Stand the sprite on the slot's baseline, but never let it cross
-            # into the message box: the PNG slot bottom (y + h) sits ~10px
-            # below the box's top edge and the PNGs get away with it only
-            # because of their transparent footer padding — the tight-cropped
-            # GIF frames have none, so bottom-aligning them there pokes real
-            # pixels into the text box.
-            baseline = min(y + h, self._MESSAGE_BOX_RECT.top())
-            fy = baseline - fh
+            fy = y + (h - fh)
             # Only re-scale when the slot size actually changed. Calling
             # setScaledSize() on every repaint (shakes fire it ~20x/turn)
             # makes some Qt builds re-decode and visibly stutter.
@@ -816,8 +845,8 @@ class TestWindow(QWidget):
         enemy_y = (170 - wpkmn_height) + self._enemy_shake_offset[1]
         main_x = (144 - mpkmn_width) + self._main_shake_offset[0]
         main_y = (275 - mpkmn_height) + self._main_shake_offset[1]
-        self._stash_gif_geom("enemy", self.enemy_pokemon, "front", enemy_x, enemy_y, new_width, new_height, False)
-        self._stash_gif_geom("main", self.main_pokemon, "back", main_x, main_y, new_width2, new_height2, False)
+        self._stash_gif_geom("enemy", self.enemy_pokemon, "front", pixmap, enemy_x, enemy_y, new_width, new_height, False)
+        self._stash_gif_geom("main", self.main_pokemon, "back", pixmap2, main_x, main_y, new_width2, new_height2, False)
         if self._gif_geom["enemy"] is None:
             painter.drawPixmap(enemy_x, enemy_y, pixmap)
         if self._gif_geom["main"] is None:
@@ -1032,8 +1061,8 @@ class TestWindow(QWidget):
         enemy_y = (170 - wpkmn_height) + self._enemy_shake_offset[1]
         main_x = (144 - mpkmn_width) + self._main_shake_offset[0]
         main_y = (275 - mpkmn_height) + self._main_shake_offset[1]
-        self._stash_gif_geom("enemy", self.enemy_pokemon, "front", enemy_x, enemy_y, new_width, new_height, enemy_hp <= 0)
-        self._stash_gif_geom("main", self.main_pokemon, "back", main_x, main_y, new_width2, new_height2, main_hp <= 0)
+        self._stash_gif_geom("enemy", self.enemy_pokemon, "front", pixmap, enemy_x, enemy_y, new_width, new_height, enemy_hp <= 0)
+        self._stash_gif_geom("main", self.main_pokemon, "back", pixmap2, main_x, main_y, new_width2, new_height2, main_hp <= 0)
         if self._gif_geom["enemy"] is None:
             self._draw_pokemon_sprite(
                 painter, pixmap, enemy_x, enemy_y,
