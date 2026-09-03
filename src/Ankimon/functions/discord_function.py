@@ -5,7 +5,12 @@ import random
 import time
 from typing import TYPE_CHECKING
 
-from ..addon_files.lib.pypresence import Presence
+from ..addon_files.lib.pypresence import (
+    DiscordError,
+    Presence,
+    ResponseTimeout,
+    ServerError,
+)
 from ..events import events
 
 if TYPE_CHECKING:
@@ -24,7 +29,41 @@ def _show_discord_error(message: str) -> None:
         return
 
 
+def _run_on_main(callback) -> None:
+    """Run ``callback`` on Anki's GUI thread.
+
+    Qt widgets may only be created on the main thread, and anything routed
+    through ``logger_obj.log_and_showinfo`` ends in a ``QMessageBox``. The
+    presence worker is a plain daemon thread, so whatever it wants to show has
+    to hop over here first. Only a missing ``aqt`` falls back to running inline:
+    that is the headless case, where there is no GUI thread to violate. Anything
+    else — a half-built ``mw`` during a hot reload, say — is left to raise rather
+    than quietly doing the unsafe thing on the worker.
+    """
+    try:
+        from aqt import mw
+    except ImportError:
+        callback()
+        return
+    mw.taskman.run_on_main(callback)
+
+
 class DiscordPresence:
+    #: Seconds between connection attempts once one has failed.
+    RECONNECT_INTERVAL = 60
+    #: How long a UI-thread caller waits for the worker to finish an RPC
+    #: round-trip before skipping its own call. Deliberately short: these run on
+    #: Anki's main thread from the sync and reviewer hooks.
+    RPC_LOCK_TIMEOUT = 0.5
+    #: Errors that mean "this request failed", not "the pipe is dead".
+    #: ``read_output()`` raises ``ResponseTimeout`` when Discord is slow to reply
+    #: and ``ServerError`` / ``DiscordError`` on an error payload, all with the
+    #: socket still open; only ``BrokenPipeError`` / ``struct.error`` become
+    #: ``PipeClosed``. Deliberately no ``RuntimeError``: ``_rpc_lock`` makes the
+    #: "this event loop is already running" collision impossible, so the only
+    #: RuntimeError left here is "Event loop is closed", which is fatal.
+    TRANSIENT_RPC_ERRORS = (ResponseTimeout, ServerError, DiscordError)
+
     def __init__(
         self,
         client_id,
@@ -37,15 +76,16 @@ class DiscordPresence:
         self.loop = False
         self.logger_obj = logger
         self.connected = False
-        # Set every plain attribute BEFORE the RPC connect, which raises when
-        # Discord is not running. Previously they were assigned after connect(),
-        # so a failed connect left a half-built object whose start()/stop()/
-        # update_presence() then blew up with "no attribute 'settings'" /
-        # "no attribute 'large_image_url'".
+        # Every plain attribute is assigned here, before anything can fail, so a
+        # failed connect can never leave a half-built object whose start() /
+        # stop() / update_presence() then blow up with "no attribute 'settings'".
         self.RPC = None
         self.large_image_url = large_image_url
         self.ankimon_tracker: AnkimonTracker = ankimon_tracker
         self.settings = settings_obj
+        # Discord renders this as the "elapsed" timer, so it marks the study
+        # session and is stamped once. A reconnect must not reset it, or someone
+        # who has been reviewing for hours watches it snap back to 0:00.
         self.start_time = time.time()
         self.thread = None
         self.quotes = [
@@ -63,48 +103,137 @@ class DiscordPresence:
         self.state = random.choice(self.quotes)
         self._client_id = client_id
         self._checked_conflicts = False
-        # Throttle (re)connection attempts so a closed Discord doesn't make
-        # every answered card hammer the RPC socket. -inf => attempt on the
-        # first call; then at most once per RECONNECT_INTERVAL seconds.
+        self._first_attempt = True
+        # Monotonic, not wall clock: resuming from sleep or an NTP correction
+        # must not silently extend (or erase) the retry interval.
         self._last_connect_attempt = float("-inf")
-        self._connect(initial=True)
+        # pypresence drives one asyncio loop per client, and update() / clear()
+        # both call run_until_complete() on it. Two threads inside that loop
+        # raise "This event loop is already running" and leave the
+        # request/response stream off by one, so every RPC call takes this lock.
+        # Re-entrant because the failure paths drop the connection while holding
+        # it.
+        self._rpc_lock = threading.RLock()
+        # No connect here. setup_discord_hooks() builds this object at add-on
+        # import time on Anki's main thread, and pypresence's handshake reads
+        # (baseclient.handshake) have no timeout at all, so a Discord that
+        # accepts the socket and never replies would hang Anki's boot. The first
+        # start() worker does the initial connect instead.
 
-    RECONNECT_INTERVAL = 60  # seconds between reconnection attempts
+    def _connect_due(self) -> bool:
+        """Is another connection attempt allowed yet?
 
-    def _connect(self, initial: bool = False) -> bool:
-        """Try to open the RPC connection. Safe to call repeatedly: a no-op
-        when already connected, and rate-limited when not. Returns
-        ``self.connected``. This is what makes Discord opening *after* Anki
-        started still pick up — ``start()`` calls it on each review."""
+        ``start()`` checks this too, not just the worker, so a session spent
+        with Discord closed doesn't spawn a thread per answered card only for it
+        to fail this same test and exit.
+        """
+        if self.connected or self._first_attempt:
+            return True
+        return time.monotonic() - self._last_connect_attempt >= self.RECONNECT_INTERVAL
+
+    def _connect(self) -> bool:
+        """Open the RPC connection. A no-op when already connected, rate-limited
+        when not, and safe to call on every review — this is what makes Discord
+        opening *after* Anki started still get picked up.
+
+        Runs on the worker thread only.
+        """
         if self.connected:
             return True
-        now = time.time()
-        if not initial and now - self._last_connect_attempt < self.RECONNECT_INTERVAL:
+        if not self._connect_due():
             return False
-        self._last_connect_attempt = now
+        initial = self._first_attempt
+        self._first_attempt = False
         try:
-            self.RPC = Presence(self._client_id)
-            self.RPC.connect()
+            with self._rpc_lock:
+                rpc = Presence(self._client_id)
+                rpc.connect()
+                self.RPC = rpc
             self.connected = True
-            self.start_time = time.time()
         except Exception as e:
+            # Only a *failed* attempt arms the throttle. Stamping successful ones
+            # too would make a drop that happens seconds later sit out the whole
+            # interval before the first retry.
+            self._last_connect_attempt = time.monotonic()
             self.RPC = None
             self.connected = False
+            # "info" rather than "debug" for the quiet retries: InfoLogger has no
+            # debug branch, so a debug line is written nowhere and someone
+            # reporting "presence never came back" would have no record of them.
             self.logger_obj.log(
-                "error" if initial else "debug", f"Error with Discord setup: {e}"
+                "error" if initial else "info", f"Error with Discord setup: {e}"
             )
             if initial:
                 _show_discord_error("Error with Discord setup. Is Discord running?")
             return False
 
-        # First successful connection only: warn about conflicting add-ons.
+        # First successful connection only, and on the GUI thread: this method
+        # runs on the worker and the warning ends in a QMessageBox.
         if not self._checked_conflicts:
             self._checked_conflicts = True
+            _run_on_main(self._warn_conflicting_addons)
+        return True
+
+    def _warn_conflicting_addons(self):
+        """Warn about other add-ons driving Discord Rich Presence. Main thread
+        only — see ``_run_on_main``."""
+        try:
             conflicting_addons = check_conflicting_discord_addons()
             if conflicting_addons:
                 conflict_list = ', '.join(conflicting_addons)
                 self.logger_obj.log_and_showinfo("warning", f"⚠️ Conflicting Discord Rich Presence addons detected: \n{conflict_list}\n\nPlease remove them to avoid issues with Ankimon's Discord status, or turn off Discord Rich Presence in Ankimon settings :) ")
-        return True
+        except Exception as e:
+            self.logger_obj.log(
+                "error", f"Error warning about conflicting Discord addons: {e}"
+            )
+
+    def _drop_connection(self, close: bool = False):
+        """Release the RPC and mark the presence disconnected so the next
+        ``start()`` reconnects.
+
+        ``close=True`` also shuts the client down, which nothing in pypresence
+        does for us — dropping the reference alone leaves the socket and its two
+        event loops for the garbage collector. Only the worker asks for that:
+        ``Presence.close()`` writes to the pipe and closes the event loop, and on
+        Windows a pipe transport fails writes asynchronously, so it is not
+        something to run on the UI thread. Off the worker we settle for the GC.
+        """
+        with self._rpc_lock:
+            rpc, self.RPC = self.RPC, None
+            self.connected = False
+        if close and rpc is not None:
+            try:
+                rpc.close()
+            except Exception:
+                pass
+
+    def _main_thread_rpc(self, action, log_prefix, tooltip_message):
+        """Run one RPC call from a UI-thread hook.
+
+        Takes ``_rpc_lock`` so it cannot enter pypresence's asyncio loop while
+        the worker is already inside it — but only briefly. These run on Anki's
+        main thread during a sync or when the reviewer closes, so a busy worker
+        means we skip the call rather than stall the UI behind a round-trip.
+        """
+        if not self._rpc_lock.acquire(timeout=self.RPC_LOCK_TIMEOUT):
+            self.logger_obj.log(
+                "info", f"{log_prefix}: presence worker busy, skipped"
+            )
+            return
+        try:
+            if self.RPC is None:
+                return
+            action(self.RPC)
+        except Exception as e:
+            self.logger_obj.log("error", f"{log_prefix}: {e}")
+            if isinstance(e, self.TRANSIENT_RPC_ERRORS):
+                # The socket is still good; don't discard a working connection
+                # or alarm the user over one late reply.
+                return
+            self._drop_connection()
+            _show_discord_error(tooltip_message)
+        finally:
+            self._rpc_lock.release()
 
     def _get_special_quotes(self):
         return [
@@ -135,42 +264,55 @@ class DiscordPresence:
         """
         if not self.connected:
             return
-        try:
-            while self.loop:
-                self.RPC.update(
-                    state = random.choice(self.quotes) if int(self.settings.get("misc.discord_rich_presence_text")) == 1 else random.choice(self._get_special_quotes()),
-                    large_image=self.large_image_url,
-                    start=self.start_time
-                )
-                time.sleep(30)  # Sleep for 30 seconds before updating again
-        except Exception as e:
-            # Connection dropped (Discord was closed mid-session). Mark it so
-            # the next start() re-attempts instead of silently staying dead.
-            # Clear self.loop too: this worker thread is about to exit, and the
-            # reviewer hook only re-calls start() while loop is False.
-            self.loop = False
-            self.connected = False
-            self.RPC = None
-            self.logger_obj.log("error",f"Error with Discord Rich Presence: {e}")
-            _show_discord_error(
-                "Error with Discord Rich Presence. Is Discord running?"
-            )
+        while self.loop:
+            try:
+                with self._rpc_lock:
+                    if self.RPC is None:
+                        break
+                    self.RPC.update(
+                        state = random.choice(self.quotes) if int(self.settings.get("misc.discord_rich_presence_text")) == 1 else random.choice(self._get_special_quotes()),
+                        large_image=self.large_image_url,
+                        start=self.start_time
+                    )
+            except Exception as e:
+                self.logger_obj.log("error", f"Error with Discord Rich Presence: {e}")
+                if isinstance(e, self.TRANSIENT_RPC_ERRORS):
+                    # A slow reply or a server-side error: the pipe is still
+                    # open, so keep the worker and try again on the next tick.
+                    pass
+                else:
+                    # Connection dropped (Discord was closed mid-session). Clear
+                    # self.loop too: this worker is about to exit, and start()
+                    # decides what to do next.
+                    self.loop = False
+                    self._drop_connection(close=True)
+                    _show_discord_error(
+                        "Error with Discord Rich Presence. Is Discord running?"
+                    )
+                    return
+            # Outside the lock: holding it across the sleep would park every
+            # main-thread caller for up to 30 seconds.
+            time.sleep(30)  # Sleep for 30 seconds before updating again
 
     def start(self):
         """
-        Spawn the presence worker (idempotent).
+        Ensure the presence worker is running (idempotent).
 
-        The worker owns the RPC connection end to end — ``_connect()`` runs
-        inside it, not here — so this call never blocks the caller
-        (``reviewer_did_answer_card`` runs on the UI thread and the RPC
-        handshake can stall), and every write to ``connected`` / ``RPC`` /
-        ``start_time`` stays on that one worker thread, with no main-thread
-        ``_connect()`` racing the worker's own teardown.
+        The worker owns the connection: ``_connect()`` runs inside it, never
+        here, so answering a card is never blocked behind pypresence's untimed
+        handshake reads. Main-thread hooks still reach the RPC through
+        ``stop()`` / ``stop_presence()``, so every RPC access takes
+        ``_rpc_lock``.
         """
         try:
-            if self.loop:
-                return
             if self.thread is not None and self.thread.is_alive():
+                # A worker is still parked in its sleep. Re-arm the loop so it
+                # resumes on the next wake instead of exiting — this is what
+                # brings the presence back when someone leaves the reviewer and
+                # returns inside the same 30s window.
+                self.loop = True
+                return
+            if not self._connect_due():
                 return
             self.loop = True
             self.thread = threading.Thread(target=self._run, daemon=True)
@@ -183,12 +325,18 @@ class DiscordPresence:
             )
 
     def _run(self):
-        """Worker body: connect, then loop updating presence. Off the UI
-        thread so a slow/blocking RPC handshake can't stall a card answer."""
-        if not self._connect():
+        """Worker body: connect, then loop updating presence. Off the UI thread
+        so a slow or blocking RPC handshake can't stall a card answer."""
+        try:
+            if self._connect():
+                self.update_presence()
+        except Exception as e:
+            self.logger_obj.log(
+                "error", f"Error in Discord Rich Presence worker: {e}"
+            )
+        finally:
+            # Never leave a dead worker looking like a running one.
             self.loop = False
-            return
-        self.update_presence()
 
     def stop(self):
         """
@@ -197,21 +345,15 @@ class DiscordPresence:
         self.loop = False
         if not self.connected:
             return
-        try:
-            if hasattr(self, 'thread') and self.thread and self.thread.is_alive():
-                # self.thread.join() # Removed to prevent blocking
-                self.thread = None  # Reset the thread
-            self.RPC.clear()
-        except Exception as e:
-            # A failing clear() means the connection is already broken — drop
-            # it so the next start() reconnects instead of trusting a stale
-            # self.connected (matches update_presence()'s failure path).
-            self.connected = False
-            self.RPC = None
-            self.logger_obj.log("error",f"Error clearing Discord Rich Presence: {e}")
-            _show_discord_error(
-                "Error clearing Discord Rich Presence. Please check Logger for info."
-            )
+        # self.thread is deliberately NOT reset here. The worker may still be
+        # parked in its sleep, and nulling a live handle lets the next start()
+        # spawn a second worker beside it — two threads then share one asyncio
+        # loop and collide.
+        self._main_thread_rpc(
+            lambda rpc: rpc.clear(),
+            "Error clearing Discord Rich Presence",
+            "Error clearing Discord Rich Presence. Please check Logger for info.",
+        )
 
     def stop_presence(self):
         """
@@ -220,19 +362,14 @@ class DiscordPresence:
         self.loop = False
         if not self.connected:
             return
-        try:
-            if not self.loop:
-                self.RPC.update(
-                    state="Break time! You’ve earned it.",
-                    large_image=self.large_image_url
-                )
-        except Exception as e:
-            self.connected = False
-            self.RPC = None
-            self.logger_obj.log("error",f"Error stopping Discord Rich Presence: {e}")
-            _show_discord_error(
-                "Error stopping Discord Rich Presence. Please check Logger for info."
-            )
+        self._main_thread_rpc(
+            lambda rpc: rpc.update(
+                state="Break time! You’ve earned it.",
+                large_image=self.large_image_url,
+            ),
+            "Error stopping Discord Rich Presence",
+            "Error stopping Discord Rich Presence. Please check Logger for info.",
+        )
 
 def check_conflicting_discord_addons():
     """
