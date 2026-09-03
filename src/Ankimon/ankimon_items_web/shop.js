@@ -589,6 +589,45 @@
             equippedSection.classList.add('hidden');
         }
 
+        // Compatible Pokémon (TMs) — which of the player's Pokémon can learn it
+        const compatSection = document.getElementById('det-compat-section');
+        const compatList = document.getElementById('det-compat-list');
+        const compatLabel = document.getElementById('det-compat-label');
+        compatList.innerHTML = '';
+        if (item.is_tm && Array.isArray(item.compatible_pokemon)) {
+            compatSection.classList.remove('hidden');
+            if (item.compatible_pokemon.length === 0) {
+                compatLabel.textContent = 'Your Compatible Pokémon';
+                const empty = document.createElement('div');
+                empty.className = 'compat-empty';
+                empty.textContent = 'None of your Pokémon can learn this move.';
+                compatList.appendChild(empty);
+            } else {
+                compatLabel.textContent =
+                    'Your Compatible Pokémon (' + item.compatible_pokemon.length + ')';
+                item.compatible_pokemon.forEach((p) => {
+                    const chip = document.createElement('span');
+                    chip.className = 'compat-chip';
+                    const nm = document.createElement('span');
+                    nm.className = 'compat-name';
+                    nm.textContent = p.name;
+                    chip.appendChild(nm);
+                    if (p.species && p.species !== p.name) {
+                        chip.title = p.species + ' · Lv ' + (p.level || '?');
+                    }
+                    if (p.level) {
+                        const lv = document.createElement('span');
+                        lv.className = 'compat-lv';
+                        lv.textContent = 'Lv ' + p.level;
+                        chip.appendChild(lv);
+                    }
+                    compatList.appendChild(chip);
+                });
+            }
+        } else {
+            compatSection.classList.add('hidden');
+        }
+
         // Actions
         const actions = document.getElementById('det-actions');
         actions.innerHTML = '';

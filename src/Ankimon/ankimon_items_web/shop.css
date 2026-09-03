@@ -3709,3 +3709,40 @@ body {
     border-color: var(--accent-red);
 }
 
+.compat-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.compat-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--bg-darker);
+    border: 1px solid var(--border-main);
+    border-radius: 999px;
+    font-family: 'Outfit', sans-serif;
+}
+
+.compat-name {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--text-bright);
+}
+
+.compat-lv {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.compat-empty {
+    margin-top: 6px;
+    font-family: 'Outfit', sans-serif;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+

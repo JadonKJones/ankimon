@@ -83,6 +83,9 @@ from ..ankimon_profile_web.profile_data import ProfileData
 from ..services import services
 from ..events import events
 
+# species internal name -> [TM move names]; filled on first shop open.
+_TM_LEARNSET_CACHE = {}
+
 # NOTE: functions/mobile_sync.py is a later (mobile) unit and is intentionally
 # NOT a module-load dependency of the web-shell host. The MobileBridge slots
 # lazy-import it in-method and degrade to a benign/neutral payload when it is
@@ -1679,6 +1682,7 @@ class AnkimonItemsWeb(QDialog):
 
         # Find all equipped items from Pokemon
         equipped_by_map = {}
+        all_pokemons = []
         try:
             all_pokemons = services.db.get_all_pokemon() or []
             for pkm in all_pokemons:
@@ -1734,6 +1738,7 @@ class AnkimonItemsWeb(QDialog):
                     item_type=(shop_entry or {}).get("item_type"),
                     owned_quantity=(owned_entry or {}).get("quantity", 0),
                     equipped_instances=equipped_by_map.get(name, []),
+                    owned_pokemon=all_pokemons,
                 )
             )
 
@@ -1780,6 +1785,7 @@ class AnkimonItemsWeb(QDialog):
         item_type,
         owned_quantity,
         equipped_instances=None,
+        owned_pokemon=None,
     ):
         from ..localized_text import (
             item_name as _item_name,
@@ -1826,6 +1832,9 @@ class AnkimonItemsWeb(QDialog):
             )
             entry["move_pp"] = self._coerce_int(move.get("pp"))
             entry["move_damage_class"] = (move.get("category") or "").title() or None
+            entry["compatible_pokemon"] = self._tm_compatible_pokemon(
+                name, owned_pokemon or []
+            )
         else:
             entry["image_url"] = QUrl.fromLocalFile(
                 str(items_path / f"{name}.png")
@@ -1835,6 +1844,50 @@ class AnkimonItemsWeb(QDialog):
             )
 
         return entry
+
+    @staticmethod
+    def _tm_learnsets():
+        """species internal name -> [TM move names]. Loaded once per process."""
+        cache = _TM_LEARNSET_CACHE.get("data")
+        if cache is None:
+            try:
+                from ..resources import pokemon_tm_learnset_path
+
+                with open(pokemon_tm_learnset_path, "r", encoding="utf-8") as f:
+                    cache = json.load(f)
+            except Exception:
+                cache = {}
+            _TM_LEARNSET_CACHE["data"] = cache
+        return cache
+
+    def _tm_compatible_pokemon(self, move_name, owned_pokemon):
+        """Which of the player's Pokémon can be taught ``move_name`` via TM.
+
+        Deduped by species (nickname carried from the lowest-level copy so the
+        player can spot the one they'd actually teach), sorted by name.
+        """
+        learnsets = self._tm_learnsets()
+        if not learnsets:
+            return []
+        move = str(move_name).lower()
+        by_species = {}
+        for pkm in owned_pokemon:
+            species = str(pkm.get("name") or "").lower()
+            if not species:
+                continue
+            valid = learnsets.get(species) or learnsets.get(species.split("-")[0])
+            if not valid or move not in valid:
+                continue
+            level = pkm.get("level") or 0
+            prev = by_species.get(species)
+            if prev is None or level < prev["level"]:
+                nickname = (pkm.get("nickname") or "").strip()
+                by_species[species] = {
+                    "name": nickname or species.title(),
+                    "species": species.title(),
+                    "level": level,
+                }
+        return sorted(by_species.values(), key=lambda p: p["species"])
 
     def _categorize(self, name, is_tm):
         """Bucket items into the same groups the legacy bag exposed."""
