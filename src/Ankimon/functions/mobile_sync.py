@@ -1773,12 +1773,22 @@ def _run_mobile_battles_impl(
                 extra_defeated = extra_encounters * defeated_ratio
                 extra_caught_count = int(extra_encounters * caught_ratio)
 
-                est_exp = calc_experience(130, active_max_level)
-                try:
-                    est_exp = max(1, math.ceil(est_exp * choose_moves_penalty * lucky_egg_boost * xp_multiplier))
-                except TypeError:
-                    est_exp = 100
-                total_xp += int(extra_defeated * est_exp)
+                # XP for the extrapolated defeats: use the average actually
+                # observed across the simulated pool (total_xp so far is the
+                # sum of those defeats' real XP), not calc_experience(130,
+                # companion_level) — that hardcoded base-exp / wrong level
+                # routinely under- or over-shot the real resolve by ~2x, which
+                # is what makes the preview total feel "wrong" once you sync.
+                simulated_defeats = len(defeated_pokemon)
+                if simulated_defeats > 0:
+                    avg_xp_per_defeat = total_xp / simulated_defeats
+                else:
+                    avg_xp_per_defeat = calc_experience(130, active_max_level)
+                    try:
+                        avg_xp_per_defeat = max(1, math.ceil(avg_xp_per_defeat * choose_moves_penalty * lucky_egg_boost * xp_multiplier))
+                    except TypeError:
+                        avg_xp_per_defeat = 100
+                total_xp += int(extra_defeated * avg_xp_per_defeat)
             else:
                 encounters_count = resolved_encounters
         else:
