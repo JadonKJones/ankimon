@@ -868,8 +868,18 @@ def _run_mobile_battles_impl(
             tracker,
             day_cutoff
         )
-        cards_in_encounter = seed_idx + 1
-        temp_tracker = TempTracker(initial_reviews + cards_in_encounter)
+        # Tier/spawn selection in _generate_encounter reads
+        # tracker.get_total_reviews(). The mode=="all" resolve path feeds it the
+        # real cumulative resolved-review count (initial_reviews + resolved_count,
+        # then +1 per review). This replay path used
+        # (encounter_idx + 1) * cards_per_round instead, which drifts above the
+        # true count every time a battle lasts more than one turn (encounter_idx
+        # = resolved_reviews // cards_per_round keeps climbing while the real
+        # encounter count doesn't) — so replay and Resolve-All generated
+        # different enemies for the same queue and their win/loss results
+        # diverged. Match the "all" path, which generates each encounter once
+        # its first cards_per_round chunk has been counted into the tracker.
+        temp_tracker = TempTracker(initial_reviews + resolved_count + cards_per_round)
 
         enc_data = _generate_encounter(stable_max_level, temp_tracker, collected_ids, settings_obj, None)
         adjusted_level = max(1, active_max_level + (enc_data["level"] - stable_max_level))
