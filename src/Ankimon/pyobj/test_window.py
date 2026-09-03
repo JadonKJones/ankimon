@@ -18,7 +18,7 @@ from aqt.qt import (
 
 from aqt.utils import showWarning
 
-from PyQt6.QtGui import QIcon, QColor, QFontMetrics, QPainterPath, QMovie, QRegion
+from PyQt6.QtGui import QIcon, QColor, QFontMetrics, QPainterPath, QMovie, QRegion, QImage
 from PyQt6.QtCore import QTimer, QRect, QSize
 
 from PyQt6.QtWidgets import (
@@ -628,14 +628,37 @@ class TestWindow(QWidget):
         key = pixmap.cacheKey()
         cached = self._opaque_cache.get(key)
         if cached is None:
-            try:
-                r = QRegion(pixmap.mask()).boundingRect()
-            except Exception:
-                r = QRect()
-            if not r.isValid() or r.isEmpty():
-                r = pixmap.rect()
-            cached = self._opaque_cache[key] = r
+            cached = self._opaque_cache[key] = self._compute_opaque_rect(pixmap)
         return cached
+
+    @staticmethod
+    def _compute_opaque_rect(pixmap):
+        # Try the cheap route first (a QRegion off the alpha-derived mask).
+        try:
+            r = QRegion(pixmap.mask()).boundingRect()
+            if r.isValid() and not r.isEmpty() and r != pixmap.rect():
+                return r
+        except Exception:
+            pass
+        # Fall back to a direct alpha-channel scan — mask() can come back
+        # empty or full-canvas on some Qt builds, and silently using the full
+        # canvas is exactly the bug this method exists to avoid.
+        try:
+            img = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+            w, h = img.width(), img.height()
+            minx, miny, maxx, maxy = w, h, -1, -1
+            for yy in range(h):
+                for xx in range(w):
+                    if (img.pixel(xx, yy) >> 24) & 0xFF > 8:
+                        minx = xx if xx < minx else minx
+                        maxx = xx if xx > maxx else maxx
+                        miny = yy if yy < miny else miny
+                        maxy = yy if yy > maxy else maxy
+            if maxx >= minx and maxy >= miny:
+                return QRect(minx, miny, maxx - minx + 1, maxy - miny + 1)
+        except Exception:
+            pass
+        return pixmap.rect()
 
     def _stash_gif_geom(self, side, pokemon, sprite_side, pixmap, x, y, w, h, fainted):
         """Record where this frame's composite left a hole for an animated
