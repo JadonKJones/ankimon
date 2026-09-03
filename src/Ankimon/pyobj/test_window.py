@@ -781,7 +781,12 @@ class TestWindow(QWidget):
             fw = max(1, int(nw_src * scale))
             fh = max(1, int(nh_src * scale))
             fx = x + (w - fw) // 2
-            fy = y + (h - fh)
+            # Stand it on the content box's bottom edge (the PNG's feet), but
+            # hard-clamp so the sprite can never cross into the message box —
+            # a guaranteed constraint regardless of whether _opaque_rect
+            # measured the PNG padding correctly on this Qt build.
+            baseline = min(y + h, self._MESSAGE_BOX_RECT.top())
+            fy = baseline - fh
             # Only re-scale when the slot size actually changed. Calling
             # setScaledSize() on every repaint (shakes fire it ~20x/turn)
             # makes some Qt builds re-decode and visibly stutter.
@@ -789,6 +794,20 @@ class TestWindow(QWidget):
                 movie.setScaledSize(QSize(fw, fh))
                 self._gif_scaled[side] = (fw, fh)
             label.setGeometry(int(fx + ox), int(fy + oy), int(fw), int(fh))
+            _dbg = (side, x, y, w, h, fw, fh, ox, oy)
+            if getattr(self, "_gif_last_dbg", {}).get(side) != _dbg:
+                self._gif_last_dbg = getattr(self, "_gif_last_dbg", {})
+                self._gif_last_dbg[side] = _dbg
+                try:
+                    self.logger.log(
+                        "info",
+                        f"[gif] {side} label={label.geometry()} content=({x},{y},{w},{h}) "
+                        f"native={self._gif_native.get(side)} fit={fw}x{fh} origin=({ox},{oy}) "
+                        f"labelH={self.main_label.height()} pmH={self.main_label.pixmap().height()} "
+                        f"boxTop={self._MESSAGE_BOX_RECT.top()}",
+                    )
+                except Exception:
+                    pass
             label.raise_()
             label.show()
             if self.isVisible():
