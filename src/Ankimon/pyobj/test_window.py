@@ -756,6 +756,22 @@ class TestWindow(QWidget):
         else:
             # Reuse the last settled origin rather than a mid-layout bogus one.
             ox, oy = getattr(self, "_gif_origin", (0, 0))
+
+        # TEMP diagnostic: log only the anomalies that could cause the reported
+        # "jitters down-and-right at random" — a non-zero origin or a
+        # not-yet-settled layout while a gif overlay is on screen.
+        if has_gif and (ox or oy or not settled):
+            try:
+                self.logger.log(
+                    "info",
+                    f"[gifjit] deferred={_deferred} settled={settled} "
+                    f"origin=({ox},{oy}) labelWH=({self.main_label.width()},{self.main_label.height()}) "
+                    f"pmWH=({pm.width() if pm else None},{pm.height() if pm else None}) "
+                    f"shake=e{self._enemy_shake_offset}/m{self._main_shake_offset} "
+                    f"view={self.current_view}",
+                )
+            except Exception:
+                pass
         for side in ("enemy", "main"):
             geom = self._gif_geom.get(side)
             movie_attr = "_enemy_gif_movie" if side == "enemy" else "_main_gif_movie"
@@ -827,7 +843,22 @@ class TestWindow(QWidget):
             if self._gif_scaled.get(side) != (fw, fh):
                 movie.setScaledSize(QSize(fw, fh))
                 self._gif_scaled[side] = (fw, fh)
-            label.setGeometry(int(fx + ox), int(fy + oy), int(fw), int(fh))
+            gx, gy = int(fx + ox), int(fy + oy)
+            # TEMP diagnostic: flag a jump bigger than a shake step (±7,±3).
+            _prev = getattr(self, "_gifjit_pos", {}).get(side)
+            if _prev is not None and (abs(_prev[0] - gx) > 10 or abs(_prev[1] - gy) > 10):
+                try:
+                    self.logger.log(
+                        "info",
+                        f"[gifjit] {side} JUMP {_prev} -> ({gx},{gy}) "
+                        f"content=({x},{y},{w},{h}) fit=({fw},{fh}) origin=({ox},{oy}) "
+                        f"deferred={_deferred} settled={settled}",
+                    )
+                except Exception:
+                    pass
+            self._gifjit_pos = getattr(self, "_gifjit_pos", {})
+            self._gifjit_pos[side] = (gx, gy)
+            label.setGeometry(gx, gy, int(fw), int(fh))
             label.raise_()
             label.show()
             if self.isVisible():
