@@ -175,6 +175,7 @@ class TestWindow(QWidget):
         self._gif_native = {"enemy": None, "main": None}
         self._gif_scaled = {"enemy": None, "main": None}
         self._opaque_cache = {}
+        self._gif_origin = (0, 0)
         self._gif_sprite_key = {"enemy": None, "main": None}
         self._gif_geom = {"enemy": None, "main": None}
         self._gif_path_exists = {}
@@ -678,6 +679,14 @@ class TestWindow(QWidget):
         else:
             self._gif_geom[side] = None
 
+    def _deferred_gif_sync(self):
+        """QTimer.singleShot target — the window may be gone by the time it
+        fires, so swallow the dead-C++-object error."""
+        try:
+            self._sync_gif_overlays(_deferred=True)
+        except RuntimeError:
+            pass
+
     def _gif_pixmap_origin(self):
         """Top-left of the composited scene inside main_label — non-zero only
         if the label was stretched larger than the scene art."""
@@ -717,11 +726,36 @@ class TestWindow(QWidget):
         self._clear_gif_overlay("enemy")
         self._clear_gif_overlay("main")
 
-    def _sync_gif_overlays(self):
+    def _sync_gif_overlays(self, _deferred=False):
         """Place/animate the overlays from the geometry the last composite
         stashed in ``self._gif_geom``. Safe to call every repaint; a no-op
         when the feature is off or neither side has a usable .gif."""
-        ox, oy = self._gif_pixmap_origin()
+        has_gif = bool(self._gif_geom.get("enemy") or self._gif_geom.get("main"))
+
+        # This runs synchronously inside display_battle()/display_first_encounter,
+        # BEFORE Qt has re-laid-out main_label for the pixmap that was just set.
+        # main_label.width()/height() are therefore whatever the widget was last
+        # laid out at — a frame behind — so _gif_pixmap_origin() returns a bogus
+        # (ox, oy) and the overlay visibly jitters down-and-right for one frame
+        # every turn before the next paint corrects it. Only trust the origin
+        # once the label actually matches the scene pixmap; until then pin the
+        # overlay to (0, 0) (its resting origin) and re-run after layout.
+        pm = self.main_label.pixmap()
+        settled = (
+            pm is not None
+            and not pm.isNull()
+            and self.main_label.width() == pm.width()
+            and self.main_label.height() == pm.height()
+        )
+        if not settled and has_gif and not _deferred:
+            QTimer.singleShot(0, self._deferred_gif_sync)
+
+        if settled:
+            ox, oy = self._gif_pixmap_origin()
+            self._gif_origin = (ox, oy)
+        else:
+            # Reuse the last settled origin rather than a mid-layout bogus one.
+            ox, oy = getattr(self, "_gif_origin", (0, 0))
         for side in ("enemy", "main"):
             geom = self._gif_geom.get(side)
             movie_attr = "_enemy_gif_movie" if side == "enemy" else "_main_gif_movie"
@@ -794,20 +828,6 @@ class TestWindow(QWidget):
                 movie.setScaledSize(QSize(fw, fh))
                 self._gif_scaled[side] = (fw, fh)
             label.setGeometry(int(fx + ox), int(fy + oy), int(fw), int(fh))
-            _dbg = (side, x, y, w, h, fw, fh, ox, oy)
-            if getattr(self, "_gif_last_dbg", {}).get(side) != _dbg:
-                self._gif_last_dbg = getattr(self, "_gif_last_dbg", {})
-                self._gif_last_dbg[side] = _dbg
-                try:
-                    self.logger.log(
-                        "info",
-                        f"[gif] {side} label={label.geometry()} content=({x},{y},{w},{h}) "
-                        f"native={self._gif_native.get(side)} fit={fw}x{fh} origin=({ox},{oy}) "
-                        f"labelH={self.main_label.height()} pmH={self.main_label.pixmap().height()} "
-                        f"boxTop={self._MESSAGE_BOX_RECT.top()}",
-                    )
-                except Exception:
-                    pass
             label.raise_()
             label.show()
             if self.isVisible():
