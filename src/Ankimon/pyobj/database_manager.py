@@ -1324,6 +1324,11 @@ class AnkimonDB:
                 self.mark_as_caught(int(pokemon_id))
             except Exception as e:
                 self._log("error", f"Failed to mark saved pokemon as caught: {e}")
+            if pokemon_data.get("shiny"):
+                try:
+                    self.mark_shiny_owned(int(pokemon_id))
+                except Exception as e:
+                    self._log("error", f"Failed to mark saved pokemon as shiny-owned: {e}")
 
         return True
 
@@ -1535,6 +1540,11 @@ class AnkimonDB:
                 self.mark_as_caught(int(pokemon_id))
             except Exception as e:
                 self._log("error", f"Failed to mark saved main pokemon as caught: {e}")
+            if pokemon_data.get("shiny"):
+                try:
+                    self.mark_shiny_owned(int(pokemon_id))
+                except Exception as e:
+                    self._log("error", f"Failed to mark saved main pokemon as shiny-owned: {e}")
 
         return True
 
@@ -2252,20 +2262,50 @@ class AnkimonDB:
                 "warning", f"Pokedex reconcile: could not read pokemon_history: {e}"
             )
 
-        if not ids:
+        # Same idea for the shiny-owned registry: back-fill it from whatever
+        # currently-live/released rows still say shiny=1. Can't recover a
+        # pre-evolution's shiny status once its row has been overwritten (that
+        # is what mark_shiny_owned at evolve-time now prevents going forward),
+        # but this still heals a missed write and backfills DBs from before
+        # the registry existed.
+        shiny_ids: set = set()
+        try:
+            cursor = self.execute(
+                "SELECT DISTINCT pokedex_id FROM captured_pokemon "
+                "WHERE shiny = 1 AND pokedex_id IS NOT NULL"
+            )
+            shiny_ids.update(
+                self._coerce_pokedex_id_list([row[0] for row in cursor.fetchall()])
+            )
+        except Exception as e:
+            self._log("warning", f"Pokedex reconcile: could not read shiny captured_pokemon: {e}")
+        try:
+            cursor = self.execute(
+                "SELECT DISTINCT json_extract(data, '$.id') FROM pokemon_history "
+                "WHERE json_extract(data, '$.shiny') = 1"
+            )
+            shiny_ids.update(
+                self._coerce_pokedex_id_list([row[0] for row in cursor.fetchall()])
+            )
+        except Exception as e:
+            self._log("warning", f"Pokedex reconcile: could not read shiny pokemon_history: {e}")
+
+        if not ids and not shiny_ids:
             return
 
         sorted_ids = sorted(ids)
+        additions = {"pokedex_caught": sorted_ids, "pokedex_seen": sorted_ids}
+        if shiny_ids:
+            additions["pokedex_shiny"] = sorted(shiny_ids)
         with self._pokedex_lock:
-            added = self._append_pokedex_ids(
-                {"pokedex_caught": sorted_ids, "pokedex_seen": sorted_ids}
-            )
+            added = self._append_pokedex_ids(additions)
         if any(added.values()):
             self._log(
                 "info",
                 "Pokedex history reconciled from stored Pokemon: "
                 f"+{added.get('pokedex_caught', 0)} caught, "
-                f"+{added.get('pokedex_seen', 0)} seen.",
+                f"+{added.get('pokedex_seen', 0)} seen, "
+                f"+{added.get('pokedex_shiny', 0)} shiny.",
             )
 
     def get_caught_ids(self) -> set[int]:
@@ -2277,6 +2317,28 @@ class AnkimonDB:
     def get_seen_ids(self) -> set[int]:
         """Returns a set of all pokemon IDs marked as seen."""
         return set(self._coerce_pokedex_id_list(self.get_user_data("pokedex_seen", [])))
+
+    def mark_shiny_owned(self, pokemon_id: int):
+        """Marks a species as having been owned in its shiny form, for good.
+
+        Mirrors mark_as_caught, but for the Ankidex's shiny badge — that badge
+        was read live off ``captured_pokemon`` (``WHERE shiny = 1``), so a
+        shiny Pokemon that evolved lost its badge the moment its row's id
+        changed to the new species (the OLD species had never itself been
+        marked shiny-owned anywhere durable). Raises so a save-path caller can
+        log the same way mark_as_caught's callers do.
+        """
+        try:
+            pokemon_id = int(pokemon_id)
+        except (TypeError, ValueError):
+            self._log("warning", f"Ignoring non-numeric shiny pokedex id: {pokemon_id!r}")
+            return
+        with self._pokedex_lock:
+            self._append_pokedex_ids({"pokedex_shiny": (pokemon_id,)})
+
+    def get_shiny_ids(self) -> set[int]:
+        """Returns a set of all pokemon IDs ever owned in their shiny form."""
+        return set(self._coerce_pokedex_id_list(self.get_user_data("pokedex_shiny", [])))
 
     def get_all_user_data(self) -> Dict[str, Any]:
         """Retrieves all user data as a dictionary."""

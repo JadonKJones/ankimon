@@ -173,6 +173,66 @@ def test_mark_as_caught_records_both_lists(open_db):
     assert db.get_caught_ids() <= db.get_seen_ids()
 
 
+def test_mark_shiny_owned_records_the_registry(open_db):
+    """mark_shiny_owned persists independently of mark_as_caught/get_caught_ids
+    (mirrors the caught/seen split — see test_mark_as_caught_records_both_lists)."""
+    db = open_db()
+    db.mark_as_caught(25)
+    db.mark_shiny_owned(25)
+
+    assert db.get_shiny_ids() == {25}
+    assert db.get_caught_ids() == {25}
+
+
+def test_mark_shiny_owned_does_not_duplicate(open_db):
+    db = open_db()
+    for _ in range(3):
+        db.mark_shiny_owned(25)
+    db.mark_shiny_owned(26)
+
+    assert db.get_user_data("pokedex_shiny", []) == [25, 26]
+
+
+def test_mark_shiny_owned_non_numeric_id_is_ignored(open_db):
+    db = open_db()
+    db.mark_shiny_owned("not-an-id")
+
+    assert db.get_shiny_ids() == set()
+
+
+def test_save_pokemon_marks_shiny_only_for_shiny_field(open_db):
+    """The Ankidex's shiny badge was read live off captured_pokemon
+    (WHERE shiny = 1), so it vanished the moment a shiny mon's row changed id
+    (evolution). save_pokemon now also durably registers shiny-owned species,
+    same as it already does for caught/seen."""
+    db = open_db()
+    shiny_row = _pokemon("shiny-rat-uuid", 19, "Rattata")
+    shiny_row["shiny"] = True
+    db.save_pokemon(shiny_row)
+    db.save_pokemon(_pokemon("plain-rat-uuid", 20, "Raticate"))
+
+    assert db.get_shiny_ids() == {19}
+    assert db.get_caught_ids() == {19, 20}
+
+
+def test_startup_reconcile_backfills_shiny_registry(open_db, db_path):
+    """A database written before pokedex_shiny existed does not start empty."""
+    db = open_db()
+    shiny_row = _pokemon("shiny-bulba-uuid", 1, "Bulbasaur")
+    shiny_row["shiny"] = True
+    db.save_pokemon(shiny_row)
+    db.close()
+
+    # Simulate a pre-upgrade DB: the shiny mon exists, but pokedex_shiny does not.
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("DELETE FROM user_data WHERE key = 'pokedex_shiny'")
+    conn.commit()
+    conn.close()
+
+    healed = open_db()
+    assert 1 in healed.get_shiny_ids()
+
+
 def test_repeated_marks_do_not_duplicate(open_db):
     db = open_db()
     for _ in range(3):

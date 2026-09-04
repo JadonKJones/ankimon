@@ -405,6 +405,20 @@ class EvoWindow(QWidget):
                         f"Failed to mark pre-evolution {prevo_id} as caught; it will "
                         f"be missing from the Pokedex: {e}",
                     )
+            # Same reasoning, for the shiny badge: the Ankidex used to read
+            # "shiny owned" live off captured_pokemon (WHERE shiny = 1), so a
+            # shiny pre-evolution lost its badge the instant its own row's id
+            # became the evolved species below — nothing had ever durably
+            # recorded that the PRE-evolution itself was owned shiny.
+            if pokemon.get("shiny") and hasattr(db, "mark_shiny_owned"):
+                try:
+                    db.mark_shiny_owned(int(prevo_id))
+                except Exception as e:
+                    self.logger.log(
+                        "error",
+                        f"Failed to mark pre-evolution {prevo_id} as shiny-owned; its "
+                        f"Pokedex shiny badge will be lost: {e}",
+                    )
 
             pokemon["name"] = evo_name.capitalize()
             pokemon["id"] = evo_id

@@ -913,19 +913,26 @@ function getDisplayId(p) {
   return isBase ? p.species_id : p.actual_id;
 }
 
-function getSpritePath(id, mode = state.ui.spriteMode) {
+function getSpritePath(id, mode = state.ui.spriteMode, shiny = false) {
+  const shinyDir = shiny ? "shiny/" : "";
   if (mode === "animated")
-    return `../user_files/sprites/front_default_gif/${id}.gif`;
-  return `../user_files/sprites/front_default/${id}.png`;
+    return `../user_files/sprites/front_default_gif/${shinyDir}${id}.gif`;
+  return `../user_files/sprites/front_default/${shinyDir}${id}.png`;
 }
 
-function handleSpriteError(img, id, speciesId) {
+function handleSpriteError(img, id, speciesId, shiny = false) {
   if (img.src.endsWith(".gif")) {
-    img.src = `../user_files/sprites/front_default/${id}.png`;
+    img.src = getSpritePath(id, "static", shiny);
+    return;
+  }
+  if (shiny) {
+    // No shiny art downloaded for this id — fall back to the regular sprite
+    // rather than a plain question mark, same as the gif->static fallback.
+    img.src = getSpritePath(id, "static", false);
     return;
   }
   if (id !== speciesId) {
-    img.src = `../user_files/sprites/front_default/${speciesId}.png`;
+    img.src = getSpritePath(speciesId, "static", false);
     return;
   }
   if (!img.src.endsWith("0.png"))
@@ -1001,11 +1008,12 @@ function renderGrid() {
       card.querySelector(".card-name").textContent =
         visState >= 1 ? formatLoreName(p.name) : "???";
 
+      const isShiny = state.collection.shinies.has(id);
       const sprite = card.querySelector(".card-sprite img");
-      sprite.src = getSpritePath(id);
-      sprite.onerror = () => handleSpriteError(sprite, id, p.species_id);
+      sprite.src = getSpritePath(id, state.ui.spriteMode, isShiny);
+      sprite.onerror = () => handleSpriteError(sprite, id, p.species_id, isShiny);
 
-      if (state.collection.shinies.has(id))
+      if (isShiny)
         card.querySelector(".shiny-badge").classList.remove("hidden");
 
       const typeContainer = card.querySelector(".card-types");
@@ -1060,9 +1068,10 @@ function selectPokemon(id, cardElement = null) {
     `#${displayId.toString().padStart(4, "0")}`;
   document.getElementById("det-name").textContent =
     visState >= 1 ? formatLoreName(p.name) : "???";
+  const detShiny = state.collection.shinies.has(id);
   const sprite = document.getElementById("det-sprite");
-  sprite.src = getSpritePath(id);
-  sprite.onerror = () => handleSpriteError(sprite, id, p.species_id);
+  sprite.src = getSpritePath(id, state.ui.spriteMode, detShiny);
+  sprite.onerror = () => handleSpriteError(sprite, id, p.species_id, detShiny);
   renderAbilities(p, visState);
   if (visState === 0)
     sprite.style.filter = "brightness(0) invert(1) brightness(0.15)";
@@ -1158,9 +1167,10 @@ function renderBriefing(p, id, visState, displayId) {
   document.getElementById("briefing-name").textContent =
     visState >= 1 ? formatLoreName(p.name) : "???";
 
+  const briefingShiny = state.collection.shinies.has(id);
   const sprite = document.getElementById("briefing-sprite");
-  sprite.src = getSpritePath(id);
-  sprite.onerror = () => handleSpriteError(sprite, id, p.species_id);
+  sprite.src = getSpritePath(id, state.ui.spriteMode, briefingShiny);
+  sprite.onerror = () => handleSpriteError(sprite, id, p.species_id, briefingShiny);
   if (visState === 0)
     sprite.style.filter = "brightness(0) invert(1) brightness(0.15)";
   else if (visState === 1)

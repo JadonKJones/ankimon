@@ -195,11 +195,21 @@ def get_ankidex_data(db, settings, tracker=None):
     if tracker is not None:
         tracker.get_ids_in_collection()
 
-    # 1. Shiny owned
+    # 1. Shiny owned — currently-live shiny rows, unioned with the durable
+    # "ever owned shiny" registry (get_shiny_ids). Without the registry, a
+    # shiny Pokemon that evolved lost its badge the moment its captured_pokemon
+    # row's id changed to the new species: this query is live-only and the
+    # pre-evolution's shiny status had never been recorded anywhere durable.
     cursor = db.execute(
         "SELECT DISTINCT pokedex_id FROM captured_pokemon WHERE shiny = 1 AND pokedex_id IS NOT NULL"
     )
-    shiny_owned_ids = [row[0] for row in cursor.fetchall()]
+    shiny_owned_ids = {row[0] for row in cursor.fetchall()}
+    if hasattr(db, "get_shiny_ids"):
+        try:
+            shiny_owned_ids.update(db.get_shiny_ids())
+        except Exception:
+            pass
+    shiny_owned_ids = list(shiny_owned_ids)
 
     # 2. Caught status — currently owned
     cursor = db.execute(
