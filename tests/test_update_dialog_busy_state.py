@@ -86,6 +86,13 @@ def _load_update_dialog():
             # to import at collection time.
             "published_at_for_tag",
             "stamp_addon_mod",
+            # Git-checkout helpers. The default stub returns None, so
+            # is_git_clone() is falsy here and these tests keep exercising the
+            # non-Git download path.
+            "is_git_clone",
+            "get_git_checkout_info",
+            "git_checkout_source",
+            "fetch_branch_relation",
         ):
             setattr(update_manager, name, lambda *args, **kwargs: None)
         sys.modules["Ankimon.pyobj.update_manager"] = update_manager
@@ -231,6 +238,13 @@ def _make_dialog():
         _close_finalized=False,
         _sprites_busy_token=None,
         sprites_thread=None,
+        # Non-Git install: _run_update branches on _git_clone to choose between
+        # the download and the git-checkout path, and _git_info gates the
+        # fast-forward button. These fakes exercise the download path.
+        _git_clone=False,
+        _git_info={},
+        _git_remote_sha=None,
+        _git_ff_blocked=False,
     )
     dialog._action_buttons = types.MethodType(
         update_dialog.UpdateDialog._action_buttons, dialog
@@ -267,6 +281,33 @@ def test_busy_state_disables_all_actions_and_restores_prior_state():
         True,
     ]
     assert dialog.status_label.text == ""
+
+
+def test_git_pull_button_joins_the_busy_cycle_and_restores_its_gate():
+    # Git-checkout mode adds git_pull_btn. It must be disabled with the others
+    # while busy and come back to the state the checkout gate chose (disabled on
+    # a dirty or detached tree), because _end_busy restores from
+    # _action_button_states rather than re-deriving it.
+    dialog, _ = _make_dialog()
+    dialog._git_clone = True
+    dialog._git_info = {"branch": "main", "sha": "abc1234", "dirty": True}
+    dialog._git_remote_sha = "f" * 40
+    dialog._git_ff_blocked = False
+    dialog.git_pull_btn = _Control(True)
+    update_dialog.UpdateDialog._set_action_enabled(dialog, dialog.git_pull_btn, False)
+    assert dialog.git_pull_btn in dialog._action_buttons()
+
+    busy_token = update_dialog.UpdateDialog._begin_busy(dialog)
+    assert dialog.git_pull_btn.enabled is False
+    update_dialog.UpdateDialog._end_busy(dialog, busy_token)
+    assert dialog.git_pull_btn.enabled is False
+
+    # A clean, attached checkout is allowed to pull, and that survives a cycle.
+    update_dialog.UpdateDialog._set_action_enabled(dialog, dialog.git_pull_btn, True)
+    busy_token = update_dialog.UpdateDialog._begin_busy(dialog)
+    assert dialog.git_pull_btn.enabled is False
+    update_dialog.UpdateDialog._end_busy(dialog, busy_token)
+    assert dialog.git_pull_btn.enabled is True
 
 
 def test_overlapping_operations_keep_busy_and_apply_latest_button_states():
