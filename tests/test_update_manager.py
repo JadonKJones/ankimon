@@ -12,6 +12,7 @@ what the services-registry refactor targets.)
 
 import importlib.util
 import json
+import os
 import sys
 import time
 import types
@@ -171,7 +172,7 @@ def test_apply_update_refuses_on_git_clone_and_cleans_zip(tmp_path, monkeypatch)
     assert not dummy_zip.exists()  # guard cleaned up the downloaded archive
 
 
-# --- git_pull_ff_only --------------------------------------------------------
+# --- git helpers fakes -------------------------------------------------------
 
 class _FakeProc:
     def __init__(self, returncode=0, stdout="", stderr=""):
@@ -185,111 +186,6 @@ def _fake_git(responses):
     def _run(cmd, **kwargs):
         return responses.get(cmd[3], _FakeProc(0))
     return _run
-
-
-def test_git_pull_reports_not_a_clone(monkeypatch):
-    monkeypatch.setattr(um, "_git_repo_root", lambda: None)
-    ok, msg = um.git_pull_ff_only()
-    assert ok is False
-    assert "not running from a git checkout" in msg.lower()
-
-
-def test_git_pull_handles_git_missing_from_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(um, "_git_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(um.shutil, "which", lambda _name: None)
-    ok, msg = um.git_pull_ff_only()
-    assert ok is False
-    assert "path" in msg.lower()
-
-
-def test_git_pull_success_names_the_branch(tmp_path, monkeypatch):
-    monkeypatch.setattr(um, "_git_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(um.shutil, "which", lambda _name: "/usr/bin/git")
-    monkeypatch.setattr(um.subprocess, "run", _fake_git({
-        "rev-parse": _FakeProc(0, "main\n"),
-        "pull": _FakeProc(0, "Updating 111..222\n"),
-        "submodule": _FakeProc(0, ""),
-    }))
-    ok, msg = um.git_pull_ff_only()
-    assert ok is True
-    assert "main" in msg
-
-
-def test_git_pull_ff_failure_is_safe(tmp_path, monkeypatch):
-    monkeypatch.setattr(um, "_git_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(um.shutil, "which", lambda _name: "/usr/bin/git")
-    monkeypatch.setattr(um.subprocess, "run", _fake_git({
-        "rev-parse": _FakeProc(0, "feature\n"),
-        "pull": _FakeProc(1, "", "fatal: Not possible to fast-forward, aborting."),
-    }))
-    ok, msg = um.git_pull_ff_only()
-    assert ok is False
-    assert "fast-forward" in msg.lower()
-
-
-def test_git_pull_refuses_dirty_tree(tmp_path, monkeypatch):
-    monkeypatch.setattr(um, "_git_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(um.shutil, "which", lambda _name: "/usr/bin/git")
-    monkeypatch.setattr(
-        um.subprocess,
-        "run",
-        _fake_git({"status": _FakeProc(0, " M src/Ankimon/example.py\n")}),
-    )
-
-    ok, msg = um.git_pull_ff_only()
-
-    assert ok is False
-    assert "local changes" in msg.lower()
-
-
-def test_git_dirty_checks_ignore_untracked_files(tmp_path, monkeypatch):
-    # Untracked files can't be "committed, stashed, or discarded" the way the
-    # refusal message says, and git itself refuses to clobber them on checkout.
-    # Both helpers and the banner query must ask git to leave them out.
-    monkeypatch.setattr(um, "_git_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(um.shutil, "which", lambda _name: "/usr/bin/git")
-    status_calls = []
-
-    def _run(cmd, **kwargs):
-        if cmd[3] == "status":
-            status_calls.append(cmd[3:])
-            # A real git honoring --untracked-files=no prints nothing here.
-            return _FakeProc(0, "" if "--untracked-files=no" in cmd else "?? scratch.py\n")
-        if cmd[3] == "rev-parse" and "--abbrev-ref" in cmd:
-            return _FakeProc(0, "main\n")
-        if cmd[3] == "rev-parse":
-            return _FakeProc(0, "0123456789abcdef0123456789abcdef01234567\n")
-        return _FakeProc(0, "")
-
-    monkeypatch.setattr(um.subprocess, "run", _run)
-
-    ok, _ = um.git_pull_ff_only()
-    assert ok is True
-    ok, _ = um.git_checkout_source("tag", "v2.0")
-    assert ok is True
-    info = um.get_git_checkout_info()
-    assert info["dirty"] is False
-    assert info["branch"] == "main"
-    assert info["full_sha"] == "0123456789abcdef0123456789abcdef01234567"
-    assert info["sha"] == "0123456"
-
-    assert status_calls, "every path must run git status"
-    assert all("--untracked-files=no" in c for c in status_calls)
-
-
-def test_git_pull_refuses_detached_checkout(tmp_path, monkeypatch):
-    monkeypatch.setattr(um, "_git_repo_root", lambda: tmp_path)
-    monkeypatch.setattr(um.shutil, "which", lambda _name: "/usr/bin/git")
-    monkeypatch.setattr(
-        um.subprocess,
-        "run",
-        _fake_git({"rev-parse": _FakeProc(0, "HEAD\n")}),
-    )
-
-    ok, msg = um.git_pull_ff_only()
-
-    assert ok is False
-    assert "detached" in msg.lower()
 
 
 # --- git_checkout_source -----------------------------------------------------
@@ -480,12 +376,18 @@ def test_git_checkout_source_reattach_is_atomic_against_real_git(tmp_path, monke
     if not um.shutil.which("git"):
         pytest.skip("git not installed")
 
+    # Hermetic: a contributor's global config (commit.gpgsign, hooks, default
+    # branch) must not be able to fail this test.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
     def git(cwd, *args):
         return sp.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True)
 
     canonical = tmp_path / "canonical"
     canonical.mkdir()
-    git(canonical, "init", "-q", "-b", "main")
+    git(canonical, "init", "-q")
+    git(canonical, "symbolic-ref", "HEAD", "refs/heads/main")
     git(canonical, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base")
     clone = tmp_path / "clone"
     git(tmp_path, "clone", "-q", str(canonical), str(clone))

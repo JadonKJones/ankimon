@@ -243,6 +243,8 @@ def _make_dialog():
         # fast-forward button. These fakes exercise the download path.
         _git_clone=False,
         _git_info={},
+        _git_remote_sha=None,
+        _git_ff_blocked=False,
     )
     dialog._action_buttons = types.MethodType(
         update_dialog.UpdateDialog._action_buttons, dialog
@@ -289,6 +291,8 @@ def test_git_pull_button_joins_the_busy_cycle_and_restores_its_gate():
     dialog, _ = _make_dialog()
     dialog._git_clone = True
     dialog._git_info = {"branch": "main", "sha": "abc1234", "dirty": True}
+    dialog._git_remote_sha = "f" * 40
+    dialog._git_ff_blocked = False
     dialog.git_pull_btn = _Control(True)
     update_dialog.UpdateDialog._set_action_enabled(dialog, dialog.git_pull_btn, False)
     assert dialog.git_pull_btn in dialog._action_buttons()

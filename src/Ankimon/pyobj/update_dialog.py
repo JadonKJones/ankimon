@@ -73,6 +73,10 @@ class UpdateDialog(QDialog):
         self.sprites_thread = None
         self._git_clone = is_git_clone()
         self._git_info = get_git_checkout_info() if self._git_clone else {}
+        # Canonical tip of the checked-out branch, learned by _load_data. Starts as
+        # "unknown": an empty string is truthy-safe but distinct from None.
+        self._git_remote_sha = "" if self._git_clone else None
+        self._git_ff_blocked = False
 
         self._apply_theme()
 
@@ -144,7 +148,18 @@ class UpdateDialog(QDialog):
 
     def _git_pull_allowed(self) -> bool:
         info = self._git_info
-        return bool(info.get("branch")) and info.get("branch") != "HEAD" and not info.get("dirty")
+        return (
+            bool(info.get("branch"))
+            and info.get("branch") != "HEAD"
+            and not info.get("dirty")
+            # "current" fetches the checked-out branch from the Ankimon repository;
+            # a local-only or fork branch can only fail. Unknown until _load_data
+            # has asked, so the button starts enabled and busy covers the wait.
+            and self._git_remote_sha is not None
+            # ...and the Branch tab's verdict: when the canonical branch is known
+            # to be behind or diverged a fast-forward cannot succeed either.
+            and not self._git_ff_blocked
+        )
 
     def _apply_git_pull_state(self):
         # Route through _set_action_enabled so _action_button_states records the
@@ -163,6 +178,9 @@ class UpdateDialog(QDialog):
         """Re-read the checkout after a Git operation moved it and redraw
         everything derived from it (banner, pull button, Branch tab)."""
         self._git_info = get_git_checkout_info()
+        # Both describe a different branch now; _load_data re-asks.
+        self._git_remote_sha = None
+        self._git_ff_blocked = False
         self._git_note.setText(self._git_banner_html())
         self._apply_git_pull_state()
         self._load_data()
@@ -578,6 +596,12 @@ class UpdateDialog(QDialog):
 
         # 5. Status & Update Button
         relation = state.get("git_relation") if self._git_clone else None
+        if self._git_clone:
+            # The banner's pull button runs the same fast-forward as this tab's
+            # button, so it follows the same verdict.
+            self._git_remote_sha = remote_sha
+            self._git_ff_blocked = relation in ("behind", "diverged")
+            self._apply_git_pull_state()
         if self._git_clone and active == "detached":
             self.brrr_status_label.setText(
                 "Status:  Detached checkout. Pick a branch, release, tag, or PR "
@@ -602,7 +626,8 @@ class UpdateDialog(QDialog):
             self.brrr_update_btn.setText("Checkout Has Local Changes")
         elif not remote_sha:
             self.brrr_status_label.setText(
-                f"Status:  Branch '{active}' was not found on the Ankimon repository."
+                f"Status:  Branch '{active}' was not found on the Ankimon repository "
+                "(or it could not be reached)."
                 if self._git_clone
                 else "Status:  Could not check connection."
             )
@@ -610,16 +635,19 @@ class UpdateDialog(QDialog):
                 f"font-size: 13px; font-weight: bold; color: {c['error']};"
             )
             self._set_action_enabled(self.brrr_update_btn, False)
-        elif self._git_clone and local_sha != remote_sha and relation != "ahead":
+            if self._git_clone:
+                self.brrr_update_btn.setText("Branch Not on Ankimon Repository")
+        elif self._git_clone and local_sha != remote_sha and relation in ("behind", "diverged"):
             # A SHA mismatch is not an update when the local branch is the one
-            # that is ahead (or has diverged, or holds unpushed commits GitHub
-            # cannot compare): a fast-forward is impossible, so don't offer it.
+            # that is ahead or has diverged: a fast-forward is impossible, so
+            # don't offer it. An UNKNOWN relation (rate limit, offline, a local
+            # commit GitHub has never seen) falls through and offers it instead:
+            # git_checkout_source proves ancestry before moving anything, and
+            # the UI must not state a reason it cannot know.
             if relation == "behind":
                 why = f"Your checkout is ahead of '{active}' on the Ankimon repository."
-            elif relation == "diverged":
-                why = f"Your checkout has diverged from '{active}' on the Ankimon repository."
             else:
-                why = "Your checkout has commits that are not on the Ankimon repository."
+                why = f"Your checkout has diverged from '{active}' on the Ankimon repository."
             self.brrr_status_label.setText(f"Status:  {why}")
             self.brrr_status_label.setStyleSheet(
                 f"font-size: 13px; font-weight: bold; color: {c['warning']};"

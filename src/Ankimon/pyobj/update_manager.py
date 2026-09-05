@@ -150,84 +150,6 @@ def get_git_checkout_info() -> dict:
     return info
 
 
-def git_pull_ff_only(status_cb=None) -> tuple[bool, str]:
-    """Update a dev clone via ``git pull --ff-only`` (+ submodule update).
-
-    Safe by construction: ``--ff-only`` refuses, without changing anything, when
-    the tree is dirty or the branch has diverged — so it never creates merge
-    conflicts. Returns ``(success, message)``.
-    """
-
-    def log(msg):
-        if status_cb:
-            status_cb(msg)
-
-    root = _git_repo_root()
-    if root is None:
-        return False, "Ankimon is not running from a git checkout."
-
-    if shutil.which("git") is None:
-        return False, (
-            "git wasn't found on Anki's PATH. This is common when Anki is "
-            "launched from the dock/Finder, which doesn't inherit your shell "
-            "PATH. Restart Anki from a terminal, or run 'git pull' in your "
-            "clone yourself."
-        )
-
-    def _git(*args, timeout=180):
-        return subprocess.run(
-            ["git", "-C", str(root), *args],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-
-    try:
-        # Only tracked modifications count as "dirty": untracked files (scratch
-        # scripts, editor droppings) can't be committed or stashed by the message
-        # below, and git itself refuses to overwrite them on a checkout.
-        status = _git("status", "--porcelain", "--untracked-files=no", timeout=30)
-        if status.returncode != 0:
-            return False, (status.stderr or status.stdout or "git status failed").strip()
-        if status.stdout.strip():
-            return False, (
-                "Your Ankimon checkout has local changes. Commit, stash, or discard "
-                "them before updating from the updater."
-            )
-
-        branch = (
-            _git("rev-parse", "--abbrev-ref", "HEAD", timeout=30).stdout or ""
-        ).strip() or "HEAD"
-        if branch == "HEAD":
-            return False, (
-                "This checkout is detached. Select a branch, release, tag, or PR in "
-                "the updater instead of pulling the current checkout."
-            )
-        log(f"Fast-forwarding '{branch}' (git pull --ff-only)...")
-        pull = _git("pull", "--ff-only")
-        if pull.returncode != 0:
-            err = (pull.stderr or pull.stdout or "").strip()
-            return False, (
-                f"Could not fast-forward '{branch}'. This is expected if you "
-                "have local changes/commits or no upstream — resolve it manually "
-                "with git.\n\n" + err
-            )
-        log("Updating submodules...")
-        sub = _git("submodule", "update", "--init", "--recursive")
-        out = (pull.stdout or "").strip()
-        if sub.returncode != 0:
-            return True, (
-                f"Updated '{branch}', but the submodule update failed — run "
-                "'git submodule update --init --recursive' manually.\n\n"
-                + (sub.stderr or "").strip()
-            )
-        return True, f"Updated '{branch}' via git pull --ff-only.\n\n{out}"
-    except subprocess.TimeoutExpired:
-        return False, "git timed out. Update manually with 'git pull'."
-    except Exception as e:
-        return False, f"git update failed: {e}. Update manually with 'git pull'."
-
-
 def git_checkout_source(
     source_type: str,
     source_name: Optional[str] = None,
@@ -276,7 +198,9 @@ def git_checkout_source(
                 )
             source_type, source_name = "branch", branch
 
-        # Tracked modifications only; see git_pull_ff_only for why.
+        # Only tracked modifications count as "dirty": untracked files (scratch
+        # scripts, editor droppings) can't be committed or stashed as the message
+        # below asks, and git itself refuses to overwrite them on a checkout.
         status = _git("status", "--porcelain", "--untracked-files=no", timeout=30)
         if status.returncode != 0:
             return False, (status.stderr or status.stdout or "git status failed").strip()
