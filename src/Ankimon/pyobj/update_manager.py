@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.request
 import urllib.error
 import zipfile
@@ -84,8 +85,11 @@ def _git_repo_root() -> Optional[Path]:
         # layouts ".git" is a *file* (containing "gitdir: ..."), not a directory.
         if not (d / ".git").exists():
             continue
+        # samefile (inode identity) rather than comparing resolved path strings:
+        # resolve() does not fold case, so a mis-cased symlink on macOS/Windows
+        # would compare unequal and hand a real checkout to the archive updater.
         try:
-            if (d / "src" / "Ankimon").resolve() == base:
+            if os.path.samefile(d / "src" / "Ankimon", base):
                 return d
         except OSError:
             pass
@@ -116,15 +120,18 @@ def get_git_checkout_info() -> dict:
     if root is None or shutil.which("git") is None:
         return info
 
-    # Called synchronously while the updater dialog is being built, so keep the
-    # worst case short: on a timeout the banner shows "unknown" and the checkout
-    # helpers re-run their own (authoritative) checks before touching anything.
+    # Called synchronously while the updater dialog is being built, so the three
+    # probes share ONE 10s budget: on a timeout the banner shows "unknown" and the
+    # checkout helpers re-run their own (authoritative) checks before touching
+    # anything.
+    deadline = time.monotonic() + 10
+
     def _git(*args):
         return subprocess.run(
             ["git", "-C", str(root), *args],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=max(0.5, deadline - time.monotonic()),
         )
 
     try:
@@ -228,10 +235,16 @@ def git_checkout_source(
 ) -> tuple[bool, str]:
     """Safely move a Git checkout to a branch, PR, tag, or release.
 
+    Every source is fetched from the official Ankimon repository (not the
+    checkout's own ``origin``, which for a contributor is their fork), so what the
+    dialog compared against is what gets installed. ``"current"`` means the
+    checked-out branch and is refused on a detached HEAD.
+
     Existing local branches and commits are never reset. An existing local branch
-    is reattached and fast-forwarded from the official repository; PRs, tags,
-    releases, and branches without a local counterpart are checked out detached.
-    A dirty working tree is refused before any checkout, and submodules are synced.
+    is reattached and fast-forwarded; that is refused up front, before HEAD moves,
+    when the local branch has commits the remote lacks. PRs, tags, releases, and
+    branches without a local counterpart are checked out detached. A dirty working
+    tree is refused before any checkout, and submodules are synced.
     """
 
     def log(msg):
@@ -254,7 +267,14 @@ def git_checkout_source(
 
     try:
         if source_type == "current":
-            return git_pull_ff_only(status_cb=status_cb)
+            head = _git("rev-parse", "--abbrev-ref", "HEAD", timeout=30)
+            branch = (head.stdout or "").strip() if head.returncode == 0 else ""
+            if not branch or branch == "HEAD":
+                return False, (
+                    "This checkout is detached. Select a branch, release, tag, or PR "
+                    "in the updater instead of updating the current checkout."
+                )
+            source_type, source_name = "branch", branch
 
         # Tracked modifications only; see git_pull_ff_only for why.
         status = _git("status", "--porcelain", "--untracked-files=no", timeout=30)
@@ -296,6 +316,26 @@ def git_checkout_source(
                 timeout=30,
             )
             if local_branch.returncode == 0:
+                # Prove the fast-forward BEFORE moving HEAD: a refusal must leave
+                # the checkout exactly as it was, not parked on another branch
+                # with an "Update Failed" box on screen.
+                ancestor = _git(
+                    "merge-base", "--is-ancestor",
+                    f"refs/heads/{source_name}", checkout_ref,
+                    timeout=30,
+                )
+                if ancestor.returncode == 1:
+                    return False, (
+                        f"Local branch '{source_name}' has commits that are not on "
+                        "the Ankimon repository, so it cannot be fast-forwarded. "
+                        "Nothing was changed. Push or rebase it, or pick another source."
+                    )
+                if ancestor.returncode != 0:
+                    return False, (
+                        f"Could not compare local branch '{source_name}' with the "
+                        "Ankimon repository. Nothing was changed.\n\n"
+                        + (ancestor.stderr or ancestor.stdout or "Unknown git error").strip()
+                    )
                 checkout = _git("checkout", source_name)
                 if checkout.returncode != 0:
                     return False, (
@@ -305,9 +345,11 @@ def git_checkout_source(
                 log(f"Fast-forwarding local branch '{source_name}'...")
                 merge = _git("merge", "--ff-only", checkout_ref)
                 if merge.returncode != 0:
+                    # Can only happen if the tree changed under us between the
+                    # ancestry check and here; say exactly where HEAD is now.
                     return False, (
-                        f"Local branch '{source_name}' could not be fast-forwarded. "
-                        "Your commits were left unchanged.\n\n"
+                        f"Branch '{source_name}' is now checked out but could not be "
+                        "fast-forwarded; its commits were left unchanged.\n\n"
                         + (merge.stderr or merge.stdout or "Unknown git merge error").strip()
                     )
                 checkout_ref = None
@@ -334,8 +376,7 @@ def git_checkout_source(
         sha = _git("rev-parse", "--short", "HEAD", timeout=30)
         sha_text = sha.stdout.strip() if sha.returncode == 0 else "the selected commit"
         return True, (
-            f"{operation} {display} at {sha_text}. Local commits were not rewritten. "
-            "Please restart Anki."
+            f"{operation} {display} at {sha_text}. Local commits were not rewritten."
         )
     except subprocess.TimeoutExpired:
         return False, "git timed out while switching the Ankimon checkout."
@@ -620,6 +661,21 @@ def fetch_commit_date(sha: str) -> Optional[str]:
     if not sha or len(sha) < 7 or not all(c in "0123456789abcdefABCDEF" for c in sha):
         return None
     return fetch_ref_date(sha)
+
+
+def fetch_branch_relation(local_sha: str, branch: str) -> Optional[str]:
+    """How the remote ``branch`` tip relates to ``local_sha`` (GitHub compare API).
+
+    ``"ahead"``: the remote has commits the local commit lacks (an update is
+    available); ``"behind"``: the local commit is ahead of the remote;
+    ``"identical"``; ``"diverged"``. ``None`` when the comparison is unavailable,
+    which includes a local commit GitHub has never seen (unpushed work).
+    """
+    if not local_sha or not branch:
+        return None
+    data = _api_get(f"compare/{local_sha}...{branch}")
+    status = data.get("status") if isinstance(data, dict) else None
+    return status if status in {"ahead", "behind", "identical", "diverged"} else None
 
 
 def fetch_branch_commits(branch: str, local_sha: Optional[str] = None) -> list[dict]:

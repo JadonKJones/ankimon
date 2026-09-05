@@ -123,15 +123,52 @@ class UpdateDialog(QDialog):
         layout.addLayout(body)
         self._load_data()
 
-    def _build_git_notice(self):
+    def _git_banner_html(self) -> str:
+        import html
+
         c = self._colors
         info = self._git_info
         branch = info.get("branch") or "unknown"
         sha = info.get("sha") or "unknown"
-        detached = branch == "HEAD"
-        display_branch = "detached checkout" if detached else branch
+        display_branch = "detached checkout" if branch == "HEAD" else branch
         state = "local changes" if info.get("dirty") else "clean"
         state_color = c["warning"] if info.get("dirty") else c["success"]
+        # Branch names may legally contain <, > and &; QLabel renders rich text.
+        return (
+            f"<b>{html.escape(display_branch)}</b> · <code>{html.escape(sha)}</code> · "
+            f"<span style='color:{state_color}'><b>{state}</b></span><br>"
+            "Use the same Releases and Developer tabs below. Git fetches the "
+            "selected source from the Ankimon repository and checks it out "
+            "without resetting local branches."
+        )
+
+    def _git_pull_allowed(self) -> bool:
+        info = self._git_info
+        return bool(info.get("branch")) and info.get("branch") != "HEAD" and not info.get("dirty")
+
+    def _apply_git_pull_state(self):
+        # Route through _set_action_enabled so _action_button_states records the
+        # intended state: _end_busy restores from that map, and a plain
+        # setEnabled() would let the button come back enabled after an update
+        # even on a detached or dirty checkout.
+        allowed = self._git_pull_allowed()
+        self._set_action_enabled(self.git_pull_btn, allowed)
+        self.git_pull_btn.setToolTip(
+            "Fast-forward the checked-out branch from the Ankimon repository."
+            if allowed
+            else "Unavailable while detached or while the checkout has local changes."
+        )
+
+    def _refresh_git_state(self):
+        """Re-read the checkout after a Git operation moved it and redraw
+        everything derived from it (banner, pull button, Branch tab)."""
+        self._git_info = get_git_checkout_info()
+        self._git_note.setText(self._git_banner_html())
+        self._apply_git_pull_state()
+        self._load_data()
+
+    def _build_git_notice(self):
+        c = self._colors
 
         group = QGroupBox("Git Workspace Mode")
         group.setStyleSheet(f"""
@@ -152,29 +189,13 @@ class UpdateDialog(QDialog):
         """)
         row = QHBoxLayout(group)
 
-        note = QLabel(
-            f"<b>{display_branch}</b> · <code>{sha}</code> · "
-            f"<span style='color:{state_color}'><b>{state}</b></span><br>"
-            "Use the same Releases and Developer tabs below. Git fetches the "
-            "selected source and checks it out without resetting local branches."
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet(f"font-size: 11px; color: {c['text']};")
-        row.addWidget(note, 1)
+        self._git_note = QLabel(self._git_banner_html())
+        self._git_note.setWordWrap(True)
+        self._git_note.setStyleSheet(f"font-size: 11px; color: {c['text']};")
+        row.addWidget(self._git_note, 1)
 
         self.git_pull_btn = QPushButton("Fast-forward Current Branch")
-        # Route through _set_action_enabled so _action_button_states records the
-        # intended state: _end_busy restores from that map, and a plain
-        # setEnabled() would let the button come back enabled after an update
-        # even on a detached or dirty checkout.
-        self._set_action_enabled(
-            self.git_pull_btn, not detached and not info.get("dirty")
-        )
-        self.git_pull_btn.setToolTip(
-            "Unavailable while detached or while the checkout has local changes."
-            if not self.git_pull_btn.isEnabled()
-            else "Run git pull --ff-only on the current branch."
-        )
+        self._apply_git_pull_state()
         self.git_pull_btn.clicked.connect(
             lambda: self._run_update(
                 None,
@@ -556,6 +577,7 @@ class UpdateDialog(QDialog):
         self.brrr_snooze_checkbox.blockSignals(False)
 
         # 5. Status & Update Button
+        relation = state.get("git_relation") if self._git_clone else None
         if self._git_clone and active == "detached":
             self.brrr_status_label.setText(
                 "Status:  Detached checkout. Pick a branch, release, tag, or PR "
@@ -566,6 +588,18 @@ class UpdateDialog(QDialog):
             )
             self._set_action_enabled(self.brrr_update_btn, False)
             self.brrr_update_btn.setText("No Branch Checked Out")
+        elif self._git_clone and self._git_info.get("dirty"):
+            # Same gate as the banner's pull button: both run the same
+            # fast-forward, and the backend refuses a dirty tree anyway.
+            self.brrr_status_label.setText(
+                "Status:  Local changes present. Commit, stash, or discard them "
+                "before updating."
+            )
+            self.brrr_status_label.setStyleSheet(
+                f"font-size: 13px; font-weight: bold; color: {c['warning']};"
+            )
+            self._set_action_enabled(self.brrr_update_btn, False)
+            self.brrr_update_btn.setText("Checkout Has Local Changes")
         elif not remote_sha:
             self.brrr_status_label.setText(
                 f"Status:  Branch '{active}' was not found on the Ankimon repository."
@@ -576,6 +610,22 @@ class UpdateDialog(QDialog):
                 f"font-size: 13px; font-weight: bold; color: {c['error']};"
             )
             self._set_action_enabled(self.brrr_update_btn, False)
+        elif self._git_clone and local_sha != remote_sha and relation != "ahead":
+            # A SHA mismatch is not an update when the local branch is the one
+            # that is ahead (or has diverged, or holds unpushed commits GitHub
+            # cannot compare): a fast-forward is impossible, so don't offer it.
+            if relation == "behind":
+                why = f"Your checkout is ahead of '{active}' on the Ankimon repository."
+            elif relation == "diverged":
+                why = f"Your checkout has diverged from '{active}' on the Ankimon repository."
+            else:
+                why = "Your checkout has commits that are not on the Ankimon repository."
+            self.brrr_status_label.setText(f"Status:  {why}")
+            self.brrr_status_label.setStyleSheet(
+                f"font-size: 13px; font-weight: bold; color: {c['warning']};"
+            )
+            self._set_action_enabled(self.brrr_update_btn, False)
+            self.brrr_update_btn.setText("Cannot Fast-forward")
         elif local_sha != remote_sha:
             self.brrr_status_label.setText(
                 f"Status:  New Update Available! (Latest: {remote_sha[:7]})"
@@ -1092,6 +1142,7 @@ class UpdateDialog(QDialog):
                 fetch_branch_sha,
                 fetch_commit_date,
                 fetch_branch_commits,
+                fetch_branch_relation,
             )
 
             # 1. Fetch releases
@@ -1120,6 +1171,13 @@ class UpdateDialog(QDialog):
                 remote_sha = fetch_branch_sha(branch)
             except Exception:
                 pass
+            if self._git_clone and local_sha and remote_sha and remote_sha != local_sha:
+                # Which side is ahead decides whether a fast-forward is even
+                # possible; the SHA comparison alone is direction-blind.
+                try:
+                    state["git_relation"] = fetch_branch_relation(local_sha, branch)
+                except Exception:
+                    state["git_relation"] = None
 
             local_commit_date = None
             if local_sha:
@@ -1378,6 +1436,10 @@ class UpdateDialog(QDialog):
             if self._end_busy(busy_token):
                 self.status_label.setText(messages[-1] if messages else msg)
                 self.progress_bar.setValue(100 if success else 0)
+            if success and self._git_clone:
+                # HEAD moved: the banner, pull button and Branch tab all describe
+                # the checkout and must not keep showing the pre-checkout state.
+                self._refresh_git_state()
             if success:
                 QMessageBox.information(
                     self,

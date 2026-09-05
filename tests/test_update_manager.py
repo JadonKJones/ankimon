@@ -367,6 +367,140 @@ def test_git_checkout_source_reattaches_existing_branch(tmp_path, monkeypatch):
     assert ["checkout", "main"] in calls
     assert ["merge", "--ff-only", "FETCH_HEAD"] in calls
     assert ["checkout", "--detach", "FETCH_HEAD"] not in calls
+    # The fast-forward is proven before HEAD moves, not discovered after.
+    ancestry = ["merge-base", "--is-ancestor", "refs/heads/main", "FETCH_HEAD"]
+    assert ancestry in calls
+    assert calls.index(ancestry) < calls.index(["checkout", "main"])
+
+
+def test_git_checkout_source_refuses_unfastforwardable_branch_before_moving_head(
+    tmp_path, monkeypatch
+):
+    # Local main has commits the canonical repo lacks (diverged or ahead). The
+    # refusal must come BEFORE any checkout: the user is on 'feature' and must
+    # still be on 'feature' when the "Update Failed" box appears.
+    monkeypatch.setattr(um, "_git_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(um.shutil, "which", lambda _name: "/usr/bin/git")
+    calls = []
+
+    def _run(cmd, **kwargs):
+        calls.append(cmd[3:])
+        if cmd[3] == "merge-base":
+            return _FakeProc(1, "")  # not an ancestor
+        if cmd[3] == "show-ref":
+            return _FakeProc(0, "")
+        return _FakeProc(0, "")
+
+    monkeypatch.setattr(um.subprocess, "run", _run)
+
+    ok, msg = um.git_checkout_source("branch", "main")
+
+    assert ok is False
+    assert "nothing was changed" in msg.lower()
+    assert not any(c and c[0] in ("checkout", "merge") for c in calls)
+
+
+def test_git_checkout_source_reports_head_position_if_merge_fails_late(
+    tmp_path, monkeypatch
+):
+    # Ancestry said fast-forward is fine, checkout happened, then the merge
+    # failed anyway (tree changed under us). The message must not claim
+    # nothing changed: HEAD is now on the branch.
+    monkeypatch.setattr(um, "_git_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(um.shutil, "which", lambda _name: "/usr/bin/git")
+    monkeypatch.setattr(
+        um.subprocess,
+        "run",
+        _fake_git({
+            "show-ref": _FakeProc(0, ""),
+            "merge": _FakeProc(1, "", "fatal: Not possible to fast-forward, aborting."),
+        }),
+    )
+
+    ok, msg = um.git_checkout_source("branch", "main")
+
+    assert ok is False
+    assert "now checked out" in msg.lower()
+    assert "nothing was changed" not in msg.lower()
+
+
+def test_git_checkout_source_current_fetches_canonical_branch(tmp_path, monkeypatch):
+    # "current" is the checked-out branch fetched from the OFFICIAL repository,
+    # not `git pull` against the checkout's own origin (a contributor's fork):
+    # the dialog compared HEAD against the official branch, so that is what
+    # must be installed.
+    monkeypatch.setattr(um, "_git_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(um.shutil, "which", lambda _name: "/usr/bin/git")
+    calls = []
+
+    def _run(cmd, **kwargs):
+        calls.append(cmd[3:])
+        if cmd[3] == "rev-parse" and "--abbrev-ref" in cmd:
+            return _FakeProc(0, "feature\n")
+        if cmd[3] == "rev-parse":
+            return _FakeProc(0, "abc1234\n")
+        return _FakeProc(0, "")
+
+    monkeypatch.setattr(um.subprocess, "run", _run)
+
+    ok, msg = um.git_checkout_source("current", "current")
+
+    assert ok is True
+    assert "branch 'feature'" in msg
+    assert ["fetch", "--force", um.GIT_REMOTE_URL, "refs/heads/feature"] in calls
+    assert ["merge", "--ff-only", "FETCH_HEAD"] in calls
+    assert not any(c and c[0] == "pull" for c in calls)
+
+
+def test_git_checkout_source_current_refuses_detached_head(tmp_path, monkeypatch):
+    monkeypatch.setattr(um, "_git_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(um.shutil, "which", lambda _name: "/usr/bin/git")
+    calls = []
+
+    def _run(cmd, **kwargs):
+        calls.append(cmd[3:])
+        if cmd[3] == "rev-parse" and "--abbrev-ref" in cmd:
+            return _FakeProc(0, "HEAD\n")
+        return _FakeProc(0, "")
+
+    monkeypatch.setattr(um.subprocess, "run", _run)
+
+    ok, msg = um.git_checkout_source("current", "current")
+
+    assert ok is False
+    assert "detached" in msg.lower()
+    assert not any(c and c[0] in ("fetch", "checkout", "merge") for c in calls)
+
+
+def test_git_checkout_source_reattach_is_atomic_against_real_git(tmp_path, monkeypatch):
+    # Real repositories, no fakes: 'main' diverged locally from the canonical
+    # repo. The refusal must leave HEAD on the branch the user was on.
+    import subprocess as sp
+
+    if not um.shutil.which("git"):
+        pytest.skip("git not installed")
+
+    def git(cwd, *args):
+        return sp.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True)
+
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    git(canonical, "init", "-q", "-b", "main")
+    git(canonical, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base")
+    clone = tmp_path / "clone"
+    git(tmp_path, "clone", "-q", str(canonical), str(clone))
+    git(clone, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "local only")
+    git(clone, "checkout", "-q", "-b", "feature")
+    git(canonical, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "upstream moved")
+
+    monkeypatch.setattr(um, "_git_repo_root", lambda: clone)
+    monkeypatch.setattr(um, "GIT_REMOTE_URL", str(canonical))
+
+    ok, msg = um.git_checkout_source("branch", "main")
+
+    assert ok is False
+    assert "nothing was changed" in msg.lower()
+    assert git(clone, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "feature"
 
 
 # --- pre-v2.0 version filtering ----------------------------------------------

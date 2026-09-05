@@ -120,7 +120,8 @@ def check_update_channel(d, app, db, pc, pool):
     for fn in saved_fetch:
         setattr(ud, fn, lambda *a, **k: [])
     for fn in saved_um_fetch:
-        setattr(um, fn, lambda *a, **k: None if fn != "fetch_branch_commits" else [])
+        # bind per iteration: a late-bound `fn` would make every stub return []
+        setattr(um, fn, (lambda *a, _fn=fn, **k: [] if _fn == "fetch_branch_commits" else None))
     # Preserve the original channel setting to restore after the test
     original_channel = d.services.settings.get("misc.update_channel")
     dlg = None
@@ -183,20 +184,27 @@ def check_update_dialog_git_mode(d, app, db, pc, pool):
 
     saved_fetch = {fn: getattr(ud, fn) for fn in ("fetch_releases", "fetch_tags", "fetch_branches", "fetch_open_prs",
                                                   "is_git_clone", "get_git_checkout_info")}
-    saved_um_fetch = {fn: getattr(um, fn) for fn in ("fetch_branch_sha", "fetch_commit_date", "fetch_branch_commits")}
+    saved_um_fetch = {fn: getattr(um, fn) for fn in ("fetch_branch_sha", "fetch_commit_date", "fetch_branch_commits",
+                                                     "fetch_branch_relation")}
     for fn in ("fetch_releases", "fetch_tags", "fetch_branches", "fetch_open_prs"):
         setattr(ud, fn, lambda *a, **k: [])
-    for fn in saved_um_fetch:
-        setattr(um, fn, lambda *a, **k: None if fn != "fetch_branch_commits" else [])
+    um.fetch_commit_date = lambda *a, **k: None
+    um.fetch_branch_commits = lambda *a, **k: []
+    # The canonical branch is one commit AHEAD of the checkout, so the clean case
+    # must light the Branch tab's update button; dirty/detached must not, and only
+    # the gates under test can make that difference.
+    um.fetch_branch_sha = lambda *a, **k: "f" * 40
+    um.fetch_branch_relation = lambda *a, **k: "ahead"
     ud.is_git_clone = lambda: True
 
+    local = "a" * 40
     cases = [
-        ("clean", {"is_git": True, "branch": "main", "sha": "abc1234", "full_sha": "abc1234" * 5, "dirty": False},
-         dict(pull=True)),
-        ("dirty", {"is_git": True, "branch": "feat", "sha": "abc1234", "full_sha": "abc1234" * 5, "dirty": True},
-         dict(pull=False)),
-        ("detached", {"is_git": True, "branch": "HEAD", "sha": "abc1234", "full_sha": "abc1234" * 5, "dirty": False},
-         dict(pull=False)),
+        ("clean", {"is_git": True, "branch": "main", "sha": local[:7], "full_sha": local, "dirty": False},
+         dict(pull=True, brrr=True)),
+        ("dirty", {"is_git": True, "branch": "feat", "sha": local[:7], "full_sha": local, "dirty": True},
+         dict(pull=False, brrr=False)),
+        ("detached", {"is_git": True, "branch": "HEAD", "sha": local[:7], "full_sha": local, "dirty": False},
+         dict(pull=False, brrr=False)),
     ]
     problems = []
     try:
@@ -212,9 +220,11 @@ def check_update_dialog_git_mode(d, app, db, pc, pool):
                     problems.append("%s: pull_enabled=%s" % (label, dlg.git_pull_btn.isEnabled()))
                 if dlg._busy_operations:
                     problems.append("%s: still busy after load" % label)
-                # The Branch tab must never offer to fetch "detached" as a ref.
-                if label == "detached" and dlg.brrr_update_btn.isEnabled():
-                    problems.append("detached: branch update button enabled")
+                # The Branch tab must offer the fast-forward only when it can
+                # succeed: never on a detached HEAD (the label is not a ref) or a
+                # dirty tree.
+                if dlg.brrr_update_btn.isEnabled() != expect["brrr"]:
+                    problems.append("%s: brrr_enabled=%s" % (label, dlg.brrr_update_btn.isEnabled()))
             except Exception as e:
                 problems.append("%s: raised %s: %s" % (label, type(e).__name__, e))
             finally:
