@@ -98,11 +98,6 @@ class UpdateDialog(QDialog):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         body.addWidget(self.tabs)
 
-        if select_tab == "sprites":
-            self.tabs.setCurrentIndex(3)
-        elif self._git_clone:
-            self.tabs.setCurrentIndex(2)
-
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setTextVisible(True)
@@ -116,6 +111,14 @@ class UpdateDialog(QDialog):
         )
         self.status_label.setMinimumHeight(24)
         body.addWidget(self.status_label)
+
+        # Pre-select a tab only now: currentChanged is already wired, and landing
+        # on the Developer tab kicks off _load_dev_data() -> _begin_busy(), which
+        # needs progress_bar and status_label to exist.
+        if select_tab == "sprites":
+            self.tabs.setCurrentIndex(3)
+        elif self._git_clone:
+            self.tabs.setCurrentIndex(2)
 
         layout.addLayout(body)
         self._load_data()
@@ -553,8 +556,22 @@ class UpdateDialog(QDialog):
         self.brrr_snooze_checkbox.blockSignals(False)
 
         # 5. Status & Update Button
-        if not remote_sha:
-            self.brrr_status_label.setText("Status:  Could not check connection.")
+        if self._git_clone and active == "detached":
+            self.brrr_status_label.setText(
+                "Status:  Detached checkout. Pick a branch, release, tag, or PR "
+                "from the other tabs."
+            )
+            self.brrr_status_label.setStyleSheet(
+                f"font-size: 13px; font-weight: bold; color: {c['warning']};"
+            )
+            self._set_action_enabled(self.brrr_update_btn, False)
+            self.brrr_update_btn.setText("No Branch Checked Out")
+        elif not remote_sha:
+            self.brrr_status_label.setText(
+                f"Status:  Branch '{active}' was not found on the Ankimon repository."
+                if self._git_clone
+                else "Status:  Could not check connection."
+            )
             self.brrr_status_label.setStyleSheet(
                 f"font-size: 13px; font-weight: bold; color: {c['error']};"
             )
@@ -604,6 +621,16 @@ class UpdateDialog(QDialog):
 
     def _on_brrr_update_clicked(self):
         branch = self.active_branch
+        if self._git_clone:
+            if branch == "detached":
+                return
+            self._run_update(
+                None,
+                f"latest {branch}",
+                source_type="current",
+                source_name="current",
+            )
+            return
         self._run_update(
             lambda progress_cb: _download_branch_zip(branch, progress_cb),
             f"latest {branch}",
@@ -1074,10 +1101,18 @@ class UpdateDialog(QDialog):
             except Exception:
                 pass
 
-            # 2. Get local state
+            # 2. Get local state. update_state.json records archive installs;
+            # a Git checkout's truth is HEAD and the checked-out branch.
             state = read_update_state() or {}
-            local_sha = state.get("commit_sha")
-            branch = state.get("source_name") or "main"
+            if self._git_clone:
+                local_sha = self._git_info.get("full_sha") or None
+                branch = self.active_branch
+                if branch == "detached":
+                    branch = "main"
+                state = dict(state, commit_sha=local_sha)
+            else:
+                local_sha = state.get("commit_sha")
+                branch = state.get("source_name") or "main"
 
             # 3. Fetch remote branch details
             remote_sha = None

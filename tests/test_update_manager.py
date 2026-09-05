@@ -93,23 +93,61 @@ def test_is_git_clone_true_when_repo_root_has_dot_git(tmp_path, monkeypatch):
     assert um.is_git_clone() is True
 
 
-def test_is_git_clone_true_when_addon_dir_is_repo(tmp_path, monkeypatch):
-    addon = tmp_path / "ankimon"
-    addon.mkdir()
-    (addon / ".git").mkdir()
-    monkeypatch.setattr(um, "addon_dir", addon)
+def test_is_git_clone_follows_dev_symlink_into_repo(tmp_path, monkeypatch):
+    # The dev setup symlinks addons21/Ankimon -> <repo>/src/Ankimon. The walk
+    # must resolve the link first so the repo root is found through it.
+    addon = tmp_path / "repo" / "src" / "Ankimon"
+    addon.mkdir(parents=True)
+    (tmp_path / "repo" / ".git").mkdir()
+    link = tmp_path / "addons21" / "Ankimon"
+    link.parent.mkdir()
+    try:
+        link.symlink_to(addon, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    monkeypatch.setattr(um, "addon_dir", link)
 
     assert um.is_git_clone() is True
+    assert um._git_repo_root() == (tmp_path / "repo").resolve()
 
 
 def test_is_git_clone_stays_true_in_dev_mode(tmp_path, monkeypatch):
-    addon = tmp_path / "ankimon"
-    addon.mkdir()
-    (addon / ".git").mkdir()
+    addon = tmp_path / "repo" / "src" / "Ankimon"
+    addon.mkdir(parents=True)
+    (tmp_path / "repo" / ".git").mkdir()
     monkeypatch.setattr(um, "addon_dir", addon)
 
     # Developer naming must not disable the checkout safety guard.
     assert um.is_git_clone() is True
+
+
+def test_is_git_clone_false_when_enclosing_repo_is_not_ankimon(tmp_path, monkeypatch):
+    # Anki's data folder (or $HOME) can itself be a git repo. That is a plain
+    # install: the archive updater must keep serving it, and above all the Git
+    # checkout helpers must never fetch Ankimon's history into that repo.
+    addon = tmp_path / "Anki2" / "addons21" / "1908235722"
+    addon.mkdir(parents=True)
+    (tmp_path / "Anki2" / ".git").mkdir()
+    monkeypatch.setattr(um, "addon_dir", addon)
+
+    assert um.is_git_clone() is False
+    assert um._git_repo_root() is None
+
+    ok, msg = um.git_checkout_source("pr", "123")
+    assert ok is False
+    assert "not running from a git checkout" in msg.lower()
+
+
+def test_is_git_clone_false_when_repo_has_a_different_ankimon(tmp_path, monkeypatch):
+    # A .git above the addon whose src/Ankimon is some *other* directory is not
+    # the checkout this addon runs from.
+    addon = tmp_path / "repo" / "vendor" / "Ankimon"
+    addon.mkdir(parents=True)
+    (tmp_path / "repo" / "src" / "Ankimon").mkdir(parents=True)
+    (tmp_path / "repo" / ".git").mkdir()
+    monkeypatch.setattr(um, "addon_dir", addon)
+
+    assert um.is_git_clone() is False
 
 
 def test_is_git_clone_false_for_plain_install(tmp_path, monkeypatch):
@@ -202,6 +240,41 @@ def test_git_pull_refuses_dirty_tree(tmp_path, monkeypatch):
 
     assert ok is False
     assert "local changes" in msg.lower()
+
+
+def test_git_dirty_checks_ignore_untracked_files(tmp_path, monkeypatch):
+    # Untracked files can't be "committed, stashed, or discarded" the way the
+    # refusal message says, and git itself refuses to clobber them on checkout.
+    # Both helpers and the banner query must ask git to leave them out.
+    monkeypatch.setattr(um, "_git_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(um.shutil, "which", lambda _name: "/usr/bin/git")
+    status_calls = []
+
+    def _run(cmd, **kwargs):
+        if cmd[3] == "status":
+            status_calls.append(cmd[3:])
+            # A real git honoring --untracked-files=no prints nothing here.
+            return _FakeProc(0, "" if "--untracked-files=no" in cmd else "?? scratch.py\n")
+        if cmd[3] == "rev-parse" and "--abbrev-ref" in cmd:
+            return _FakeProc(0, "main\n")
+        if cmd[3] == "rev-parse":
+            return _FakeProc(0, "0123456789abcdef0123456789abcdef01234567\n")
+        return _FakeProc(0, "")
+
+    monkeypatch.setattr(um.subprocess, "run", _run)
+
+    ok, _ = um.git_pull_ff_only()
+    assert ok is True
+    ok, _ = um.git_checkout_source("tag", "v2.0")
+    assert ok is True
+    info = um.get_git_checkout_info()
+    assert info["dirty"] is False
+    assert info["branch"] == "main"
+    assert info["full_sha"] == "0123456789abcdef0123456789abcdef01234567"
+    assert info["sha"] == "0123456"
+
+    assert status_calls, "every path must run git status"
+    assert all("--untracked-files=no" in c for c in status_calls)
 
 
 def test_git_pull_refuses_detached_checkout(tmp_path, monkeypatch):

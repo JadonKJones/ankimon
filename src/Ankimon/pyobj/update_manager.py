@@ -61,14 +61,19 @@ UPDATE_CHANNELS = (CHANNEL_STABLE, CHANNEL_EXPERIMENTAL, CHANNEL_MAIN)
 
 
 def _git_repo_root() -> Optional[Path]:
-    """Return the git repo root that contains the addon, else None.
+    """Return the root of the Ankimon git checkout that contains the addon, else None.
 
     For a GitHub clone the addon is ``src/Ankimon`` nested in the repo, so the
     ``.git`` directory sits two levels *above* ``addon_dir`` at the repo root —
     hence the upward parent walk. ``resolve()`` first follows the dev symlink
-    from ``addons21/`` into the repo so those parents land on the real repo root;
-    the walk is kept shallow to avoid false positives from an unrelated repo
-    higher up.
+    from ``addons21/`` into the repo so those parents land on the real repo root.
+
+    A ``.git`` alone is not enough: the repo must actually be an Ankimon checkout,
+    i.e. its ``src/Ankimon`` must be this very addon directory. Anki's data folder
+    (or a user's home) can itself be under an unrelated git repo, and running
+    ``git fetch``/``git checkout`` of Ankimon's history inside *that* repo would
+    replace its working tree. Such installs are plain installs: the archive
+    updater serves them and the release polls stay on.
     """
     try:
         base = Path(addon_dir).resolve()
@@ -77,8 +82,14 @@ def _git_repo_root() -> Optional[Path]:
     for d in [base, *list(base.parents)[:3]]:
         # .exists() rather than .is_dir(): in git worktrees and some submodule
         # layouts ".git" is a *file* (containing "gitdir: ..."), not a directory.
-        if (d / ".git").exists():
-            return d
+        if not (d / ".git").exists():
+            continue
+        try:
+            if (d / "src" / "Ankimon").resolve() == base:
+                return d
+        except OSError:
+            pass
+        return None
     return None
 
 
@@ -95,26 +106,36 @@ def is_git_clone() -> bool:
 def get_git_checkout_info() -> dict:
     """Return lightweight display information for the updater's Git mode."""
     root = _git_repo_root()
-    info = {"is_git": root is not None, "branch": "", "sha": "", "dirty": False}
+    info = {
+        "is_git": root is not None,
+        "branch": "",
+        "sha": "",
+        "full_sha": "",
+        "dirty": False,
+    }
     if root is None or shutil.which("git") is None:
         return info
 
+    # Called synchronously while the updater dialog is being built, so keep the
+    # worst case short: on a timeout the banner shows "unknown" and the checkout
+    # helpers re-run their own (authoritative) checks before touching anything.
     def _git(*args):
         return subprocess.run(
             ["git", "-C", str(root), *args],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=10,
         )
 
     try:
         branch = _git("rev-parse", "--abbrev-ref", "HEAD")
-        sha = _git("rev-parse", "--short", "HEAD")
-        status = _git("status", "--porcelain")
+        sha = _git("rev-parse", "HEAD")
+        status = _git("status", "--porcelain", "--untracked-files=no")
         if branch.returncode == 0:
             info["branch"] = branch.stdout.strip()
         if sha.returncode == 0:
-            info["sha"] = sha.stdout.strip()
+            info["full_sha"] = sha.stdout.strip()
+            info["sha"] = info["full_sha"][:7]
         if status.returncode == 0:
             info["dirty"] = bool(status.stdout.strip())
     except (OSError, subprocess.SubprocessError):
@@ -155,7 +176,10 @@ def git_pull_ff_only(status_cb=None) -> tuple[bool, str]:
         )
 
     try:
-        status = _git("status", "--porcelain", timeout=30)
+        # Only tracked modifications count as "dirty": untracked files (scratch
+        # scripts, editor droppings) can't be committed or stashed by the message
+        # below, and git itself refuses to overwrite them on a checkout.
+        status = _git("status", "--porcelain", "--untracked-files=no", timeout=30)
         if status.returncode != 0:
             return False, (status.stderr or status.stdout or "git status failed").strip()
         if status.stdout.strip():
@@ -232,7 +256,8 @@ def git_checkout_source(
         if source_type == "current":
             return git_pull_ff_only(status_cb=status_cb)
 
-        status = _git("status", "--porcelain", timeout=30)
+        # Tracked modifications only; see git_pull_ff_only for why.
+        status = _git("status", "--porcelain", "--untracked-files=no", timeout=30)
         if status.returncode != 0:
             return False, (status.stderr or status.stdout or "git status failed").strip()
         if status.stdout.strip():
