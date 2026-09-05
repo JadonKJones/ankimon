@@ -465,18 +465,23 @@ def _modify_percentages_overhaul(
     return percentages
 
 
-def modify_percentages(total_reviews, daily_average, trainer_level):
+def modify_percentages(total_reviews, daily_average, trainer_level, *, main_level=None):
     """
     Modify Pokémon encounter percentages based on total reviews, trainer level, and main Pokémon level.
 
     Thin dispatcher: routes to the overhaul or legacy calculation based on the
     active system flag. The simulator (F23) calls the ``_modify_percentages_*``
     helpers directly with injected state, so it never has to flip this module's
-    ``USE_OVERHAUL_ENCOUNTER_SYSTEM`` global.
+    ``USE_OVERHAUL_ENCOUNTER_SYSTEM`` global. ``main_level`` is forwarded to the
+    helpers' injection hook; ``None`` keeps the live ``main_pokemon`` global.
     """
     if USE_OVERHAUL_ENCOUNTER_SYSTEM:
-        return _modify_percentages_overhaul(total_reviews, daily_average, trainer_level)
-    return _modify_percentages_legacy(total_reviews, daily_average, trainer_level)
+        return _modify_percentages_overhaul(
+            total_reviews, daily_average, trainer_level, main_level=main_level
+        )
+    return _modify_percentages_legacy(
+        total_reviews, daily_average, trainer_level, main_level=main_level
+    )
 
 
 def _modify_percentages_legacy(
@@ -659,7 +664,7 @@ def _meets_prerequisites(pokemon_id: int, collected_ids: set) -> bool:
     return required.issubset(collected_ids)
 
 
-def get_tier(total_reviews, trainer_level=1, event_modifier=None):
+def get_tier(total_reviews, trainer_level=1, event_modifier=None, *, main_level=None):
     """_summary_
     Randomly picks the tier for a new enemy Pokemon to be generated from, based on weighted probabilities based on number of reviews and trainer level.
 
@@ -667,12 +672,16 @@ def get_tier(total_reviews, trainer_level=1, event_modifier=None):
         total_reviews (int): Number of reviews done in that Anki session.
         trainer_level (int, optional): Trainer XP level. Defaults to 1.
         event_modifier (?, optional): Unused argument. Defaults to None.
+        main_level (int, optional): Main-Pokémon level for the tier gates. ``None``
+            uses the live ``main_pokemon`` global (desktop play).
 
     Returns:
         choice[0]: The first choice of TIER picked randomly (by a random.choices function)
     """
     daily_average = int(settings_obj.get("battle.daily_average"))
-    percentages = modify_percentages(total_reviews, daily_average, trainer_level)
+    percentages = modify_percentages(
+        total_reviews, daily_average, trainer_level, main_level=main_level
+    )
 
     tiers = list(percentages.keys())
     probabilities = list(percentages.values())
@@ -838,7 +847,12 @@ def get_all_pokemon_in_tier(tier: str) -> list[int]:
 
 
 def generate_random_pokemon(
-    main_pokemon_level: int, ankimon_tracker_obj: AnkimonTracker, *args, **kwargs
+    main_pokemon_level: int,
+    ankimon_tracker_obj: AnkimonTracker,
+    *args,
+    trainer_level: Optional[int] = None,
+    main_level: Optional[int] = None,
+    **kwargs,
 ):
     """
     Generates a random wild Pokémon with attributes scaled to the level of the player's main Pokémon.
@@ -853,6 +867,11 @@ def generate_random_pokemon(
             the generated wild Pokémon.
         ankimon_tracker_obj (AnkimonTracker): An object used to track battle state, such as the number
             of Pokémon encountered and cards used in the battle.
+        trainer_level / main_level (int, optional): Explicit trainer-card and
+            main-Pokémon levels for the tier roll. ``None`` reads the bound
+            ``trainer_card`` / ``main_pokemon`` globals (desktop play). Callers
+            running off the live singletons (mobile sync) pass them explicitly
+            instead of mutating this module's globals.
 
     Returns:
         tuple: A tuple containing the following elements:
@@ -913,7 +932,11 @@ def generate_random_pokemon(
     selected_tier = None
 
     # 1. Select the initial tier based on probabilities
-    initial_tier = get_tier(ankimon_tracker_obj.get_total_reviews(), trainer_card.level)
+    if trainer_level is None:
+        trainer_level = trainer_card.level if trainer_card is not None else 1
+    initial_tier = get_tier(
+        ankimon_tracker_obj.get_total_reviews(), trainer_level, main_level=main_level
+    )
 
     # Find starting point in fallback order
     try:
@@ -1182,6 +1205,17 @@ def new_pokemon(
     except Exception as e:
         print(f"[Ankimon] Error resetting battle state in new_pokemon: {e}")
 
+    # Clear the PLAYER's volatile statuses as well. The enemy object is rebuilt
+    # from `pokemon_data` below, which carries a fresh `volatile_status`, but
+    # `main_pokemon` persists across encounters — so a confusion/taunt/leechseed
+    # left over from the battle that just ended would otherwise follow the
+    # player into the next one and be re-sent to the engine on turn 1. The
+    # hooks-level reset in ankimon_hooks_to_poke_engine only runs on the
+    # `state is not None` path, and this function forces `_state.new_state =
+    # None` immediately above, so it can never cover this.
+    if main_pokemon is not None and hasattr(main_pokemon, "volatile_status"):
+        main_pokemon.volatile_status = set()
+
     # Force HUD update on next card/refresh via the HUD leaf's public
     # invalidation method, so this call site never has to track the leaf's
     # private cache set. Guarded so it works both before and after that leaf
@@ -1235,6 +1269,7 @@ def new_pokemon(
             "accuracy": 0,
             "evasion": 0,
         },
+        "volatile_status": set(),
         "tier": tier,
         "ev_yield": ev_yield,
         "shiny": is_shiny,

@@ -615,7 +615,13 @@ def validate_pokemon_status(pokemon):
         FIGHTING,
     }
 
-    current_status = getattr(pokemon, "battle_status", FIGHTING)
+    # Mirror PokemonObject._normalize_battle_status: strip + lower, None/blank
+    # means healthy. A padded "  par  " must stay "par", not fall through the
+    # invalid-status branch and be silently reset to "fighting".
+    current_status = (
+        str(getattr(pokemon, "battle_status", None) or "").strip().lower()
+        or "fighting"
+    )
 
     # Ensure volatile_status exists
     if not hasattr(pokemon, "volatile_status"):
@@ -631,6 +637,10 @@ def validate_pokemon_status(pokemon):
     # If Pokemon is fainted but status isn't fainted, override
     if hasattr(pokemon, "hp") and pokemon.hp <= 0 and current_status != FAINTED:
         return FAINTED
+
+    # If Pokemon has HP > 0 but status is fainted, revert to fighting
+    if hasattr(pokemon, "hp") and pokemon.hp > 0 and current_status == "fainted":
+        return "fighting"
 
     return current_status
 
@@ -797,7 +807,5 @@ def calculate_hp(base_stat_hp, level, ev, iv):
     ev_value = ev["hp"] / 4
     iv_value = iv["hp"]
     # hp = int(((iv + 2 * (base_stat_hp + ev) + 100) * level) / 100 + 10)
-    hp = int(
-        ((((2 * base_stat_hp) + iv_value + ev_value) * level) / 100) + level + 10
-    )
+    hp = int(((((2 * base_stat_hp) + iv_value + ev_value) * level) / 100) + level + 10)
     return hp
