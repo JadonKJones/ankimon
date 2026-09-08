@@ -484,5 +484,6 @@
   "release_channel_experimental": "Experimentální",
   "ankimon_update_button": "Aktualizovat Ankimon",
   "nature_chart_button": "Zobrazit tabulku povah",
-  "effect_item_consumed": "{pokemon_name} spotřeboval předmět {item}!"
+  "effect_item_consumed": "{pokemon_name} spotřeboval předmět {item}!",
+  "dig_no_ground": "Tady ale není žádná zem na kopání!"
 }

@@ -484,5 +484,6 @@
   "release_channel_experimental": "Experimentell",
   "ankimon_update_button": "Ankimon aktualisieren",
   "nature_chart_button": "Wesen-Tabelle prüfen",
-  "effect_item_consumed": "{pokemon_name} hat sein Item {item} aufgebraucht!"
+  "effect_item_consumed": "{pokemon_name} hat sein Item {item} aufgebraucht!",
+  "dig_no_ground": "Aber hier ist kein Boden zum Graben!"
 }

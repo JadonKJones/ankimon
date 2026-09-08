@@ -484,5 +484,6 @@
   "ankimon_update_button": "Actualizar Ankimon",
   "nature_chart_button": "Consultar la tabla de naturalezas",
   "effect_item_consumed": "¡{pokemon_name} ha agotado su objeto {item}!",
-  "weather_rain_still": "¡Sigue lloviendo!"
+  "weather_rain_still": "¡Sigue lloviendo!",
+  "dig_no_ground": "¡Pero aquí no hay suelo para cavar!"
 }

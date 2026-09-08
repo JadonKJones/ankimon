@@ -484,5 +484,6 @@
   "release_channel_experimental": "Expérimentale",
   "ankimon_update_button": "Mettre Ankimon à jour",
   "nature_chart_button": "Consulter le tableau des natures",
-  "effect_item_consumed": "{pokemon_name} a épuisé son objet {item} !"
+  "effect_item_consumed": "{pokemon_name} a épuisé son objet {item} !",
+  "dig_no_ground": "Mais il n'y a pas de sol à creuser ici !"
 }

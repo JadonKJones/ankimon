@@ -484,5 +484,6 @@
   "release_channel_experimental": "Experimental",
   "ankimon_update_button": "Atualizar Ankimon",
   "nature_chart_button": "Ver tabela de naturezas",
-  "effect_item_consumed": "{pokemon_name} consumiu seu item {item}!"
+  "effect_item_consumed": "{pokemon_name} consumiu seu item {item}!",
+  "dig_no_ground": "Mas não há solo aqui para cavar!"
 }

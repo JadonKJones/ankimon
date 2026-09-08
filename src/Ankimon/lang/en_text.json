@@ -88,6 +88,7 @@
   "choose_nickname": "Choose nickname",
   "enemy_attack_announcement": "{pokemon_name} used {attack_name}!",
   "player_attack_announcement": "{pokemon_name} used {attack_name}!",
+  "dig_no_ground": "But there's no ground here to dig into!",
   "damage_to_player_pokemon": "{pokemon_name} took {damage} damage!",
   "damage_to_enemy_pokemon": "{pokemon_name} took {damage} damage!",
   "enemy_attack_no_damage": "The attack had no effect on {pokemon_name}!",

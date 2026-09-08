@@ -484,5 +484,6 @@
   "release_channel_experimental": "実験版",
   "ankimon_update_button": "Ankimonを更新",
   "nature_chart_button": "性格表を確認",
-  "effect_item_consumed": "{pokemon_name}は{item}を使い切った！"
+  "effect_item_consumed": "{pokemon_name}は{item}を使い切った！",
+  "dig_no_ground": "しかし、ここには掘る地面がない！"
 }

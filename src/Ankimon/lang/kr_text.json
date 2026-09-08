@@ -484,5 +484,6 @@
   "release_channel_experimental": "실험판",
   "ankimon_update_button": "Ankimon 업데이트",
   "nature_chart_button": "성격 차트 확인",
-  "effect_item_consumed": "{pokemon_name}이(가) {item}을(를) 모두 사용했다!"
+  "effect_item_consumed": "{pokemon_name}이(가) {item}을(를) 모두 사용했다!",
+  "dig_no_ground": "하지만 여기엔 팔 땅이 없다!"
 }

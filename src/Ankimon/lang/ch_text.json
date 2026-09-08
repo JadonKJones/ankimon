@@ -484,5 +484,6 @@
   "release_channel_experimental": "实验版",
   "ankimon_update_button": "更新 Ankimon",
   "nature_chart_button": "查看性格图表",
-  "effect_item_consumed": "{pokemon_name} 用完了携带的 {item}！"
+  "effect_item_consumed": "{pokemon_name} 用完了携带的 {item}！",
+  "dig_no_ground": "但这里没有可以挖掘的地面！"
 }
