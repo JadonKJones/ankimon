@@ -842,6 +842,26 @@ def simulate_battle_with_poke_engine(
             main_move_normalized = normalize_name(main_move)
             enemy_move_normalized = normalize_name(enemy_move)
 
+        # If a side is midway through a two-turn move (Dig/Fly/Solar Beam/...),
+        # it is locked into finishing that move this turn — the caller picks a
+        # fresh random move every round and would otherwise leave the Pokemon
+        # "underground"/"charging" indefinitely.
+        _TWO_TURN_MOVES = {
+            "solarbeam", "solarblade", "skyattack", "razorwind", "skullbash",
+            "freezeshock", "iceburn", "geomancy", "meteorbeam", "electroshot",
+            "fly", "dig", "dive", "bounce", "phantomforce", "shadowforce", "skydrop",
+        }
+        _user_charging = _TWO_TURN_MOVES & set(
+            getattr(state.user.active, "volatile_status", set())
+        )
+        if _user_charging:
+            main_move_normalized = next(iter(_user_charging))
+        _opp_charging = _TWO_TURN_MOVES & set(
+            getattr(state.opponent.active, "volatile_status", set())
+        )
+        if _opp_charging:
+            enemy_move_normalized = next(iter(_opp_charging))
+
         # Get all possible outcomes
         transpose_instructions = get_all_state_instructions(
             mutator, main_move_normalized, enemy_move_normalized
