@@ -400,6 +400,17 @@ def on_review_card(*args):
                 changes=current_battle_info_changes,
             )
 
+            # Dig can't be used with no ground underfoot (ocean battle scene) —
+            # the poke_engine hook already fizzles it, this explains why.
+            _scene = str(getattr(ankimon_tracker_obj, "battlescene_file", "") or "")
+            if _scene.startswith("ocean") and any(
+                str(mv).lower().replace(" ", "") == "dig"
+                for mv in (user_attack, enemy_attack)
+            ):
+                formatted_battle_log = (
+                    f"{formatted_battle_log}\n{translator.translate('dig_no_ground')}"
+                )
+
             tooltipWithColour(formatted_battle_log, color)
 
             # Observable turn outcome for the agent harness.

@@ -466,5 +466,6 @@
   "badge_ready": "⇈ Prêt à évoluer !",
   "badge_wait_day": "☀️ Prêt à évoluer pendant la journée",
   "badge_wait_night": "🌙 Prêt à évoluer pendant la nuit",
-  "switched_pokemon": "À toi, {pokemon_name} ! N.{level}"
+  "switched_pokemon": "À toi, {pokemon_name} ! N.{level}",
+  "dig_no_ground": "Mais il n'y a pas de sol à creuser ici !"
 }

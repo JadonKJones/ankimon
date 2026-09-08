@@ -466,5 +466,6 @@
   "badge_ready": "⇈ Pronto para evoluir!",
   "badge_wait_day": "☀️ Pronto para evoluir durante o dia",
   "badge_wait_night": "🌙 Pronto para evoluir à noite",
-  "switched_pokemon": "Trocou para {pokemon_name}! Nv. {level}"
+  "switched_pokemon": "Trocou para {pokemon_name}! Nv. {level}",
+  "dig_no_ground": "Mas não há solo aqui para cavar!"
 }

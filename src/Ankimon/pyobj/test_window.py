@@ -1154,12 +1154,10 @@ class TestWindow(QWidget):
         enemy_y = (170 - wpkmn_height) + self._enemy_shake_offset[1]
         main_x = (144 - mpkmn_width) + self._main_shake_offset[0]
         main_y = (275 - mpkmn_height) + self._main_shake_offset[1]
-        # A Pokemon that is mid-Dig/Fly/Dive/Bounce is off the field
-        # ("semi-invulnerable") until the move lands next turn — draw its slot
-        # empty rather than leaving it standing there.
-        _SEMI_INVULN = {"dig", "fly", "dive", "bounce", "phantomforce", "shadowforce", "skydrop"}
-        enemy_hidden = bool(_SEMI_INVULN & set(getattr(self.enemy_pokemon, "volatile_status", None) or ()))
-        main_hidden = bool(_SEMI_INVULN & set(getattr(self.main_pokemon, "volatile_status", None) or ()))
+        # A Pokemon mid-Dig is underground until the move lands next turn —
+        # draw its slot empty rather than leaving it standing on the surface.
+        enemy_hidden = "dig" in (getattr(self.enemy_pokemon, "volatile_status", None) or ())
+        main_hidden = "dig" in (getattr(self.main_pokemon, "volatile_status", None) or ())
         self._stash_gif_geom("enemy", self.enemy_pokemon, "front", pixmap, enemy_x, enemy_y, new_width, new_height, enemy_hp <= 0 or enemy_hidden)
         self._stash_gif_geom("main", self.main_pokemon, "back", pixmap2, main_x, main_y, new_width2, new_height2, main_hp <= 0 or main_hidden)
         if self._gif_geom["enemy"] is None and not enemy_hidden:

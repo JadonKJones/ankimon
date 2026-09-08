@@ -466,5 +466,6 @@
   "badge_ready": "⇈ Pronto per l'evoluzione!",
   "badge_wait_day": "☀️ Pronto per l'evoluzione durante il giorno",
   "badge_wait_night": "🌙 Pronto per l'evoluzione di notte",
-  "switched_pokemon": "Scambio con {pokemon_name}! Lv. {level}"
+  "switched_pokemon": "Scambio con {pokemon_name}! Lv. {level}",
+  "dig_no_ground": "Ma qui non c'è terreno in cui scavare!"
 }
