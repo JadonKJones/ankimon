@@ -851,6 +851,20 @@ def simulate_battle_with_poke_engine(
             "freezeshock", "iceburn", "geomancy", "meteorbeam", "electroshot",
             "fly", "dig", "dive", "bounce", "phantomforce", "shadowforce", "skydrop",
         }
+        # You can't burrow underground in the middle of the ocean — Dig just
+        # fails on the ocean battle scene (both as a fresh pick and as a
+        # continuation of a charge that somehow carried in).
+        _scene = str(getattr(ankimon_tracker_obj, "battlescene_file", "") or "")
+        if _scene.startswith("ocean"):
+            if main_move_normalized == "dig":
+                main_move_normalized = "splash"
+                if hasattr(state.user.active, "volatile_status"):
+                    state.user.active.volatile_status.discard("dig")
+            if enemy_move_normalized == "dig":
+                enemy_move_normalized = "splash"
+                if hasattr(state.opponent.active, "volatile_status"):
+                    state.opponent.active.volatile_status.discard("dig")
+
         _user_charging = _TWO_TURN_MOVES & set(
             getattr(state.user.active, "volatile_status", set())
         )
