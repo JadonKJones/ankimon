@@ -1036,3 +1036,24 @@ def test_a_linked_media_recovery_store_keeps_the_scan_armed(transfer, media_host
 
     assert result["outcome"] == "armed"
     assert any("is a link" in message for _, message in result["log"])
+
+
+def test_a_junction_is_refused_wherever_a_linked_recovery_folder_is(transfer, media_host, monkeypatch):
+    """A junction is not a symlink, so every recovery-folder check asks about both."""
+    from Ankimon import save_import
+
+    store = st._recovery_store(media_host.media)
+    pre_import = transfer.active.parent / "ankimon_recovery"
+    store.mkdir(exist_ok=True)
+    pre_import.mkdir(exist_ok=True)
+    monkeypatch.setattr(save_import, "_is_junction", lambda path: Path(path) in (store, pre_import))
+    opened = []
+    monkeypatch.setattr(sys.modules["aqt.utils"], "openFolder", lambda path: opened.append(path), raising=False)
+
+    for create in (False, True):
+        with pytest.raises(OSError, match="is a link"):
+            st._recovery_store(media_host.media, create=create)
+    st.browse_recovered_saves()
+
+    assert opened == []
+    assert "is a link" in st.showWarning.call_args.args[0]

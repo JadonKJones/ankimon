@@ -481,6 +481,19 @@ After CodeRabbit reviewed `562304bc`:
   to open a fresh save at that path, and SQLite deleted both a stale `-journal` and
   a stale `-wal` beside a new database when that was tried.
 
+After CodeRabbit reviewed `e0c08f87`:
+
+- Junctions are recognised on every Python version, including the older ones that
+  older Anki builds bundle. `os.path.isjunction` only exists from 3.12, and the
+  fallback answered False, so there a junction passed every recovery-folder check.
+  The check now reads the reparse tag `os.lstat` reports on Windows, the field
+  `os.path.isjunction` itself compares.
+- *Refuse a save that is itself a link.* Not changed. Play opens the save through
+  that link, so the import replaces the file the user plays and keeps its recovery
+  copy beside it. Refusing linked saves, or linked parent folders, would break
+  profiles kept in a linked or synced folder, and whoever can place that link
+  already controls the live save.
+
 Tests only: the prune test checks that the superseded copy it keeps is the newest,
 a staged save swapped for another valid save now reaches the digest refusal
 instead of the size check, the shutdown-budget test covers a developer-mode active

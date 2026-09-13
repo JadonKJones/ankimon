@@ -1014,6 +1014,31 @@ def test_a_spent_startup_budget_still_sets_journals_aside(tmp_path):
     assert importer.pending_import_info(target) is not None
 
 
+def test_a_junction_is_recognised_on_pythons_without_isjunction(tmp_path, monkeypatch):
+    """os.path.isjunction only exists from Python 3.12; older Anki builds bundle older ones.
+
+    A fallback that always answered False let a junction pass as an ordinary
+    folder there. Simulated through the field os.lstat reports on Windows.
+    """
+    importer = load_module()
+    folder = tmp_path / "ankimon_recovery"
+    folder.mkdir()
+    real_lstat = os.lstat
+
+    def windows_lstat(path, *args, **kwargs):
+        result = real_lstat(path, *args, **kwargs)
+        if Path(path) != folder:
+            return result
+        return SimpleNamespace(st_mode=result.st_mode, st_reparse_tag=0xA0000003)
+
+    monkeypatch.delattr(os.path, "isjunction", raising=False)
+    monkeypatch.setattr(os, "lstat", windows_lstat)
+    assert importer._is_link(folder)
+    assert not importer._is_link(tmp_path)
+    with pytest.raises(OSError, match="is a link"):
+        importer._private_directory(folder)
+
+
 def test_a_spent_startup_budget_refuses_rather_than_waiting_again(tmp_path):
     """The install runs before Anki has a window to say what it is waiting for."""
     importer = load_module()

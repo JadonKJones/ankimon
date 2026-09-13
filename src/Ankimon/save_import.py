@@ -581,7 +581,23 @@ def _restrict_directory(path: Path, logger=None) -> None:
         _log(logger, "warning", f"Could not restrict access to {path}: {error}")
 
 
-_is_junction = getattr(os.path, "isjunction", lambda path: False)
+# What os.lstat reports as st_reparse_tag for a junction on Windows
+# (IO_REPARSE_TAG_MOUNT_POINT; the stat module defines it only there).
+_IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
+
+
+def _is_junction(path: Path) -> bool:
+    """Whether ``path`` is a Windows junction, on every Python Anki bundles.
+
+    ``os.path.isjunction`` reads this same field, but only from Python 3.12, and
+    older Anki builds bundle older Pythons; a fallback that answered False let a
+    junction pass as an ordinary folder there. Elsewhere ``lstat`` carries no
+    reparse tag, and nothing is a junction.
+    """
+    try:
+        return os.lstat(path).st_reparse_tag == _IO_REPARSE_TAG_MOUNT_POINT
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def _is_link(path: Path) -> bool:
