@@ -756,6 +756,30 @@ def _set_aside_orphaned_journals(target: Path, directory: Path, logger=None,
          f"Moved journals left beside the missing {target.name} to {directory}")
 
 
+# SQLITE_BUSY and SQLITE_LOCKED: another connection held the save for longer
+# than the busy timeout. The sqlite3 module names them only from Python 3.11.
+_LOCK_CODES = frozenset(
+    code for code in (getattr(sqlite3, "SQLITE_BUSY", None),
+                      getattr(sqlite3, "SQLITE_LOCKED", None))
+    if code is not None
+)
+
+
+def _is_lock_error(error: sqlite3.Error) -> bool:
+    """Whether SQLite gave up waiting for another connection to release the save.
+
+    ``sqlite_errorcode`` only exists from Python 3.11, and older Anki builds
+    bundle older Pythons, so without it the message SQLite wrote has to do. The
+    code is the extended one (SQLITE_BUSY_RECOVERY, say), which keeps the
+    primary code in its low byte.
+    """
+    code = getattr(error, "sqlite_errorcode", None)
+    if code is not None and _LOCK_CODES:
+        return (code & 0xFF) in _LOCK_CODES
+    message = str(error).lower()
+    return "locked" in message or "busy" in message
+
+
 def _recover_hot_journal(target: Path, logger=None, deadline: float = None) -> None:
     """Let SQLite roll back a transaction a crash left unfinished in the save.
 
@@ -776,8 +800,16 @@ def _recover_hot_journal(target: Path, logger=None, deadline: float = None) -> N
         finally:
             conn.close()
     except (sqlite3.Error, OSError) as error:
-        # A read-only volume or a lock. The read-only steps that follow report
-        # their own error, as they did before this step existed.
+        # A lock stops the install here, with SQLite's own error. Passed over, it
+        # left the read-only steps to wait on the same lock with what remained of
+        # the budget, so get_db recorded "the save import budget expired" instead
+        # of the lock, and without a deadline the lock was waited out twice.
+        if isinstance(error, sqlite3.Error) and _is_lock_error(error):
+            raise
+        # A save this connection cannot write: a read-only volume, a file SQLite
+        # will not open read-write, "attempt to write a readonly database". The
+        # read-only steps that follow may still read it, and report their own
+        # error if they cannot, as they did before this step existed.
         _log(logger, "warning",
              f"Could not open {target.name} to roll back an unfinished write: {error}")
 

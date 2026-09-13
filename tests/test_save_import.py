@@ -197,6 +197,82 @@ def test_an_import_installs_over_a_save_a_crash_left_with_a_hot_journal(tmp_path
     assert importer.pending_import_info(target) is None
 
 
+def test_a_locked_save_stops_the_install_with_the_lock_not_the_budget(tmp_path):
+    """The rollback step's read-write open waits on a lock like any other.
+
+    Passing that lock over left the read-only steps to wait on it again with
+    nothing left of the budget, so the startup notice said the budget expired
+    instead of naming the lock.
+    """
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target)
+    locker = sqlite3.connect(target, isolation_level=None)
+    try:
+        locker.execute("BEGIN EXCLUSIVE")
+        result = child(
+            "import time\n"
+            "try:\n"
+            "    module.commit_pending_import(target, deadline=time.monotonic() + 1.5)\n"
+            "except Exception as error:\n"
+            "    print(json.dumps({'error': type(error).__name__, 'message': str(error)}))\n"
+            "else:\n"
+            "    raise AssertionError('the install went ahead over a locked save')\n",
+            target,
+        )
+    finally:
+        locker.execute("ROLLBACK")
+        locker.close()
+    failure = json.loads(result.stdout)
+    assert failure["error"] == "OperationalError", failure
+    assert "locked" in failure["message"], failure
+    assert names(target) == ["local"]
+    assert not staged["recovery_path"].exists()
+    assert importer.pending_import_info(target)["token"] == staged["token"]
+
+
+def test_a_save_the_rollback_step_cannot_open_for_writing_still_installs(tmp_path):
+    """The steps that predate the rollback step only ever opened the save read-only.
+
+    Only a lock stops the install there; a save SQLite will not open read-write
+    is logged and left to the read-only steps, which read it as they always did.
+    """
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target)
+    result = child(
+        "messages = []\n"
+        "class Logger:\n"
+        "    def log(self, level, message):\n"
+        "        messages.append(message)\n"
+        "real_connect = sqlite3.connect\n"
+        "trips = []\n"
+        "def cannot_write(database, *args, **kwargs):\n"
+        "    # The rollback step's is the install's first read-write open; the\n"
+        "    # journal-mode switch after it gets a real connection.\n"
+        "    if 'mode=rw' in str(database) and not trips:\n"
+        "        trips.append(database)\n"
+        "        raise sqlite3.OperationalError('unable to open database file')\n"
+        "    return real_connect(database, *args, **kwargs)\n"
+        "module.sqlite3.connect = cannot_write\n"
+        "installed = module.commit_pending_import(target, Logger())\n"
+        "print(json.dumps({'installed': installed, 'messages': messages,\n"
+        "                  'trips': len(trips)}))\n",
+        target,
+    )
+    outcome = json.loads(result.stdout)
+    assert outcome["installed"] is True, outcome
+    assert outcome["trips"] == 1, outcome
+    assert any("roll back an unfinished write" in message
+               and "unable to open database file" in message
+               for message in outcome["messages"]), outcome
+    assert names(target) == ["incoming"]
+    assert names(staged["recovery_path"]) == ["local"]
+    assert importer.pending_import_info(target) is None
+
+
 def test_cancellation_discards_only_pending_import(tmp_path):
     importer = load_module()
     target = make_save(tmp_path / "ankimon.db", "local")
