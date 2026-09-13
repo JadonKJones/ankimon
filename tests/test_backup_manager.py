@@ -508,8 +508,11 @@ def test_failed_backup_mkdir_preserves_existing_same_timestamp_directory(mock_en
     _seed_db(database, "Existing", 123)
     original = database.read_bytes()
     # Even an expired existing backup must survive a failed creation attempt.
-    expired = time.time() - 30 * 24 * 3600
-    os.utime(backup_dir, (expired, expired))
+    # A colliding staging directory is another attempt's and stays fresh: one
+    # past the stale age was abandoned, and a failed attempt sweeps it too.
+    if prefix == "backup_":
+        expired = time.time() - 30 * 24 * 3600
+        os.utime(backup_dir, (expired, expired))
 
     with patch.object(_bm_mod.datetime, "datetime", wraps=datetime.datetime) as clock:
         clock.now.return_value = now
@@ -1026,6 +1029,50 @@ def test_an_abandoned_staging_directory_is_swept_once_it_is_stale(mock_env, monk
 
     assert not stale.exists()
     assert live.is_dir(), "a staging directory an attempt may still be using was removed"
+
+
+def test_a_failed_backup_still_sweeps_leftovers_but_keeps_every_backup(mock_env, monkeypatch):
+    """A run of failed backups on a locked folder must not pile up save copies.
+
+    Each failure whose own removal is locked out too leaves a staging directory
+    holding a save, and the sweep that removes those ran only after a success.
+    Retention still waits for one: evicting old backups while none replace them
+    would leave the user with nothing.
+    """
+    bm, _, _, _ = mock_env
+    stale = bm.backups_path / ".backup_2020-01-01_00-00-00"
+    stale.mkdir()
+    (stale / "ankimon.db").write_bytes(b"a whole save copy")
+    os.utime(stale, (1_600_000_000, 1_600_000_000))
+    discarded = bm.backups_path / ".discard_0badf00d_backup_2020-01-01_00-00-01"
+    discarded.mkdir()
+    (discarded / "ankimon.db").write_bytes(b"what a locked removal left")
+    made = _fake_backups(bm, bm.MAX_BACKUPS + 2)
+    expired = time.time() - (bm.MAX_BACKUP_AGE_DAYS + 7) * 24 * 3600
+    for directory in made[:2]:
+        os.utime(directory, (expired, expired))
+
+    def locked_partial_copy(source_path, destination_path, timeout=30.0):
+        destination_path.write_bytes(b"part of a save copy")
+        raise OSError("simulated lock on the save")
+
+    unlink = Path.unlink
+
+    def locked(path, *args, **kwargs):
+        # Only this attempt's own copy: the sweep renames what it removes first.
+        if path.parent.name.startswith(".backup_"):
+            raise PermissionError("simulated antivirus lock on the partial copy")
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", locked)
+    with patch.object(bm, "_snapshot_database", side_effect=locked_partial_copy):
+        assert bm.create_backup() is False
+
+    assert not stale.exists()
+    assert not list(bm.backups_path.glob(".discard_*"))
+    (attempt,) = bm.backups_path.glob(".backup_*")
+    assert (attempt / "ankimon.db").is_file(), "the sweep took the attempt still in flight"
+    assert sorted(bm.backups_path.glob("backup_*")) == made
 
 
 def test_a_restore_close_failure_notice_that_cannot_be_shown_does_not_escape(mock_env):

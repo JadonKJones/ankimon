@@ -534,3 +534,8 @@ After the reviews of `73a65d89`:
   before anything else reads the save. Every step before the journal-mode switch
   read the save read-only, which SQLite cannot use to roll a journal back, so that
   start failed and the user played a session on the old save.
+- A failed backup attempt still sweeps abandoned `.backup_` staging directories and
+  the `.discard_` remains of unfinished removals, while retention of published
+  backups still runs only after a backup succeeds. Before, the sweep ran only after
+  a success, so while backups kept failing on a locked folder, every attempt whose
+  own cleanup failed too added another full save copy that nothing removed.

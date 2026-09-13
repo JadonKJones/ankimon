@@ -241,6 +241,15 @@ class BackupManager:
                                     "incomplete backup; retention sweeps it once stale")
             except OSError as error:
                 self.logger.log("error", f"Failed to remove incomplete backup: {error}")
+        if not success:
+            # While backups keep failing on a locked folder, each attempt can
+            # leave another whole save copy behind, so the leftovers are swept
+            # anyway. Retention still waits for a success: evicting old backups
+            # with nothing replacing them would leave none. Same hook, same budget.
+            try:
+                self._sweep_leftovers(deadline)
+            except Exception as error:
+                self.logger.log("error", f"Backup cleanup did not finish: {error}")
         return success
 
     @staticmethod
@@ -728,9 +737,7 @@ class BackupManager:
         """Deletes old backups based on retention policy."""
         # Taken before this pass renames anything, so a removal that fails now
         # is retried by the next pass rather than twice in this one.
-        # A link counts even when dangling: _remove_tree removes the link itself.
-        leftovers = [p for p in self.backups_path.glob(f"{self.DISCARD_PREFIX}*")
-                     if p.is_dir() or p.is_symlink()]
+        leftovers = self._discarded()
         # Only published backups enter retention. Failed or interrupted staging
         # directories must not displace recoverable saves even if they remain.
         backups = sorted(
@@ -754,6 +761,24 @@ class BackupManager:
                 oldest_backup = backups_to_keep.pop(0)
                 if not self._discard(oldest_backup, "oldest backup", deadline):
                     return
+
+        self._sweep_leftovers(deadline, leftovers)
+
+    def _discarded(self) -> List[Path]:
+        # A link counts even when dangling: _remove_tree removes the link itself.
+        return [p for p in self.backups_path.glob(f"{self.DISCARD_PREFIX}*")
+                if p.is_dir() or p.is_symlink()]
+
+    def _sweep_leftovers(self, deadline: float = None, leftovers: List[Path] = None):
+        """Remove abandoned staging directories and unfinished removals.
+
+        Neither is a backup anyone can list or restore, so unlike retention this
+        also runs after a failed attempt. ``leftovers`` is the ``.discard_`` list
+        a caller took before renaming anything itself; by default it is taken
+        here, before the staging sweep renames anything.
+        """
+        if leftovers is None:
+            leftovers = self._discarded()
 
         # An attempt whose own rmtree failed leaves a dot-prefixed staging
         # directory holding a full copy of the save. Listing and retention both
