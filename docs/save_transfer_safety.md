@@ -524,3 +524,8 @@ After the reviews of `73a65d89`:
   reparse tag on every Python. The previous round's fix reached only the import
   code, so on Pythons before 3.12 Backup Manager still walked a junction and deleted
   what it pointed at, outside `ankimon_backups`.
+- Profile open still reaches the media migration when the connectivity check cannot
+  be scheduled. Before, that dispatch was the one unguarded step between arming the
+  media-sync guard at the top of the profile-open handler and
+  `register_media_migration_hooks`, the only step that releases it, so a task
+  manager refusing work there left media sync paused for the session.

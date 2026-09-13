@@ -221,7 +221,13 @@ def _on_profile_did_open(online_connectivity):
                     parent=mw, exception=e, message="Error awarding monthly pokemon:"
                 )
 
-        mw.taskman.run_in_background(check_connectivity_bg, on_done)
+        # Guarded because the media migration below is what releases the guard
+        # armed at the top: a task manager that refuses this dispatch must not
+        # end the handler before it runs.
+        try:
+            mw.taskman.run_in_background(check_connectivity_bg, on_done)
+        except Exception as e:
+            logger.log("error", f"Could not schedule connectivity check: {e}")
 
         # One-shot per-profile cleanup after the removal of the AnkiWeb
         # file-sync: protect whatever that feature left in collection.media from

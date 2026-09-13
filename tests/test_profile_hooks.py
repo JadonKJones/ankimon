@@ -265,9 +265,10 @@ class _Future:
 
 
 def _fire_profile_did_open(monkeypatch, *, mobile_enabled=True, warm_error=None,
-                           record=None):
+                           record=None, dispatch_error=None):
     """Register hooks, then fire the profile_did_open handler with the given
-    settings.
+    settings. ``dispatch_error`` makes ``mw.taskman.run_in_background`` raise
+    it instead of running the task.
 
     Returns ``(profile_hooks, stubbed ankimon_sync, stubbed save_transfer)`` —
     the third is what lets a caller assert on the media-migration registration
@@ -297,6 +298,8 @@ def _fire_profile_did_open(monkeypatch, *, mobile_enabled=True, warm_error=None,
 
     # Run the backgrounded connectivity task synchronously so on_done executes.
     def _run_in_background(task, on_done=None):
+        if dispatch_error is not None:
+            raise dispatch_error
         value = task()
         if on_done is not None:
             on_done(_Future(value))
@@ -356,6 +359,24 @@ def test_the_media_guard_precedes_every_dialog_and_the_scan_follows_them(monkeyp
     assert "show_tip_of_the_day" in order
     assert order.index("guard_media_saves_now") < order.index("show_tip_of_the_day")
     assert order.index("show_tip_of_the_day") < order.index("register_media_migration_hooks")
+
+
+def test_a_refused_connectivity_dispatch_still_reaches_the_media_migration(monkeypatch):
+    """The guard is armed at the top and only the media migration releases it.
+
+    The connectivity check is dispatched between the two, and the task manager
+    raises when its executor refuses work. Escaping there left media sync paused
+    for the session with no scan and no retry hook.
+    """
+    profile_hooks, _, transfer_mod = _fire_profile_did_open(
+        monkeypatch, dispatch_error=RuntimeError("executor unavailable")
+    )
+
+    transfer_mod.guard_media_saves_now.assert_called_once()
+    transfer_mod.register_media_migration_hooks.assert_called_once()
+    profile_hooks.logger.log.assert_any_call(
+        "error", "Could not schedule connectivity check: executor unavailable"
+    )
 
 
 # --- Static-data re-warm on profile open ------------------------------------
