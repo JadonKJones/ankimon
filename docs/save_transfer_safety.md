@@ -558,3 +558,52 @@ After the reviews of `73a65d89`:
   writes, so it will not open or change an `ankimon_recovery` that another account
   owns. Before, it ignored every `chmod` refusal, and skipped `chmod` on Windows, so
   it tightened and opened a folder that every recovery write refuses.
+- Four cleanups change nothing a save goes through. The profile-open guard now arms
+  from stat calls alone; it used to glob `collection.media` twice for a fingerprint
+  it threw away. Backup Restore's notices about a pending import now say what
+  Import's already did: that nothing is installed a second time, and that the
+  current save's final progress is still retained in a recovery copy first. Backup
+  Manager's snapshot verifies and cleans up through the import code's `_verify_save`
+  and `_remove_owned_copy`; only the logged wording of a refused backup differs. The
+  replace-in-place helpers that staging left without callers are gone from
+  `ankimon_sync`.
+- *Gate media sync where Anki starts a sync, not in the wrapper around the profile's
+  `media_syncing_enabled`, which walks the stack to stand aside for
+  `aqt.preferences`.* Not changed. In Anki 25.09.2 that getter has three sync
+  readers in two modules, each of a different shape: a bool read inside
+  `sync_collection`'s worker lambda, full sync's `server_usn` gate, and
+  `MediaSyncer.start`. Missing one would let a sync run with media while the guard
+  is up. That is worse than the stack walk's own worst case, a later Anki moving
+  Preferences out of `aqt.preferences`, where the dialog would show media sync off
+  while the guard is up and OK would save it. Preferences is the only reader that
+  writes the value back; why the guard stands aside for it is recorded above, among
+  the fixes that verifying the third round surfaced.
+
+Deferred, with reasons:
+
+- A settled profile whose bare `ankimon.db` or `ankimonDEV.db` stays in
+  `collection.media` is scanned again by every new Anki process, and media sync
+  waits for that background scan. The in-process cache covers reopening a profile
+  in one session. A fast path across restarts needs a durable record of which
+  protected copy covers each bare save, for both save names, because the settle
+  fingerprint deliberately leaves recovery copies out and looks only at the active
+  save's names. Nothing is lost; only startup media sync is delayed.
+- Import still stamps the collection's review watermark into the snapshot it is
+  about to stage. Every reader and writer of the watermark calls
+  `rebase_after_import` first, which replaces it while `import_rebase_pending` is
+  set, so the stamp is never read, and Backup Restore already stages with the
+  marker alone. But the stamp's collection read is also what makes Import abort
+  when the collection cannot be read, which
+  `test_import_leaves_live_save_untouched_when_collection_cannot_be_read` pins.
+  Dropping it changes that contract, so it is left for a decision.
+- One shared helper for the pending-import notices of Import and Backup Restore.
+  The two now say the same things, each with its own opening and retry wording,
+  but the helper has no natural home: `save_import` deliberately has no Anki, Qt or
+  services imports, Backup Manager does not import `save_transfer`, and the two
+  present through different helpers, `services.ui` for Backup Manager, as new
+  popups should, and `showWarning` for Import.
+- A full merge of the backup and import snapshot paths. Backup Manager's snapshot
+  turns a relative timeout into its own deadline, publishes with its own
+  `os.replace` and does not sync the file; the import's `_snapshot` spends a
+  deadline its caller shares, leaves the publish to that caller and syncs the copy.
+  Merging them is a behaviour decision rather than a refactor.
