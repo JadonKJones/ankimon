@@ -634,7 +634,10 @@ def _replace_active_save(source: Path, target: Path, what: str, *, collection,
                     )
                 if _save_snapshot_digest(target) != local_digest:
                     return False
-                pending = stage_import(source, target)
+            # Staging reads only the media copy, and the next start snapshots the
+            # final local save before installing, so nothing after the comparison
+            # needs the live connection closed.
+            pending = stage_import(source, target)
         else:
             pending = stage_import(source, target)
     except ImportAlreadyPendingError:

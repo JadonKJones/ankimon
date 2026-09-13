@@ -9,6 +9,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from concurrent.futures import Future
@@ -365,6 +366,49 @@ def test_rescue_rechecks_progress_after_waiting_for_active_writers(
     assert st.get_db_stats(transfer.active)["pokemon"] == 8
     assert len(rescue.prompts) == 1
     assert list(transfer.snapshots.iterdir()) == []
+
+
+def test_rescue_releases_the_live_save_before_staging_the_media_copy(
+    transfer, rescue, monkeypatch,
+):
+    """Staging reads only the media copy. Holding the live save's connection lock
+    through its snapshot and VACUUM stalled every background thread that needed
+    the database."""
+    from Ankimon import save_import
+
+    transfer.active.unlink()
+    db = AnkimonDB(_Logger(), db_path=transfer.active)
+    monkeypatch.setattr(services, "db", db)
+    stage = save_import.stage_import
+    lock_free = []
+
+    def stage_while_a_worker_wants_the_database(snapshot, target):
+        acquired = []
+
+        def worker():
+            if db._conn_lock.acquire(timeout=0.5):
+                db._conn_lock.release()
+                acquired.append(True)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join()
+        lock_free.append(bool(acquired))
+        return stage(snapshot, target)
+
+    monkeypatch.setattr(save_import, "stage_import", stage_while_a_worker_wants_the_database)
+    try:
+        db.set_config_value("trainer.cash", 250)
+        st._apply_migration_result(st._migration_scan(rescue.media, transfer.active), _Logger())
+        rescue.finish_workers()
+        assert len(rescue.callbacks) == 1
+        rescue.callbacks.pop(0)()
+
+        assert lock_free == [True]
+        assert st.get_db_stats(transfer.active)["pokemon"] == 4
+        assert list(transfer.snapshots.iterdir()) == []
+    finally:
+        db.close()
 
 
 def test_rescue_does_not_remember_a_decline_for_changed_local_progress(

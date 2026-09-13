@@ -549,3 +549,8 @@ After the reviews of `73a65d89`:
   Save Import, which clears it. Before, `stage_import` let that record's error
   through as it was, so Import reported a plain abort and Backup Restore a failure
   to prepare, and neither named any way to clear the record.
+- An accepted rescue releases the live save's connection lock once the save is
+  confirmed unchanged, before it stages the media copy. Staging never reads the live
+  save, and the next start snapshots it again before installing. Before, the rescue
+  held that lock through the copy's snapshot and `VACUUM`, so background work that
+  needed the database stalled until staging finished.
