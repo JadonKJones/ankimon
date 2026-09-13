@@ -509,6 +509,21 @@ def test_existing_recovery_directories_are_private_before_snapshot_access(tmp_pa
     assert names(staged["recovery_path"]) == ["local"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions")
+def test_an_installed_import_keeps_the_saves_permissions(tmp_path):
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    # Not the umask default, so an install that hard-codes one cannot pass.
+    target.chmod(0o640)
+    staged = importer.stage_import(source, target)
+    commit_in_new_process(target)
+    assert names(target) == ["incoming"]
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+    # The copy that may still carry credentials stays private.
+    assert stat.S_IMODE(staged["recovery_path"].stat().st_mode) == 0o600
+
+
 def rebase_state(path, *, marker="1"):
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT)")

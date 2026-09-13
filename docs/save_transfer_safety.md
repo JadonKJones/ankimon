@@ -539,3 +539,8 @@ After the reviews of `73a65d89`:
   backups still runs only after a backup succeeds. Before, the sweep ran only after
   a success, so while backups kept failing on a locked folder, every attempt whose
   own cleanup failed too added another full save copy that nothing removed.
+- An installed import or Backup Restore keeps the save's permissions. The install
+  wrote the imported save through a private `mkstemp` file and renamed it over the
+  live save, so every import or restore left the save readable by its owner alone,
+  where Restore on `main` kept its mode with `shutil.copy2`. The staged and recovery
+  copies stay private on purpose, since they may carry credentials.

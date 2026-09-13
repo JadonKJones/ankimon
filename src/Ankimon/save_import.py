@@ -861,6 +861,15 @@ def commit_pending_import(target: Path, logger=None, deadline: float = None) -> 
         _copy_within(incoming, install_temp, deadline)
         _budget(deadline)
         _fsync_file(install_temp)
+        if not missing and os.name != "nt":
+            # mkstemp made the copy private, and the rename carried that over the
+            # save, so every import or restore left it readable by its owner alone.
+            # Set only after the sync, whose open would fail on a read-only mode.
+            try:
+                install_temp.chmod(target.stat().st_mode & 0o7777)
+            except OSError:
+                # A volume with fixed permissions refuses chmod.
+                pass
         os.replace(install_temp, target)
     except Exception:
         _remove_owned_copy(install_temp)
