@@ -584,6 +584,11 @@ def _restrict_directory(path: Path, logger=None) -> None:
 _is_junction = getattr(os.path, "isjunction", lambda path: False)
 
 
+def _is_link(path: Path) -> bool:
+    """Whether ``path`` is a symlink or a Windows junction, without following it."""
+    return path.is_symlink() or _is_junction(path)
+
+
 def _private_directory(path: Path, logger=None) -> None:
     """Create or reuse a folder for private copies of a save, never through a link.
 
@@ -592,12 +597,18 @@ def _private_directory(path: Path, logger=None) -> None:
     checked here would never have been that folder's.
     """
     path.mkdir(mode=0o700, exist_ok=True)
-    if path.is_symlink() or _is_junction(path):
+    if _is_link(path):
         raise OSError(
             f"{path} is a link to another folder, so Ankimon will not write a copy "
             "of the save through it"
         )
     _restrict_directory(path, logger)
+
+
+def _sync_within(path: Path, deadline: float | None) -> None:
+    """Sync a directory, unless the shared startup budget is already spent."""
+    _budget(deadline)
+    _fsync_directory(path)
 
 
 def _finish_installed_import(target, recovery, logger, install_temp=None) -> None:
@@ -656,6 +667,7 @@ def _retain_current_save(target: Path, recovery: Path, logger, deadline) -> Path
     # mkdir(mode=...) neither tightens a folder that already exists nor refuses a
     # link. Check both levels before inspecting or writing private recovery
     # material.
+    _budget(deadline)
     _private_directory(recovery.parent.parent, logger)
     _private_directory(recovery.parent, logger)
     if recovery.is_file():
@@ -667,8 +679,10 @@ def _retain_current_save(target: Path, recovery: Path, logger, deadline) -> Path
         # again afterwards. Redirecting left that advertised path holding the
         # stale first attempt while the genuinely final save sat beside it under
         # a name nobody had been given.
+        _budget(deadline)
         os.replace(recovery, recovery.with_name(f"retry-{uuid.uuid4().hex}-{target.name}"))
-        _fsync_directory(recovery.parent)
+        _sync_within(recovery.parent, deadline)
+        _budget(deadline)
         _prune_superseded_recovery(recovery.parent, target.name)
     elif recovery.exists():
         # Something that is not a snapshot holds the name. Write beside it, as
@@ -680,17 +694,20 @@ def _retain_current_save(target: Path, recovery: Path, logger, deadline) -> Path
     backup_temp = Path(name)
     try:
         _snapshot(target, backup_temp, deadline)
+        # Everything past the snapshot is more recovery I/O inside add-on import.
+        _budget(deadline)
         os.replace(backup_temp, recovery)
-        _fsync_directory(recovery.parent)
-        _fsync_directory(recovery.parent.parent)
-        _fsync_directory(target.parent)
+        _sync_within(recovery.parent, deadline)
+        _sync_within(recovery.parent.parent, deadline)
+        _sync_within(target.parent, deadline)
     finally:
         _remove_owned_copy(backup_temp)
 
     return recovery
 
 
-def _set_aside_orphaned_journals(target: Path, directory: Path, logger=None) -> None:
+def _set_aside_orphaned_journals(target: Path, directory: Path, logger=None,
+                                 deadline: float = None) -> None:
     """Move journals left beside a missing save out of the imported save's way.
 
     SQLite pairs a journal with a database by filename alone, so one left here
@@ -702,13 +719,15 @@ def _set_aside_orphaned_journals(target: Path, directory: Path, logger=None) -> 
     orphans = [path for path in orphans if os.path.lexists(path)]
     if not orphans:
         return
+    # Not budgeted: these renames stay on one volume, and leaving the journals in
+    # place is what loses them. Only the syncs below wait on the disk.
     _private_directory(directory.parent, logger)
     _private_directory(directory, logger)
     for orphan in orphans:
         os.replace(orphan, directory / f"orphaned-{uuid.uuid4().hex}-{orphan.name}")
-    _fsync_directory(directory)
-    _fsync_directory(directory.parent)
-    _fsync_directory(target.parent)
+    _sync_within(directory, deadline)
+    _sync_within(directory.parent, deadline)
+    _sync_within(target.parent, deadline)
     _log(logger, "warning",
          f"Moved journals left beside the missing {target.name} to {directory}")
 
@@ -763,6 +782,11 @@ def commit_pending_import(target: Path, logger=None, deadline: float = None) -> 
     if not missing and _installed_token(target, deadline) == info["token"]:
         _finish_installed_import(target, _recovery_copy(info), logger)
         return True
+    if missing:
+        # Before anything that can stop the install: if it stops, get_db opens a
+        # fresh save at this path, and SQLite does not keep journals it finds
+        # beside a database with no pages.
+        _set_aside_orphaned_journals(target, info["recovery_path"].parent, logger, deadline)
 
     incoming = info["pending_path"]
     _verify_save(incoming, deadline)
@@ -771,7 +795,6 @@ def commit_pending_import(target: Path, logger=None, deadline: float = None) -> 
     if missing:
         # A copy kept by an earlier attempt still describes a previous save.
         recovery = _recovery_copy(info)
-        _set_aside_orphaned_journals(target, info["recovery_path"].parent, logger)
     else:
         recovery = _retain_current_save(target, info["recovery_path"], logger, deadline)
         # Let SQLite merge and remove the OLD database's journals itself. Never

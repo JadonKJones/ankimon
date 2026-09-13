@@ -45,12 +45,18 @@ def _recovery_store(media_dir: Path, *, create: bool = False) -> Path:
     another account's folder that cannot be made private, raises rather than
     receiving copies that hold the save's credentials. ``_protect_bare_saves``
     then copies nothing, leaves media sync paused, and reports the reason.
+    Without ``create`` a link raises as well, so nothing is read through one.
     """
+    from ..save_import import _is_link, _private_directory
+
     recovery = Path(media_dir).parent / "ankimon-media-recovery"
     if create:
-        from ..save_import import _private_directory
-
         _private_directory(recovery)
+    elif _is_link(recovery):
+        # Reading through it would rank, and offer to install, whatever save sits
+        # wherever it points.
+        raise OSError(f"{recovery} is a link to another folder, so Ankimon will not "
+                      "read recovery saves through it")
     return recovery
 
 
@@ -836,6 +842,14 @@ def browse_recovered_saves() -> None:
     recovery = Path(target).parent / "ankimon_recovery" if target else user_path / "ankimon_recovery"
     from aqt.utils import openFolder
 
+    from ..save_import import _is_link
+
+    if _is_link(recovery):
+        # mkdir, chmod and the file manager would all act on wherever it points.
+        showWarning(f"{recovery} is a link to another folder, so Ankimon will not open "
+                    "or change it, and will not write recovery copies through it. "
+                    "Replace it with an ordinary folder.")
+        return
     try:
         recovery.mkdir(mode=0o700, parents=True, exist_ok=True)
         if os.name != "nt":
@@ -1086,14 +1100,16 @@ def _media_candidate_paths(media_dir: Path, target_db: str) -> list:
 
 def _recovery_candidate_paths(media_dir: Path, target_db: str) -> list:
     """Verified local recovery copies for ``target_db``, outside media sync."""
-    recovery = _recovery_store(media_dir)
-    if not recovery.is_dir():
-        return []
     try:
+        recovery = _recovery_store(media_dir)
+        if not recovery.is_dir():
+            return []
+        # Only copies that are really in the folder: a linked one is read from
+        # wherever it points, just like a linked folder.
         return [
             path
             for path in sorted(recovery.glob(_SAVE_PREFIX[target_db] + "*.db"))
-            if _target_db_for(path) == target_db
+            if _target_db_for(path) == target_db and not path.is_symlink()
         ]
     except Exception:
         return []
@@ -1276,6 +1292,13 @@ def _migration_scan(media_dir: Path, target: Optional[Path]) -> Dict[str, Any]:
 
     saves, integrity_failures = _find_media_saves(media_dir, target_db)
     unreadable.extend(integrity_failures)
+    try:
+        _recovery_store(media_dir)
+    except OSError as error:
+        # Refused, not empty: the copies behind it were never read. Stay armed so
+        # they are offered once it is an ordinary folder again.
+        unreadable.append(Path(media_dir).parent / "ankimon-media-recovery")
+        notes.append(("warning", f"Ankimon: {error}"))
 
     def _result(outcome: str, **extra) -> Dict[str, Any]:
         base = {
@@ -1432,7 +1455,9 @@ def _preserve(at_risk: Path, media_dir: Path, target_db: str,
             base = recovery_dir / _protected_copy_name(target_db, digest)
             candidate, suffix = base, 0
             while candidate.exists() or candidate.is_symlink():
-                if _content_digest(candidate) == digest:
+                # A link holds the name but is never the copy: its bytes live
+                # wherever it points.
+                if not candidate.is_symlink() and _content_digest(candidate) == digest:
                     return candidate
                 suffix += 1
                 candidate = base.with_name(f"{base.stem}-{suffix}.db")
@@ -1528,7 +1553,8 @@ def _protect_bare_saves(media_dir: Path) -> Dict[str, Any]:
             destination = recovery_dir / f"_ankimon_unverified_{name}_{digest}.zip"
             base, suffix = destination, 0
             while destination.exists() or destination.is_symlink():
-                if _content_digest(destination) == digest:
+                # As in _preserve: a link holds the name but is never the archive.
+                if not destination.is_symlink() and _content_digest(destination) == digest:
                     break
                 suffix += 1
                 destination = base.with_name(f"{base.stem}-{suffix}.zip")

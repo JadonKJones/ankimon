@@ -461,6 +461,26 @@ After CodeRabbit reviewed that follow-up:
 - *Move the startup install off the add-on import path.* Not changed, for the
   reasons given under the compatibility check above.
 
+After CodeRabbit reviewed `562304bc`:
+
+- Recovery saves are never read through a link either. A linked
+  `ankimon-media-recovery` is not searched for rescue candidates, and a linked copy
+  inside the folder is skipped, so a save kept outside the profile cannot be ranked
+  and offered for installation. Preserving or archiving a save never adopts a link
+  that holds the copy's name either. A linked folder keeps the scan armed, with a
+  log note, instead of settling as empty, so its copies are offered once it is an
+  ordinary folder again. Browse Pre-import Recovery Saves refuses a linked
+  `ankimon_recovery` before `mkdir`, `chmod` or the file manager can act on what it
+  points at.
+- The recovery steps of the startup install check the shared budget like the rest
+  of it: before setting up a folder, before each move or publish, before pruning,
+  and before each directory sync. An install whose budget ran out while
+  snapshotting no longer publishes that snapshot. Journals beside a missing save
+  are the exception: they are set aside before anything that can spend the budget,
+  and only their directory syncs are budgeted. An install that stops leaves `get_db`
+  to open a fresh save at that path, and SQLite deleted both a stale `-journal` and
+  a stale `-wal` beside a new database when that was tried.
+
 Tests only: the prune test checks that the superseded copy it keeps is the newest,
 a staged save swapped for another valid save now reaches the digest refusal
 instead of the size check, the shutdown-budget test covers a developer-mode active

@@ -953,6 +953,67 @@ def test_an_install_into_a_missing_save_that_keeps_its_record_names_no_recovery_
     assert importer.pending_import_info(target) is None
 
 
+def test_the_startup_budget_is_checked_before_a_recovery_snapshot_is_published(tmp_path):
+    """A snapshot that used up the budget must not go on to publish and sync it.
+
+    Every recovery step runs inside add-on import, before Anki has a window.
+    """
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target)
+    child(
+        "import time\n"
+        "end = time.monotonic() + 60\n"
+        "snapshot = module._snapshot\n"
+        "def snapshot_then_stall(source, dest, deadline=None):\n"
+        "    snapshot(source, dest, deadline)\n"
+        "    module.time.monotonic = lambda: end + 1\n"
+        "module._snapshot = snapshot_then_stall\n"
+        "try:\n"
+        "    module.commit_pending_import(target, deadline=end)\n"
+        "except TimeoutError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise AssertionError('the budget was not checked after the snapshot')\n",
+        target,
+    )
+    assert names(target) == ["local"]
+    assert not staged["recovery_path"].exists()
+    assert not list(staged["recovery_path"].parent.glob(".backup-*"))
+    assert importer.pending_import_info(target) is not None
+
+
+def test_a_spent_startup_budget_still_sets_journals_aside(tmp_path):
+    """Moving them is what keeps them, so no budget check may come first.
+
+    An install that stops leaves get_db to open a fresh save at that path, and
+    SQLite does not keep journals it finds beside a database with no pages.
+    """
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target)
+    target.unlink()
+    journal = Path(str(target) + "-journal")
+    journal.write_bytes(b"stale journal")
+    child(
+        "import time\n"
+        "try:\n"
+        "    module.commit_pending_import(target, deadline=time.monotonic() - 1)\n"
+        "except TimeoutError:\n"
+        "    pass\n"
+        "else:\n"
+        "    raise AssertionError('an expired budget should refuse the install')\n",
+        target,
+    )
+    assert not journal.exists()
+    assert [path.read_bytes() for path in staged["recovery_path"].parent.iterdir()] == [
+        b"stale journal"]
+    assert not target.exists()
+    assert importer.pending_import_info(target) is not None
+
+
 def test_a_spent_startup_budget_refuses_rather_than_waiting_again(tmp_path):
     """The install runs before Anki has a window to say what it is waiting for."""
     importer = load_module()

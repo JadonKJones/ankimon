@@ -950,3 +950,89 @@ def test_a_media_recovery_folder_that_refuses_chmod_is_used_only_when_owned(
         notice = _pause_notice()
         assert "Operation not permitted" in notice
         assert "locking" not in notice
+
+
+@pytest.mark.skipif(os.name == "nt", reason="creating symlinks needs privileges on Windows")
+def test_a_linked_media_recovery_store_is_not_searched_for_rescues(transfer, media_host, tmp_path):
+    """A save behind a link would be ranked and offered for installation.
+
+    That holds for a linked folder and for a linked copy inside a real one.
+    """
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    planted = _make_save(elsewhere / st._protected_copy_name("ankimon.db", "0" * 32), pokemon=99)
+    store = st._recovery_store(media_host.media)
+    store.symlink_to(elsewhere, target_is_directory=True)
+    assert st._recovery_candidate_paths(media_host.media, "ankimon.db") == []
+
+    store.unlink()
+    store.mkdir()
+    (store / planted.name).symlink_to(planted)
+    assert st._recovery_candidate_paths(media_host.media, "ankimon.db") == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="creating symlinks needs privileges on Windows")
+def test_browse_does_not_open_or_change_a_linked_recovery_folder(transfer, tmp_path, monkeypatch):
+    """mkdir, chmod and the file manager would all act on wherever the link points."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    elsewhere.chmod(0o755)
+    (transfer.active.parent / "ankimon_recovery").symlink_to(elsewhere, target_is_directory=True)
+    opened = []
+    monkeypatch.setattr(sys.modules["aqt.utils"], "openFolder", lambda path: opened.append(path), raising=False)
+
+    st.browse_recovered_saves()
+
+    assert opened == []
+    assert elsewhere.stat().st_mode & 0o777 == 0o755
+    assert "is a link" in st.showWarning.call_args.args[0]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="creating symlinks needs privileges on Windows")
+@pytest.mark.parametrize("readable", [True, False])
+def test_a_linked_copy_in_the_media_recovery_store_is_never_adopted(
+    transfer, media_host, tmp_path, readable,
+):
+    """A link holds a copy's name, but its bytes live wherever it points.
+
+    Adopting it as the protected copy, or as the raw archive, would release the
+    media-sync guard over a copy outside the store and offer it as a rescue.
+    """
+    source = media_host.media / "ankimon.db"
+    if readable:
+        _make_save(source, pokemon=5)
+    else:
+        source.write_bytes(b"unreadable database" * 100)
+
+    def kept():
+        result = st._protect_bare_saves(media_host.media)
+        return result["protected"][source] if readable else result["archives"][0]
+
+    first = kept()
+    outside = tmp_path / "outside"
+    outside.write_bytes(first.read_bytes())
+    first.unlink()
+    first.symlink_to(outside)
+
+    again = kept()
+
+    assert not again.is_symlink()
+    assert again.parent == first.parent
+    assert again != first
+
+
+@pytest.mark.skipif(os.name == "nt", reason="creating symlinks needs privileges on Windows")
+def test_a_linked_media_recovery_store_keeps_the_scan_armed(transfer, media_host, tmp_path):
+    """Refused is not empty: the copies behind the link were never read.
+
+    Settling as empty would never look again, so after the link is replaced
+    with an ordinary folder its copies would never be offered.
+    """
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    st._recovery_store(media_host.media).symlink_to(elsewhere, target_is_directory=True)
+
+    result = st._migration_scan(media_host.media, transfer.active)
+
+    assert result["outcome"] == "armed"
+    assert any("is a link" in message for _, message in result["log"])

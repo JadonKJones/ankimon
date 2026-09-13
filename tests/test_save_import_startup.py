@@ -22,8 +22,13 @@ def _runtime_saves(tmp_path):
     source = make_save(tmp_path / "source.db", "incoming")
     for path in (target, source):
         with sqlite3.connect(path) as conn:
-            for column in ("name", "pokedex_id", "shiny", "level", "is_main"):
-                conn.execute(f"ALTER TABLE captured_pokemon ADD COLUMN {column} TEXT")
+            conn.executescript(
+                "ALTER TABLE captured_pokemon ADD COLUMN name TEXT;"
+                "ALTER TABLE captured_pokemon ADD COLUMN pokedex_id TEXT;"
+                "ALTER TABLE captured_pokemon ADD COLUMN shiny TEXT;"
+                "ALTER TABLE captured_pokemon ADD COLUMN level TEXT;"
+                "ALTER TABLE captured_pokemon ADD COLUMN is_main TEXT;"
+            )
             conn.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT)")
             conn.execute("INSERT INTO metadata VALUES ('base_stats_normalized', 'true')")
     return target, source
