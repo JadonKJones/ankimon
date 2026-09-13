@@ -571,6 +571,19 @@ def test_snapshot_missing_source_is_not_created(mock_env, tmp_path):
     assert not list(tmp_path.glob(".snapshot-*"))
 
 
+def test_snapshot_of_a_database_that_is_not_a_save_is_refused(mock_env, tmp_path):
+    """A readable SQLite file without captured_pokemon must not be published."""
+    bm, _, _, _ = mock_env
+    source = tmp_path / "other.db"
+    destination = tmp_path / "saved.db"
+    with closing(sqlite3.connect(source)) as conn:
+        conn.executescript("CREATE TABLE notes(id INTEGER, data TEXT);")
+    with pytest.raises(ValueError):
+        bm._snapshot_database(source, destination)
+    assert not list(tmp_path.glob("saved.db*"))
+    assert not list(tmp_path.glob(".snapshot-*"))
+
+
 def test_backup_rejects_corruption_that_sqlite_can_copy(mock_env):
     """Online backup copies pages without verifying their logical consistency."""
     bm, _, user_files_dir, _ = mock_env

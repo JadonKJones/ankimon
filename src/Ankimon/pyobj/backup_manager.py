@@ -267,36 +267,34 @@ class BackupManager:
         a read has to expect it -- ``_pending_media_protection`` in
         ``save_transfer`` leaves ``-shm`` out for exactly this reason.
         """
+        # Imported before the temporary exists: the cleanup below needs it.
+        from ..save_import import _remove_owned_copy, _sqlite_uri, _verify_save
+
         deadline = time.monotonic() + timeout
         fd, name = tempfile.mkstemp(prefix=".snapshot-", suffix=".db", dir=destination_path.parent)
         os.close(fd)
         temporary = Path(name)
-        try:
-            from ..save_import import _sqlite_uri
 
+        def check_deadline(status, remaining, total):
+            # backup() retries SQLITE_BUSY beyond connect's timeout.
+            if time.monotonic() > deadline:
+                raise TimeoutError("Timed out taking a database backup")
+
+        try:
             uri = _sqlite_uri(source_path, "ro")
             with closing(sqlite3.connect(uri, uri=True, timeout=timeout)) as source, \
                  closing(sqlite3.connect(temporary, timeout=timeout)) as snapshot:
-                def check_deadline(status, remaining, total):
-                    # backup() retries SQLITE_BUSY beyond connect's timeout.
-                    if time.monotonic() > deadline:
-                        raise TimeoutError("Timed out taking a database backup")
-
                 source.backup(snapshot, pages=256, progress=check_deadline, sleep=0.05)
-                snapshot.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
-                if snapshot.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
-                    raise ValueError("Database backup failed its integrity check")
-                if not snapshot.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='captured_pokemon'"
-                ).fetchone():
-                    raise ValueError("Database backup is not an Ankimon save")
                 # A backup is a single file: do not require WAL sidecars on restore.
+                # It also lets the read-only check below open the file alone.
                 snapshot.execute("PRAGMA journal_mode=DELETE")
-                check_deadline(0, 0, 0)
+            # The import code's check, on the closed file as it will be
+            # published, and bounded by the same deadline.
+            _verify_save(temporary, deadline)
+            check_deadline(0, 0, 0)
             os.replace(temporary, destination_path)
         finally:
-            for suffix in ("", "-wal", "-shm", "-journal"):
-                Path(str(temporary) + suffix).unlink(missing_ok=True)
+            _remove_owned_copy(temporary)
 
     def _get_db_file_stats(self, db_file_path: Path) -> Dict[str, Any]:
         """Reads summary stats directly from one Ankimon SQLite backup file.
