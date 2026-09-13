@@ -989,6 +989,7 @@ def test_retention_removes_a_linked_backup_without_emptying_what_it_points_at(mo
     assert not list(bm.backups_path.glob(".discard_*"))
 
 
+@pytest.mark.skipif(os.name == "nt", reason="creating symlinks needs privileges on Windows")
 @pytest.mark.parametrize("route", ["retention", "delete", "entry"])
 def test_a_junction_is_removed_as_a_link_on_pythons_without_isjunction(mock_env, tmp_path, monkeypatch, route):
     """Before Python 3.12 only the reparse tag os.lstat reports gives a junction away.
