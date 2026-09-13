@@ -533,7 +533,10 @@ After the reviews of `73a65d89`:
   journal. One read on a read-write connection lets SQLite roll that journal back
   before anything else reads the save. Every step before the journal-mode switch
   read the save read-only, which SQLite cannot use to roll a journal back, so that
-  start failed and the user played a session on the old save.
+  start failed and the user played a session on the old save. A save another
+  process holds locked still stops the install with the lock's own error. As first
+  written, that step logged the lock and carried on, so the startup notice said
+  the import budget had expired, and with no deadline the lock was waited out twice.
 - A failed backup attempt still sweeps abandoned `.backup_` staging directories and
   the `.discard_` remains of unfinished removals, while retention of published
   backups still runs only after a backup succeeds. Before, the sweep ran only after
