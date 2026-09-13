@@ -304,8 +304,8 @@ def _snapshot_save(source: Path, timeout: float = 30.0) -> Path:
     """Return a private verified snapshot; its owner must discard it afterwards.
 
     The same file supplies the displayed stats and the eventual replacement.
-    A cloud download can replace the original pathname while a dialog or the
-    safety backup runs, without changing the save the user approved.
+    A cloud download can replace the original pathname while a dialog is open
+    or the import is being staged, without changing the save the user approved.
     """
     from .ankimon_sync import _verify_sqlite_integrity
 
@@ -1840,12 +1840,13 @@ def _apply_migration_decision(result: Dict[str, Any], logger) -> None:
             parent=mw,
             defaultno=True,
         ):
-            # Deliberately NOT settled here. On success the replace closes Anki;
-            # the next boot re-runs this, finds the media copy no longer ahead of
-            # the (now equal) local save, skips the prompt and settles then. On
-            # FAILURE — a refused backup, a persisting file lock — the flag is
-            # still unset, so the user is offered the rescue again next launch
-            # instead of silently losing their only route back to that data.
+            # Deliberately NOT settled here. On success the rescue is staged and
+            # Anki closes; the next boot installs it, re-runs this, finds the
+            # media copy no longer ahead of the (now equal) local save, skips the
+            # prompt and settles then. On FAILURE — staging that fails, a save
+            # Ankimon could not stop writing to in time — the flag is still
+            # unset, so the user is offered the rescue again next launch instead
+            # of silently losing their only route back to that data.
             _offer_rescue_later(
                 result.pop("snapshot_path"), Path(target), collection,
                 local_revision, local_digest, logger,

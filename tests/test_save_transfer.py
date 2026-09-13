@@ -248,31 +248,20 @@ def test_export_discards_a_file_that_fails_verification(tmp_path, live_db, monke
 # --------------------------------------------------------------------------
 # Import
 # --------------------------------------------------------------------------
-def _stub_sync(monkeypatch, *, backup_ok=True):
-    """Stand in for the AnkimonDataSync primitives the import path leans on,
-    recording the order in which they were called."""
-    calls = []
+def _stub_sync(monkeypatch, *, staging_ok=True):
+    """Stand in for the one AnkimonDataSync primitive the import path still
+    holds, and optionally make staging the import fail. Nothing here touches
+    the live save, so each test checks that save itself."""
 
     class _Sync:
         def _quiesce_live_db_connection(self, target):
             return nullcontext(True)
 
-        def _backup_before_overwrite(self, name):
-            calls.append(("backup", name))
-            return backup_ok
-
-        def _atomic_replace(self, src, dest, validate_target=None):
-            if validate_target is not None:
-                validate_target()
-            calls.append(("replace", str(src), str(dest)))
-            shutil.copy2(src, dest)
-
-    if not backup_ok:
+    if not staging_ok:
         def fail_staging(*args):
             raise OSError("Cannot prepare pending import")
         monkeypatch.setattr("Ankimon.save_import.stage_import", fail_staging)
     monkeypatch.setattr("Ankimon.pyobj.ankimon_sync.get_ankimon_sync", lambda: _Sync())
-    return calls
 
 
 def test_import_refuses_a_file_that_is_not_an_ankimon_save(tmp_path, live_db, monkeypatch):
@@ -298,11 +287,10 @@ def test_import_refuses_when_staging_fails(tmp_path, live_db, monkeypatch):
     monkeypatch.setattr(st, "showInfo", MagicMock())
     closed = MagicMock()
     monkeypatch.setattr(st, "close_anki", closed)
-    calls = _stub_sync(monkeypatch, backup_ok=False)
+    _stub_sync(monkeypatch, staging_ok=False)
 
     assert st.import_save() is False
-    assert calls == []  # nothing touches the live database
-    assert st.get_db_stats(live_db)["pokemon"] == 3
+    assert st.get_db_stats(live_db)["pokemon"] == 3  # nothing touches the live database
     closed.assert_not_called()
 
 
@@ -310,10 +298,9 @@ def test_import_declined_by_user_changes_nothing(tmp_path, live_db, monkeypatch)
     incoming = _make_save(tmp_path / "incoming.db", pokemon=99)
     monkeypatch.setattr(st.QFileDialog, "getOpenFileName", lambda *a, **k: (str(incoming), ""))
     monkeypatch.setattr(st, "askUser", lambda *a, **k: False)
-    calls = _stub_sync(monkeypatch)
+    _stub_sync(monkeypatch)
 
     assert st.import_save() is False
-    assert calls == []
     assert st.get_db_stats(live_db)["pokemon"] == 3
 
 
@@ -324,10 +311,9 @@ def test_import_prepares_then_installs_only_after_full_restart(tmp_path, live_db
     monkeypatch.setattr(st, "showInfo", MagicMock())
     closed = MagicMock()
     monkeypatch.setattr(st, "close_anki", closed)
-    calls = _stub_sync(monkeypatch)
+    _stub_sync(monkeypatch)
 
     assert st.import_save() is True
-    assert calls == []
     assert st.get_db_stats(live_db)["pokemon"] == 3
     commit_in_new_process(live_db)
     assert st.get_db_stats(live_db)["pokemon"] == 99
@@ -337,9 +323,9 @@ def test_import_prepares_then_installs_only_after_full_restart(tmp_path, live_db
 def test_import_refuses_the_file_it_is_already_using(tmp_path, live_db, monkeypatch):
     monkeypatch.setattr(st.QFileDialog, "getOpenFileName", lambda *a, **k: (str(live_db), ""))
     monkeypatch.setattr(st, "showWarning", MagicMock())
-    calls = _stub_sync(monkeypatch)
+    _stub_sync(monkeypatch)
     assert st.import_save() is False
-    assert calls == []
+    assert st.get_db_stats(live_db)["pokemon"] == 3
 
 
 # --------------------------------------------------------------------------
@@ -449,11 +435,10 @@ def test_migration_rescue_replaces_the_save_when_accepted(media, live_db, logger
     monkeypatch.setattr(st, "askUser", lambda *a, **k: True)
     monkeypatch.setattr(st, "showInfo", MagicMock())
     monkeypatch.setattr(st, "close_anki", MagicMock())
-    calls = _stub_sync(monkeypatch)
+    _stub_sync(monkeypatch)
 
     st.run_media_migration(MagicMock(), logger)
 
-    assert calls == []
     assert st.get_db_stats(live_db)["pokemon"] == 3
     commit_in_new_process(live_db)
     assert st.get_db_stats(live_db)["pokemon"] == 42
@@ -497,14 +482,14 @@ def test_migration_never_raises_out_of_profile_open(media, live_db, logger, monk
 
 
 def test_migration_retries_the_rescue_if_the_replace_failed(media, live_db, logger, monkeypatch):
-    """A refused backup or a persisting file lock must not burn the one-shot
-    flag — that would leave the user with no offered route back to the only copy
-    of their progress."""
+    """A rescue that fails to stage must not burn the one-shot flag — that
+    would leave the user with no offered route back to the only copy of their
+    progress."""
     _make_save(media / "ankimon.db", pokemon=42, badges=8, history=99)
     ask = MagicMock(return_value=True)
     monkeypatch.setattr(st, "askUser", ask)
     monkeypatch.setattr(st, "showWarning", MagicMock())
-    _stub_sync(monkeypatch, backup_ok=False)          # backup refuses
+    _stub_sync(monkeypatch, staging_ok=False)         # staging fails
 
     st.run_media_migration(MagicMock(), logger)
     st.run_media_migration(MagicMock(), logger)
@@ -703,7 +688,7 @@ def test_rescue_keeps_the_verified_snapshot_when_the_media_file_changes(
     # Make the protect step fail, so the offer names the bare, replaceable file
     # rather than a content-addressed copy nothing overwrites.
     monkeypatch.setattr(st, "_preserve", lambda *a, **k: None)
-    calls = _stub_sync(monkeypatch)
+    _stub_sync(monkeypatch)
     scheduled = []
     monkeypatch.setattr(
         st.mw.progress, "single_shot",
@@ -723,7 +708,6 @@ def test_rescue_keeps_the_verified_snapshot_when_the_media_file_changes(
     assert st.get_db_stats(live_db)["pokemon"] == 3
     commit_in_new_process(live_db)
     assert st.get_db_stats(live_db)["pokemon"] == 42
-    assert calls == []
     assert "unverified" in warn.call_args.args[0]
 
 

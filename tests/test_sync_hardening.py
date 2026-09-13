@@ -10,9 +10,9 @@ one-shot media migration now depend on:
 * the integrity check rejects a corrupt, truncated or foreign DB;
 * the atomic copy (``_atomic_write_over``) survives a transient Windows file lock
   (issue #636);
-* ``BackupManager.create_backup`` isolates per-file failures and reports failure
-  for the file a caller actually depends on, so a failed backup can refuse a
-  destructive overwrite.
+* ``BackupManager.create_backup`` isolates per-file failures and reports success
+  only for a verified snapshot of the file it is asked about (the active-mode
+  database by default), so one file's failure does not blank another's.
 
 See ``test_save_transfer.py`` for the Export/Import and migration paths built on
 top of these.
@@ -186,8 +186,8 @@ def _make_backup_manager(tmp_path, monkeypatch):
 
 
 def test_backup_required_file_success_isolated_from_other_file_failure(tmp_path, monkeypatch):
-    """A failed ankimonDEV.db snapshot must NOT blank a successful ankimon.db backup
-    — otherwise a perfectly safe import would be needlessly aborted."""
+    """A failed ankimonDEV.db snapshot must NOT blank a successful ankimon.db backup:
+    the result reports the file that was asked about."""
     _make_ankimon_db(tmp_path / "ankimon.db")
     (tmp_path / "ankimonDEV.db").write_bytes(b"DEV" + b"\x00" * 600)
     bm = _make_backup_manager(tmp_path, monkeypatch)

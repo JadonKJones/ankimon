@@ -333,7 +333,16 @@ class AnkimonDataSync:
 
     @contextlib.contextmanager
     def _quiesce_live_db_connection(self, target_file: Path):
-        """Keep connection creation blocked across a live DB file replacement."""
+        """Close the live save's connections and hold new ones off for the block.
+
+        Yields whether they all closed in time. The media rescue holds it only
+        while it checks that the local save's digest still matches the one
+        taken when the rescue was offered, so nothing writes to the save while
+        it is read. Nothing replaces the file under it: the import is staged
+        for the next start. A ``target_file`` that is not the live save yields
+        True untouched; a DB manager without ``quiesce`` gets a plain close,
+        which cannot hold new connections off.
+        """
         from ..services import services
 
         db = services.db

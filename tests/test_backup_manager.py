@@ -649,7 +649,7 @@ def test_shutdown_backup_spends_one_budget_across_both_databases(mock_env, monke
     assert attempts[0][1] == pytest.approx(bm.SHUTDOWN_BACKUP_BUDGET)
     assert clock[0] - 100.0 <= bm.SHUTDOWN_BACKUP_BUDGET
 
-    # A pre-overwrite backup is not a shutdown: every file keeps the per-file
+    # A backup outside shutdown has no deadline: every file keeps the per-file
     # default, and the call shape stays positional for callers that patch it.
     attempts.clear()
     assert bm.create_backup(required_file="ankimon.db") is False

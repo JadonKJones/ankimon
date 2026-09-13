@@ -124,13 +124,10 @@ class BackupManager:
         caller leaves it unset and keeps the per-file default.
 
         Returns ``True`` only if the backup directory contains a verified
-        snapshot of the file the caller depends on. ``required_file`` names it (the
-        one a pre-overwrite caller is protecting, e.g. ``ankimon.db``); when
-        omitted, the active-mode database is used. Callers that back up *before*
-        a destructive overwrite rely on this to refuse the overwrite when no
-        recoverable backup of THAT file was actually made — so one unrelated
-        file's snapshot failure must not blank another file's success (each file is
-        isolated below)."""
+        snapshot of ``required_file`` (e.g. ``ankimon.db``), or of the
+        active-mode database when it is omitted. The result is about THAT file:
+        each file is snapshotted in isolation below, so one file's failure
+        neither blanks another file's success nor is hidden by it."""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         backup_dir = self.backups_path / f"backup_{timestamp}"
         staging_dir = self.backups_path / f".{backup_dir.name}"
@@ -163,8 +160,7 @@ class BackupManager:
                 source_path = sources[filename]
                 if source_path.exists():
                     # Isolate each snapshot: a failure on ankimonDEV.db must not mark
-                    # a successful ankimon.db backup as failed (which would
-                    # needlessly abort a safe import), and vice versa.
+                    # a successful ankimon.db backup as failed, and vice versa.
                     try:
                         if deadline is None:
                             self._snapshot_database(source_path, staging_dir / filename)
@@ -182,7 +178,7 @@ class BackupManager:
                         self.logger.log("error", f"Failed to back up {filename}: {e}")
 
             # A failed snapshot can leave a partial temporary file; only a
-            # completed, verified snapshot authorizes a destructive overwrite.
+            # completed, verified snapshot of the needed file counts as a backup.
             # Summarise INSIDE that check: with no snapshot in staging,
             # _generate_summary falls back to the live database, and its own
             # busy timeout would re-enter the very lock wait `deadline` exists
