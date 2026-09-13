@@ -729,6 +729,32 @@ def test_reopening_a_profile_captured_earlier_this_session_resumes_media_sync(
     assert media_host.pm.media_syncing_enabled() is True
 
 
+def test_arming_the_guard_on_profile_open_lists_no_directory(transfer, media_host, monkeypatch):
+    """The guard runs on the GUI thread before profile open does anything else.
+
+    It globbed the whole of collection.media twice, for a fingerprint it then
+    discarded: two scans of a folder that can hold tens of thousands of files,
+    on every profile open, for nothing.
+    """
+    _make_save(media_host.media / "ankimon.db", pokemon=1)
+    listings = []
+
+    def counted(name, real):
+        def listing(*args, **kwargs):
+            listings.append((name, args))
+            return real(*args, **kwargs)
+        return listing
+
+    monkeypatch.setattr(Path, "glob", counted("glob", Path.glob))
+    monkeypatch.setattr(os, "scandir", counted("scandir", os.scandir))
+    monkeypatch.setattr(os, "listdir", counted("listdir", os.listdir))
+
+    st.guard_media_saves_now(_Logger())
+
+    assert listings == []
+    assert media_host.pm.media_syncing_enabled() is False
+
+
 def test_a_retry_that_fires_before_the_throttle_ends_arms_another(
     transfer, media_host, monkeypatch,
 ):

@@ -1993,7 +1993,7 @@ def _schedule_migration_retry(settings_obj, logger, delay: Optional[float] = Non
         pass
 
 
-def _pending_media_protection(media_dir: Path, target: Optional[Path]):
+def _stat_bare_saves(media_dir: Path):
     """Stat both bare saves and sidecars without opening or copying their bytes.
 
     SHM is left out for the reason ``_local_save_revision`` leaves it out: it is
@@ -2024,6 +2024,16 @@ def _pending_media_protection(media_dir: Path, target: Optional[Path]):
                                   stat.st_ctime_ns, stat.st_ino, stat.st_mode))
             if not suffix:
                 protection["unprotected"].append(source)
+    return protection, signature
+
+
+def _pending_media_protection(media_dir: Path, target: Optional[Path]):
+    """``_stat_bare_saves`` plus the fingerprint of every sync-visible candidate.
+
+    That fingerprint globs the whole of collection.media, so a caller that needs
+    only the protection picture calls ``_stat_bare_saves`` instead.
+    """
+    protection, signature = _stat_bare_saves(media_dir)
     # A newly downloaded candidate must also bypass an unreadable-file delay.
     entries = _media_fingerprint_entries(media_dir, target.name if target else "ankimon.db")
     return protection, (tuple(signature), tuple(sorted(entries.items())))
@@ -2044,13 +2054,15 @@ def guard_media_saves_now(logger) -> None:
     its work with a zero-delay timer precisely to get off that stack, which only
     works if nothing after the dispatch pumps the loop.
 
-    Only stat calls: no SQLite, no thread, nothing that can block a profile open.
+    Only stat calls: no directory listing, no SQLite, no thread, nothing that can
+    block a profile open. ``_pending_media_protection`` would glob the whole of
+    collection.media for a fingerprint this never reads.
     """
     try:
         media_dir = _media_dir()
         if media_dir is None or not media_dir.is_dir():
             return
-        protection, _ = _pending_media_protection(media_dir, _active_db_path())
+        protection, _ = _stat_bare_saves(media_dir)
         _guard_uncaptured_media(media_dir, protection)
     except Exception as e:
         try:
