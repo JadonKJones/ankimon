@@ -554,7 +554,8 @@ class BackupManager:
                     "The previous save import has ALREADY installed and is the "
                     "save you are playing now. Only its leftover record could "
                     "not be cleared.\n\nUse Ankimon → Game → Cancel Pending Save Import "
-                    "to clear that record, then restore this backup again."
+                    "to clear that record, then restore this backup again. Nothing "
+                    "will be installed a second time."
                 )
                 return
             if installed is None:
@@ -580,7 +581,9 @@ class BackupManager:
             self._warn_about_pending_import(
                 f"The backup restore could not be finished cleanly: {e}.\n\n"
                 "Your current save is still active, but the restore is now "
-                "PENDING and will install at the next full Anki restart. Use "
+                "PENDING and will install at the next full Anki restart. The "
+                "current save's final progress will still be retained in a "
+                "recovery copy first. Use "
                 "Ankimon → Game → Cancel Pending Save Import if you do not want it."
             )
             return

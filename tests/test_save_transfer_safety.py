@@ -718,6 +718,8 @@ def test_backup_restore_published_but_unfinished_is_reported_as_pending(transfer
     message = warn.call_args.args[0]
     assert "PENDING" in message
     assert "Cancel Pending Save Import" in message
+    # The same install keeps the final save first, and Import already says so.
+    assert "final progress will still be retained in a recovery copy first" in message
     assert "Failed to prepare" not in message
     # Like Import, the restore does not close Anki on its own after an I/O
     # failure; the user decides when to restart.

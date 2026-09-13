@@ -918,6 +918,28 @@ def test_restore_over_an_import_of_unknown_state_claims_neither_answer(mock_env,
         save_import.cancel_pending_import(db.db_path)
 
 
+def test_restore_over_an_already_installed_import_says_nothing_installs_twice(mock_env, monkeypatch):
+    """Import's notice says so, and the same install path holds for a restore."""
+    bm, db, _, _ = mock_env
+    from Ankimon import save_import
+
+    backup_dir = bm.backups_path / "backup_2026-06-02_13-00-00"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    _seed_db(backup_dir / "ankimon.db", "Blue", 999)
+    bm.restore_backup(str(backup_dir))
+    assert save_import.pending_import_info(db.db_path) is not None
+    monkeypatch.setattr(save_import, "pending_import_is_installed", lambda target: True)
+    try:
+        with patch.object(services, "ui", MagicMock()) as ui:
+            bm.restore_backup(str(backup_dir))
+        message = ui.warn.call_args.args[0]
+        assert "ALREADY installed" in message
+        assert "Nothing will be installed a second time." in message
+        assert "will install at the next" not in message
+    finally:
+        save_import.cancel_pending_import(db.db_path)
+
+
 def test_a_manual_delete_that_fails_part_way_cannot_pose_as_the_newest_backup(mock_env):
     """The Delete button had the same restamped-remains problem as retention."""
     bm, _, _, _ = mock_env
