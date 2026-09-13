@@ -195,6 +195,33 @@ def test_browse_still_opens_a_folder_whose_permissions_cannot_change(transfer, m
     st.showWarning.assert_not_called()
 
 
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+def test_browse_does_not_open_another_accounts_recovery_folder(transfer, monkeypatch):
+    """chmod refuses another account's folder with the same EPERM as a FAT volume.
+
+    Every recovery write refuses that folder, so Browse must not tighten it or show
+    it as the place the save's copies are kept.
+    """
+    import errno
+
+    recovery = transfer.active.parent / "ankimon_recovery"
+    recovery.mkdir()
+    opened = []
+    monkeypatch.setattr(sys.modules["aqt.utils"], "openFolder", lambda path: opened.append(path), raising=False)
+    chmod, getuid = Path.chmod, os.getuid
+
+    def not_owned(self, mode, *args, **kwargs):
+        if self == recovery:
+            raise PermissionError(errno.EPERM, "Operation not permitted", str(self))
+        return chmod(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "chmod", not_owned)
+    monkeypatch.setattr(os, "getuid", lambda: getuid() + 1)
+    st.browse_recovered_saves()
+    assert opened == []
+    assert "could not be opened" in st.showWarning.call_args.args[0]
+
+
 def test_scan_result_is_discarded_when_the_media_save_changes_mid_scan(
     transfer, media_host, monkeypatch,
 ):

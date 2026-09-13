@@ -554,3 +554,7 @@ After the reviews of `73a65d89`:
   save, and the next start snapshots it again before installing. Before, the rescue
   held that lock through the copy's snapshot and `VACUUM`, so background work that
   needed the database stalled until staging finished.
+- Browse Pre-import Recovery Saves now uses the same folder check as the recovery
+  writes, so it will not open or change an `ankimon_recovery` that another account
+  owns. Before, it ignored every `chmod` refusal, and skipped `chmod` on Windows, so
+  it tightened and opened a folder that every recovery write refuses.

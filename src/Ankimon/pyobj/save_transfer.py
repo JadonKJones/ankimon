@@ -845,7 +845,7 @@ def browse_recovered_saves() -> None:
     recovery = Path(target).parent / "ankimon_recovery" if target else user_path / "ankimon_recovery"
     from aqt.utils import openFolder
 
-    from ..save_import import _is_link
+    from ..save_import import _is_link, _private_directory
 
     if _is_link(recovery):
         # mkdir, chmod and the file manager would all act on wherever it points.
@@ -854,14 +854,12 @@ def browse_recovered_saves() -> None:
                     "Replace it with an ordinary folder.")
         return
     try:
-        recovery.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if os.name != "nt":
-            try:
-                recovery.chmod(0o700)
-            except OSError:
-                # A volume mounted with fixed permissions refuses chmod, and
-                # showing the folder does not depend on tightening it.
-                pass
+        # _private_directory creates only the last folder.
+        recovery.parent.mkdir(parents=True, exist_ok=True)
+        # The check every recovery write makes: a volume with fixed permissions
+        # may refuse chmod on this user's folder, but another account's folder
+        # is refused, not shown as where the save's copies are kept.
+        _private_directory(recovery)
         openFolder(str(recovery))
     except OSError as error:
         showWarning(f"The recovery folder could not be opened: {error}. "
