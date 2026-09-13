@@ -37,7 +37,6 @@ Two unrelated things used to live in this module under the shared word "sync":
 import base64
 import contextlib
 import errno
-import gc
 import json
 import os
 import shutil
@@ -47,8 +46,7 @@ from pathlib import Path
 from typing import Callable, Any
 
 from aqt import mw, gui_hooks
-from aqt.utils import showWarning, tooltip
-from ..pyobj.error_handler import show_warning_with_traceback
+from aqt.utils import tooltip
 
 from ..resources import user_path
 
@@ -112,9 +110,8 @@ def _retry_on_lock(op: Callable[[], Any], delays=None) -> Any:
     for the caller to translate into a friendly message.
 
     A blocking lock is held by ANOTHER process (OneDrive/antivirus), so there is
-    no handle of ours to reclaim here — callers that need to drop their own live
-    DB handle (``_atomic_replace``) do the one ``gc.collect()`` that matters
-    before calling in, rather than paying a full-heap scan on every retry."""
+    no handle of ours to reclaim here, and nothing a full-heap ``gc.collect()``
+    between tries could release."""
     if delays is None:
         delays = _SYNC_LOCK_RETRY_DELAYS
     attempts = len(delays) + 1
@@ -261,18 +258,6 @@ def _verify_sqlite_integrity(db_file: Path, timeout: float = 30.0) -> bool:
         return False
 
 
-def _handle_manual_sync_error(exc: BaseException, message: str) -> bool:
-    """Present a MANUAL (modal) sync failure and return False. A transient file
-    lock (OneDrive/antivirus) that survived the retry gets the single friendly,
-    actionable ``SYNC_LOCK_MESSAGE``; a genuine error gets the raw traceback. The
-    caller early-returns on False, so neither is stacked with a second dialog."""
-    if _is_lock_error(exc):
-        showWarning(SYNC_LOCK_MESSAGE)
-    else:
-        show_warning_with_traceback(parent=mw, exception=exc, message=message)
-    return False
-
-
 class AnkimonDataSync:
     """Save-file primitives shared by the manual save transfer and the
     sync-removal migration.
@@ -282,10 +267,11 @@ class AnkimonDataSync:
     that path is gone (see this module's docstring). What survives here is the
     part that was hard-won and is still correct: the legacy ``config.obf``
     obfuscation helpers that ``settings.py`` still needs to read a pre-SQLite
-    config, the integrity gate, the backup-before-overwrite gate, and the atomic
-    replace with its Windows file-lock tolerance (issue #636).
-    ``pyobj/save_transfer.py`` builds the user-facing Export/Import on top of
-    these, and resolves the media folder itself when it needs it.
+    config, the integrity gate, and the live-DB quiescence that
+    ``pyobj/save_transfer.py`` holds while a rescue checks the local save has
+    not changed. An import stages its save for the next start, so nothing here
+    replaces the live file. The atomic copy with its Windows file-lock tolerance
+    (issue #636) is the module-level ``_atomic_write_over``.
     """
 
     _OBFUSCATION_KEY = "H0tP-!s-N0t-4-C@tG!rL_v2"
@@ -375,80 +361,6 @@ class AnkimonDataSync:
         ``AnkimonDataSync`` (which needs a loaded Anki profile).
         """
         return _verify_sqlite_integrity(db_file, timeout=timeout)
-
-    def _backup_before_overwrite(self, required_file: str = "ankimon.db") -> bool:
-        """Timestamped backup of the local Ankimon DB(s) before an import
-        overwrites them, so a bad cross-device import is recoverable via the
-        Backup Manager. Reuses BackupManager (WAL checkpoint + summary +
-        retention) rather than a bare copy. Returns True only if a backup of
-        ``required_file`` (the file about to be overwritten) was actually
-        written — callers MUST refuse to overwrite when this is False, or a
-        failed backup would leave the live save with no recovery path."""
-        try:
-            from ..services import services
-            from .backup_manager import BackupManager
-            return bool(
-                BackupManager(services.logger, services.settings).create_backup(
-                    manual=False, required_file=required_file
-                )
-            )
-        except Exception as e:
-            try:
-                from ..services import services
-                services.logger.log("error", f"Pre-import backup failed: {e}")
-            except Exception:
-                pass
-            return False
-
-    def _atomic_replace(self, media_file: Path, source_file: Path,
-                        validate_target: Callable[[], Any] = None) -> None:
-        """Overwrite ``source_file`` with ``media_file`` atomically via
-        ``_atomic_write_over`` (temp on the same volume + ``os.replace``, retrying
-        a transient OneDrive/antivirus lock), after closing the live connection to
-        ``source_file`` so the OS releases its handle before the rename. A
-        persisting lock re-raises for the caller to surface as a friendly message;
-        a non-lock error propagates unchanged. (``_atomic_write_over`` prefers the
-        system temp dir, falling back to a same-directory sibling.)
-
-        The media file is a single-file export (no WAL sidecar), so any stale
-        ``-wal`` / ``-shm`` belonging to the OLD ``source_file`` must be removed
-        after the swap — a fresh connection that found them would try to replay
-        an unrelated WAL over the new file and hit 'database disk image is
-        malformed'.
-
-        The connection registry requests closure from GUI and background wrappers.
-        If an in-flight operation does not release its lease within the bounded
-        wait, replacement aborts and the original database remains untouched.
-        ``validate_target`` runs after writers drain and before replacement,
-        while connection creation remains blocked."""
-        source_file.parent.mkdir(parents=True, exist_ok=True)
-        quiescence = self._quiesce_live_db_connection(source_file)
-        entered = False
-
-        def _release_handles():
-            nonlocal entered
-            closed = quiescence.__enter__()
-            entered = True
-            if not closed:
-                raise RuntimeError(
-                    "Database replacement aborted because active operations did not finish"
-                )
-            if validate_target is not None:
-                validate_target()
-            gc.collect()
-
-        try:
-            _atomic_write_over(media_file, source_file, before_replace=_release_handles)
-
-            for sidecar in ("-wal", "-shm"):
-                stale = source_file.with_name(source_file.name + sidecar)
-                try:
-                    stale.unlink(missing_ok=True)
-                except Exception:
-                    pass
-        finally:
-            if entered:
-                quiescence.__exit__(None, None, None)
 
 
 # Global instance for easy access - but will be lazy initialized
