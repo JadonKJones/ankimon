@@ -993,3 +993,30 @@ def test_a_restore_close_failure_notice_that_cannot_be_shown_does_not_escape(moc
         assert save_import.pending_import_info(db.db_path) is not None
     finally:
         save_import.cancel_pending_import(db.db_path)
+
+
+def test_a_restore_that_fails_before_staging_is_reported_not_raised(mock_env):
+    """Its handlers name exceptions that were imported inside the same try.
+
+    Anything raised before that import -- here, a backup folder that cannot be
+    read -- made the first handler raise UnboundLocalError instead, and the
+    restore escaped with nothing said.
+    """
+    bm, db, _, _ = mock_env
+    from Ankimon.save_import import pending_import_info
+
+    backup_dir = bm.backups_path / "backup_2026-06-05_12-00-00"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    is_file = Path.is_file
+
+    def unreadable(self, *args, **kwargs):
+        if self.parent == backup_dir:
+            raise PermissionError("simulated unreadable backup folder")
+        return is_file(self, *args, **kwargs)
+
+    with patch.object(Path, "is_file", unreadable), \
+         patch.object(_bm_mod, "showWarning") as warning:
+        bm.restore_backup(str(backup_dir))
+    assert warning.call_count == 1
+    assert warning.call_args.args[0].startswith("Failed to prepare backup restore")
+    assert pending_import_info(db.db_path) is None

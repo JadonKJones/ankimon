@@ -868,29 +868,89 @@ def test_repeated_failed_installs_do_not_grow_the_recovery_folder_forever(tmp_pa
     ]
 
 
-def test_an_import_for_a_save_that_no_longer_exists_says_so(tmp_path):
-    """Every step below the check reads the target; a bare SQLite error does not.
+def test_an_import_for_a_save_that_no_longer_exists_installs_it(tmp_path):
+    """There is no current save to lose, so the import goes in.
 
-    get_db tries both modes on every start and never recreates the developer
-    save, so an unactionable message here repeats for as long as the record does.
+    Refusing it let get_db create a fresh save in the same start, and the start
+    after that installed the import over the fresh save without a notice.
     """
     importer = load_module()
-    target = make_save(tmp_path / "ankimonDEV.db", "local")
+    target = make_save(tmp_path / "ankimon.db", "local")
     source = make_save(tmp_path / "source.db", "incoming")
-    importer.stage_import(source, target)
+    staged = importer.stage_import(source, target)
     target.unlink()
 
+    child("assert module.commit_pending_import(target) is True\n", target)
+    assert names(target) == ["incoming"]
+    assert importer.pending_import_info(target) is None
+    # Nothing was retained, so no empty recovery folder suggests otherwise.
+    assert not staged["recovery_path"].parent.exists()
+
+
+@pytest.mark.parametrize("suffixes", [("-journal",), ("-wal", "-shm")])
+def test_journals_left_beside_a_missing_save_are_set_aside_not_replayed(tmp_path, suffixes):
+    """SQLite pairs a journal with a database by its filename alone.
+
+    Left in place, a stale one would be applied to the imported save. It may be
+    all that remains of the missing save, so it is kept rather than deleted.
+    """
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target)
+    target.unlink()
+    for suffix in suffixes:
+        Path(str(target) + suffix).write_bytes(f"stale {suffix}".encode())
+
+    child("assert module.commit_pending_import(target) is True\n", target)
+    assert not [suffix for suffix in suffixes if Path(str(target) + suffix).exists()]
+    assert names(target) == ["incoming"]
+    kept = sorted(path.read_bytes() for path in staged["recovery_path"].parent.iterdir())
+    assert kept == sorted(f"stale {suffix}".encode() for suffix in suffixes)
+    if os.name != "nt":
+        assert stat.S_IMODE(staged["recovery_path"].parent.stat().st_mode) == 0o700
+
+
+def test_an_install_into_a_missing_save_that_keeps_its_record_names_no_recovery_copy(tmp_path):
+    """Nothing was replaced, so nothing was kept, whatever path the record reserved.
+
+    Its final cleanup can fail like any other install's, leaving the record for
+    the next start and for Cancel. Neither may send the user after a copy.
+    """
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target)
+    target.unlink()
     child(
+        "def refuse(target):\n"
+        "    raise OSError('injected cleanup failure')\n"
+        "module.cancel_pending_import = refuse\n"
         "try:\n"
         "    module.commit_pending_import(target)\n"
-        "except FileNotFoundError as error:\n"
-        "    assert 'no longer exists' in str(error), error\n"
-        "    assert 'Cancel Pending Save Import' in str(error), error\n"
+        "except module.ImportInstalledError:\n"
+        "    pass\n"
         "else:\n"
-        "    raise AssertionError('a missing target should be reported, not opened')\n",
+        "    raise AssertionError('the cleanup failure should have been reported')\n",
         target,
     )
-    assert importer.pending_import_info(target) is not None
+    assert names(target) == ["incoming"]
+    assert importer.pending_import_is_installed(target) is True
+    assert importer.pending_import_recovery_copy(target) is None
+    assert not staged["recovery_path"].exists()
+
+    result = child(
+        "messages = []\n"
+        "class Logger:\n"
+        "    def log(self, level, message):\n"
+        "        messages.append(message)\n"
+        "assert module.commit_pending_import(target, Logger()) is True\n"
+        "print(json.dumps(messages))\n",
+        target,
+    )
+    messages = json.loads(result.stdout)
+    assert messages and not any("ankimon_recovery" in message for message in messages)
+    assert importer.pending_import_info(target) is None
 
 
 def test_a_spent_startup_budget_refuses_rather_than_waiting_again(tmp_path):
@@ -1130,6 +1190,47 @@ def test_a_recovery_folder_owned_by_another_account_is_still_refused(tmp_path):
     assert "Operation not permitted" in result.stderr
     assert names(target) == ["local"]
     assert not staged["recovery_path"].exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="creating symlinks needs privileges on Windows")
+def test_a_recovery_folder_that_is_a_link_is_refused(tmp_path):
+    """mkdir(exist_ok=True) accepts a link to a folder.
+
+    A snapshot written through it, credentials included, lands wherever the link
+    points, and the permissions checked on the way were never that folder's.
+    """
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    importer.stage_import(source, target)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (target.parent / "ankimon_recovery").symlink_to(elsewhere, target_is_directory=True)
+
+    result = child("module.commit_pending_import(target)\n", target, expected=1)
+    assert "is a link" in result.stderr
+    assert names(target) == ["local"]
+    assert list(elsewhere.iterdir()) == []
+    assert importer.pending_import_info(target) is not None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="creating symlinks needs privileges on Windows")
+def test_a_staging_folder_that_is_a_link_is_refused(tmp_path):
+    """A prepared restore keeps this installation's credentials in its staged copy.
+
+    Written through a link, that copy lands wherever the link points, like a
+    recovery snapshot would.
+    """
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (tmp_path / f".ankimon-import-{target.name}").symlink_to(elsewhere, target_is_directory=True)
+
+    with pytest.raises(OSError, match="is a link"):
+        importer.stage_import(source, target, sanitize_credentials=False)
+    assert list(elsewhere.iterdir()) == []
 
 
 def unc_as_uri(self):

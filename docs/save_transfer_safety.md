@@ -65,7 +65,11 @@ committed WAL contents and use content-derived filenames under
 `ankimon-media-recovery/` beside `collection.media`, not inside the media folder.
 That keeps newly-created recovery databases out of AnkiWeb media sync while
 still leaving old underscore-prefixed migration copies readable for backwards
-compatibility. Only saves in the active mode are compared for recovery.
+compatibility. Only saves in the active mode are compared for recovery. The
+recovery folder is restricted to this user where the volume allows it. If a link
+stands in its place, or it belongs to another account and cannot be restricted,
+nothing is written there, media sync stays paused, and the notice names the folder
+and the reason.
 
 If SQLite cannot read a source, Ankimon retains a labelled **unverified** ZIP of
 the raw database and its WAL or rollback journal in the same local recovery
@@ -243,8 +247,8 @@ Import lifecycle:
   is retried on every start and each attempt snapshots the save again.
 - The whole startup installation shares one 30-second budget. It runs during
   add-on import, before Anki has a window or a progress dialog.
-- A record whose target no longer exists says so, and Cancel Pending Save Import
-  covers both save modes, since startup reports failures for both.
+- Cancel Pending Save Import covers both save modes, since startup reports
+  failures for both.
 
 Shutdown and scheduling:
 
@@ -381,8 +385,8 @@ Import and recovery:
   again after the next sync or restart.
 - Cancel over a record whose save no longer exists says the import was cancelled,
   not that Ankimon could not tell whether it had installed. The exception is a
-  record with a recovery copy beside it: an install got as far as replacing that
-  save, so the answer stays unknown and points at the copy.
+  record with a recovery copy beside it: an install may have replaced that save
+  before it went missing, so the answer stays unknown and points at the copy.
 - Every menu path the import and recovery notices name exists. One pointed at
   "Browse Recovered Saves",
   which never existed, and all of them left out the Game submenu the actions live
@@ -424,6 +428,39 @@ After CodeRabbit re-reviewed that push:
   design, and the two-second budget bounds SQLite's wait on a locked save, not a
   mount that has gone away.
 
+After CodeRabbit reviewed that follow-up:
+
+- Backup Restore reports a failure before staging instead of raising
+  `UnboundLocalError`. Its handlers named exceptions imported inside the same
+  `try`, so anything raised before that import, such as an unreadable backup
+  folder, left `restore_backup` with nothing said.
+- An import whose save was deleted before the next start is installed. It used to
+  be refused, and `get_db` then created a fresh save in that same start; the start
+  after that installed the import over the fresh save without a notice. With no
+  save on disk there is nothing to retain, so no recovery copy is made. An earlier
+  start may have installed the import before the save went missing, and installing
+  it again loses nothing more. Journals left beside the missing save are moved into
+  the import's recovery folder first, which is created for them: SQLite pairs a
+  journal with a database by filename alone, and would replay a stale one into the
+  imported save. Since such an install keeps no copy, Cancel over its leftover
+  record no longer says the replaced save was retained, and the install log names a
+  recovery copy only when one exists.
+- Recovery folders are never written through a link. `mkdir(exist_ok=True)`
+  accepts a link to a folder, so the pre-import folders, the staging folder that
+  holds a prepared import (credentials included, for Backup Restore) and
+  `ankimon-media-recovery` now refuse a symlink or junction in their place. The
+  media store no longer ignores a failed chmod. Like the pre-import folders, it is
+  refused when chmod fails on a folder another account owns, and still used when
+  the volume refuses chmod on a folder this user owns; otherwise media sync would
+  stay paused for good on FAT or exFAT. Ownership is examined only when chmod
+  fails. When the media store is refused, nothing is written, not even a temporary
+  raw archive; media sync stays paused, and the notice names the folder and the
+  reason instead of asking the user to close whatever is locking the save. Windows
+  ACLs are not inspected: these folders inherit the profile folder's, which already
+  protect the save itself.
+- *Move the startup install off the add-on import path.* Not changed, for the
+  reasons given under the compatibility check above.
+
 Tests only: the prune test checks that the superseded copy it keeps is the newest,
 a staged save swapped for another valid save now reaches the digest refusal
 instead of the size check, the shutdown-budget test covers a developer-mode active
@@ -441,11 +478,6 @@ Deferred, with reasons:
   the snapshot changes what gets retained, so it needs its own review.
 - Retention orders backups by directory mtime, which a read of a WAL-mode backup
   restamps. Ordering by the timestamp in the name has to handle legacy names.
-- A staged import for `ankimon.db` whose file is deleted before the next start is
-  reported as impossible to install. `get_db` then creates a fresh save, and the
-  following start installs the import over it without a notice; only the recovery
-  copy keeps what was played in between. Which save should win is a product
-  decision.
 - Smaller items: a staged rescue can be offered again by a later scan in the same
   session; the unverified-archive warning repeats at every start for a permanently
   damaged file; temporary copies left by a force-quit install or an interrupted

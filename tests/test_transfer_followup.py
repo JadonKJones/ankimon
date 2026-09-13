@@ -415,6 +415,26 @@ def test_cancelling_a_record_for_an_installed_import_does_not_claim_nothing_chan
     assert "unchanged" not in shown[0].lower()
 
 
+@pytest.mark.parametrize("kept", [True, False])
+def test_cancel_points_at_a_recovery_copy_only_when_one_exists(transfer, monkeypatch, kept):
+    """An install into a save that no longer existed replaced nothing and kept nothing."""
+    import shutil
+
+    staged = _install_without_cleanup(transfer)
+    if kept:
+        staged["recovery_path"].parent.mkdir(parents=True)
+        shutil.copyfile(transfer.incoming, staged["recovery_path"])
+    shown = []
+    monkeypatch.setattr(st, "showInfo", lambda message: shown.append(message))
+
+    st.cancel_pending_save_import()
+
+    assert len(shown) == 1
+    assert "ALREADY installed" in shown[0]
+    assert ("Browse Pre-import Recovery Saves" in shown[0]) is kept
+    assert ("No pre-import recovery copy exists" in shown[0]) is not kept
+
+
 def test_a_second_import_is_not_told_the_installed_one_is_still_coming(
     transfer, monkeypatch
 ):

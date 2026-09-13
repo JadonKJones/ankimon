@@ -302,7 +302,9 @@ def stage_import(
         raise ImportAlreadyPendingError(
             "An import is already pending; cancel it before choosing another save")
     token = uuid.uuid4().hex
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # A Backup Restore's staged copy keeps credentials, so this folder gets the
+    # recovery folders' checks: never a link, and private to this user.
+    _private_directory(directory)
     incoming = directory / f"{token}.db"
     temp_manifest = directory / f"{token}.json"
     published = False
@@ -506,16 +508,42 @@ def pending_import_is_installed(target: Path) -> bool | None:
         if info is None:
             return False
         if not Path(target).is_file():
-            # No save on disk can be the imported one. The recovery copy is written
-            # just before replacement, so without one no install ever got that
-            # far, and "unknown" would send the user after a copy that was never
-            # made. With one, an install may have replaced the save before it went
-            # missing, and only "unknown" points the user at that copy.
+            # No save on disk can be the imported one. An install that replaces a
+            # save writes the recovery copy first, so with one an install may have
+            # replaced the save before it went missing, and only "unknown" points
+            # the user at that copy. Without one, "unknown" would send the user
+            # after a copy that was never made. The one install that writes no
+            # copy, into a save that was already missing, leaves nothing to point
+            # at either; if its save goes missing too, the next start installs the
+            # import again.
             return None if info["recovery_path"].is_file() else False
         deadline = time.monotonic() + _WORDING_BUDGET
         return _installed_token(target, deadline) == info["token"]
     except Exception:
         return None
+
+
+def _recovery_copy(info: dict) -> Path | None:
+    """This record's pre-import copy, if one is on disk.
+
+    An install into a save that no longer existed replaced nothing and kept
+    nothing, so the record's reserved path is not evidence of a copy.
+    """
+    recovery = info["recovery_path"]
+    return recovery if recovery.is_file() else None
+
+
+def pending_import_recovery_copy(target: Path) -> Path | None:
+    """Where the pending record for ``target`` kept the save it replaced, if anywhere.
+
+    None when there is no readable record or no copy on disk, so a notice never
+    sends the user after a copy that was never made.
+    """
+    try:
+        info = pending_import_info(target)
+    except Exception:
+        return None
+    return None if info is None else _recovery_copy(info)
 
 
 def _log(logger, level: str, message: str) -> None:
@@ -553,8 +581,29 @@ def _restrict_directory(path: Path, logger=None) -> None:
         _log(logger, "warning", f"Could not restrict access to {path}: {error}")
 
 
+_is_junction = getattr(os.path, "isjunction", lambda path: False)
+
+
+def _private_directory(path: Path, logger=None) -> None:
+    """Create or reuse a folder for private copies of a save, never through a link.
+
+    ``mkdir(exist_ok=True)`` accepts a link to a folder. A copy written through
+    one, credentials included, lands wherever it points, and the permissions
+    checked here would never have been that folder's.
+    """
+    path.mkdir(mode=0o700, exist_ok=True)
+    if path.is_symlink() or _is_junction(path):
+        raise OSError(
+            f"{path} is a link to another folder, so Ankimon will not write a copy "
+            "of the save through it"
+        )
+    _restrict_directory(path, logger)
+
+
 def _finish_installed_import(target, recovery, logger, install_temp=None) -> None:
-    _log(logger, "info", f"Ankimon import installed. Previous save: {recovery}")
+    previous = ("No recovery copy of a previous save exists." if recovery is None
+                else f"Previous save: {recovery}")
+    _log(logger, "info", f"Ankimon import installed. {previous}")
     try:
         # Retry this sync after a prior crash too, before retiring the manifest.
         _fsync_directory(target.parent)
@@ -599,6 +648,71 @@ def _prune_superseded_recovery(directory: Path, name: str, keep: int = 1) -> Non
             pass
 
 
+_JOURNAL_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
+def _retain_current_save(target: Path, recovery: Path, logger, deadline) -> Path:
+    """Snapshot the save an install is about to replace; return where it went."""
+    # mkdir(mode=...) neither tightens a folder that already exists nor refuses a
+    # link. Check both levels before inspecting or writing private recovery
+    # material.
+    _private_directory(recovery.parent.parent, logger)
+    _private_directory(recovery.parent, logger)
+    if recovery.is_file():
+        # A failed previous replacement may be followed by more local play, so
+        # the snapshot taken now is the one holding everything. Move the older
+        # attempt aside rather than redirecting this one: the canonical name is
+        # the only recovery filename the user is ever shown -- the staging
+        # notice quotes it once, before Anki closes, and nothing names the file
+        # again afterwards. Redirecting left that advertised path holding the
+        # stale first attempt while the genuinely final save sat beside it under
+        # a name nobody had been given.
+        os.replace(recovery, recovery.with_name(f"retry-{uuid.uuid4().hex}-{target.name}"))
+        _fsync_directory(recovery.parent)
+        _prune_superseded_recovery(recovery.parent, target.name)
+    elif recovery.exists():
+        # Something that is not a snapshot holds the name. Write beside it, as
+        # this has always done: replacing it would fail the install outright.
+        recovery = recovery.with_name(f"retry-{uuid.uuid4().hex}-{target.name}")
+
+    fd, name = tempfile.mkstemp(prefix=".backup-", suffix=".db", dir=recovery.parent)
+    os.close(fd)
+    backup_temp = Path(name)
+    try:
+        _snapshot(target, backup_temp, deadline)
+        os.replace(backup_temp, recovery)
+        _fsync_directory(recovery.parent)
+        _fsync_directory(recovery.parent.parent)
+        _fsync_directory(target.parent)
+    finally:
+        _remove_owned_copy(backup_temp)
+
+    return recovery
+
+
+def _set_aside_orphaned_journals(target: Path, directory: Path, logger=None) -> None:
+    """Move journals left beside a missing save out of the imported save's way.
+
+    SQLite pairs a journal with a database by filename alone, so one left here
+    would be replayed into the imported save. It may also be all that remains of
+    the missing save, so it goes into this import's private recovery folder
+    rather than being deleted.
+    """
+    orphans = [Path(str(target) + suffix) for suffix in _JOURNAL_SUFFIXES]
+    orphans = [path for path in orphans if os.path.lexists(path)]
+    if not orphans:
+        return
+    _private_directory(directory.parent, logger)
+    _private_directory(directory, logger)
+    for orphan in orphans:
+        os.replace(orphan, directory / f"orphaned-{uuid.uuid4().hex}-{orphan.name}")
+    _fsync_directory(directory)
+    _fsync_directory(directory.parent)
+    _fsync_directory(target.parent)
+    _log(logger, "warning",
+         f"Moved journals left beside the missing {target.name} to {directory}")
+
+
 def commit_pending_import(target: Path, logger=None, deadline: float = None) -> bool:
     """Install before any runtime exists, refusing work staged in this process.
 
@@ -629,72 +743,48 @@ def commit_pending_import(target: Path, logger=None, deadline: float = None) -> 
     if info is None or info["process"] == _process_identity():
         return False
 
-    if not target.is_file():
-        # Every step below reads the save, so without this the user gets a bare
-        # SQLite "unable to open database file" on every start. The developer
-        # save is never recreated, so that is forever.
-        raise FileNotFoundError(
-            f"{target.name} no longer exists, so the save import prepared for it "
+    try:
+        target.lstat()
+        missing = False
+    except FileNotFoundError:
+        # Nothing on disk to retain, and no installed token to check. An earlier
+        # start may have installed this import before the save went missing;
+        # installing it again loses nothing more. Refusing here let get_db create
+        # a fresh save in this same start, which the next start then replaced
+        # without a notice.
+        missing = True
+    if not missing and not target.is_file():
+        raise OSError(
+            f"{target.name} is not a file, so the save import prepared for it "
             "cannot be installed. Use Ankimon \u2192 Game \u2192 Cancel Pending Save "
-            "Import to "
-            "discard it."
+            "Import to discard it."
         )
 
-    if _installed_token(target, deadline) == info["token"]:
-        _finish_installed_import(target, info["recovery_path"], logger)
+    if not missing and _installed_token(target, deadline) == info["token"]:
+        _finish_installed_import(target, _recovery_copy(info), logger)
         return True
 
     incoming = info["pending_path"]
     _verify_save(incoming, deadline)
     if _digest(incoming, deadline) != info["digest"]:
         raise ValueError("The pending save changed after it was confirmed")
-    recovery = info["recovery_path"]
-    # mkdir(mode=...) does not tighten pre-existing directories. Restrict both
-    # levels before inspecting or writing private recovery material.
-    recovery.parent.parent.mkdir(mode=0o700, exist_ok=True)
-    _restrict_directory(recovery.parent.parent, logger)
-    recovery.parent.mkdir(mode=0o700, exist_ok=True)
-    _restrict_directory(recovery.parent, logger)
-    if recovery.is_file():
-        # A failed previous replacement may be followed by more local play, so
-        # the snapshot taken now is the one holding everything. Move the older
-        # attempt aside rather than redirecting this one: the canonical name is
-        # the only recovery filename the user is ever shown -- the staging
-        # notice quotes it once, before Anki closes, and nothing names the file
-        # again afterwards. Redirecting left that advertised path holding the
-        # stale first attempt while the genuinely final save sat beside it under
-        # a name nobody had been given.
-        os.replace(recovery, recovery.with_name(f"retry-{uuid.uuid4().hex}-{target.name}"))
-        _fsync_directory(recovery.parent)
-        _prune_superseded_recovery(recovery.parent, target.name)
-    elif recovery.exists():
-        # Something that is not a snapshot holds the name. Write beside it, as
-        # this has always done: replacing it would fail the install outright.
-        recovery = recovery.with_name(f"retry-{uuid.uuid4().hex}-{target.name}")
-
-    fd, name = tempfile.mkstemp(prefix=".backup-", suffix=".db", dir=recovery.parent)
-    os.close(fd)
-    backup_temp = Path(name)
-    try:
-        _snapshot(target, backup_temp, deadline)
-        os.replace(backup_temp, recovery)
-        _fsync_directory(recovery.parent)
-        _fsync_directory(recovery.parent.parent)
-        _fsync_directory(target.parent)
-    finally:
-        _remove_owned_copy(backup_temp)
-
-    # Let SQLite merge and remove the OLD database's journals itself. Never
-    # delete a WAL before replacement: a crash in that gap would lose committed
-    # progress. A busy external connection refuses the mode change and import.
-    conn = sqlite3.connect(_sqlite_uri(target, "rw"), uri=True, timeout=_budget(deadline))
-    try:
-        mode = conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
-        if str(mode).lower() != "delete":
-            raise RuntimeError("Could not safely close the old save's journal")
-    finally:
-        conn.close()
-    if any(Path(str(target) + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
+    if missing:
+        # A copy kept by an earlier attempt still describes a previous save.
+        recovery = _recovery_copy(info)
+        _set_aside_orphaned_journals(target, info["recovery_path"].parent, logger)
+    else:
+        recovery = _retain_current_save(target, info["recovery_path"], logger, deadline)
+        # Let SQLite merge and remove the OLD database's journals itself. Never
+        # delete a WAL before replacement: a crash in that gap would lose committed
+        # progress. A busy external connection refuses the mode change and import.
+        conn = sqlite3.connect(_sqlite_uri(target, "rw"), uri=True, timeout=_budget(deadline))
+        try:
+            mode = conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+            if str(mode).lower() != "delete":
+                raise RuntimeError("Could not safely close the old save's journal")
+        finally:
+            conn.close()
+    if any(Path(str(target) + suffix).exists() for suffix in _JOURNAL_SUFFIXES):
         raise RuntimeError("The old save still has SQLite journals; import remains pending")
 
     fd, name = tempfile.mkstemp(prefix=".ankimon-install-", suffix=".db", dir=target.parent)

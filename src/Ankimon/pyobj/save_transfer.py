@@ -39,15 +39,18 @@ _SAVE_PREFIX = {"ankimon.db": "_ankimon_save_", "ankimonDEV.db": "_ankimon_save_
 
 
 def _recovery_store(media_dir: Path, *, create: bool = False) -> Path:
-    """Profile-local media-save recovery storage that Anki does not sync."""
+    """Profile-local media-save recovery storage that Anki does not sync.
+
+    ``create`` makes it private to this user first. A link in its place, or
+    another account's folder that cannot be made private, raises rather than
+    receiving copies that hold the save's credentials. ``_protect_bare_saves``
+    then copies nothing, leaves media sync paused, and reports the reason.
+    """
     recovery = Path(media_dir).parent / "ankimon-media-recovery"
     if create:
-        recovery.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if os.name != "nt":
-            try:
-                recovery.chmod(0o700)
-            except OSError:
-                pass
+        from ..save_import import _private_directory
+
+        _private_directory(recovery)
     return recovery
 
 
@@ -755,14 +758,21 @@ def _import_targets() -> list:
 def cancel_pending_save_import() -> None:
     """Cancel staged imports for either save mode, and report what was found."""
     from ..events import events
-    from ..save_import import cancel_pending_import, pending_import_is_installed
+    from ..save_import import (
+        cancel_pending_import, pending_import_is_installed, pending_import_recovery_copy,
+    )
 
     cancelled, already_installed, undetermined, failures = [], [], [], []
+    without_copy = set()
     for target in _import_targets():
         try:
             # Asked BEFORE cancelling: removing the manifest is what makes the
             # two states indistinguishable afterwards.
             installed = pending_import_is_installed(target)
+            if installed and pending_import_recovery_copy(target) is None:
+                # An install into a save that no longer existed replaced nothing,
+                # so there is no copy to send the user after.
+                without_copy.add(target)
             if not cancel_pending_import(target):
                 continue
         except OSError as error:
@@ -783,18 +793,23 @@ def cancel_pending_save_import() -> None:
     outcomes = []
     for target in cancelled:
         if target in already_installed:
+            if target in without_copy:
+                kept = (" No pre-import recovery copy exists for it; one is kept only "
+                        "when an install replaces an existing save.")
+            else:
+                kept = (" The save it replaced was retained first; find it under "
+                        "Ankimon → Game → Browse Pre-import Recovery Saves…")
             outcomes.append(
                 f"{target.name}: that import had ALREADY installed, so this save IS "
                 "the imported one. Only its leftover record was cleared, and nothing "
-                "will be installed again. The save it replaced was retained first; find "
-                "it under Ankimon → Game → Browse Pre-import Recovery Saves…")
+                f"will be installed again.{kept}")
         elif target in undetermined:
             outcomes.append(
                 f"{target.name}: the import record was cleared, so nothing will be "
                 "installed from it. Ankimon could not tell whether that import had "
-                "already installed; if it had, the save it replaced was retained "
-                "first; find it under Ankimon → Game → Browse Pre-import Recovery "
-                "Saves…")
+                "already installed; if it replaced a save, that save was retained "
+                "first. Look under "
+                "Ankimon → Game → Browse Pre-import Recovery Saves…")
         else:
             outcomes.append(f"{target.name}: the pending import was cancelled. "
                             "This save is unchanged.")
@@ -1461,7 +1476,9 @@ def _protect_bare_saves(media_dir: Path) -> Dict[str, Any]:
     gets a labelled raw archive including sidecars, never a claimed valid save.
     Validation, ranking and recovery decisions remain eligible for retry.
     """
-    result = {"protected": {}, "unprotected": [], "archives": [], "archived_sources": [], "log": []}
+    result = {"protected": {}, "unprotected": [], "archives": [], "archived_sources": [],
+              "log": [], "store_error": None}
+    store_checked = False
     for name in _SAVE_PREFIX:
         source = media_dir / name
         try:
@@ -1470,6 +1487,20 @@ def _protect_bare_saves(media_dir: Path) -> Dict[str, Any]:
             continue
         except OSError:
             pass  # Unknown/unreadable is not the same as an absent file.
+        if not store_checked:
+            store_checked = True
+            try:
+                _recovery_store(media_dir, create=True)
+            except Exception as error:
+                # A link in its place, or another account's folder: every copy and
+                # raw archive below would be made only to be thrown away, on each
+                # retry, and closing programs cannot clear it, so the notice has to
+                # name the folder instead.
+                result["store_error"] = str(error)
+                result["log"].append(("error", f"Could not use the media recovery folder: {error}"))
+        if result["store_error"] is not None:
+            result["unprotected"].append(source)
+            continue
         protected = _preserve(source, media_dir, name, result["log"], [], [])
         if protected is not None:
             result["protected"][source] = protected
@@ -1674,7 +1705,16 @@ def _report_protection(result: Dict[str, Any], logger) -> None:
             # failed, or could not be dispatched, schedules none: those paths show
             # a warning of their own, and a timer there would repeat it every 30
             # seconds for as long as the failure lasted.
-            if _MIGRATION_SCAN_STATE.get("retry_scheduled"):
+            if result.get("store_error"):
+                # Closing programs cannot clear a refused recovery folder.
+                again = ("Ankimon retries about every 30 seconds while Anki is open, and "
+                         "at the next sync or restart"
+                         if _MIGRATION_SCAN_STATE.get("retry_scheduled")
+                         else "restart Anki to retry")
+                retry = (f"Ankimon could not use its recovery folder: {result['store_error']}. "
+                         "It has to be an ordinary folder that belongs to you, not a link; "
+                         f"once it is, {again}.")
+            elif _MIGRATION_SCAN_STATE.get("retry_scheduled"):
                 retry = ("Close anything locking those files: Ankimon retries about "
                          "every 30 seconds while Anki is open, and at the next sync or "
                          "restart.")

@@ -509,6 +509,14 @@ class BackupManager:
         ):
             return
 
+        # Imported before the guard, because its handlers name these: a name
+        # first bound inside the try is unbound there when anything before the
+        # import raises, and the handler itself then raises UnboundLocalError.
+        from ..save_import import (
+            ImportAlreadyPendingError, ImportStagedError,
+            pending_import_is_installed, stage_import,
+        )
+
         try:
             if services.db is None:
                 showWarning("The Ankimon database is not initialized yet; cannot restore a backup.")
@@ -522,11 +530,6 @@ class BackupManager:
                     f"database ({target.name})."
                 )
                 return
-
-            from ..save_import import (
-                ImportAlreadyPendingError, ImportStagedError,
-                pending_import_is_installed, stage_import,
-            )
 
             pending = stage_import(
                 backup_file, target, sanitize_credentials=False

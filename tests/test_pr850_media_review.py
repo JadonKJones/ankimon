@@ -876,3 +876,77 @@ def test_reopening_within_the_throttle_restores_a_verdict_that_released_the_guar
 
     assert media_host.queued == []
     assert media_host.pm.media_syncing_enabled() is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="creating symlinks needs privileges on Windows")
+def test_a_media_recovery_folder_that_is_a_link_is_not_written_through(
+    transfer, media_host, tmp_path, monkeypatch,
+):
+    """The copies hold the save's credentials, and a link carries them elsewhere.
+
+    Nothing is written, not even a raw archive to throw away on every retry.
+    Media sync stays paused, and the notice says why: closing programs cannot
+    fix this.
+    """
+    _make_save(media_host.media / "ankimon.db", pokemon=5)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    st._recovery_store(media_host.media).symlink_to(elsewhere, target_is_directory=True)
+    monkeypatch.setattr(st, "_LAST_PROTECTION_NOTICE", None)
+    prefixes, mkstemp = [], st.tempfile.mkstemp
+
+    def recorded(*args, **kwargs):
+        prefixes.append(kwargs.get("prefix"))
+        return mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr(st.tempfile, "mkstemp", recorded)
+
+    st.start_media_migration(None, _Logger())
+    media_host.finish()
+
+    assert list(elsewhere.iterdir()) == []
+    assert media_host.pm.media_syncing_enabled() is False
+    assert "ankimon-unverified-" not in prefixes
+    notice = _pause_notice()
+    assert "is a link to another folder" in notice
+    assert "locking" not in notice
+    # Fixing the folder is enough while the retry timer runs; no restart needed.
+    assert ("about every 30 seconds" in notice) is bool(
+        st._MIGRATION_SCAN_STATE.get("retry_scheduled"))
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+@pytest.mark.parametrize("owned", [True, False])
+def test_a_media_recovery_folder_that_refuses_chmod_is_used_only_when_owned(
+    transfer, media_host, monkeypatch, owned,
+):
+    """FAT and exFAT volumes refuse chmod, and so does another account's folder.
+
+    The first can never be tightened, so refusing it would pause media sync for
+    good. The second is no place for a copy of the save.
+    """
+    import errno
+
+    _make_save(media_host.media / "ankimon.db", pokemon=5)
+    store = st._recovery_store(media_host.media)
+    chmod, getuid = Path.chmod, os.getuid
+
+    def fixed_permissions(self, mode, *args, **kwargs):
+        if self == store:
+            raise PermissionError(errno.EPERM, "Operation not permitted", str(self))
+        return chmod(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "chmod", fixed_permissions)
+    if not owned:
+        monkeypatch.setattr(os, "getuid", lambda: getuid() + 1)
+
+    monkeypatch.setattr(st, "_LAST_PROTECTION_NOTICE", None)
+    st.start_media_migration(None, _Logger())
+    media_host.finish()
+
+    assert bool(list(store.iterdir())) is owned
+    assert media_host.pm.media_syncing_enabled() is owned
+    if not owned:
+        notice = _pause_notice()
+        assert "Operation not permitted" in notice
+        assert "locking" not in notice

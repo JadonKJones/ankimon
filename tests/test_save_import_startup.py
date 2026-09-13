@@ -12,6 +12,23 @@ from test_profile_hooks import _exec_profile_hooks, _fresh_gui_hooks, _fresh_ser
 from test_save_import import child, make_save
 
 
+def _runtime_saves(tmp_path):
+    """A local and an incoming save that the real database manager can open.
+
+    Both get its indexed columns and normalization marker, so constructing it
+    needs no external Pokemon assets.
+    """
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    for path in (target, source):
+        with sqlite3.connect(path) as conn:
+            for column in ("name", "pokedex_id", "shiny", "level", "is_main"):
+                conn.execute(f"ALTER TABLE captured_pokemon ADD COLUMN {column} TEXT")
+            conn.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT)")
+            conn.execute("INSERT INTO metadata VALUES ('base_stats_normalized', 'true')")
+    return target, source
+
+
 @pytest.mark.parametrize("installed", [False, True])
 def test_startup_reports_the_save_that_is_active(tmp_path, monkeypatch, installed):
     importer = importlib.import_module("Ankimon.save_import")
@@ -22,16 +39,7 @@ def test_startup_reports_the_save_that_is_active(tmp_path, monkeypatch, installe
     monkeypatch.setattr(events_module, "events", event_bus)
     services = _fresh_services(monkeypatch)
     monkeypatch.setattr(manager, "_db_instance", None)
-    target = make_save(tmp_path / "ankimon.db", "local")
-    source = make_save(tmp_path / "source.db", "incoming")
-    for path in (target, source):
-        # Supply the real database manager's indexed columns and normalization
-        # marker, so constructing it needs no external Pokemon assets.
-        with sqlite3.connect(path) as conn:
-            for column in ("name", "pokedex_id", "shiny", "level", "is_main"):
-                conn.execute(f"ALTER TABLE captured_pokemon ADD COLUMN {column} TEXT")
-            conn.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT)")
-            conn.execute("INSERT INTO metadata VALUES ('base_stats_normalized', 'true')")
+    target, source = _runtime_saves(tmp_path)
     child("module.stage_import(Path(sys.argv[3]), target)\n", target, source)
     replace, sync = os.replace, importer._fsync_directory
 
@@ -119,3 +127,32 @@ def test_failed_warning_delivery_keeps_the_notice_and_registers_sync_hooks(monke
     assert services._save_import_errors == ["ankimon.db: injected replacement failure"]
     assert services._save_import_warnings == ["ankimonDEV.db: injected final sync failure"]
     assert hooks.setup_ankimon_sync_hooks.called
+
+
+def test_startup_installs_an_import_whose_save_was_deleted(tmp_path, monkeypatch):
+    """No fresh save may be created in its place and replaced a start later.
+
+    Refusing the install let the database manager create a new save in the same
+    start, and the following start installed the import over it without a word.
+    """
+    importer = importlib.import_module("Ankimon.save_import")
+    manager = importlib.import_module("Ankimon.pyobj.database_manager")
+    events_module = importlib.import_module("Ankimon.events")
+    event_bus = events_module._EventBus()
+    event_bus.enable()
+    monkeypatch.setattr(events_module, "events", event_bus)
+    services = _fresh_services(monkeypatch)
+    monkeypatch.setattr(manager, "_db_instance", None)
+    target, source = _runtime_saves(tmp_path)
+    child("module.stage_import(Path(sys.argv[3]), target)\n", target, source)
+    target.unlink()
+
+    runtime = manager.get_db(logger=None, db_path=target)
+    try:
+        assert runtime.get_config_value("trainer.name") == "incoming"
+        assert not getattr(services, "_save_import_errors", [])
+        assert importer.pending_import_info(target) is None
+        assert [event["target"] for event in event_bus.peek()
+                if event["type"] == "save_import_installed"] == [str(target)]
+    finally:
+        runtime.close()
