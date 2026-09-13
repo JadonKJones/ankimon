@@ -643,9 +643,11 @@ class BackupManager:
     @staticmethod
     def _is_link(path: Path) -> bool:
         # A Windows junction is not a symlink to pathlib, and walking one deletes
-        # what it points at; shutil.rmtree guards against both.
-        isjunction = getattr(os.path, "isjunction", None)
-        return path.is_symlink() or bool(isjunction and isjunction(path))
+        # what it points at. The import code's check reads the reparse tag on
+        # every Python; os.path.isjunction only exists from 3.12.
+        from ..save_import import _is_link
+
+        return _is_link(path)
 
     def _remove_tree(self, directory: Path, deadline) -> bool:
         """Delete a directory one entry at a time, stopping at the deadline.

@@ -516,3 +516,11 @@ Deferred, with reasons:
   damaged file; temporary copies left by a force-quit install or an interrupted
   cancel are not swept; the import lifecycle is thinly logged; and a handful of
   paths are covered only indirectly by tests.
+
+After the reviews of `73a65d89`:
+
+- Backup Manager's link check, used by retention, Delete and the removal of a failed
+  backup attempt, now shares the import code's junction check, which reads the
+  reparse tag on every Python. The previous round's fix reached only the import
+  code, so on Pythons before 3.12 Backup Manager still walked a junction and deleted
+  what it pointed at, outside `ankimon_backups`.

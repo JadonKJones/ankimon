@@ -951,6 +951,67 @@ def test_retention_removes_a_linked_backup_without_emptying_what_it_points_at(mo
     assert not list(bm.backups_path.glob(".discard_*"))
 
 
+@pytest.mark.parametrize("route", ["retention", "delete", "entry"])
+def test_a_junction_is_removed_as_a_link_on_pythons_without_isjunction(mock_env, tmp_path, monkeypatch, route):
+    """Before Python 3.12 only the reparse tag os.lstat reports gives a junction away.
+
+    Those Pythons have no os.path.isjunction, and Path.is_symlink answers False
+    for a junction. A symlink stands in for one here, found by its target
+    because retention and Delete rename it before removing it.
+    """
+    bm, _, _, _ = mock_env
+    elsewhere = tmp_path / "backup-on-another-drive"
+    elsewhere.mkdir()
+    (elsewhere / "ankimon.db").write_bytes(b"a save the user moved and linked back")
+    stamp = time.time() - 3600
+    os.utime(elsewhere, (stamp, stamp))
+    made = _fake_backups(bm, bm.MAX_BACKUPS)
+    doomed = bm.backups_path / ".discard_0badf00d_backup_2019-01-01_00-00-01"
+    if route == "entry":
+        doomed.mkdir()
+        link = doomed / "linked"
+    else:
+        link = bm.backups_path / "backup_2019-01-01_00-00-00"
+    link.symlink_to(elsewhere, target_is_directory=True)
+
+    def is_junction(path):
+        try:
+            return Path(os.readlink(path)) == elsewhere
+        except OSError:
+            return False
+
+    real_lstat, real_is_symlink, real_iterdir = os.lstat, Path.is_symlink, Path.iterdir
+    listed = []
+
+    def windows_lstat(path, *args, **kwargs):
+        result = real_lstat(path, *args, **kwargs)
+        if not is_junction(path):
+            return result
+        return types.SimpleNamespace(st_mode=result.st_mode, st_reparse_tag=0xA0000003)
+
+    def recording_iterdir(self):
+        listed.append((self, is_junction(self)))
+        return real_iterdir(self)
+
+    monkeypatch.delattr(os.path, "isjunction", raising=False)
+    monkeypatch.setattr(os, "lstat", windows_lstat)
+    monkeypatch.setattr(Path, "is_symlink", lambda self: real_is_symlink(self) and not is_junction(self))
+    monkeypatch.setattr(Path, "iterdir", recording_iterdir)
+
+    if route == "retention":
+        bm.cleanup_backups()
+    elif route == "delete":
+        bm.delete_backup(str(link))
+    else:
+        assert bm._remove_tree(doomed, None)
+
+    assert (elsewhere / "ankimon.db").is_file()
+    assert [path for path, junction in listed if junction] == []
+    assert not os.path.lexists(link)
+    assert all(path.is_dir() for path in made)
+    assert not list(bm.backups_path.glob(".discard_*"))
+
+
 def test_an_abandoned_staging_directory_is_swept_once_it_is_stale(mock_env, monkeypatch):
     """Nothing else can remove it: listing and retention both filter on backup_."""
     bm, _, _, _ = mock_env
