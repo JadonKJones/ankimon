@@ -298,7 +298,15 @@ def stage_import(
     and the staged copy is removed with it.
     """
     target, directory = _paths(target)
-    if pending_import_info(target) is not None:
+    try:
+        existing = pending_import_info(target)
+    except ValueError as error:
+        # A damaged record, or one written for this save at another path, blocks
+        # staging just the same, and only Cancel clears it. Callers name Cancel
+        # for this refusal; as a plain error they reported an abort instead.
+        raise ImportAlreadyPendingError(
+            "An import is already pending; cancel it before choosing another save") from error
+    if existing is not None:
         raise ImportAlreadyPendingError(
             "An import is already pending; cancel it before choosing another save")
     token = uuid.uuid4().hex

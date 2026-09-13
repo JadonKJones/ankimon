@@ -4,6 +4,7 @@ Use real SQLite files, backups and atomic replacement. Only the Anki host/UI
 and external writers are controlled at the boundary.
 """
 
+import json
 import os
 import sqlite3
 import subprocess
@@ -679,6 +680,62 @@ def test_backup_restore_published_but_unfinished_is_reported_as_pending(transfer
     backup_manager.close_anki.assert_not_called()
     commit_in_new_process(transfer.active)
     assert st.get_db_stats(transfer.active)["pokemon"] == 11
+
+
+def _stage_a_record_for_a_moved_save(transfer):
+    """Stage a real import, then point its record at the save's old location.
+
+    Moving the Anki base folder leaves exactly this: the record still sits beside
+    the save but no longer matches it, and only Cancel Pending Save Import clears it.
+    """
+    from Ankimon import save_import
+
+    staged = save_import.stage_import(transfer.incoming, transfer.active)
+    manifest = staged["pending_path"].parent / "pending.json"
+    record = json.loads(manifest.read_text(encoding="utf-8"))
+    record["target"] = str(transfer.active.parent / "old-base-folder" / transfer.active.name)
+    manifest.write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_import_over_a_record_for_a_moved_save_names_the_cancel_action(transfer, monkeypatch):
+    """An abort that names no way forward leaves the user stuck behind the record."""
+    _stage_a_record_for_a_moved_save(transfer)
+    closed = []
+    monkeypatch.setattr(st, "close_anki", lambda **kwargs: closed.append(kwargs))
+
+    result = st.import_save()
+    message = st.showWarning.call_args.args[0]
+    assert "Cancel Pending Save Import" in message
+    assert "aborted" not in message.lower()
+    assert result is True
+    assert closed == []
+    assert st.get_db_stats(transfer.active)["pokemon"] == 3
+
+
+def test_backup_restore_over_a_record_for_a_moved_save_names_the_cancel_action(
+    transfer, monkeypatch, tmp_path,
+):
+    """Backup Restore refuses over the same record, so it must name the same remedy."""
+    backup_dir = tmp_path / "backup_2026-01-01_00-00-00"
+    backup_dir.mkdir()
+    _make_save(backup_dir / transfer.active.name, pokemon=11, name="Restored")
+    manager = backup_manager.BackupManager(_Logger(), SimpleNamespace(get=lambda *a, **k: None))
+    monkeypatch.setattr(services, "db", SimpleNamespace(db_path=transfer.active))
+    warn = MagicMock()
+    monkeypatch.setattr(backup_manager, "showWarning", warn)
+    monkeypatch.setattr(services, "ui", SimpleNamespace(warn=warn))
+    monkeypatch.setattr(backup_manager, "showInfo", MagicMock())
+    monkeypatch.setattr(backup_manager, "askUser", lambda *a, **k: True)
+    monkeypatch.setattr(backup_manager, "close_anki", MagicMock())
+    _stage_a_record_for_a_moved_save(transfer)
+
+    manager.restore_backup(str(backup_dir))
+
+    message = warn.call_args.args[0]
+    assert "Cancel Pending Save Import" in message
+    assert "Failed to prepare" not in message
+    backup_manager.close_anki.assert_not_called()
+    assert st.get_db_stats(transfer.active)["pokemon"] == 3
 
 
 def test_backup_restore_that_cannot_announce_itself_is_not_called_a_failure(

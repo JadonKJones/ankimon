@@ -226,6 +226,40 @@ def test_cancellation_recovers_from_a_damaged_pending_manifest(tmp_path):
     assert names(target) == ["local"]
 
 
+@pytest.mark.parametrize("damage", ["corrupt", "moved"])
+def test_a_record_staging_cannot_read_is_refused_as_a_pending_import(tmp_path, damage):
+    """Cancel is the only way to clear such a record, so refuse in the type that names it.
+
+    A plain ValueError reached Import's and Backup Restore's generic handlers,
+    which reported an abort and never mentioned Cancel Pending Save Import.
+    """
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    other = make_save(tmp_path / "other.db", "second")
+    staged = importer.stage_import(source, target)
+    manifest = staged["pending_path"].parent / "pending.json"
+    if damage == "corrupt":
+        manifest.write_text("{ definitely-not-json", encoding="utf-8")
+    else:
+        # What moving the Anki base folder leaves: the record names the old path.
+        record = json.loads(manifest.read_text(encoding="utf-8"))
+        record["target"] = str(tmp_path / "old-base-folder" / target.name)
+        manifest.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(importer.ImportAlreadyPendingError) as refused:
+        importer.stage_import(other, target)
+    assert isinstance(refused.value.__cause__, ValueError)
+    # The callers word this answer as unknown and point at Cancel.
+    assert importer.pending_import_is_installed(target) is None
+
+    assert importer.cancel_pending_import(target) is True
+    assert not staged["pending_path"].exists()
+    importer.stage_import(other, target)
+    assert json.loads(commit_in_new_process(target).stdout)["installed"] is True
+    assert names(target) == ["second"]
+
+
 def test_cancellation_is_committed_even_if_staged_copy_cleanup_is_locked(
     tmp_path, monkeypatch
 ):

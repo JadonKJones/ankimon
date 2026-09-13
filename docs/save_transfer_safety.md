@@ -544,3 +544,8 @@ After the reviews of `73a65d89`:
   live save, so every import or restore left the save readable by its owner alone,
   where Restore on `main` kept its mode with `shutil.copy2`. The staged and recovery
   copies stay private on purpose, since they may carry credentials.
+- Import and Backup Restore now treat a damaged pending record, or one written for
+  the save at another path, as an import still pending, and point to Cancel Pending
+  Save Import, which clears it. Before, `stage_import` let that record's error
+  through as it was, so Import reported a plain abort and Backup Restore a failure
+  to prepare, and neither named any way to clear the record.
