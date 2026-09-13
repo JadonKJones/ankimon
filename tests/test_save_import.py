@@ -164,6 +164,39 @@ def test_next_process_installs_and_recovers_commits_made_after_staging(tmp_path)
     assert names(rollback["recovery_path"]) == ["incoming"]
 
 
+def test_an_import_installs_over_a_save_a_crash_left_with_a_hot_journal(tmp_path):
+    """Only a read-write connection can roll a hot rollback journal back.
+
+    Every step before the journal-mode switch reads the save read-only, so that
+    start failed, and the user played a session on the old save.
+    """
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target)
+    # A transaction too large for the page cache writes into the save itself, and
+    # only its journal can undo that. The writer dies before committing.
+    child(
+        "conn = sqlite3.connect(target, isolation_level=None)\n"
+        "conn.execute('PRAGMA journal_mode=DELETE')\n"
+        "conn.execute('PRAGMA cache_size=1')\n"
+        "conn.execute('BEGIN IMMEDIATE')\n"
+        "for i in range(2000):\n"
+        "    conn.execute('INSERT INTO captured_pokemon VALUES (?, ?)', (f'torn-{i}', 'x' * 400))\n"
+        "os._exit(1)\n", target, expected=1,
+    )
+    journal = Path(str(target) + "-journal")
+    assert journal.is_file() and journal.stat().st_size > 0
+
+    result = commit_in_new_process(target)
+    assert json.loads(result.stdout)["installed"] is True
+    assert names(target) == ["incoming"]
+    assert not journal.exists()
+    # The copy kept of the old save is its last committed state, not the torn one.
+    assert names(staged["recovery_path"]) == ["local"]
+    assert importer.pending_import_info(target) is None
+
+
 def test_cancellation_discards_only_pending_import(tmp_path):
     importer = load_module()
     target = make_save(tmp_path / "ankimon.db", "local")

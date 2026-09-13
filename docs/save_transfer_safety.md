@@ -529,3 +529,8 @@ After the reviews of `73a65d89`:
   media-sync guard at the top of the profile-open handler and
   `register_media_migration_hooks`, the only step that releases it, so a task
   manager refusing work there left media sync paused for the session.
+- A pending import now installs over a save a crash left with a hot rollback
+  journal. One read on a read-write connection lets SQLite roll that journal back
+  before anything else reads the save. Every step before the journal-mode switch
+  read the save read-only, which SQLite cannot use to roll a journal back, so that
+  start failed and the user played a session on the old save.

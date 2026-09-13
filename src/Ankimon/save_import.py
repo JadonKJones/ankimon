@@ -748,6 +748,32 @@ def _set_aside_orphaned_journals(target: Path, directory: Path, logger=None,
          f"Moved journals left beside the missing {target.name} to {directory}")
 
 
+def _recover_hot_journal(target: Path, logger=None, deadline: float = None) -> None:
+    """Let SQLite roll back a transaction a crash left unfinished in the save.
+
+    Only a read-write connection can roll back a hot rollback journal, and every
+    step before the journal-mode switch opens the save read-only. SQLite refuses
+    those with "attempt to write a readonly database", so the install failed for
+    that start, and get_db's own connection then rolled the journal back under a
+    session on the old save. One read takes the shared lock that rolls it back.
+    On a WAL save the close may checkpoint, which the mode switch does anyway.
+    """
+    # Outside the try: TimeoutError is an OSError, and a spent budget stops the
+    # install rather than being logged and passed over.
+    timeout = _budget(deadline)
+    try:
+        conn = sqlite3.connect(_sqlite_uri(target, "rw"), uri=True, timeout=timeout)
+        try:
+            conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError) as error:
+        # A read-only volume or a lock. The read-only steps that follow report
+        # their own error, as they did before this step existed.
+        _log(logger, "warning",
+             f"Could not open {target.name} to roll back an unfinished write: {error}")
+
+
 def commit_pending_import(target: Path, logger=None, deadline: float = None) -> bool:
     """Install before any runtime exists, refusing work staged in this process.
 
@@ -795,6 +821,8 @@ def commit_pending_import(target: Path, logger=None, deadline: float = None) -> 
             "Import to discard it."
         )
 
+    if not missing:
+        _recover_hot_journal(target, logger, deadline)
     if not missing and _installed_token(target, deadline) == info["token"]:
         _finish_installed_import(target, _recovery_copy(info), logger)
         return True
