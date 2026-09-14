@@ -60,10 +60,7 @@ class CloudSync:
         if services.db is None:
             showWarning("The Ankimon database is not initialized yet; cannot push.")
             return
-        if not askUser(
-            "Push your local Ankimon data to the cloud copy? This will "
-            "overwrite whatever is currently saved there."
-        ):
+        if not askUser("Push your data to the cloud copy? This overwrites it."):
             return
 
         local_path = services.db.db_path
@@ -88,10 +85,7 @@ class CloudSync:
 
             tmp_path.replace(dest_path)
             self.logger.log("info", f"Cloud sync: pushed {local_path.name} to {dest_path}")
-            showInfo(
-                "Pushed your Ankimon data to the cloud copy. Now sync Anki "
-                "as usual (the sync button) to send it to your other device."
-            )
+            showInfo("Pushed. Sync Anki now to send it to your other device.")
         except Exception as e:
             tmp_path.unlink(missing_ok=True)
             self.logger.log("error", f"Cloud sync push failed: {e}")
@@ -104,27 +98,14 @@ class CloudSync:
             return
         cloud_path = self._cloud_db_path()
         if not cloud_path.is_file():
-            showWarning(
-                f"No {CLOUD_DB_NAME} was found in your collection media yet. "
-                "Push from another device first, then sync Anki there and "
-                "here (the sync button) before pulling."
-            )
+            showWarning("No cloud copy found. Push from your other device, sync, then try again.")
             return
 
         if not self._verify_sqlite_integrity(cloud_path):
-            showWarning(
-                "Pull aborted: the cloud copy failed an integrity check "
-                "(it may still be mid-sync — try syncing Anki again first). "
-                "Nothing was changed locally."
-            )
+            showWarning("Pull aborted: the cloud copy looks incomplete. Try syncing again first.")
             return
 
-        if not askUser(
-            "Pull data from the cloud copy? This will overwrite your local "
-            "Ankimon data with what's saved there. A backup of your current "
-            "data will be made first, then Anki will close so you can restart "
-            "and see the pulled data."
-        ):
+        if not askUser("Pull from the cloud copy? This overwrites your local data and restarts Anki."):
             return
 
         local_path = services.db.db_path
@@ -157,10 +138,7 @@ class CloudSync:
                         sidecar_file.unlink()
 
             self.logger.log("info", f"Cloud sync: pulled {cloud_path} into {local_path.name}")
-            showInfo(
-                "Pulled cloud data successfully. Anki will now close. "
-                "Please restart Anki to see the changes."
-            )
+            showInfo("Pulled. Anki will close — restart it to see the changes.")
             close_anki()
         except Exception as e:
             self.logger.log("error", f"Cloud sync pull failed: {e}")

@@ -27,7 +27,6 @@ from .pyobj.ankimon_tracker_window import AnkimonTrackerWindow
 from .pyobj.backup_manager import BackupManager
 from .gui_classes.backup_manager_dialog import BackupManagerDialog
 from .pyobj.cloud_sync import CloudSync
-from .gui_classes.cloud_sync_dialog import CloudSyncDialog
 from .gui_entities import (
     License,
     Credits,
@@ -222,11 +221,16 @@ def create_menu_actions(
     backup_manager_action.triggered.connect(lambda: BackupManagerDialog(backup_manager, mw).exec())
     game_menu.addAction(backup_manager_action)
 
-    # Cloud Sync (manual push/pull to a Syncthing-style folder)
-    cloud_sync_action = QAction("Cloud Sync", mw)
-    cloud_sync_action.setMenuRole(QAction.MenuRole.NoRole)
-    cloud_sync_action.triggered.connect(lambda: CloudSyncDialog(cloud_sync, mw).exec())
-    game_menu.addAction(cloud_sync_action)
+    # Cloud Sync: manual push/pull riding on Anki's own sync, straight in the menu.
+    push_to_cloud_action = QAction("Push to Cloud", mw)
+    push_to_cloud_action.setMenuRole(QAction.MenuRole.NoRole)
+    push_to_cloud_action.triggered.connect(cloud_sync.push)
+    game_menu.addAction(push_to_cloud_action)
+
+    pull_from_cloud_action = QAction("Pull from Cloud", mw)
+    pull_from_cloud_action.setMenuRole(QAction.MenuRole.NoRole)
+    pull_from_cloud_action.triggered.connect(cloud_sync.pull)
+    game_menu.addAction(pull_from_cloud_action)
 
     # Effectiveness chart
     eff_chart_action = QAction(mw.translator.translate("eff_chart_button"), mw)
