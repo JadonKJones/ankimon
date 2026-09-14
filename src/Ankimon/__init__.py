@@ -54,6 +54,7 @@ from .menu_buttons import create_menu_actions
 from .hooks import setupHooks
 from .pyobj.error_handler import show_warning_with_traceback
 from .pyobj.backup_manager import BackupManager
+from .pyobj.cloud_sync import CloudSync
 from .services import services
 from .events import events
 
@@ -175,6 +176,7 @@ setattr(services, _REVIEW_HOOK_RECORD, _review_handlers)
 # in place, so profile hooks, battle state and reviewer UI all observe the
 # same live set.
 backup_manager = BackupManager(logger, settings_obj)
+cloud_sync = CloudSync(logger, settings_obj)
 collected_pokemon_ids = set()
 
 # --- Hook registry + profile hooks ---
@@ -289,6 +291,7 @@ def start_asynchronous_startup():
             addon_dir,
             pokemon_pc,
             backup_manager,
+            cloud_sync,
         )
 
         # 5. Reviewer shortcuts/buttons (base signature; F34 adds its

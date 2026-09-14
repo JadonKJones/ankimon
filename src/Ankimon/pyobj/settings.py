@@ -101,6 +101,7 @@ DEFAULT_CONFIG = {
     "mobile.inactive_companions": [],
     "leaderboard.username": "",
     "leaderboard.api_key": "",
+    "sync.cloud_folder": "",
 }
 
 HUD_TOGGLE_AUTO_SYNC_KEYS = (
