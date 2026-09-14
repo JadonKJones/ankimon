@@ -1,6 +1,5 @@
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QLineEdit,
-    QFileDialog,
+    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog,
 )
 from PyQt6.QtCore import Qt
 
@@ -22,23 +21,20 @@ class CloudSyncDialog(QDialog):
 
         info_label = QLabel(
             "Push and Pull are manual and one-directional: you decide which "
-            "device has the data you want to keep. Point the folder below at "
-            "a folder synced by Syncthing (or similar) between your devices."
+            "device has the data you want to keep. Add the folder below to "
+            "Syncthing (or similar) so it's shared between your devices."
         )
         info_label.setWordWrap(True)
         main_layout.addWidget(info_label)
 
         folder_layout = QHBoxLayout()
-        self.folder_edit = QLineEdit()
-        current = self.cloud_sync.get_cloud_folder()
-        if current is not None:
-            self.folder_edit.setText(str(current))
-        self.folder_edit.setPlaceholderText("Cloud Sync Folder path...")
-        self.folder_edit.editingFinished.connect(self.save_folder)
-        browse_button = QPushButton("Browse...")
-        browse_button.clicked.connect(self.browse_folder)
-        folder_layout.addWidget(self.folder_edit)
-        folder_layout.addWidget(browse_button)
+        self.folder_label = QLabel(str(self.cloud_sync.get_cloud_folder()))
+        self.folder_label.setWordWrap(True)
+        self.folder_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        change_button = QPushButton("Change...")
+        change_button.clicked.connect(self.browse_folder)
+        folder_layout.addWidget(self.folder_label, stretch=1)
+        folder_layout.addWidget(change_button)
         main_layout.addLayout(folder_layout)
 
         button_layout = QHBoxLayout()
@@ -60,10 +56,9 @@ class CloudSyncDialog(QDialog):
         self.setLayout(main_layout)
 
     def browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Choose Cloud Sync Folder")
+        folder = QFileDialog.getExistingDirectory(
+            self, "Choose Cloud Sync Folder", str(self.cloud_sync.get_cloud_folder())
+        )
         if folder:
-            self.folder_edit.setText(folder)
-            self.save_folder()
-
-    def save_folder(self):
-        self.cloud_sync.set_cloud_folder(self.folder_edit.text().strip())
+            self.cloud_sync.set_cloud_folder(folder)
+            self.folder_label.setText(str(self.cloud_sync.get_cloud_folder()))

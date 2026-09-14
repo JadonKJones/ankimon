@@ -18,6 +18,9 @@ from aqt.utils import askUser, showInfo, showWarning
 
 from ..services import services
 from ..utils import close_anki
+from ..resources import user_path
+
+DEFAULT_CLOUD_FOLDER_NAME = "AnkimonCloudSync"
 
 
 class CloudSync:
@@ -27,18 +30,29 @@ class CloudSync:
         self.logger = logger
         self.settings_obj = settings_obj
 
-    def get_cloud_folder(self) -> Optional[Path]:
+    def get_cloud_folder(self) -> Path:
+        """Returns the cloud folder, creating a default one on first use.
+
+        No path needs to be chosen: the folder is made next to the addon's own
+        data on first access, and the user just adds that one folder to
+        Syncthing (or similar) between their devices.
+        """
         raw = self.settings_obj.get("sync.cloud_folder", "")
-        return Path(raw) if raw else None
+        if raw:
+            folder = Path(raw)
+        else:
+            folder = user_path / DEFAULT_CLOUD_FOLDER_NAME
+            self.set_cloud_folder(str(folder))
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
 
     def set_cloud_folder(self, path: str):
         self.settings_obj.set("sync.cloud_folder", path)
 
     def _cloud_db_path(self) -> Optional[Path]:
-        folder = self.get_cloud_folder()
-        if folder is None or services.db is None:
+        if services.db is None:
             return None
-        return folder / services.db.db_path.name
+        return self.get_cloud_folder() / services.db.db_path.name
 
     def _verify_sqlite_integrity(self, path: Path) -> bool:
         try:
@@ -62,9 +76,6 @@ class CloudSync:
             showWarning("The Ankimon database is not initialized yet; cannot push.")
             return
         cloud_folder = self.get_cloud_folder()
-        if cloud_folder is None:
-            showWarning("Set a Cloud Sync Folder first.")
-            return
         if not askUser(
             "Push your local Ankimon data to the cloud folder? This will "
             "overwrite whatever is currently saved there."
@@ -75,8 +86,6 @@ class CloudSync:
         dest_path = cloud_folder / local_path.name
         tmp_path = dest_path.with_name(dest_path.name + ".tmp")
         try:
-            cloud_folder.mkdir(parents=True, exist_ok=True)
-
             # Flush WAL and block new connections so the copy reads one
             # consistent snapshot of the file.
             with services.db.quiesce(2.0) as drained:
