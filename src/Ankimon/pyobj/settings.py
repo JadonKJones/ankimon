@@ -33,7 +33,6 @@ DEFAULT_CONFIG = {
     "controls.allow_to_choose_moves": False,
     "gui.animate_time": True,
     "gui.gif_in_collection": True,
-    "gui.gif_in_ankimon_window": False,
     "gui.show_sprites_across_ankimon": True,
     "gui.styling_in_reviewer": True,
     "gui.pop_up_dialog_message_on_defeat": False,
@@ -88,12 +87,6 @@ DEFAULT_CONFIG = {
     "trainer.sprite": "ash",
     "trainer.id": 0,
     "trainer.cash": 0,
-    # "classic" = pre-Gen-6 behavior: one chosen holder splits XP 50/50 with
-    # the active Pokémon. "oras" = Gen 6+ Key Item behavior: the active
-    # Pokémon keeps full XP and the whole active team also earns a full
-    # share, no holder to pick. Defaults to "classic" so existing saves keep
-    # their current behavior until the player opts in.
-    "trainer.xp_share_mode": "classic",
     "trainer.cash_reward_amount": 40,
     "trainer.cash_reward_interval": 10,
     "trainer.cash_earned_today": 0,
@@ -108,7 +101,6 @@ DEFAULT_CONFIG = {
     "mobile.inactive_companions": [],
     "leaderboard.username": "",
     "leaderboard.api_key": "",
-    "sync.cloud_folder": "",
 }
 
 HUD_TOGGLE_AUTO_SYNC_KEYS = (
