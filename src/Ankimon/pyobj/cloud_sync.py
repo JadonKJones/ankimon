@@ -18,7 +18,6 @@ from aqt.utils import askUser, showInfo, showWarning
 
 from ..services import services
 from ..utils import close_anki
-from ..resources import user_path
 
 DEFAULT_CLOUD_FOLDER_NAME = "AnkimonCloudSync"
 
@@ -31,23 +30,17 @@ class CloudSync:
         self.settings_obj = settings_obj
 
     def get_cloud_folder(self) -> Path:
-        """Returns the cloud folder, creating a default one on first use.
+        """Returns the fixed cloud folder, creating it if needed.
 
-        No path needs to be chosen: the folder is made next to the addon's own
-        data on first access, and the user just adds that one folder to
-        Syncthing (or similar) between their devices.
+        Not user-configurable, and deliberately NOT inside Anki's addon data
+        (that path looks different on every machine/install, e.g. a versioned
+        addon folder vs. a dev symlink). Home directory is the one location
+        that's the same shape everywhere, so pairing it in Syncthing is just
+        "point both machines at ~/AnkimonCloudSync" with nothing to hunt for.
         """
-        raw = self.settings_obj.get("sync.cloud_folder", "")
-        if raw:
-            folder = Path(raw)
-        else:
-            folder = user_path / DEFAULT_CLOUD_FOLDER_NAME
-            self.set_cloud_folder(str(folder))
+        folder = Path.home() / DEFAULT_CLOUD_FOLDER_NAME
         folder.mkdir(parents=True, exist_ok=True)
         return folder
-
-    def set_cloud_folder(self, path: str):
-        self.settings_obj.set("sync.cloud_folder", path)
 
     def _cloud_db_path(self) -> Optional[Path]:
         if services.db is None:
