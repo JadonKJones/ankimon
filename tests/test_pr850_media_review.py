@@ -725,6 +725,11 @@ def test_reopening_a_profile_captured_earlier_this_session_resumes_media_sync(
     assert media_host.pm.media_syncing_enabled() is False
     st.start_media_migration(None, log)
 
+    assert media_host.pm.media_syncing_enabled() is True
+    # Confirming the rest of the folder is still settled means listing it, which
+    # a worker does; media sync does not wait for it.
+    assert len(media_host.queued) == 1
+    media_host.finish()
     assert media_host.queued == []
     assert media_host.pm.media_syncing_enabled() is True
 
@@ -1110,3 +1115,180 @@ def test_a_junction_is_refused_wherever_a_linked_recovery_folder_is(transfer, me
 
     assert opened == []
     assert "is a link" in st.showWarning.call_args.args[0]
+
+
+@pytest.mark.parametrize("bare_save", [False, True])
+def test_checking_a_settled_profile_lists_collection_media_only_on_the_worker(
+    transfer, media_host, monkeypatch, bare_save,
+):
+    """Profile open and every media-sync stop start this on the GUI thread.
+
+    Confirming that a settled profile was still settled listed collection.media
+    there four times -- twice for the fingerprint in the throttle key and twice
+    more to compare it with the settled one -- and a scan's callback listed it
+    twice again. A folder of tens of thousands of cards' media stalled the GUI
+    for about a third of a second on every sync, whether or not the profile ever
+    had the removed feature on. Only the two fixed save names are looked at there.
+    """
+    if bare_save:
+        _make_save(media_host.media / "ankimon.db", pokemon=1)
+    for index in range(20):
+        (media_host.media / f"card-{index}.jpg").write_bytes(b"image")
+    st.start_media_migration(None, _Logger())
+    media_host.finish()
+    assert st._migration_done()
+
+    gui = threading.get_ident()
+    listings = []
+
+    def counted(name, real):
+        def listing(*args, **kwargs):
+            listings.append((name, threading.get_ident()))
+            return real(*args, **kwargs)
+        return listing
+
+    monkeypatch.setattr(Path, "glob", counted("glob", Path.glob))
+    monkeypatch.setattr(Path, "iterdir", counted("iterdir", Path.iterdir))
+    monkeypatch.setattr(os, "scandir", counted("scandir", os.scandir))
+    monkeypatch.setattr(os, "listdir", counted("listdir", os.listdir))
+
+    # File > Switch Profile and back: profile open arms the guard, then scans.
+    st.guard_media_saves_now(_Logger())
+    st.start_media_migration(None, _Logger())
+    assert [name for name, thread in listings if thread == gui] == []
+    assert media_host.pm.media_syncing_enabled() is True
+    while media_host.queued:
+        media_host.finish()
+
+    assert [name for name, thread in listings if thread == gui] == []
+    assert [name for name, thread in listings if thread != gui], "nothing checked the folder"
+    assert media_host.pm.media_syncing_enabled() is True
+    assert st._MIGRATION_SCAN_STATE["running"] is False
+
+
+def test_a_save_that_lands_after_a_profile_settled_is_still_scanned(
+    transfer, media_host, monkeypatch,
+):
+    """Whichever thread confirms a settled profile, it must still see a newcomer.
+
+    A media sync can bring an older client's copy under a legacy name long after
+    the profile settled. Answering "settled" from the two fixed names alone would
+    leave it unscanned until Anki restarted. The scan's callback lists nothing on
+    the GUI thread either.
+    """
+    st.start_media_migration(None, _Logger())
+    media_host.finish()
+    assert st._migration_done()
+    scans = []
+    scan = st._migration_scan
+
+    def recorded(*args, **kwargs):
+        scans.append(args)
+        return scan(*args, **kwargs)
+
+    monkeypatch.setattr(st, "_migration_scan", recorded)
+
+    st.start_media_migration(None, _Logger())
+    while media_host.queued:
+        media_host.finish()
+    assert scans == []
+
+    _make_save(media_host.media / "_addons21_ankimon.db", pokemon=42, badges=8, history=99)
+    gui, listings = threading.get_ident(), []
+
+    def counted(real):
+        def listing(*args, **kwargs):
+            listings.append(threading.get_ident())
+            return real(*args, **kwargs)
+        return listing
+
+    monkeypatch.setattr(Path, "glob", counted(Path.glob))
+    monkeypatch.setattr(os, "scandir", counted(os.scandir))
+    monkeypatch.setattr(os, "listdir", counted(os.listdir))
+    st.start_media_migration(None, _Logger())
+    while media_host.queued:
+        media_host.finish()
+    assert len(scans) == 1
+    assert listings and gui not in listings
+
+
+def test_a_media_sync_stop_does_not_pause_a_settled_profile_while_its_check_runs(
+    transfer, media_host, media_syncer,
+):
+    """Every media-sync stop starts a pass, not only a profile open.
+
+    A save this session captured, and that is unchanged since, stays covered
+    whatever the rest of the folder holds. Raising the guard for the worker's
+    listing turned the media part of a sync starting in that window away on
+    every stop, to be replayed afterwards as a periodic sync.
+    """
+    _make_save(media_host.media / "ankimon.db", pokemon=1)
+    st.start_media_migration(None, _Logger())
+    media_host.finish()
+    assert st._migration_done()
+    assert media_host.pm.media_syncing_enabled() is True
+
+    st.start_media_migration(None, _Logger())      # media_sync_did_start_or_stop(False)
+    assert len(media_host.queued) == 1
+    assert media_host.pm.media_syncing_enabled() is True
+    media_host.finish()
+
+    assert media_host.pm.media_syncing_enabled() is True
+    assert media_syncer == []                       # nothing was turned away to replay
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_a_settled_check_that_cannot_be_dispatched_warns_only_when_the_settle_is_stale(
+    transfer, media_host, monkeypatch, stale,
+):
+    """Whether the settle still holds is the question the worker was dispatched for.
+
+    A failed dispatch cannot leave it unanswered. Treating any stored settle as
+    current stayed silent about a legacy save that had just landed, where a
+    failed dispatch has always warned.
+    """
+    st.start_media_migration(None, _Logger())
+    media_host.finish()
+    assert st._migration_done()
+    if stale:
+        _make_save(media_host.media / "_addons21_ankimon.db", pokemon=42, badges=8, history=99)
+
+    def refused(*args, **kwargs):
+        raise RuntimeError("executor stopped")
+
+    monkeypatch.setattr(st.mw.taskman, "run_in_background", refused)
+    st.showWarning.reset_mock()
+    st.start_media_migration(None, _Logger())
+
+    assert st.showWarning.called is stale
+    assert st._MIGRATION_SCAN_STATE["running"] is False
+    assert media_host.pm.media_syncing_enabled() is True
+
+
+def test_a_failed_scan_does_not_report_a_save_this_session_captured_as_uncaptured(
+    transfer, media_host, monkeypatch,
+):
+    """Media sync stays on for that save, so calling it uncaptured and paused is wrong twice."""
+    _make_save(media_host.media / "ankimon.db", pokemon=1)
+    st.start_media_migration(None, _Logger())
+    media_host.finish()
+    assert st._migration_done()
+    _make_save(media_host.media / "_addons21_ankimon.db", pokemon=42, badges=8, history=99)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("scan failed")
+
+    monkeypatch.setattr(st, "_migration_scan", broken)
+    monkeypatch.setattr(st, "_LAST_PROTECTION_NOTICE", None)
+    st.showWarning.reset_mock()
+    st.start_media_migration(None, _Logger())
+    work, done = media_host.queued.pop(0)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(work)
+        assert isinstance(future.exception(), RuntimeError)
+    done(future)
+
+    warnings = [call.args[0] for call in st.showWarning.call_args_list]
+    assert any("comparison failed" in text for text in warnings)
+    assert not any("Could not create a verified recovery save" in text for text in warnings)
+    assert media_host.pm.media_syncing_enabled() is True

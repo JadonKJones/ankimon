@@ -941,6 +941,10 @@ def _migration_done() -> bool:
     migration flag policy above). Absent — or the bare ``True`` an earlier build
     wrote, which settled permanently — reads as not finished: one more pass, and
     it re-settles with a fingerprint unless there is real work.
+
+    It lists collection.media, so ``start_media_migration`` makes the same
+    comparison on its worker instead; this form is for callers that are already
+    off the GUI thread, or tests.
     """
     stored = _profile_flag(_MIGRATION_FLAG)
     if not stored:
@@ -978,15 +982,17 @@ def _current_fingerprint_entries() -> Dict[str, str]:
 def _media_fingerprint_entries(media_dir: Path, target_db: str) -> Dict[str, str]:
     """``{filename: stat signature}`` for the partition's media saves.
 
-    Deliberately cheap — no SQLite, no reads — because it runs on the
-    profile-open stack before anything is dispatched. Size and mtime together
-    are enough: Anki stamps a downloaded media file's mtime from the local clock
-    at the moment it writes it, so a save that arrives from a peer always looks
-    different from the one it replaced, and it only downloads at all when the
-    sha1 differs. Missing paths are omitted; other stat failures retain an
-    empty-string entry so the whole fingerprint stays unknown, including when
-    other candidates are readable. An unreadable newcomer must not match a
-    previously settled empty folder or subset of saves.
+    No SQLite and no reads, only stat calls, but finding the legacy names means
+    listing collection.media, which can hold tens of thousands of files. So it
+    runs on the scan's worker, never on the GUI thread that starts a pass.
+
+    Size and mtime together are enough: Anki stamps a downloaded media file's
+    mtime from the local clock at the moment it writes it, so a save that
+    arrives from a peer always looks different from the one it replaced, and it
+    only downloads at all when the sha1 differs. Missing paths are omitted;
+    other stat failures retain an empty-string entry so the whole fingerprint
+    stays unknown, including when other candidates are readable. An unreadable
+    newcomer must not match a previously settled empty folder or subset of saves.
 
     Only sync-visible media paths belong here. Private recovery copies are
     scanned separately and cannot re-arm or settle a media-sync fingerprint.
@@ -1281,7 +1287,8 @@ def _notify_affected_user(logger) -> None:
             pass
 
 
-def _migration_scan(media_dir: Path, target: Optional[Path]) -> Dict[str, Any]:
+def _migration_scan(media_dir: Path, target: Optional[Path],
+                    entries: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Discover and protect media saves, then prepare a rescue comparison.
 
     Runs on a worker and returns plain data. Preserve the bare media save
@@ -1292,6 +1299,9 @@ def _migration_scan(media_dir: Path, target: Optional[Path]) -> Dict[str, Any]:
     The source signature is read before AND after the capture, and ``stable``
     says whether they agreed. Only a capture bound to one observed revision can
     release the media-sync guard.
+
+    ``entries`` is a fingerprint the same worker took a moment earlier, before
+    anything was read, so the folder is not listed a second time for it.
     """
     notes: list = []
     unreadable: list = []
@@ -1301,7 +1311,8 @@ def _migration_scan(media_dir: Path, target: Optional[Path]) -> Dict[str, Any]:
     # Taken BEFORE anything is read or written. This fingerprint deliberately
     # describes only collection.media: private recovery copies are outside Anki
     # media sync and must not make a settled media state look changed.
-    entries = _media_fingerprint_entries(media_dir, target_db)
+    if entries is None:
+        entries = _media_fingerprint_entries(media_dir, target_db)
 
     # The revision the capture is BOUND to, read before anything is copied.
     # _preserve verifies the bytes it wrote, not that the source held still
@@ -1309,7 +1320,7 @@ def _migration_scan(media_dir: Path, target: Optional[Path]) -> Dict[str, Any]:
     # leave a recovery copy of the old version described by the new version's
     # signature — and the callback, comparing new against new, would release
     # the sync guard over bytes that were never preserved.
-    _, before_protection = _pending_media_protection(media_dir, target)
+    _, before_protection = _pending_media_protection(media_dir, target, entries)
 
     protection = _protect_bare_saves(media_dir)
     notes.extend(protection["log"])
@@ -1351,7 +1362,11 @@ def _migration_scan(media_dir: Path, target: Optional[Path]) -> Dict[str, Any]:
             "local_stats": None,
             "fingerprint": _join_fingerprint(entries),
             "protection": protection,
-            "signature": captured_signature,
+            # Only the fixed save names: that is all the callback rechecks,
+            # since listing the folder again there would put this work back on
+            # the GUI thread. A candidate landing during the capture already
+            # made ``stable`` false, which compares the fingerprint too.
+            "signature": captured_signature[0],
             "stable": stable_capture,
         }
         base.update(extra)
@@ -2065,15 +2080,18 @@ def _stat_bare_saves(media_dir: Path):
     return protection, signature
 
 
-def _pending_media_protection(media_dir: Path, target: Optional[Path]):
+def _pending_media_protection(media_dir: Path, target: Optional[Path],
+                              entries: Optional[Dict[str, str]] = None):
     """``_stat_bare_saves`` plus the fingerprint of every sync-visible candidate.
 
-    That fingerprint globs the whole of collection.media, so a caller that needs
-    only the protection picture calls ``_stat_bare_saves`` instead.
+    That fingerprint lists the whole of collection.media, so this belongs on the
+    worker; the GUI thread calls ``_stat_bare_saves`` alone. ``entries`` reuses a
+    fingerprint the worker took a moment earlier.
     """
     protection, signature = _stat_bare_saves(media_dir)
-    # A newly downloaded candidate must also bypass an unreadable-file delay.
-    entries = _media_fingerprint_entries(media_dir, target.name if target else "ankimon.db")
+    # A candidate that lands mid-capture makes the before/after pair disagree.
+    if entries is None:
+        entries = _media_fingerprint_entries(media_dir, target.name if target else "ankimon.db")
     return protection, (tuple(signature), tuple(sorted(entries.items())))
 
 
@@ -2112,10 +2130,14 @@ def guard_media_saves_now(logger) -> None:
 def start_media_migration(settings_obj, logger) -> None:
     """Scan on a background worker, then apply decisions on the main thread.
 
-    Cheap guards avoid dispatching scans for an unchanged, settled profile.
+    This thread only stats the two fixed save names. Listing collection.media,
+    which can hold tens of thousands of files, happens on the worker, and that
+    includes confirming a settled profile is still settled: a worker that finds
+    the stored fingerprint unchanged returns without scanning. Profile open and
+    every media-sync stop start a pass, so a listing here stalled the GUI on each.
     ``uses_collection=False`` keeps inspection off Anki's collection executor,
-    where it would delay startup sync. Requests arriving during a scan are
-    coalesced into a later pass, and profile changes invalidate its result.
+    where it would delay startup sync. Requests arriving during a pass are
+    coalesced into a later one, and profile changes invalidate its result.
     """
     try:
         media_dir = _media_dir()
@@ -2123,7 +2145,8 @@ def start_media_migration(settings_obj, logger) -> None:
             return
         target = _active_db_path()
         collection = _active_collection()
-        protection, signature = _pending_media_protection(media_dir, target)
+        protection, signature = _stat_bare_saves(media_dir)
+        signature = tuple(signature)
         if not protection["unprotected"]:
             # A user may move an uncaptured save out of media. Release its old
             # guard even when the folder now matches a previously settled scan.
@@ -2131,6 +2154,9 @@ def start_media_migration(settings_obj, logger) -> None:
         completed = _MIGRATION_SCAN_STATE.setdefault("completed", {})
         key = (media_dir, target)
         previous = completed.get(key)
+        # This session's last verdict, while both saves still stat exactly as
+        # that pass captured them.
+        earlier = None
         if previous is not None and previous["signature"] == signature:
             earlier = previous["protection"]
             if earlier["unprotected"]:
@@ -2142,32 +2168,42 @@ def start_media_migration(settings_obj, logger) -> None:
                     # retry timer itself can land here -- Qt fires a 30 s timer
                     # up to half a second early -- as can a timer armed for an
                     # earlier pass, and returning with nothing scheduled left
-                    # the guard up with no retry left to lift it.
+                    # the guard up with no retry left to lift it. A legacy-named
+                    # save that arrives meanwhile waits for that retry, or for
+                    # the next pass after the throttle: noticing it sooner means
+                    # listing the folder here.
                     _guard_uncaptured_media(media_dir, earlier)
                     if set(earlier["unprotected"]) - set(earlier["archived_sources"]):
                         _schedule_migration_retry(settings_obj, logger, delay=remaining)
                     return
-            elif _migration_done():
-                # Settled, and unchanged since. A profile reopened in this
-                # process had its guard re-armed by guard_media_saves_now, which
-                # only stats files, and nothing runs after this return to lift
-                # it: media sync stayed paused until Anki restarted.
-                _guard_uncaptured_media(media_dir, earlier)
-                return
-        elif not protection["unprotected"] and _migration_done():
-            return
+                earlier = None
+        # A bare save this session has not captured is captured whatever the
+        # stored fingerprint says. Otherwise the worker first compares the folder
+        # with that fingerprint, and scans only if it no longer matches.
+        settled = (None if protection["unprotected"] and earlier is None
+                   else _profile_flag(_MIGRATION_FLAG))
 
         # Anki checks this gate before startup/periodic media sync. Pause it
         # before dispatch so neither SQLite backups nor raw ZIP writes block
-        # profile-open. Only a completed capture can release the guard.
-        _guard_uncaptured_media(media_dir, protection)
+        # profile-open; only a completed capture releases it. The exception is a
+        # capture this session already made of saves that still stat as they did
+        # then: the guard only ever covers those two files, so that verdict
+        # stands while the worker looks at the rest of the folder. Holding media
+        # sync for the check paused it on every sync stop, and this is also what
+        # lifts the stat-only guard a profile reopen arms.
+        _guard_uncaptured_media(media_dir, earlier if earlier is not None else protection)
 
         if _MIGRATION_SCAN_STATE["running"]:
             _MIGRATION_SCAN_STATE["rerun"] = True
             return
 
+        target_db = Path(target).name if target else "ankimon.db"
+
         def _scan():
-            return _migration_scan(media_dir, target)
+            entries = _media_fingerprint_entries(media_dir, target_db)
+            if settled and _join_fingerprint(entries) == settled:
+                return {"outcome": "settled", "signature": signature, "stable": True}
+            return _migration_scan(media_dir, target, entries)
 
         def _done(future) -> None:
             result = None
@@ -2178,9 +2214,14 @@ def start_media_migration(settings_obj, logger) -> None:
                 # mw.pm has already moved on by the time this runs, so compare.
                 if (result is not None and _media_dir() == media_dir
                         and _active_collection() is collection):
-                    _, current_signature = _pending_media_protection(media_dir, target)
+                    # The fixed names only, for the reason the worker's result
+                    # gives. A candidate that lands after the worker looked makes
+                    # the stored fingerprint stale, and the next pass -- the
+                    # media sync that brought it starts one when it stops --
+                    # scans it.
+                    _, current_signature = _stat_bare_saves(media_dir)
                     baseline = result.get("signature", signature)
-                    if current_signature != baseline or not result.get("stable", True):
+                    if tuple(current_signature) != baseline or not result.get("stable", True):
                         # A download or external writer changed the source
                         # during or after the capture. Keep sync paused until
                         # the next pass and drop this result whole: its
@@ -2189,6 +2230,11 @@ def start_media_migration(settings_obj, logger) -> None:
                         # not of the version sitting there now, so releasing
                         # the guard would expose unpreserved progress.
                         _MIGRATION_SCAN_STATE["rerun"] = True
+                    elif result.get("outcome") == "settled":
+                        # Nothing to apply: the folder still matches the settle,
+                        # and dispatch already put back any verdict this
+                        # session's capture gave.
+                        pass
                     else:
                         if result.get("protection"):
                             completed[key] = {"signature": baseline,
@@ -2206,7 +2252,11 @@ def start_media_migration(settings_obj, logger) -> None:
                 try:
                     logger.log("error", f"AnkiWeb sync-removal migration failed: {e}")
                     if _media_dir() == media_dir and _active_collection() is collection:
-                        _report_protection(protection, logger)
+                        if earlier is None:
+                            # As on a failed dispatch: otherwise this session's
+                            # capture covers the saves as they stat, and media
+                            # sync was never paused for them.
+                            _report_protection(protection, logger)
                         showWarning("Ankimon's media recovery comparison failed and will be retried "
                                     "after the next sync or restart. See the Ankimon log for details.")
                 except Exception:
@@ -2229,8 +2279,18 @@ def start_media_migration(settings_obj, logger) -> None:
             mw.taskman.run_in_background(_scan, _done, uses_collection=False)
         except Exception as error:
             _MIGRATION_SCAN_STATE["running"] = False
-            _report_protection(protection, logger)
             logger.log("error", f"Could not schedule media recovery scan: {error}")
+            if settled and _migration_done():
+                # The comparison the worker was dispatched to make, made here
+                # instead. It lists the folder on the GUI thread, but only on
+                # this rare path. A settle that still holds needs no scan and no
+                # warning; one a download has made stale gets the warning below,
+                # as any failed dispatch does.
+                return
+            if earlier is None:
+                # Otherwise this session's capture already covers the saves as
+                # they stat, and reporting them as uncaptured would be wrong.
+                _report_protection(protection, logger)
             showWarning("Ankimon could not start its media recovery scan. "
                         "It will be retried after the next sync or restart. "
                         "Media sync stays paused while original save files remain uncaptured.")

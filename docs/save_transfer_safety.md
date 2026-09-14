@@ -88,9 +88,9 @@ to retry.
 
 Preservation status is separate from the feature-removal announcement. Worker
 and dispatch failures remain retryable and visible. Preservation work runs on
-the guarded worker and does not copy, archive, or compare saves on the GUI
-thread. Unchanged unreadable saves have a 30-second retry delay; changed files,
-permissions, or SQLite sidecars re-arm immediately.
+the guarded worker and does not list the media folder, or copy, archive, or
+compare saves, on the GUI thread. Unchanged unreadable saves have a 30-second
+retry delay; changed files, permissions, or SQLite sidecars re-arm immediately.
 Moving an uncaptured save out of the media folder also clears its sync guard.
 Recovery paths are recorded in the Ankimon
 log. No original media file is deleted.
@@ -642,3 +642,24 @@ After an external review of `ecc70364`:
   deleted while a session has it open: that session's database reconnects to its
   path as it always has, and an add-on reload keeps that database rather than
   calling `get_db`.
+- Checking the media folder no longer lists `collection.media` on the GUI thread.
+  Profile open and every media-sync stop start that check. To confirm that a settled
+  profile had not changed, including the common profile with no Ankimon media save,
+  it listed the folder four times there, and a scan's callback listed it twice more;
+  the review measured about a third of a second for 50,000 media files. The GUI
+  thread now stats only `ankimon.db` and `ankimonDEV.db`. A worker lists the folder
+  once and compares it with the settled fingerprint, then either returns or scans
+  with that listing, so the scan does not take its own first one. The callback
+  rechecks the two fixed names only. A legacy-named save that lands during a capture
+  still invalidates it through the worker's before-and-after comparison, and one that
+  lands later expires the settled fingerprint for the next pass. A bare save this
+  session already copied to a verified recovery save, and that still stats the same,
+  keeps media sync running while the worker checks, as it did when no worker was
+  needed, and a failed dispatch or scan does not report it as uncaptured. On a failed
+  dispatch the stored settle is compared with the folder on the GUI thread, on that
+  failure path only: a settle that still holds needs no warning, and a stale one gets
+  the warning any failed dispatch gets. One consequence is deliberate. The 30-second
+  throttle for an unreadable bare save is keyed on the two fixed names alone, so a
+  legacy-named save that arrives inside it waits for the retry, or for the first pass
+  once the throttle is over, instead of cutting it short. Noticing it sooner would
+  mean listing the folder on the GUI thread again.
