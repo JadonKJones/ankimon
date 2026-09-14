@@ -154,6 +154,13 @@ class FakeBackupManager:
         pass
 
 
+class FakeCloudSync:
+    instances = []
+
+    def __init__(self, logger, settings_obj):
+        type(self).instances.append(self)
+
+
 class FakeCheckFiles:
     instances = []
 
@@ -858,6 +865,9 @@ def boot_env(monkeypatch):
         "Ankimon.pyobj.backup_manager": _stub_module(
             "Ankimon.pyobj.backup_manager", BackupManager=FakeBackupManager
         ),
+        "Ankimon.pyobj.cloud_sync": _stub_module(
+            "Ankimon.pyobj.cloud_sync", CloudSync=FakeCloudSync
+        ),
         "Ankimon.events": _stub_module(
             "Ankimon.events", events=SimpleNamespace(emit=rec("events.emit"))
         ),
@@ -1091,14 +1101,15 @@ def test_menu_gets_base_call_shape_no_none_placeholders(boot_env):
 
     menu = _first(boot_env, "create_menu_actions")
     args = menu[1]
-    assert len(args) == 31
+    assert len(args) == 32
     # exp passed 11 None placeholders; the port passes base's real objects.
     assert not any(arg is None for arg in args)
     assert args[0] is True  # database_complete
     assert args[1] is True  # online_connectivity (real result)
     assert args[2] is boot_env.singletons.item_window
     assert args[3] is boot_env.singletons.test_window
-    assert args[-1] is mod.backup_manager
+    assert args[-2] is mod.backup_manager
+    assert args[-1] is mod.cloud_sync
 
 
 def test_reviewer_ui_called_with_base_three_arg_signature(boot_env):

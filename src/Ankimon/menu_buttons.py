@@ -29,6 +29,8 @@ from .pyobj.save_transfer import (
     export_save, import_save, cancel_pending_save_import, browse_recovered_saves,
 )
 from .gui_classes.backup_manager_dialog import BackupManagerDialog
+from .pyobj.cloud_sync import CloudSync
+from .gui_classes.cloud_sync_dialog import CloudSyncDialog
 from .gui_entities import (
     License,
     Credits,
@@ -115,6 +117,7 @@ def create_menu_actions(
     addon_dir: Path,
     pokemon_pc: PokemonPC,
     backup_manager: BackupManager,
+    cloud_sync: CloudSync,
 ):
     from .singletons import (
         get_items_window,
@@ -246,6 +249,12 @@ def create_menu_actions(
     recovery_action.setMenuRole(QAction.MenuRole.NoRole)
     recovery_action.triggered.connect(browse_recovered_saves)
     game_menu.addAction(recovery_action)
+
+    # Cloud Sync (manual push/pull to a Syncthing-style folder)
+    cloud_sync_action = QAction("Cloud Sync", mw)
+    cloud_sync_action.setMenuRole(QAction.MenuRole.NoRole)
+    cloud_sync_action.triggered.connect(lambda: CloudSyncDialog(cloud_sync, mw).exec())
+    game_menu.addAction(cloud_sync_action)
 
     # Effectiveness chart
     eff_chart_action = QAction(mw.translator.translate("eff_chart_button"), mw)
