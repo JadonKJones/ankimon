@@ -1,7 +1,4 @@
-from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-)
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 
 from ..pyobj.cloud_sync import CloudSync
 
@@ -11,7 +8,7 @@ class CloudSyncDialog(QDialog):
         super().__init__(parent)
         self.cloud_sync = cloud_sync
         self.setWindowTitle("Ankimon Cloud Sync")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(420)
         self.init_ui()
 
     def init_ui(self):
@@ -21,17 +18,13 @@ class CloudSyncDialog(QDialog):
 
         info_label = QLabel(
             "Push and Pull are manual and one-directional: you decide which "
-            "device has the data you want to keep. Add the folder below to "
-            "Syncthing (or similar) on EVERY device — it's the same path "
-            "everywhere, so there's nothing else to set up."
+            "device has the data you want to keep. Push saves a cloud copy "
+            "that rides along on Anki's own sync — no extra setup. On this "
+            "device: Push, then sync Anki. On the other device: sync Anki, "
+            "then Pull."
         )
         info_label.setWordWrap(True)
         main_layout.addWidget(info_label)
-
-        self.folder_label = QLabel(str(self.cloud_sync.get_cloud_folder()))
-        self.folder_label.setWordWrap(True)
-        self.folder_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        main_layout.addWidget(self.folder_label)
 
         button_layout = QHBoxLayout()
         push_button = QPushButton("Push to Cloud")

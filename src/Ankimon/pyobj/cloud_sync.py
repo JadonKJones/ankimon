@@ -1,51 +1,43 @@
-"""Manual push/pull of the Ankimon database to a user-chosen cloud folder
-(e.g. one watched by Syncthing).
+"""Manual push/pull of the Ankimon database to a cloud copy that rides along
+on Anki's own AnkiWeb sync — no separate sync tool (Syncthing etc.) needed.
 
 Deliberately has no "which side is newer" logic — that mtime-comparison
 approach is what made the old automatic AnkiWeb-riding sync unreliable and
 led to it being disabled (see ``ankimon_sync.py``'s dormant
 ``_automatic_sync_enabled`` subsystem). Here the user always decides the
-direction explicitly.
+direction explicitly: Push writes the cloud copy, then the user runs Anki's
+normal sync (the button they already use for their cards) to move it to the
+other device, then Pull reads it there.
+
+The cloud copy lives in ``collection.media`` — the one folder AnkiWeb already
+syncs — with a leading underscore (``_ankimon_cloud.db``), the standard Anki
+add-on convention for a file that should ride sync but be exempt from Anki's
+"check media" unused-file cleanup (it isn't referenced by any note).
 """
 
 import shutil
 import sqlite3
 from contextlib import closing
 from pathlib import Path
-from typing import Optional
 
+from aqt import mw
 from aqt.utils import askUser, showInfo, showWarning
 
 from ..services import services
 from ..utils import close_anki
 
-DEFAULT_CLOUD_FOLDER_NAME = "AnkimonCloudSync"
+CLOUD_DB_NAME = "_ankimon_cloud.db"
 
 
 class CloudSync:
-    """Handles pushing/pulling the active Ankimon database to a cloud folder."""
+    """Handles pushing/pulling the active Ankimon database to its cloud copy."""
 
     def __init__(self, logger, settings_obj):
         self.logger = logger
         self.settings_obj = settings_obj
 
-    def get_cloud_folder(self) -> Path:
-        """Returns the fixed cloud folder, creating it if needed.
-
-        Not user-configurable, and deliberately NOT inside Anki's addon data
-        (that path looks different on every machine/install, e.g. a versioned
-        addon folder vs. a dev symlink). Home directory is the one location
-        that's the same shape everywhere, so pairing it in Syncthing is just
-        "point both machines at ~/AnkimonCloudSync" with nothing to hunt for.
-        """
-        folder = Path.home() / DEFAULT_CLOUD_FOLDER_NAME
-        folder.mkdir(parents=True, exist_ok=True)
-        return folder
-
-    def _cloud_db_path(self) -> Optional[Path]:
-        if services.db is None:
-            return None
-        return self.get_cloud_folder() / services.db.db_path.name
+    def _cloud_db_path(self) -> Path:
+        return Path(mw.pm.profileFolder()) / "collection.media" / CLOUD_DB_NAME
 
     def _verify_sqlite_integrity(self, path: Path) -> bool:
         try:
@@ -64,19 +56,18 @@ class CloudSync:
             return False
 
     def push(self):
-        """Copy the active local database into the cloud folder, overwriting it."""
+        """Copy the active local database into ankimon_cloud.db, overwriting it."""
         if services.db is None:
             showWarning("The Ankimon database is not initialized yet; cannot push.")
             return
-        cloud_folder = self.get_cloud_folder()
         if not askUser(
-            "Push your local Ankimon data to the cloud folder? This will "
+            "Push your local Ankimon data to the cloud copy? This will "
             "overwrite whatever is currently saved there."
         ):
             return
 
         local_path = services.db.db_path
-        dest_path = cloud_folder / local_path.name
+        dest_path = self._cloud_db_path()
         tmp_path = dest_path.with_name(dest_path.name + ".tmp")
         try:
             # Flush WAL and block new connections so the copy reads one
@@ -97,31 +88,39 @@ class CloudSync:
 
             tmp_path.replace(dest_path)
             self.logger.log("info", f"Cloud sync: pushed {local_path.name} to {dest_path}")
-            showInfo("Pushed your Ankimon data to the cloud folder.")
+            showInfo(
+                "Pushed your Ankimon data to the cloud copy. Now sync Anki "
+                "as usual (the sync button) to send it to your other device."
+            )
         except Exception as e:
             tmp_path.unlink(missing_ok=True)
             self.logger.log("error", f"Cloud sync push failed: {e}")
             showWarning(f"Push failed: {e}")
 
     def pull(self):
-        """Overwrite the active local database with the cloud folder's copy."""
+        """Overwrite the active local database with the ankimon_cloud.db copy."""
         if services.db is None:
             showWarning("The Ankimon database is not initialized yet; cannot pull.")
             return
         cloud_path = self._cloud_db_path()
-        if cloud_path is None or not cloud_path.is_file():
-            showWarning("No matching database was found in the Cloud Sync Folder.")
+        if not cloud_path.is_file():
+            showWarning(
+                f"No {CLOUD_DB_NAME} was found in your collection media yet. "
+                "Push from another device first, then sync Anki there and "
+                "here (the sync button) before pulling."
+            )
             return
 
         if not self._verify_sqlite_integrity(cloud_path):
             showWarning(
-                "Pull aborted: the database in the Cloud Sync Folder failed an "
-                "integrity check. Nothing was changed locally."
+                "Pull aborted: the cloud copy failed an integrity check "
+                "(it may still be mid-sync — try syncing Anki again first). "
+                "Nothing was changed locally."
             )
             return
 
         if not askUser(
-            "Pull data from the cloud folder? This will overwrite your local "
+            "Pull data from the cloud copy? This will overwrite your local "
             "Ankimon data with what's saved there. A backup of your current "
             "data will be made first, then Anki will close so you can restart "
             "and see the pulled data."
