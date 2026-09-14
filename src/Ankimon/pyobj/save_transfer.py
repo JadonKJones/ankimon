@@ -764,6 +764,32 @@ def _import_targets() -> list:
     return targets
 
 
+# Journals left beside a missing save go into its import's recovery folder, moved
+# by the install or by Cancel, under names that start with this.
+_KEPT_JOURNALS = (" SQLite journals left beside the missing save are kept in its recovery "
+                  "folder; find them under "
+                  "Ankimon → Game → Browse Pre-import Recovery Saves…")
+
+
+def _import_recovery_folder(target: Path) -> Optional[Path]:
+    """The recovery folder a readable pending record for ``target`` reserved."""
+    from ..save_import import pending_import_info
+
+    try:
+        info = pending_import_info(target)
+    except Exception:
+        return None
+    return None if info is None else info["recovery_path"].parent
+
+
+def _holds_kept_journals(folder: Optional[Path]) -> bool:
+    try:
+        return (folder is not None and folder.is_dir() and not folder.is_symlink()
+                and any(folder.glob("orphaned-*")))
+    except OSError:
+        return False
+
+
 def cancel_pending_save_import() -> None:
     """Cancel staged imports for either save mode, and report what was found."""
     from ..events import events
@@ -772,8 +798,9 @@ def cancel_pending_save_import() -> None:
     )
 
     cancelled, already_installed, undetermined, failures = [], [], [], []
-    without_copy = set()
+    without_copy, journals_kept = set(), set()
     for target in _import_targets():
+        folder = None
         try:
             # Asked BEFORE cancelling: removing the manifest is what makes the
             # two states indistinguishable afterwards.
@@ -782,12 +809,21 @@ def cancel_pending_save_import() -> None:
                 # An install into a save that no longer existed replaced nothing,
                 # so there is no copy to send the user after.
                 without_copy.add(target)
+            # Cancelling moves journals left beside a missing save into the
+            # import's recovery folder first. Say so, or the only sign of it is a
+            # folder nobody was told about. Look in that folder, not beside the
+            # save: a move that went through before a later step failed leaves
+            # nothing beside it, on this attempt and on the retry.
+            folder = _import_recovery_folder(target)
             if not cancel_pending_import(target):
                 continue
         except OSError as error:
-            failures.append(f"{target.name}: {error}")
+            kept = _KEPT_JOURNALS if _holds_kept_journals(folder) else ""
+            failures.append(f"{target.name}: {error}{kept}")
             continue
         cancelled.append(target)
+        if _holds_kept_journals(folder):
+            journals_kept.add(target)
         if installed:
             already_installed.append(target)
         elif installed is None:
@@ -801,6 +837,7 @@ def cancel_pending_save_import() -> None:
     # both, including "the save you are playing" about a save nobody is playing.
     outcomes = []
     for target in cancelled:
+        moved = _KEPT_JOURNALS if target in journals_kept else ""
         if target in already_installed:
             if target in without_copy:
                 kept = (" No pre-import recovery copy exists for it; one is kept only "
@@ -818,10 +855,10 @@ def cancel_pending_save_import() -> None:
                 "installed from it. Ankimon could not tell whether that import had "
                 "already installed; if it replaced a save, that save was retained "
                 "first. Look under "
-                "Ankimon → Game → Browse Pre-import Recovery Saves…")
+                f"Ankimon → Game → Browse Pre-import Recovery Saves…{moved}")
         else:
-            outcomes.append(f"{target.name}: the pending import was cancelled. "
-                            "This save is unchanged.")
+            outcomes.append(f"{target.name}: the pending import was cancelled."
+                            + (moved or " This save is unchanged."))
 
     if failures:
         message = ("The pending save import could not be cancelled:\n\n"

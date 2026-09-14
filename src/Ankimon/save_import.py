@@ -51,6 +51,16 @@ class ImportStagedError(RuntimeError):
     """
 
 
+class ImportUnsafeToOpenError(RuntimeError):
+    """A pending import's save is missing, and journals are still beside it.
+
+    Opening a database at that path creates a fresh save, and SQLite discards
+    journals it finds beside a database with no pages. They may hold the only
+    remaining copy of the missing save's progress, so nothing may open that
+    path until the install has set them aside or the user has moved them.
+    """
+
+
 def _process_identity() -> str:
     # sys survives add-on module purges. Include the PID so a subprocess/fork
     # cannot inherit the parent's identity while a reload keeps its identity.
@@ -421,6 +431,11 @@ def cancel_pending_import(target: Path) -> bool:
     remove is synced again, removed, and reported as nothing pending. Invalid
     manifests are deliberately not trusted for paths; only locally-generated
     32-hex-token database names are cleaned up.
+
+    Journals beside a save that is missing are moved into the import's recovery
+    folder first, as its install would have moved them. If they cannot be moved,
+    or a damaged record gives them nowhere to go, this raises ``OSError`` before
+    the commit point, with nothing cancelled.
     """
     target, directory = _paths(target)
     manifest = directory / "pending.json"
@@ -432,6 +447,12 @@ def cancel_pending_import(target: Path) -> bool:
     except Exception:
         info = None
     already_cancelled = info is None and _manifest_is_cancelled(manifest)
+    if not already_cancelled:
+        # The record is what keeps a fresh save from being opened over journals
+        # left beside a missing save (refuse_to_open_over_journals). They go
+        # where the install would have put them before it is retired; if they
+        # cannot, nothing is cancelled and that protection stays in force.
+        _set_aside_before_cancelling(target, info)
 
     # Commit cancellation before touching any staged data.
     try:
@@ -686,6 +707,12 @@ def _prune_superseded_recovery(directory: Path, name: str, keep: int = 1) -> Non
 _JOURNAL_SUFFIXES = ("-wal", "-shm", "-journal")
 
 
+def _journals_beside(target: Path) -> list:
+    """The SQLite journals that exist beside ``target``, links included."""
+    return [path for path in (Path(str(target) + suffix) for suffix in _JOURNAL_SUFFIXES)
+            if os.path.lexists(path)]
+
+
 def _retain_current_save(target: Path, recovery: Path, logger, deadline) -> Path:
     """Snapshot the save an install is about to replace; return where it went."""
     # mkdir(mode=...) neither tightens a folder that already exists nor refuses a
@@ -739,8 +766,7 @@ def _set_aside_orphaned_journals(target: Path, directory: Path, logger=None,
     the missing save, so it goes into this import's private recovery folder
     rather than being deleted.
     """
-    orphans = [Path(str(target) + suffix) for suffix in _JOURNAL_SUFFIXES]
-    orphans = [path for path in orphans if os.path.lexists(path)]
+    orphans = _journals_beside(target)
     if not orphans:
         return
     # Not budgeted: these renames stay on one volume, and leaving the journals in
@@ -755,6 +781,94 @@ def _set_aside_orphaned_journals(target: Path, directory: Path, logger=None,
     _log(logger, "warning",
          f"Moved journals left beside the missing {target.name} to {directory}")
 
+
+def refuse_to_open_over_journals(target: Path, cause: BaseException = None) -> None:
+    """Raise ``ImportUnsafeToOpenError`` rather than let a fresh save discard journals.
+
+    Applies while the save is missing, a journal is still beside it, and an
+    import is pending for it or its pending record cannot be read: the install
+    either could not set the journal aside or stopped before trying. The answer
+    comes from the files on disk rather than from that attempt, because an
+    add-on reload after a refused start makes no attempt: this process already
+    tried. Cancelling the import moves the journals aside before it retires the
+    record, so it cannot take this protection away.
+
+    Two cases are left alone. A missing save with no import pending: no install
+    offered to keep its journals, and refusing to start would leave no menu to
+    resolve it from. And a save deleted while a session has it open: that
+    session's database reconnects to its path without asking.
+    ``cause`` is why this start's install stopped, when that is known.
+    """
+    target, directory = _paths(target)
+    if os.path.lexists(target):
+        return
+    journals = _journals_beside(target)
+    if not journals:
+        return
+    unreadable = None
+    try:
+        info = pending_import_info(target)
+    except Exception as error:
+        info, unreadable = None, error
+    if info is None and unreadable is None:
+        return
+    listed = "\n".join(f"    {path}" for path in journals)
+    exposed = (
+        f"Ankimon will not open {target.name}: a new save there would be created over "
+        "what may be the last copy of your progress.\n\n"
+        f"{target} is missing, and these SQLite journals are still beside it:\n{listed}\n"
+        "They can hold progress that was never written into the save, and a new save "
+        "at that path would discard them."
+    )
+    if info is not None:
+        folder = info["recovery_path"].parent
+        stopped = "" if cause is None else f" It could not: {cause}"
+        detail = (
+            f"A save import is waiting to install over {target.name}, and it moves these "
+            f"journals into {folder} first.{stopped}\n\n"
+            "To continue, close anything that may be using those files and make sure "
+            f"{folder.parent} is an ordinary folder that belongs to you, not a file or a "
+            "link, or move the journal files listed above somewhere safe. Then restart "
+            "Anki, and the import installs."
+        )
+    else:
+        detail = (
+            f"A save import record for {target.name} is in {directory}, but it could not "
+            f"be read ({unreadable}), so the journals were not moved anywhere.\n\n"
+            "To continue, move the journal files listed above somewhere safe, and restart "
+            "Anki if this stopped Ankimon from loading.\n"
+            "Ankimon → Game → Cancel Pending Save Import then clears the damaged record."
+        )
+    raise ImportUnsafeToOpenError(f"{exposed}\n\n{detail}") from cause
+
+
+def _set_aside_before_cancelling(target: Path, info) -> None:
+    """Move journals beside a missing save aside before its record is retired."""
+    if os.path.lexists(target) or not _journals_beside(target):
+        return
+    if info is None:
+        raise OSError(
+            f"{target.name} is missing, SQLite journals that may hold its progress are "
+            "still beside it, and its import record could not be read, so there is "
+            "nowhere to move them. Nothing was cancelled. Move the journal files beside "
+            f"{target.name} somewhere safe, then cancel again."
+        )
+    folder = info["recovery_path"].parent
+    try:
+        _set_aside_orphaned_journals(target, folder)
+    except OSError as error:
+        # The move is one rename per journal and then the syncs, so any of them
+        # may already be in the folder when this fails. Name only what is left.
+        remaining = _journals_beside(target)
+        left = ("These are still beside it: " + ", ".join(path.name for path in remaining)
+                + ". " if remaining else "None is left beside it. ")
+        raise OSError(
+            f"{target.name} is missing, and moving the SQLite journals beside it, which "
+            f"may hold its progress, into {folder} failed: {error}. {left}Any already "
+            "moved are kept in that folder. Nothing was cancelled. Make sure "
+            f"{folder.parent} is an ordinary folder that belongs to you, or move the "
+            "journal files still beside the save somewhere safe, then cancel again."
+        ) from error
 
 # SQLITE_BUSY and SQLITE_LOCKED: another connection held the save for longer
 # than the busy timeout. The sqlite3 module names them only from Python 3.11.
@@ -869,7 +983,8 @@ def commit_pending_import(target: Path, logger=None, deadline: float = None) -> 
     if missing:
         # Before anything that can stop the install: if it stops, get_db opens a
         # fresh save at this path, and SQLite does not keep journals it finds
-        # beside a database with no pages.
+        # beside a database with no pages. If this move is what fails, get_db
+        # refuses to open the path at all; see refuse_to_open_over_journals.
         _set_aside_orphaned_journals(target, info["recovery_path"].parent, logger, deadline)
 
     incoming = info["pending_path"]

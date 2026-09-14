@@ -646,3 +646,71 @@ def test_every_read_only_open_works_on_a_network_path(transfer, tmp_path, monkey
         BackupManager._snapshot_database(save, snapshot)
     assert st.get_db_stats(copy)["pokemon"] == 4
     assert st.get_db_stats(snapshot)["pokemon"] == 4
+
+
+def test_cancel_says_where_the_journals_of_a_missing_save_went(transfer, tmp_path, monkeypatch):
+    """Cancelling moves them into the import's recovery folder first; say so."""
+    from Ankimon.save_import import pending_import_info, stage_import
+
+    monkeypatch.setattr(st, "user_path", tmp_path)
+    developer = _make_save(tmp_path / "ankimonDEV.db", pokemon=1, name="Dev")
+    staged = stage_import(transfer.incoming, developer)
+    developer.unlink()
+    journal = Path(str(developer) + "-journal")
+    journal.write_bytes(b"unfinished transaction" * 64)
+    shown = []
+    monkeypatch.setattr(st, "showInfo", lambda message: shown.append(message))
+
+    st.cancel_pending_save_import()
+
+    assert pending_import_info(developer) is None
+    assert not journal.exists()
+    assert [path.read_bytes() for path in staged["recovery_path"].parent.iterdir()] == [
+        b"unfinished transaction" * 64]
+    [message] = shown
+    outcome = message.split("ankimonDEV.db:", 1)[1]
+    assert "journals" in outcome and "Browse Pre-import Recovery Saves" in outcome
+    assert "This save is unchanged" not in outcome
+
+
+def test_a_cancel_that_moved_the_journals_before_failing_still_says_where_they_are(
+    transfer, tmp_path, monkeypatch,
+):
+    """Moving them comes before the cancellation is committed, and that can still fail.
+
+    By then they are in the recovery folder, both on the failed attempt and on the
+    retry, which finds nothing beside the save any more.
+    """
+    import importlib
+
+    from Ankimon.save_import import pending_import_info, stage_import
+
+    save_import = importlib.import_module("Ankimon.save_import")
+    monkeypatch.setattr(st, "user_path", tmp_path)
+    developer = _make_save(tmp_path / "ankimonDEV.db", pokemon=1, name="Dev")
+    stage_import(transfer.incoming, developer)
+    developer.unlink()
+    journal = Path(str(developer) + "-journal")
+    journal.write_bytes(b"unfinished transaction" * 64)
+    write = save_import._write_cancelled_record
+
+    def locked(*args, **kwargs):
+        raise PermissionError(13, "Permission denied", "pending.json")
+
+    monkeypatch.setattr(save_import, "_write_cancelled_record", locked)
+    warned, shown = [], []
+    monkeypatch.setattr(st, "showWarning", lambda message: warned.append(message))
+    monkeypatch.setattr(st, "showInfo", lambda message: shown.append(message))
+
+    st.cancel_pending_save_import()
+    assert pending_import_info(developer) is not None
+    assert not journal.exists()
+    [warning] = warned
+    assert "Browse Pre-import Recovery Saves" in warning.split("ankimonDEV.db:", 1)[1]
+
+    monkeypatch.setattr(save_import, "_write_cancelled_record", write)
+    st.cancel_pending_save_import()
+    assert pending_import_info(developer) is None
+    [message] = shown
+    outcome = message.split("ankimonDEV.db:", 1)[1]
+    assert "journals" in outcome and "Browse Pre-import Recovery Saves" in outcome

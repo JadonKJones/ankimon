@@ -1170,6 +1170,8 @@ def test_a_spent_startup_budget_still_sets_journals_aside(tmp_path):
         b"stale journal"]
     assert not target.exists()
     assert importer.pending_import_info(target) is not None
+    # Set aside, so a fresh save may be opened there after all.
+    importer.refuse_to_open_over_journals(target)
 
 
 def test_a_junction_is_recognised_on_pythons_without_isjunction(tmp_path, monkeypatch):
@@ -1528,3 +1530,93 @@ def test_an_import_stages_and_installs_on_a_network_path(tmp_path, monkeypatch):
     )
     assert names(target) == ["incoming"]
     assert names(staged["recovery_path"]) == ["local"]
+
+
+@pytest.mark.parametrize("folder_usable", [False, True])
+def test_cancelling_an_import_whose_save_is_missing_keeps_the_journals(tmp_path, folder_usable):
+    """The pending record is what keeps a fresh save from being opened over them.
+
+    Cancelling retires it, so the journals go where the install would have put
+    them first, and nothing is cancelled when they cannot.
+    """
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target)
+    target.unlink()
+    journal = Path(str(target) + "-wal")
+    journal.write_bytes(b"committed progress" * 64)
+    if not folder_usable:
+        (tmp_path / "ankimon_recovery").write_text("not a folder")
+        with pytest.raises(OSError, match="Nothing was cancelled"):
+            importer.cancel_pending_import(target)
+        assert importer.pending_import_info(target)["token"] == staged["token"]
+        assert journal.read_bytes() == b"committed progress" * 64
+        with pytest.raises(importer.ImportUnsafeToOpenError):
+            importer.refuse_to_open_over_journals(target)
+        return
+    assert importer.cancel_pending_import(target) is True
+    assert importer.pending_import_info(target) is None
+    assert not journal.exists()
+    assert [path.read_bytes() for path in staged["recovery_path"].parent.iterdir()] == [
+        b"committed progress" * 64]
+    importer.refuse_to_open_over_journals(target)
+
+
+def test_a_damaged_record_is_not_cancelled_out_from_under_the_journals_it_protects(tmp_path):
+    """With no readable record there is no recovery folder to move them into."""
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    importer.stage_import(source, target)
+    target.unlink()
+    journal = Path(str(target) + "-journal")
+    journal.write_bytes(b"unfinished transaction" * 64)
+    manifest = tmp_path / f".ankimon-import-{target.name}" / "pending.json"
+    manifest.write_text("{damaged")
+
+    with pytest.raises(OSError, match="Nothing was cancelled"):
+        importer.cancel_pending_import(target)
+    assert manifest.read_text() == "{damaged"
+    assert journal.exists()
+
+    # Once the user has moved them, the damaged record cancels as it always did.
+    journal.unlink()
+    assert importer.cancel_pending_import(target) is True
+    assert importer.pending_import_info(target) is None
+
+
+def test_a_cancel_that_fails_partway_through_the_move_names_only_what_is_still_beside_the_save(
+    tmp_path, monkeypatch,
+):
+    """Journals already moved are safe in the recovery folder; only the rest need the user."""
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target)
+    target.unlink()
+    wal, journal = Path(str(target) + "-wal"), Path(str(target) + "-journal")
+    wal.write_bytes(b"committed progress" * 64)
+    journal.write_bytes(b"unfinished transaction" * 64)
+    replace = importer.os.replace
+
+    def refuse_the_journal(source, destination):
+        if Path(source) == journal:
+            raise PermissionError(13, "in use", str(journal))
+        return replace(source, destination)
+
+    monkeypatch.setattr(importer.os, "replace", refuse_the_journal)
+    with pytest.raises(OSError, match="Nothing was cancelled") as failed:
+        importer.cancel_pending_import(target)
+    message = str(failed.value)
+    assert f"still beside it: {journal.name}." in message
+    assert "could not be moved" not in message
+    assert not wal.exists() and journal.exists()
+    assert importer.pending_import_info(target)["token"] == staged["token"]
+    assert [path.read_bytes() for path in staged["recovery_path"].parent.iterdir()] == [
+        b"committed progress" * 64]
+
+    monkeypatch.setattr(importer.os, "replace", replace)
+    assert importer.cancel_pending_import(target) is True
+    assert sorted(path.read_bytes() for path in staged["recovery_path"].parent.iterdir()) == [
+        b"committed progress" * 64, b"unfinished transaction" * 64]

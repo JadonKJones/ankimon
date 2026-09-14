@@ -33,6 +33,9 @@ database. The preparation message displays the reserved location, and
 does not delete these copies. Import a recovery `.db` through the same import
 flow to restore it. A failed installation retry keeps the newest snapshot under
 the advertised name, plus the one it superseded; older retry copies are pruned.
+If the save is missing and journals left beside it cannot be moved into the
+recovery folder, Ankimon will not open that save rather than create a new one over
+them, and says how to resolve it. Cancelling the import moves them there first.
 
 Imports require leaderboard sign-in again. Incoming current and legacy
 credentials are removed; explicit empty authentication settings prevent legacy
@@ -610,3 +613,32 @@ Deferred, with reasons:
   `os.replace` and does not sync the file; the import's `_snapshot` spends a
   deadline its caller shares, leaves the publish to that caller and syncs the copy.
   Merging them is a behaviour decision rather than a refactor.
+
+After an external review of `ecc70364`:
+
+- A pending import whose save is missing no longer lets Ankimon create a fresh save
+  over journals the install could not set aside. The install moves `-wal`, `-shm`
+  and `-journal` files left beside a deleted save into its recovery folder before
+  anything else. When that move failed, because a file held the recovery folder's
+  name or access was refused, `get_db` recorded the failure and opened the path
+  anyway. SQLite then discarded the journals beside the new, empty save: run through
+  `get_db` with the refusal switched off, a committed `-wal` holding play that never
+  reached the save was deleted, and so was a `-journal`. `get_db` now refuses to open
+  that path, and `switch_database` refuses it when developer mode opens the other
+  save. At startup the refusal fails the add-on load on purpose, so its message is
+  the whole notice: it lists the journals, names the recovery folder and why the move
+  failed, and says to fix the folder or move the journals somewhere safe, then
+  restart. When the save that failed is the one startup does not open, Ankimon loads
+  and the startup notice carries the same message. The refusal is decided from the
+  files rather than from the install attempt. That covers two paths that never reach
+  the move: an add-on reload after a refused start, which this process's attempt gate
+  keeps from installing again, and a pending record too damaged to read. Cancel
+  Pending Save Import, which the startup notice recommends, no longer removes the
+  protection: it moves the journals into the import's recovery folder before
+  retiring the record, says where they went, even when a later step fails, and
+  cancels nothing if they cannot all be moved. Two cases are not refused. A missing
+  save with journals beside it and no import pending: no install offered to keep
+  those journals, and a refusal would leave no menu to clear it from. And a save
+  deleted while a session has it open: that session's database reconnects to its
+  path as it always has, and an add-on reload keeps that database rather than
+  calling `get_db`.

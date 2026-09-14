@@ -4,6 +4,7 @@ Use real SQLite files, backups and atomic replacement. Only the Anki host/UI
 and external writers are controlled at the boundary.
 """
 
+import importlib
 import json
 import os
 import sqlite3
@@ -598,7 +599,9 @@ def test_unsuccessful_import_releases_snapshot_and_preserves_live_save(transfer,
     else:
         def disk_failure(*args):
             raise OSError("cannot prepare destination")
-        monkeypatch.setattr("Ankimon.save_import.stage_import", disk_failure)
+        # The module itself, as in test_save_transfer's _stub_sync.
+        monkeypatch.setattr(importlib.import_module("Ankimon.save_import"),
+                            "stage_import", disk_failure)
     assert st.import_save() is False
     assert transfer.active.read_bytes() == before
     assert list(transfer.snapshots.iterdir()) == []

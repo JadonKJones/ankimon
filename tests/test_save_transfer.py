@@ -19,6 +19,7 @@ real add-on modules import Qt-free, then drive the real code.
 import os
 import sys
 import atexit
+import importlib
 import types
 import shutil
 import sqlite3
@@ -260,7 +261,11 @@ def _stub_sync(monkeypatch, *, staging_ok=True):
     if not staging_ok:
         def fail_staging(*args):
             raise OSError("Cannot prepare pending import")
-        monkeypatch.setattr("Ankimon.save_import.stage_import", fail_staging)
+        # The module itself, not a dotted path: a test that re-executes the
+        # package leaves ``Ankimon`` without its ``save_import`` attribute once
+        # something imported that module earlier in the run.
+        monkeypatch.setattr(importlib.import_module("Ankimon.save_import"),
+                            "stage_import", fail_staging)
     monkeypatch.setattr("Ankimon.pyobj.ankimon_sync.get_ankimon_sync", lambda: _Sync())
 
 
