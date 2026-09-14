@@ -61,6 +61,20 @@ class ImportUnsafeToOpenError(RuntimeError):
     """
 
 
+class SaveDamagedError(ValueError):
+    """A save failed SQLite's integrity check."""
+
+
+class CurrentSaveDamagedError(ValueError):
+    """The save an install would replace failed SQLite's integrity check.
+
+    The install keeps a verified copy of that save before replacing it, and a
+    damaged save cannot give one, so restarting does not change the answer. Only
+    an import staged with ``retain_unverified``, which the user chose after being
+    told, installs over it, keeping the save as it is instead.
+    """
+
+
 def _process_identity() -> str:
     # sys survives add-on module purges. Include the PID so a subprocess/fork
     # cannot inherit the parent's identity while a reload keeps its identity.
@@ -122,6 +136,50 @@ def _budget(deadline: float | None) -> float:
     return min(_TIMEOUT, remaining)
 
 
+# What Windows answers for a rename or delete that another handle blocks (#636):
+# 5 = ERROR_ACCESS_DENIED, what OneDrive and antivirus filters usually give,
+# 32 = ERROR_SHARING_VIOLATION, 33 = ERROR_LOCK_VIOLATION. Kept here, with the
+# retry below, because this module must stay importable without Anki; the sync
+# module takes its classification from here.
+_FILE_LOCK_WINERRORS = frozenset({5, 32, 33})
+
+# Waits between tries of one locked file operation: about 2.5 seconds in all, and
+# only after a first try has failed.
+_FILE_LOCK_RETRY_DELAYS = (0.1, 0.2, 0.4, 0.8, 1.0)
+
+
+def _is_file_lock_error(error: BaseException) -> bool:
+    """Whether ``error`` is Windows refusing a file operation another handle blocks.
+
+    Windows only: POSIX renames and deletes over open files, so a PermissionError
+    there is a real permission problem, and retrying it only delays the report.
+    """
+    if os.name != "nt":
+        return False
+    if isinstance(error, PermissionError):
+        return True
+    return isinstance(error, OSError) and getattr(error, "winerror", None) in _FILE_LOCK_WINERRORS
+
+
+def _retry_on_file_lock(operation, deadline: float | None = None):
+    """Run one file operation, trying it again while another handle blocks it.
+
+    A sync client or virus scanner that opens a file just written usually lets
+    go within a second. Only this operation is retried, never the step around it,
+    and any other error propagates at once. With ``deadline``, no wait runs past
+    it: a lock still held then raises its own error rather than a spent budget,
+    so the notice names what blocked the file.
+    """
+    for delay in (*_FILE_LOCK_RETRY_DELAYS, None):
+        try:
+            return operation()
+        except OSError as error:
+            if (delay is None or not _is_file_lock_error(error)
+                    or (deadline is not None and time.monotonic() + delay >= deadline)):
+                raise
+        time.sleep(delay)
+
+
 def _sqlite_uri(path, mode: str) -> str:
     """A SQLite URI for ``path`` that a Windows network path can use too.
 
@@ -156,7 +214,7 @@ def _verify_save(path: Path, deadline: float = None) -> None:
     conn = _connect_readonly(path, deadline)
     try:
         if conn.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
-            raise ValueError("The save failed its SQLite integrity check")
+            raise SaveDamagedError("The save failed its SQLite integrity check")
         if conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='captured_pokemon'"
         ).fetchone() is None:
@@ -278,17 +336,21 @@ def pending_import_info(target: Path) -> dict | None:
     if (record.get("version") != 1 or record.get("target") != str(target)
             or not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None
             or not isinstance(record.get("process"), str)
-            or not isinstance(record.get("digest"), str)):
+            or not isinstance(record.get("digest"), str)
+            or not isinstance(record.get("retain_unverified", False), bool)):
         raise ValueError("The pending import record does not match this save")
+    recovery = target.parent / "ankimon_recovery" / f"pre-import-{token}"
     return {
         **record,
         "pending_path": directory / f"{token}.db",
-        "recovery_path": target.parent / "ankimon_recovery" / f"pre-import-{token}" / target.name,
+        "recovery_path": recovery / target.name,
+        "unverified_path": recovery / _UNVERIFIED / target.name,
     }
 
 
 def stage_import(
-    snapshot: Path, target: Path, *, sanitize_credentials: bool = True
+    snapshot: Path, target: Path, *, sanitize_credentials: bool = True,
+    retain_unverified: bool = False,
 ) -> dict:
     """Durably retain the chosen save without touching the runtime database.
 
@@ -299,6 +361,11 @@ def stage_import(
     ``sanitize_credentials`` is True for portable imports/rescues. Backup
     Manager restores may set it False because their source is already private
     local recovery material owned by this installation.
+
+    ``retain_unverified`` records that the user agreed, after
+    ``damaged_save_question``, to replace a save that fails its integrity check.
+    The install then keeps that save as it is, under ``unverified_path``, when it
+    cannot keep a verified copy. It never relaxes the checks on the new save.
 
     Raises ``ImportStagedError`` when publication succeeded but a later step
     did not: the import is armed for the next start and can only be stopped by
@@ -336,11 +403,13 @@ def stage_import(
             "version": 1, "target": str(target), "token": token,
             "process": _process_identity(), "digest": _digest(incoming),
         }
+        if retain_unverified:
+            record["retain_unverified"] = True
         with temp_manifest.open("x", encoding="utf-8") as handle:
             json.dump(record, handle)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_manifest, directory / "pending.json")
+        _retry_on_file_lock(lambda: os.replace(temp_manifest, directory / "pending.json"))
         published = True
     finally:
         if not published:
@@ -545,7 +614,7 @@ def pending_import_is_installed(target: Path) -> bool | None:
             # copy, into a save that was already missing, leaves nothing to point
             # at either; if its save goes missing too, the next start installs the
             # import again.
-            return None if info["recovery_path"].is_file() else False
+            return None if _recovery_copy(info) is not None else False
         deadline = time.monotonic() + _WORDING_BUDGET
         return _installed_token(target, deadline) == info["token"]
     except Exception:
@@ -556,10 +625,14 @@ def _recovery_copy(info: dict) -> Path | None:
     """This record's pre-import copy, if one is on disk.
 
     An install into a save that no longer existed replaced nothing and kept
-    nothing, so the record's reserved path is not evidence of a copy.
+    nothing, so the record's reserved path is not evidence of a copy. A verified
+    copy comes first; an install that could not make one, over a save that failed
+    its integrity check, kept that save unverified instead.
     """
-    recovery = info["recovery_path"]
-    return recovery if recovery.is_file() else None
+    for copy in (info["recovery_path"], info["unverified_path"]):
+        if copy.is_file():
+            return copy
+    return None
 
 
 def pending_import_recovery_copy(target: Path) -> Path | None:
@@ -573,6 +646,87 @@ def pending_import_recovery_copy(target: Path) -> Path | None:
     except Exception:
         return None
     return None if info is None else _recovery_copy(info)
+
+
+# What Import and Backup Restore may spend on the GUI thread checking the save they
+# would replace. SQLite's own busy timeout and the check's progress limit would
+# each allow _TIMEOUT for a locked save. The integrity check reads the whole file,
+# though, so a save too large to check in this long gets no question, and if it
+# is damaged the install refuses it at every start.
+_DAMAGE_CHECK_BUDGET = 10.0
+
+
+def current_save_is_damaged(target: Path) -> bool | None:
+    """Whether the save an import would replace fails SQLite's integrity check.
+
+    Asked before staging, on the GUI thread, within ``_DAMAGE_CHECK_BUDGET``. True
+    only for a save whose schema SQLite can still read: the install switches that
+    save's journal mode before replacing it, which needs the schema, so offering
+    to install over any other would promise a replacement that never happens.
+    None means the check did not finish: the save is locked, unreadable or slower
+    to check than that. A missing save is not damaged, since there is nothing to
+    keep.
+    """
+    target = Path(target)
+    if not target.is_file():
+        return False
+    try:
+        conn = _connect_readonly(target, time.monotonic() + _DAMAGE_CHECK_BUDGET)
+    except Exception:
+        return None
+    try:
+        try:
+            conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        except Exception:
+            return None
+        try:
+            return conn.execute("PRAGMA quick_check").fetchall() != [("ok",)]
+        except Exception as error:
+            return True if _is_damage(error) else None
+    finally:
+        conn.close()
+
+
+def should_confirm_unverified_copy(target: Path) -> bool:
+    """Whether Import or Backup Restore must ask before staging over ``target``.
+
+    Not while an import is already recorded for it: staging refuses that anyway
+    and says why, and a question about a copy that will never be made would only
+    come first.
+    """
+    try:
+        if pending_import_info(target) is not None:
+            return False
+    except Exception:
+        return False
+    return current_save_is_damaged(target) is True
+
+
+def damaged_save_question(target: Path, replacement: str) -> str:
+    """What Import and Backup Restore ask before staging over a damaged save."""
+    target, _ = _paths(target)
+    return (
+        f"Your current Ankimon save, {target.name}, failed SQLite's integrity check, "
+        "so part of it may be damaged, even if Ankimon still opens it.\n\n"
+        "Before Ankimon replaces a save, it keeps a verified copy of it, and a damaged "
+        f"save cannot give one. If you continue, and {target.name} still fails the "
+        "check at the next start, Ankimon copies it exactly as it is, unchecked and "
+        f"unrepaired, with its SQLite journal files, into a folder named \"{_UNVERIFIED}\" "
+        f"inside:\n{target.parent / 'ankimon_recovery'}\n"
+        f"Then it installs {replacement}, which passed the check.\n\n"
+        "Continue?"
+    )
+
+
+def describe_recovery_destination(info: dict) -> str:
+    """Where a staging notice says the save being replaced will be kept."""
+    destination = str(info["recovery_path"])
+    if info.get("retain_unverified"):
+        destination += (
+            "\n\nIf it still fails its integrity check then, it is copied as it is, "
+            f"unverified, to:\n{info['unverified_path']}"
+        )
+    return destination
 
 
 def _log(logger, level: str, message: str) -> None:
@@ -657,9 +811,16 @@ def _sync_within(path: Path, deadline: float | None) -> None:
 
 
 def _finish_installed_import(target, recovery, logger, install_temp=None) -> None:
-    previous = ("No recovery copy of a previous save exists." if recovery is None
-                else f"Previous save: {recovery}")
-    _log(logger, "info", f"Ankimon import installed. {previous}")
+    level = "info"
+    if recovery is None:
+        previous = "No recovery copy of a previous save exists."
+    elif recovery.parent.name == _UNVERIFIED:
+        level = "warning"
+        previous = ("The previous save failed its integrity check and was kept as it "
+                    f"was, unverified: {recovery}")
+    else:
+        previous = f"Previous save: {recovery}"
+    _log(logger, level, f"Ankimon import installed. {previous}")
     try:
         # Retry this sync after a prior crash too, before retiring the manifest.
         _fsync_directory(target.parent)
@@ -705,6 +866,9 @@ def _prune_superseded_recovery(directory: Path, name: str, keep: int = 1) -> Non
 
 
 _JOURNAL_SUFFIXES = ("-wal", "-shm", "-journal")
+# The folder, inside an import's recovery folder, that holds a save kept without
+# verification. The name is what labels it; notices quote it.
+_UNVERIFIED = "unverified"
 
 
 def _journals_beside(target: Path) -> list:
@@ -713,8 +877,14 @@ def _journals_beside(target: Path) -> list:
             if os.path.lexists(path)]
 
 
-def _retain_current_save(target: Path, recovery: Path, logger, deadline) -> Path:
-    """Snapshot the save an install is about to replace; return where it went."""
+def _retain_current_save(target: Path, recovery: Path, logger, deadline,
+                         retain_unverified: bool = False) -> Path:
+    """Snapshot the save an install is about to replace; return where it went.
+
+    A save that fails its integrity check cannot give a verified snapshot. That
+    stops the install with ``CurrentSaveDamagedError``, unless the import was
+    staged with ``retain_unverified``; then the save is kept as it is instead.
+    """
     # mkdir(mode=...) neither tightens a folder that already exists nor refuses a
     # link. Check both levels before inspecting or writing private recovery
     # material.
@@ -731,7 +901,8 @@ def _retain_current_save(target: Path, recovery: Path, logger, deadline) -> Path
         # stale first attempt while the genuinely final save sat beside it under
         # a name nobody had been given.
         _budget(deadline)
-        os.replace(recovery, recovery.with_name(f"retry-{uuid.uuid4().hex}-{target.name}"))
+        superseded = recovery.with_name(f"retry-{uuid.uuid4().hex}-{target.name}")
+        _retry_on_file_lock(lambda: os.replace(recovery, superseded), deadline)
         _sync_within(recovery.parent, deadline)
         _budget(deadline)
         _prune_superseded_recovery(recovery.parent, target.name)
@@ -744,17 +915,129 @@ def _retain_current_save(target: Path, recovery: Path, logger, deadline) -> Path
     os.close(fd)
     backup_temp = Path(name)
     try:
-        _snapshot(target, backup_temp, deadline)
-        # Everything past the snapshot is more recovery I/O inside add-on import.
-        _budget(deadline)
-        os.replace(backup_temp, recovery)
-        _sync_within(recovery.parent, deadline)
-        _sync_within(recovery.parent.parent, deadline)
-        _sync_within(target.parent, deadline)
+        try:
+            _snapshot(target, backup_temp, deadline)
+        except (ValueError, sqlite3.DatabaseError) as error:
+            # A lock, a spent budget or a file that is not a save is not damage,
+            # and stops the install as it always has.
+            if not _is_damage(error):
+                raise
+            if not retain_unverified:
+                raise CurrentSaveDamagedError(_damaged_save_refusal(target, error)) from error
+            damage = error
+        else:
+            damage = None
+            # Everything past the snapshot is more recovery I/O inside add-on import.
+            _budget(deadline)
+            _retry_on_file_lock(lambda: os.replace(backup_temp, recovery), deadline)
+            _sync_within(recovery.parent, deadline)
+            _sync_within(recovery.parent.parent, deadline)
+            _sync_within(target.parent, deadline)
     finally:
         _remove_owned_copy(backup_temp)
 
+    if damage is not None:
+        _log(logger, "warning", f"{target.name} failed its integrity check ({damage}), so "
+             "it is kept unverified, as the import was staged to allow")
+        return _retain_unverified_save(target, recovery.parent, logger, deadline)
     return recovery
+
+
+def _damaged_save_refusal(target: Path, error: BaseException) -> str:
+    """The startup notice for a damaged save an import was not staged to replace."""
+    detail = "" if isinstance(error, SaveDamagedError) else f" ({error})"
+    return (
+        f"{target.name} failed SQLite's integrity check{detail}, so Ankimon could not "
+        "keep a verified copy of it before replacing it, and restarting will not change "
+        "that. Nothing was replaced. To install anyway, use Ankimon → Game → Cancel "
+        "Pending Save Import, then choose the import or backup again: Ankimon checks the "
+        "save when you do, and asks whether to keep it as it is, unverified, instead."
+    )
+
+
+def _discard_copies(folder: Path) -> None:
+    """Remove a folder of copies this module wrote, leaving whatever will not go."""
+    try:
+        if _is_link(folder) or not folder.is_dir():
+            return
+        entries = list(folder.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            # unlink removes a link itself, never what it points at.
+            entry.unlink()
+        except OSError:
+            pass
+    try:
+        folder.rmdir()
+    except OSError:
+        pass
+
+
+def _prune_superseded_unverified(folder: Path, keep: int = 1) -> None:
+    """Keep the newest unverified copy an earlier attempt left, and no more.
+
+    The same bound, for the same reason, as ``_prune_superseded_recovery``.
+    """
+    try:
+        superseded = sorted(
+            (path for path in folder.glob(f"{_UNVERIFIED}-superseded-*")
+             if path.is_dir() and not _is_link(path)),
+            key=lambda path: path.stat().st_mtime,
+        )
+    except OSError:
+        return
+    for stale in superseded[:-keep] if keep else superseded:
+        _discard_copies(stale)
+
+
+def _retain_unverified_save(target: Path, folder: Path, logger, deadline) -> Path:
+    """Keep a save that failed its integrity check exactly as it is on disk.
+
+    Only for an import staged with ``retain_unverified``. The save, and the WAL
+    or rollback journal beside it, are copied byte for byte, unchecked and
+    unrepaired, and keep their names, because SQLite pairs a journal with its
+    database by name. The shared-memory index is left out; SQLite rebuilds it.
+    SQLite's own recovery has already run, as it does before every install:
+    ``_recover_hot_journal`` rolled back a hot journal, and closing its
+    connection merged a WAL no other connection held open.
+
+    Each attempt fills a hidden folder and publishes it with one rename, so the
+    ``unverified`` folder never pairs a save with another attempt's journal. A
+    copy an earlier attempt published is moved aside first.
+    """
+    for stale in folder.glob(f".{_UNVERIFIED}-*"):
+        # An attempt that stopped before publishing. The save it copied has not
+        # been replaced, so this attempt copies it again.
+        _discard_copies(stale)
+    _budget(deadline)
+    building = folder / f".{_UNVERIFIED}-{uuid.uuid4().hex}"
+    _private_directory(building, logger)
+    published = folder / _UNVERIFIED
+    try:
+        journals = [path for path in (Path(str(target) + "-wal"), Path(str(target) + "-journal"))
+                    if path.is_file()]
+        for source in (target, *journals):
+            copy = building / source.name
+            _copy_within(source, copy, deadline)
+            _budget(deadline)
+            _fsync_file(copy)
+        _sync_within(building, deadline)
+        if os.path.lexists(published):
+            superseded = folder / f"{_UNVERIFIED}-superseded-{uuid.uuid4().hex}"
+            _retry_on_file_lock(lambda: os.rename(published, superseded), deadline)
+        _retry_on_file_lock(lambda: os.rename(building, published), deadline)
+    except BaseException:
+        _discard_copies(building)
+        raise
+    # The same syncs a verified copy gets, so the folders that lead to this copy
+    # are on disk before the save it holds is replaced.
+    _sync_within(folder, deadline)
+    _sync_within(folder.parent, deadline)
+    _sync_within(target.parent, deadline)
+    _prune_superseded_unverified(folder)
+    return published / target.name
 
 
 def _set_aside_orphaned_journals(target: Path, directory: Path, logger=None,
@@ -774,7 +1057,9 @@ def _set_aside_orphaned_journals(target: Path, directory: Path, logger=None,
     _private_directory(directory.parent, logger)
     _private_directory(directory, logger)
     for orphan in orphans:
-        os.replace(orphan, directory / f"orphaned-{uuid.uuid4().hex}-{orphan.name}")
+        kept = directory / f"orphaned-{uuid.uuid4().hex}-{orphan.name}"
+        # A lock is retried outside the budget too, for the reason above.
+        _retry_on_file_lock(lambda: os.replace(orphan, kept))
     _sync_within(directory, deadline)
     _sync_within(directory.parent, deadline)
     _sync_within(target.parent, deadline)
@@ -894,6 +1179,27 @@ def _is_lock_error(error: sqlite3.Error) -> bool:
     return "locked" in message or "busy" in message
 
 
+# SQLITE_CORRUPT: a page is not what the database should hold. SQLITE_NOTADB is
+# left out: a save without a readable header gives an install nothing to work on.
+_CORRUPT_CODE = 11
+
+
+def _is_damage(error: BaseException) -> bool:
+    """Whether ``error`` says a save is damaged, not locked, slow or unreachable.
+
+    A failed integrity check, or SQLite reporting a malformed database. Every
+    other failure, a lock above all, keeps its usual meaning.
+    """
+    if isinstance(error, SaveDamagedError):
+        return True
+    if not isinstance(error, sqlite3.DatabaseError) or _is_lock_error(error):
+        return False
+    code = getattr(error, "sqlite_errorcode", None)
+    if code is not None:
+        return (code & 0xFF) == _CORRUPT_CODE
+    return "malformed" in str(error).lower()
+
+
 def _recover_hot_journal(target: Path, logger=None, deadline: float = None) -> None:
     """Let SQLite roll back a transaction a crash left unfinished in the save.
 
@@ -926,6 +1232,25 @@ def _recover_hot_journal(target: Path, logger=None, deadline: float = None) -> N
         # error if they cannot, as they did before this step existed.
         _log(logger, "warning",
              f"Could not open {target.name} to roll back an unfinished write: {error}")
+
+
+def _holds_this_import(target: Path, info: dict, logger, deadline) -> bool:
+    """Whether ``target`` already is this import, which an earlier start installed.
+
+    A damaged save may be unable to say. An import staged to keep such a save
+    unverified goes ahead regardless: whichever save it is, the unverified copy
+    keeps it. Any other import is refused as a damaged save, with the notice that
+    says what to do, rather than with SQLite's bare error.
+    """
+    try:
+        return _installed_token(target, deadline) == info["token"]
+    except sqlite3.DatabaseError as error:
+        if not _is_damage(error):
+            raise
+        if not info.get("retain_unverified"):
+            raise CurrentSaveDamagedError(_damaged_save_refusal(target, error)) from error
+        _log(logger, "warning", f"Could not read which import {target.name} holds: {error}")
+        return False
 
 
 def commit_pending_import(target: Path, logger=None, deadline: float = None) -> bool:
@@ -977,9 +1302,9 @@ def commit_pending_import(target: Path, logger=None, deadline: float = None) -> 
 
     if not missing:
         _recover_hot_journal(target, logger, deadline)
-    if not missing and _installed_token(target, deadline) == info["token"]:
-        _finish_installed_import(target, _recovery_copy(info), logger)
-        return True
+        if _holds_this_import(target, info, logger, deadline):
+            _finish_installed_import(target, _recovery_copy(info), logger)
+            return True
     if missing:
         # Before anything that can stop the install: if it stops, get_db opens a
         # fresh save at this path, and SQLite does not keep journals it finds
@@ -995,7 +1320,8 @@ def commit_pending_import(target: Path, logger=None, deadline: float = None) -> 
         # A copy kept by an earlier attempt still describes a previous save.
         recovery = _recovery_copy(info)
     else:
-        recovery = _retain_current_save(target, info["recovery_path"], logger, deadline)
+        recovery = _retain_current_save(target, info["recovery_path"], logger, deadline,
+                                        info.get("retain_unverified", False))
         # Let SQLite merge and remove the OLD database's journals itself. Never
         # delete a WAL before replacement: a crash in that gap would lose committed
         # progress. A busy external connection refuses the mode change and import.
@@ -1025,7 +1351,10 @@ def commit_pending_import(target: Path, logger=None, deadline: float = None) -> 
             except OSError:
                 # A volume with fixed permissions refuses chmod.
                 pass
-        os.replace(install_temp, target)
+        # A lock that clears within the budget must not cost a restart: this
+        # process's attempt gate refuses a second install, so only this rename is
+        # tried again.
+        _retry_on_file_lock(lambda: os.replace(install_temp, target), deadline)
     except Exception:
         _remove_owned_copy(install_temp)
         raise

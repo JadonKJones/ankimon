@@ -49,6 +49,11 @@ from aqt import mw, gui_hooks
 from aqt.utils import tooltip
 
 from ..resources import user_path
+from ..save_import import (
+    _FILE_LOCK_RETRY_DELAYS as _SYNC_LOCK_RETRY_DELAYS,
+    _FILE_LOCK_WINERRORS as _SYNC_LOCK_WINERRORS,  # noqa: F401 -- tests classify with it
+    _is_file_lock_error as _is_lock_error,
+)
 
 
 # --------------------------------------------------------------------------
@@ -62,16 +67,12 @@ from ..resources import user_path
 # small just-created file they typically clear within a second — so the fix is a
 # bounded retry (the retry, not the message, is the primary fix), falling back
 # to a single friendly, actionable message only if the lock persists.
-
-# WinError codes that mean "another handle is blocking this rename/delete":
-# 5 = ERROR_ACCESS_DENIED (what OneDrive typically yields, incl. delete-pending
-# and cloud/AV filter-driver cases), 32 = ERROR_SHARING_VIOLATION,
-# 33 = ERROR_LOCK_VIOLATION.
-_SYNC_LOCK_WINERRORS = frozenset({5, 32, 33})
-
-# Backoff schedule for retrying a locked file op (~2.5 s worst case, and only on
-# the failure path — the common case succeeds on the first try with no delay).
-_SYNC_LOCK_RETRY_DELAYS = (0.1, 0.2, 0.4, 0.8, 1.0)
+#
+# Which errors count as such a lock (``_is_lock_error``: on Windows only, a
+# PermissionError or WinError 32 or 33) and the backoff between tries (~2.5 s
+# worst case) are imported
+# from ``save_import``. The save import's startup install has to load without
+# Anki, and it retries the same locks with the same schedule.
 
 # One friendly, actionable message reused by every manual (modal) entry point.
 SYNC_LOCK_MESSAGE = (
@@ -82,25 +83,6 @@ SYNC_LOCK_MESSAGE = (
     "and try again.\n\n"
     "Your existing Ankimon data has NOT been changed."
 )
-
-
-def _is_lock_error(exc: BaseException) -> bool:
-    """True if ``exc`` is a transient Windows file-lock error (another process
-    such as OneDrive/antivirus holding the file open).
-
-    Gated on Windows (``os.name == "nt"``): on POSIX, ``os.replace`` succeeds
-    over open handles, so a ``PermissionError`` there is a GENUINE permission
-    problem (read-only dir, bad ACL) that must NOT be retried for ~2.5 s or
-    blamed on a sync client — it falls through to the normal traceback handler
-    instead. On Windows, ``PermissionError`` covers the common WinError 5 and the
-    winerror set also catches the sharing/lock-violation variants (32/33). A
-    non-lock ``OSError`` (e.g. cross-device link, file-not-found) always returns
-    False."""
-    if os.name != "nt":
-        return False
-    if isinstance(exc, PermissionError):
-        return True
-    return isinstance(exc, OSError) and getattr(exc, "winerror", None) in _SYNC_LOCK_WINERRORS
 
 
 def _retry_on_lock(op: Callable[[], Any], delays=None) -> Any:

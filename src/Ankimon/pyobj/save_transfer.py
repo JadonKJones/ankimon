@@ -610,8 +610,9 @@ def _replace_active_save(source: Path, target: Path, what: str, *, collection,
     rather than aborted and must not lead a caller to offer another save.
     """
     from ..save_import import (
-        ImportAlreadyPendingError, ImportStagedError,
-        pending_import_is_installed, stage_import,
+        ImportAlreadyPendingError, ImportStagedError, damaged_save_question,
+        describe_recovery_destination, pending_import_is_installed,
+        should_confirm_unverified_copy, stage_import,
     )
     from .ankimon_sync import get_ankimon_sync
 
@@ -619,6 +620,14 @@ def _replace_active_save(source: Path, target: Path, what: str, *, collection,
         if _active_db_path() != Path(target) or _active_collection() is not collection:
             raise RuntimeError("The active profile or save changed; please try the import again")
         _rebase_import_watermark(source, collection)
+        # Asked before the revision and digest checks, so the save they compare is
+        # the one left after the user has answered.
+        retain_unverified = should_confirm_unverified_copy(Path(target))
+        replacement = "the save you chose" if what == "Import" else "the rescued save"
+        if retain_unverified and not askUser(
+            damaged_save_question(target, replacement), defaultno=True
+        ):
+            return False
         if local_revision is not None and _local_save_revision(target) != local_revision:
             return False
         if local_digest is not None:
@@ -637,9 +646,9 @@ def _replace_active_save(source: Path, target: Path, what: str, *, collection,
             # Staging reads only the media copy, and the next start snapshots the
             # final local save before installing, so nothing after the comparison
             # needs the live connection closed.
-            pending = stage_import(source, target)
+            pending = stage_import(source, target, retain_unverified=retain_unverified)
         else:
-            pending = stage_import(source, target)
+            pending = stage_import(source, target, retain_unverified=retain_unverified)
     except ImportAlreadyPendingError:
         # An earlier choice is still staged. "Nothing was replaced" is true of
         # this attempt and false of the session, which is the confusing half:
@@ -718,7 +727,7 @@ def _replace_active_save(source: Path, target: Path, what: str, *, collection,
             "Your current save stays active until Anki exits. At the next start, "
             "its final progress will be saved in a separately retained recovery copy "
             "before the imported save is installed:\n"
-            f"{pending['recovery_path']}\n\n"
+            f"{describe_recovery_destination(pending)}\n\n"
             "Please reopen Anki after it closes. If you keep editing, this import "
             "stays pending; use Ankimon → Game → Cancel Pending Save Import to discard it.\n\n"
             "Leaderboard credentials are not imported. Sign in again after restart."

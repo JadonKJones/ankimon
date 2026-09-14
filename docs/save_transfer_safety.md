@@ -504,14 +504,6 @@ save, and the sync-hardening stub of `cleanup_backups` takes its real signature.
 
 Deferred, with reasons:
 
-- Windows lock retries for the backup's publishing rename and the import's
-  `os.replace` calls (#636). These are real regressions from `main` in that
-  environment, but a fix needs the lock-retry helpers in a module the stdlib-only
-  import code can load, and a Windows runner to exercise them. That is its own
-  change.
-- A current save that fails `quick_check` but still works blocks imports and
-  Backup Restore, because the safety snapshot of it fails verification. Repairing
-  the snapshot changes what gets retained, so it needs its own review.
 - Retention orders backups by directory mtime, which a read of a WAL-mode backup
   restamps. Ordering by the timestamp in the name has to handle legacy names.
 - Smaller items: a staged rescue can be offered again by a later scan in the same
@@ -663,3 +655,49 @@ After an external review of `ecc70364`:
   legacy-named save that arrives inside it waits for the retry, or for the first pass
   once the throttle is over, instead of cutting it short. Noticing it sooner would
   mean listing the folder on the GUI thread again.
+
+After an external review of `e7898fbe`:
+
+- A damaged save no longer blocks the restore that would replace it. The install
+  keeps a verified snapshot of the save it replaces, and a save that fails
+  `quick_check` cannot give one, so an Import or Backup Restore over it failed at
+  every start, however sound the chosen save was. Import and Backup Restore now
+  check the current save before staging. When it fails, they say so and ask whether
+  to go ahead, and No stages nothing. Yes records `retain_unverified` in the pending
+  record. At the next start, if the snapshot still fails the check, the install
+  copies the save byte for byte, with its WAL or rollback journal, into an
+  `unverified` folder inside the import's recovery folder, then installs. Nothing
+  in that copy is checked or repaired, and the files keep their names, so SQLite
+  still pairs the journal with the save. Each attempt fills a hidden folder and
+  publishes it with one rename; a copy an earlier attempt published is moved aside,
+  and one of those is kept. The new save is checked exactly as before, and a damaged
+  one is still refused. Only damage counts: a failed integrity check, or SQLite
+  reporting a malformed database. A lock, a spent budget or a file that is not a
+  save still stops the install. An import staged without the answer stops with a
+  notice that names the current save, says a restart will not change it, and says
+  to cancel and choose the import again. The question is asked only when SQLite can
+  still read the save's schema: the install switches the save's journal mode before
+  replacing it, and that reads the schema. A save damaged after staging gets the
+  same notice at the next start. The same answer lets an install go ahead over a
+  save too damaged to say which import it already holds; without it, that save gets
+  the same notice. The check runs on the GUI thread, as staging's own checks of the
+  chosen save already do, so every Import and Backup Restore now also waits for one
+  `quick_check` of the current save, for at most ten seconds. A locked save
+  therefore freezes Anki for ten seconds rather than a minute. The cost is a
+  damaged save too large to check in that time: it gets no question, and the
+  install refuses it at every start.
+- A file lock that clears within the startup budget no longer holds an import back
+  until the next restart. The install's rename over the save, the recovery copy's
+  renames, the moves that set journals aside, and staging's publication of
+  `pending.json` now retry a Windows lock (WinError 5, 32 or 33) with the backoff
+  Import and Export already used: 0.1, 0.2, 0.4, 0.8 and 1 second. Only the rename is
+  retried, never the install, and this process's attempt gate is unchanged. Under
+  the startup budget no wait runs past the deadline, and a lock still held then
+  raises its own error, not the budget's. The journal moves stay outside the budget,
+  as the moves themselves were. Other errors, and every PermissionError on POSIX,
+  propagate on the first attempt. Backup Manager retries the rename that publishes
+  each snapshot and the rename that publishes the backup folder, under the shutdown
+  budget when there is one. The classification and the schedule now live in
+  `save_import`, which loads without Anki, and `ankimon_sync` imports them. One test
+  holds a real handle on the save and needs Windows; CI runs only on Ubuntu, so it
+  is skipped there, and every other test simulates the lock.

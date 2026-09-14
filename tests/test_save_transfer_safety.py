@@ -183,8 +183,8 @@ def test_import_does_not_copy_a_source_changed_after_verification(transfer, monk
     from Ankimon import save_import
     stage = save_import.stage_import
 
-    def stage_during_download(snapshot, target):
-        result = stage(snapshot, target)
+    def stage_during_download(snapshot, target, **options):
+        result = stage(snapshot, target, **options)
         transfer.incoming.write_bytes(b"corrupted after staging" * 100)
         return result
 
@@ -383,7 +383,7 @@ def test_rescue_releases_the_live_save_before_staging_the_media_copy(
     stage = save_import.stage_import
     lock_free = []
 
-    def stage_while_a_worker_wants_the_database(snapshot, target):
+    def stage_while_a_worker_wants_the_database(snapshot, target, **options):
         acquired = []
 
         def worker():
@@ -395,7 +395,7 @@ def test_rescue_releases_the_live_save_before_staging_the_media_copy(
         thread.start()
         thread.join()
         lock_free.append(bool(acquired))
-        return stage(snapshot, target)
+        return stage(snapshot, target, **options)
 
     monkeypatch.setattr(save_import, "stage_import", stage_while_a_worker_wants_the_database)
     try:
@@ -871,3 +871,48 @@ def test_a_close_failure_notice_that_cannot_be_shown_is_not_called_an_abort(tran
     assert st.import_save() is True
     assert [message.split(":")[0] for message in shown] == ["Anki could not close"]
     assert save_import.pending_import_info(transfer.active) is not None
+
+
+@pytest.mark.parametrize("keep_it", [False, True])
+def test_import_over_a_damaged_save_asks_before_anything_is_staged(transfer, monkeypatch, keep_it):
+    """Import promised a verified copy of the save it replaces, which a damaged
+    save cannot give. Answered yes, the next start installs anyway and keeps
+    that save as it was."""
+    from Ankimon import save_import
+    from test_save_import import damage_a_table
+
+    damage_a_table(transfer.active)
+    before = transfer.active.read_bytes()
+    prompts = []
+
+    def ask(prompt, **kwargs):
+        prompts.append(prompt)
+        return keep_it if "integrity check" in prompt else True
+
+    monkeypatch.setattr(st, "askUser", ask)
+    assert st.import_save() is keep_it
+    assert len(prompts) == 2 and "the save you chose" in prompts[1]
+    if not keep_it:
+        assert save_import.pending_import_info(transfer.active) is None
+        assert transfer.active.read_bytes() == before
+        assert not st.showWarning.called
+        return
+    # The fixture's close_anki starts a fresh process, which installs the import.
+    assert st.get_db_stats(transfer.active)["pokemon"] == 42
+    [kept] = transfer.backups.glob("pre-import-*/unverified/ankimon.db")
+    assert kept.read_bytes() == before
+    assert str(kept.resolve()) in st.showInfo.call_args.args[0]
+
+
+def test_a_rescue_over_a_damaged_save_that_is_declined_stages_nothing(transfer, monkeypatch):
+    from Ankimon import save_import
+    from test_save_import import damage_a_table
+
+    damage_a_table(transfer.active)
+    prompts = []
+    monkeypatch.setattr(st, "askUser", lambda prompt, **kwargs: prompts.append(prompt) or False)
+    assert st._replace_active_save(transfer.incoming, transfer.active, "Rescue",
+                                   collection=transfer.col) is False
+    assert len(prompts) == 1 and "the rescued save" in prompts[0]
+    assert save_import.pending_import_info(transfer.active) is None
+    assert not st.showWarning.called

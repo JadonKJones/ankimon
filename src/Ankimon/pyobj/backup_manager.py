@@ -192,7 +192,12 @@ class BackupManager:
 
                 if backup_dir.exists():
                     raise FileExistsError(f"Backup already exists: {backup_dir.name}")
-                staging_dir.rename(backup_dir)
+                from ..save_import import _retry_on_file_lock
+
+                # On Windows a scanner still reading a snapshot just written
+                # blocks renaming its folder. Retry the rename, within the
+                # shutdown budget when there is one.
+                _retry_on_file_lock(lambda: staging_dir.rename(backup_dir), deadline)
                 success = True
                 self.logger.log("info", f"Created backup: {backup_dir.name}")
 
@@ -264,7 +269,9 @@ class BackupManager:
         ``save_transfer`` leaves ``-shm`` out for exactly this reason.
         """
         # Imported before the temporary exists: the cleanup below needs it.
-        from ..save_import import _remove_owned_copy, _sqlite_uri, _verify_save
+        from ..save_import import (
+            _remove_owned_copy, _retry_on_file_lock, _sqlite_uri, _verify_save,
+        )
 
         deadline = time.monotonic() + timeout
         fd, name = tempfile.mkstemp(prefix=".snapshot-", suffix=".db", dir=destination_path.parent)
@@ -288,7 +295,7 @@ class BackupManager:
             # published, and bounded by the same deadline.
             _verify_save(temporary, deadline)
             check_deadline(0, 0, 0)
-            os.replace(temporary, destination_path)
+            _retry_on_file_lock(lambda: os.replace(temporary, destination_path), deadline)
         finally:
             _remove_owned_copy(temporary)
 
@@ -517,7 +524,8 @@ class BackupManager:
         # import raises, and the handler itself then raises UnboundLocalError.
         from ..save_import import (
             ImportAlreadyPendingError, ImportStagedError,
-            pending_import_is_installed, stage_import,
+            damaged_save_question, describe_recovery_destination,
+            pending_import_is_installed, should_confirm_unverified_copy, stage_import,
         )
 
         try:
@@ -534,8 +542,17 @@ class BackupManager:
                 )
                 return
 
+            # A damaged save cannot give the verified copy the question above
+            # promised, so its replacement needs its own answer.
+            retain_unverified = should_confirm_unverified_copy(target)
+            if retain_unverified and not askUser(
+                damaged_save_question(target, "the selected backup"), defaultno=True
+            ):
+                return
+
             pending = stage_import(
-                backup_file, target, sanitize_credentials=False
+                backup_file, target, sanitize_credentials=False,
+                retain_unverified=retain_unverified,
             )
         except ImportAlreadyPendingError:
             # Guarded like the success notice below: showWarning reaches into
@@ -597,7 +614,7 @@ class BackupManager:
                 "Your current save stays active until Anki exits. At the next "
                 "start, its final state will be retained here before the selected "
                 "backup is installed:\n"
-                f"{pending['recovery_path']}\n\n"
+                f"{describe_recovery_destination(pending)}\n\n"
                 "If you choose Keep Editing, the restore remains pending until "
                 "the next full restart."
             )

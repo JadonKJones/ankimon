@@ -1,5 +1,6 @@
 """Exercise staged imports across real process and SQLite boundaries."""
 
+import errno
 import importlib.util
 import json
 import os
@@ -1620,3 +1621,462 @@ def test_a_cancel_that_fails_partway_through_the_move_names_only_what_is_still_b
     assert importer.cancel_pending_import(target) is True
     assert sorted(path.read_bytes() for path in staged["recovery_path"].parent.iterdir()) == [
         b"committed progress" * 64, b"unfinished transaction" * 64]
+
+
+def damage_a_table(path, table="junk"):
+    """Break one table's root page and leave the rest of the save readable.
+
+    A bad sector or a torn write does this to a save that still loads: SQLite
+    opens it and reads the other tables, and only its integrity check notices.
+    ``junk`` is created for the purpose; any other table must already exist.
+    """
+    conn = sqlite3.connect(path)
+    try:
+        if table == "junk":
+            with conn:
+                conn.execute("CREATE TABLE junk (id INTEGER PRIMARY KEY, data TEXT)")
+                conn.executemany("INSERT INTO junk VALUES (?, ?)",
+                                 [(i, "x" * 1000) for i in range(200)])
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        root = conn.execute("SELECT rootpage FROM sqlite_master WHERE name=?", (table,)).fetchone()[0]
+        size = conn.execute("PRAGMA page_size").fetchone()[0]
+    finally:
+        conn.close()
+    with open(path, "r+b") as handle:
+        handle.seek((root - 1) * size)
+        handle.write(b"\xff" * 64)
+    return path
+
+
+def quick_check_passes(path):
+    uri = f"{Path(path).resolve().as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        # Worse damage makes the check raise rather than list what it found.
+        return conn.execute("PRAGMA quick_check").fetchall() == [("ok",)]
+    except sqlite3.DatabaseError:
+        return False
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("journal", ["delete", "wal merged", "wal beside it"])
+def test_a_damaged_save_is_kept_as_it_is_when_the_import_was_staged_to_allow_it(tmp_path, journal):
+    """The restore a damaged save needs most is the one a verified copy blocked.
+
+    The new save is still checked in full. The one it replaces is copied byte for
+    byte, journal included, and nothing is repaired on the way.
+    """
+    importer = load_module()
+    target = damage_a_table(make_save(tmp_path / "ankimon.db", "local"))
+    source = make_save(tmp_path / "source.db", "incoming")
+    assert importer.current_save_is_damaged(target) is True
+    staged = importer.stage_import(source, target, retain_unverified=True)
+    wal = Path(str(target) + "-wal")
+    commit = "print(json.dumps({'installed': module.commit_pending_import(target)}))\n"
+    if journal != "delete":
+        # Play after the damage, left in the WAL by a writer that died.
+        child(
+            "conn = sqlite3.connect(target)\n"
+            "conn.execute('PRAGMA journal_mode=WAL')\n"
+            "conn.execute('PRAGMA wal_autocheckpoint=0')\n"
+            "conn.execute(\"INSERT INTO captured_pokemon VALUES ('wal-only', '{}')\")\n"
+            "conn.commit()\n"
+            "os._exit(0)\n", target,
+        )
+        assert wal.stat().st_size > 0
+    if journal == "wal beside it":
+        # When nothing merges the WAL before the copy, it is copied beside the save.
+        commit = "module._recover_hot_journal = lambda *args, **kwargs: None\n" + commit
+    before = {suffix: Path(str(target) + suffix).read_bytes()
+              for suffix in ("", "-wal") if Path(str(target) + suffix).is_file()}
+
+    result = child(commit, target)
+    assert json.loads(result.stdout)["installed"] is True
+    assert names(target) == ["incoming"]
+    assert importer.pending_import_info(target) is None
+    kept = staged["unverified_path"]
+    assert not staged["recovery_path"].exists()
+    assert sorted(path.name for path in kept.parent.parent.iterdir()) == ["unverified"]
+    if journal == "wal merged":
+        # SQLite merged it into the save before the copy, as before any install.
+        # The install's own read-only reads then leave an empty WAL beside it.
+        assert [path.name for path in kept.parent.iterdir()
+                if path.name != kept.name and path.stat().st_size] == []
+    else:
+        assert {suffix: Path(str(kept) + suffix).read_bytes()
+                for suffix in ("", "-wal") if Path(str(kept) + suffix).is_file()} == before
+    assert not quick_check_passes(kept), "the kept save was repaired"
+    expected = ["local"] if journal == "delete" else ["local", "wal-only"]
+    assert names(kept) == expected
+
+
+def test_a_damaged_save_an_import_was_not_staged_to_replace_stays_and_says_why(tmp_path):
+    importer = load_module()
+    target = damage_a_table(make_save(tmp_path / "ankimon.db", "local"))
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target)
+    before = target.read_bytes()
+
+    result = child("module.commit_pending_import(target)\n", target, expected=1)
+    assert "CurrentSaveDamagedError" in result.stderr
+    assert "restarting will not change that" in result.stderr
+    assert "Cancel Pending Save Import" in result.stderr
+    assert target.read_bytes() == before
+    assert importer.pending_import_info(target)["token"] == staged["token"]
+    assert not staged["unverified_path"].parent.exists()
+    assert not staged["recovery_path"].exists()
+
+
+@pytest.mark.parametrize("failure", [
+    "sqlite3.OperationalError('database is locked')",
+    "TimeoutError('the save import budget expired')",
+])
+def test_a_lock_or_a_spent_budget_is_not_taken_for_damage(tmp_path, failure):
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target, retain_unverified=True)
+
+    result = child(
+        "def interrupted(*args, **kwargs):\n"
+        f"    raise {failure}\n"
+        "module._snapshot = interrupted\n"
+        "module.commit_pending_import(target)\n", target, expected=1,
+    )
+    assert failure.split("(")[0].split(".")[-1] in result.stderr
+    assert names(target) == ["local"]
+    assert importer.pending_import_info(target) is not None
+    assert not staged["unverified_path"].parent.exists()
+
+
+def test_a_damaged_new_save_is_refused_even_when_the_current_one_may_be_kept(tmp_path):
+    importer = load_module()
+    target = damage_a_table(make_save(tmp_path / "ankimon.db", "local"))
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target, retain_unverified=True)
+    damage_a_table(staged["pending_path"])
+    before = target.read_bytes()
+
+    result = child("module.commit_pending_import(target)\n", target, expected=1)
+    # The new save's own check refuses it, before anything reads the current one.
+    assert "SaveDamagedError" in result.stderr or "malformed" in result.stderr
+    assert "CurrentSaveDamagedError" not in result.stderr
+    assert target.read_bytes() == before
+    assert importer.pending_import_info(target) is not None
+    assert not staged["unverified_path"].parent.exists()
+
+
+def test_a_save_too_damaged_to_name_its_import_is_replaced_only_when_allowed(tmp_path):
+    """The install first asks the save which import it holds, from a table that
+    can be the damaged one."""
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    with sqlite3.connect(target) as conn:
+        conn.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO metadata VALUES ('import_token', 'an-earlier-import')")
+    damage_a_table(target, "metadata")
+    source = make_save(tmp_path / "source.db", "incoming")
+    importer.stage_import(source, target)
+
+    result = child("module.commit_pending_import(target)\n", target, expected=1)
+    assert "CurrentSaveDamagedError" in result.stderr and "malformed" in result.stderr
+    assert "Cancel Pending Save Import" in result.stderr
+    assert names(target) == ["local"]
+
+    importer.cancel_pending_import(target)
+    staged = importer.stage_import(source, target, retain_unverified=True)
+    assert json.loads(commit_in_new_process(target).stdout)["installed"] is True
+    assert names(target) == ["incoming"]
+    assert names(staged["unverified_path"]) == ["local"]
+
+
+def test_each_failed_attempt_keeps_the_newest_unverified_copy_and_one_before_it(tmp_path):
+    """Play goes on between failed starts, so each attempt copies the save again."""
+    importer = load_module()
+    target = damage_a_table(make_save(tmp_path / "ankimon.db", "local"))
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target, retain_unverified=True)
+    kept = staged["unverified_path"]
+    refuse_install = (
+        "real_replace = os.replace\n"
+        "def fail_install(source, dest):\n"
+        "    if Path(dest) == target:\n"
+        "        raise PermissionError('simulated antivirus lock')\n"
+        "    return real_replace(source, dest)\n"
+        "module.os.replace = fail_install\n"
+        "module.commit_pending_import(target)\n"
+    )
+    for attempt in range(3):
+        child(refuse_install, target, expected=1)
+        assert importer.pending_import_recovery_copy(target) == kept
+        with sqlite3.connect(target) as conn:
+            conn.execute("INSERT INTO captured_pokemon VALUES (?, '{}')", (f"run-{attempt}",))
+
+    folder = kept.parent.parent
+    superseded = sorted(folder.glob("unverified-superseded-*"))
+    assert len(superseded) == 1
+    assert names(superseded[0] / target.name) == ["local", "run-0"]
+    assert names(kept) == ["local", "run-0", "run-1"]
+    assert not list(folder.glob(".unverified-*"))
+
+    assert json.loads(commit_in_new_process(target).stdout)["installed"] is True
+    assert names(target) == ["incoming"]
+    assert names(kept) == ["local", "run-0", "run-1", "run-2"]
+
+
+def test_an_unverified_copy_counts_as_a_save_an_install_may_have_replaced(tmp_path):
+    """With the save gone, only a copy says an install may have run. Without one
+    the menu would say the import never installed."""
+    importer = load_module()
+    target = damage_a_table(make_save(tmp_path / "ankimon.db", "local"))
+    staged = importer.stage_import(make_save(tmp_path / "source.db", "incoming"), target,
+                                   retain_unverified=True)
+    assert importer.pending_import_is_installed(target) is False
+    child(
+        "real_replace = os.replace\n"
+        "def fail_install(source, dest):\n"
+        "    if Path(dest) == target:\n"
+        "        raise PermissionError('simulated antivirus lock')\n"
+        "    return real_replace(source, dest)\n"
+        "module.os.replace = fail_install\n"
+        "module.commit_pending_import(target)\n", target, expected=1,
+    )
+    target.unlink()
+    assert importer.pending_import_recovery_copy(target) == staged["unverified_path"]
+    assert importer.pending_import_is_installed(target) is None
+
+
+def test_whether_the_current_save_is_damaged(tmp_path, monkeypatch):
+    importer = load_module()
+    healthy = make_save(tmp_path / "healthy.db", "local")
+    assert importer.current_save_is_damaged(healthy) is False
+    assert importer.current_save_is_damaged(tmp_path / "missing.db") is False
+    assert importer.current_save_is_damaged(
+        damage_a_table(make_save(tmp_path / "damaged.db", "local"))) is True
+    # Nothing an install could replace: asking would promise what never happens.
+    unreadable = make_save(tmp_path / "unreadable.db", "local")
+    with open(unreadable, "r+b") as handle:
+        handle.seek(100)
+        handle.write(b"\xff" * 64)
+    assert importer.current_save_is_damaged(unreadable) is None
+
+    monkeypatch.setattr(importer, "_DAMAGE_CHECK_BUDGET", 0.2)
+    writer = sqlite3.connect(healthy, isolation_level=None)
+    try:
+        writer.execute("BEGIN EXCLUSIVE")
+        assert importer.current_save_is_damaged(healthy) is None
+    finally:
+        writer.close()
+
+
+def test_only_a_damaged_save_with_nothing_pending_asks_first(tmp_path):
+    importer = load_module()
+    healthy = make_save(tmp_path / "ankimon.db", "local")
+    assert importer.should_confirm_unverified_copy(healthy) is False
+    damaged = damage_a_table(make_save(tmp_path / "ankimonDEV.db", "local"))
+    assert importer.should_confirm_unverified_copy(damaged) is True
+    importer.stage_import(make_save(tmp_path / "source.db", "incoming"), damaged)
+    assert importer.should_confirm_unverified_copy(damaged) is False
+
+
+def test_a_record_whose_unverified_answer_is_not_a_yes_or_no_is_refused(tmp_path):
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    staged = importer.stage_import(make_save(tmp_path / "source.db", "incoming"), target)
+    manifest = tmp_path / f".ankimon-import-{target.name}" / "pending.json"
+    record = json.loads(manifest.read_text())
+    assert "retain_unverified" not in record
+    manifest.write_text(json.dumps({**record, "retain_unverified": "yes"}))
+    with pytest.raises(ValueError, match="does not match"):
+        importer.pending_import_info(target)
+    assert staged["token"] == record["token"]
+
+
+LOCKED_ONCE = (
+    "import time\n"
+    "module._is_file_lock_error = lambda error: isinstance(error, PermissionError)\n"
+    "module.time.sleep = lambda seconds: None\n"
+    "real_replace = os.replace\n"
+    "held = Path(sys.argv[3])\n"
+    "refused = []\n"
+    "def scanner_lets_go(source, destination):\n"
+    "    if Path(destination) == held and not refused:\n"
+    "        refused.append(destination)\n"
+    "        raise PermissionError(13, 'simulated scanner holding the file')\n"
+    "    return real_replace(source, destination)\n"
+    "module.os.replace = scanner_lets_go\n"
+    "installed = module.commit_pending_import(target, deadline=time.monotonic() + 30)\n"
+    "print(json.dumps({'installed': installed, 'refused': len(refused)}))\n"
+)
+
+
+@pytest.mark.parametrize("held", ["save", "recovery copy"])
+def test_a_lock_that_clears_during_the_install_does_not_cost_a_restart(tmp_path, held):
+    """This process's attempt gate refuses a second install, so a rename that
+    failed once used to wait for another full restart."""
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    staged = importer.stage_import(source, target)
+    destination = target if held == "save" else staged["recovery_path"]
+
+    result = child(LOCKED_ONCE, target, destination)
+    assert json.loads(result.stdout) == {"installed": True, "refused": 1}
+    assert names(target) == ["incoming"]
+    assert names(staged["recovery_path"]) == ["local"]
+    assert importer.pending_import_info(target) is None
+
+
+def test_a_lock_that_outlasts_the_budget_stops_the_install_with_the_lock(tmp_path):
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    importer.stage_import(source, target)
+
+    result = child(
+        "import time\n"
+        "module._is_file_lock_error = lambda error: isinstance(error, PermissionError)\n"
+        "module._FILE_LOCK_RETRY_DELAYS = (1, 2, 4, 8, 16)\n"
+        "real_monotonic, waited = time.monotonic, [0.0]\n"
+        "module.time.monotonic = lambda: real_monotonic() + waited[0]\n"
+        "module.time.sleep = lambda seconds: waited.__setitem__(0, waited[0] + seconds)\n"
+        "attempts = []\n"
+        "real_replace = os.replace\n"
+        "def never_lets_go(source, destination):\n"
+        "    if Path(destination) == target:\n"
+        "        attempts.append(destination)\n"
+        "        raise PermissionError(13, 'simulated scanner that never lets go')\n"
+        "    return real_replace(source, destination)\n"
+        "module.os.replace = never_lets_go\n"
+        "try:\n"
+        "    module.commit_pending_import(target, deadline=real_monotonic() + 10)\n"
+        "except PermissionError:\n"
+        "    print(json.dumps({'attempts': len(attempts), 'waited': waited[0]}))\n",
+        target,
+    )
+    outcome = json.loads(result.stdout)
+    assert 2 <= outcome["attempts"] < 6, outcome
+    assert outcome["waited"] < 10
+    assert names(target) == ["local"]
+    assert importer.pending_import_info(target) is not None
+    assert not list(tmp_path.glob(".ankimon-install-*"))
+
+
+@pytest.mark.parametrize("error", [
+    "OSError(errno.EIO, 'simulated disk error')",
+    pytest.param("PermissionError(13, 'a real permission problem')", marks=pytest.mark.skipif(
+        os.name == "nt", reason="on Windows this is how a lock looks")),
+])
+def test_an_error_that_is_not_a_lock_is_not_retried(tmp_path, error):
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    importer.stage_import(source, target)
+    classify = ("module._is_file_lock_error = lambda error: isinstance(error, PermissionError)\n"
+                if error.startswith("OSError") else "")
+
+    result = child(
+        "import errno\n" + classify +
+        "attempts = []\n"
+        "real_replace = os.replace\n"
+        "def broken(source, destination):\n"
+        "    if Path(destination) == target:\n"
+        "        attempts.append(destination)\n"
+        f"        raise {error}\n"
+        "    return real_replace(source, destination)\n"
+        "module.os.replace = broken\n"
+        "try:\n"
+        "    module.commit_pending_import(target)\n"
+        "except OSError as failure:\n"
+        "    print(json.dumps({'attempts': len(attempts), 'errno': failure.errno}))\n",
+        target,
+    )
+    assert json.loads(result.stdout)["attempts"] == 1
+    assert names(target) == ["local"]
+
+
+def test_file_locks_are_recognised_on_windows_only(monkeypatch):
+    importer = load_module()
+    monkeypatch.setattr(importer.os, "name", "nt")
+    assert importer._is_file_lock_error(PermissionError()) is True
+    for code in (5, 32, 33):
+        error = OSError()
+        error.winerror = code
+        assert importer._is_file_lock_error(error) is True, code
+    missing = OSError()
+    missing.winerror = 2
+    assert importer._is_file_lock_error(missing) is False
+    assert importer._is_file_lock_error(ValueError()) is False
+    monkeypatch.setattr(importer.os, "name", "posix")
+    assert importer._is_file_lock_error(PermissionError(5, "denied")) is False
+
+
+def test_a_file_lock_retry_never_waits_past_its_deadline(monkeypatch):
+    importer = load_module()
+    now = [100.0]
+    monkeypatch.setattr(importer, "_is_file_lock_error", lambda error: isinstance(error, PermissionError))
+    monkeypatch.setattr(importer.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(importer.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+    attempts = []
+
+    def locked():
+        attempts.append(now[0])
+        raise PermissionError(13, "held")
+
+    with pytest.raises(PermissionError):
+        importer._retry_on_file_lock(locked, deadline=100.5)
+    # 0.1 and 0.2 fit before the deadline; waiting 0.4 more would not.
+    assert attempts == pytest.approx([100.0, 100.1, 100.3])
+
+
+def test_staging_publishes_its_record_through_a_lock_that_clears(tmp_path, monkeypatch):
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    monkeypatch.setattr(importer, "_is_file_lock_error", lambda error: isinstance(error, PermissionError))
+    monkeypatch.setattr(importer, "_FILE_LOCK_RETRY_DELAYS", (0, 0, 0, 0, 0))
+    replace = os.replace
+    refused = []
+
+    def scanner_lets_go(source, destination):
+        if Path(destination).name == "pending.json" and not refused:
+            refused.append(destination)
+            raise PermissionError(13, "simulated scanner holding the record")
+        return replace(source, destination)
+
+    monkeypatch.setattr(importer.os, "replace", scanner_lets_go)
+    staged = importer.stage_import(source, target)
+    assert len(refused) == 1
+    assert importer.pending_import_info(target)["token"] == staged["token"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="needs a real Windows sharing violation")
+def test_a_windows_handle_on_the_save_that_closes_does_not_cost_a_restart(tmp_path, monkeypatch):
+    """A handle opened without FILE_SHARE_DELETE, as a scanner or sync client
+    opens one, makes Windows refuse the rename over the save. Nothing here is
+    simulated but the moment the other program lets go."""
+    importer = load_module()
+    target = make_save(tmp_path / "ankimon.db", "local")
+    source = make_save(tmp_path / "source.db", "incoming")
+    child("module.stage_import(Path(sys.argv[3]), target)\n", target, source)
+    handle = open(target, "rb")
+    replace = os.replace
+    refusals = []
+
+    def scanner_lets_go(source, destination):
+        try:
+            return replace(source, destination)
+        except OSError as error:
+            if Path(destination) == target and not handle.closed:
+                refusals.append(error)
+                handle.close()
+            raise
+
+    monkeypatch.setattr(importer.os, "replace", scanner_lets_go)
+    try:
+        assert importer.commit_pending_import(target, deadline=time.monotonic() + 30) is True
+    finally:
+        handle.close()
+    assert refusals and importer._is_file_lock_error(refusals[0])
+    assert names(target) == ["incoming"]

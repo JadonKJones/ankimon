@@ -1164,3 +1164,71 @@ def test_a_restore_that_fails_before_staging_is_reported_not_raised(mock_env):
     assert warning.call_count == 1
     assert warning.call_args.args[0].startswith("Failed to prepare backup restore")
     assert pending_import_info(db.db_path) is None
+
+
+@pytest.mark.parametrize("current, answer", [("healthy", None), ("damaged", False), ("damaged", True)])
+def test_restore_over_a_damaged_save_asks_before_anything_is_staged(mock_env, current, answer):
+    """The first question promises a verified copy of the save being replaced. A
+    damaged save cannot give one, so replacing it takes an answer of its own."""
+    bm, db, _, _ = mock_env
+    from Ankimon.save_import import cancel_pending_import, pending_import_info
+    from test_save_import import damage_a_table
+
+    if current == "damaged":
+        damage_a_table(db.db_path)
+    backup_dir = bm.backups_path / "backup_2026-06-06_12-00-00"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    _seed_db(backup_dir / "ankimon.db", "Blue", 999)
+    prompts = []
+
+    def ask(prompt, **kwargs):
+        prompts.append(prompt)
+        return answer if "integrity check" in prompt else True
+
+    try:
+        with patch.object(_bm_mod, "askUser", side_effect=ask), \
+             patch.object(_bm_mod, "showInfo") as notice:
+            bm.restore_backup(str(backup_dir))
+        pending = pending_import_info(db.db_path)
+        if current == "healthy":
+            assert len(prompts) == 1
+            assert "retain_unverified" not in pending
+            return
+        assert len(prompts) == 2 and "the selected backup" in prompts[1]
+        if not answer:
+            assert pending is None
+            assert not notice.called
+            return
+        assert pending["retain_unverified"] is True
+        assert str(pending["unverified_path"]) in notice.call_args.args[0]
+    finally:
+        cancel_pending_import(db.db_path)
+
+
+def test_a_backup_publishes_through_locks_that_clear(mock_env, monkeypatch):
+    """On Windows a scanner reading the snapshot just written blocks, for a moment,
+    both its rename into the backup folder and the folder's rename into place."""
+    bm, _, _, _ = mock_env
+    importer = importlib.import_module("Ankimon.save_import")
+    monkeypatch.setattr(importer, "_is_file_lock_error", lambda error: isinstance(error, PermissionError))
+    monkeypatch.setattr(importer, "_FILE_LOCK_RETRY_DELAYS", (0, 0, 0, 0, 0))
+    replace, rename = os.replace, Path.rename
+    refused = []
+
+    def snapshot_held_once(source, destination):
+        if Path(destination).name == "ankimon.db" and "snapshot" not in refused:
+            refused.append("snapshot")
+            raise PermissionError(13, "simulated scanner holding the snapshot")
+        return replace(source, destination)
+
+    def folder_held_once(self, destination):
+        if Path(destination).name.startswith("backup_") and "folder" not in refused:
+            refused.append("folder")
+            raise PermissionError(13, "simulated scanner inside the folder")
+        return rename(self, destination)
+
+    monkeypatch.setattr(os, "replace", snapshot_held_once)
+    monkeypatch.setattr(Path, "rename", folder_held_once)
+    assert bm.create_backup(required_file="ankimon.db", deadline=time.monotonic() + 30) is True
+    assert refused == ["snapshot", "folder"]
+    assert len(list(bm.backups_path.glob("backup_*"))) == 1
