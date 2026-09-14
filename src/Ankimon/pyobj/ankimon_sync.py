@@ -37,7 +37,6 @@ Two unrelated things used to live in this module under the shared word "sync":
 import base64
 import contextlib
 import errno
-import gc
 import json
 import os
 import shutil
@@ -47,10 +46,14 @@ from pathlib import Path
 from typing import Callable, Any
 
 from aqt import mw, gui_hooks
-from aqt.utils import showWarning, tooltip
-from ..pyobj.error_handler import show_warning_with_traceback
+from aqt.utils import tooltip
 
 from ..resources import user_path
+from ..save_import import (
+    _FILE_LOCK_RETRY_DELAYS as _SYNC_LOCK_RETRY_DELAYS,
+    _FILE_LOCK_WINERRORS as _SYNC_LOCK_WINERRORS,  # noqa: F401 -- tests classify with it
+    _is_file_lock_error as _is_lock_error,
+)
 
 
 # --------------------------------------------------------------------------
@@ -64,16 +67,12 @@ from ..resources import user_path
 # small just-created file they typically clear within a second — so the fix is a
 # bounded retry (the retry, not the message, is the primary fix), falling back
 # to a single friendly, actionable message only if the lock persists.
-
-# WinError codes that mean "another handle is blocking this rename/delete":
-# 5 = ERROR_ACCESS_DENIED (what OneDrive typically yields, incl. delete-pending
-# and cloud/AV filter-driver cases), 32 = ERROR_SHARING_VIOLATION,
-# 33 = ERROR_LOCK_VIOLATION.
-_SYNC_LOCK_WINERRORS = frozenset({5, 32, 33})
-
-# Backoff schedule for retrying a locked file op (~2.5 s worst case, and only on
-# the failure path — the common case succeeds on the first try with no delay).
-_SYNC_LOCK_RETRY_DELAYS = (0.1, 0.2, 0.4, 0.8, 1.0)
+#
+# Which errors count as such a lock (``_is_lock_error``: on Windows only, a
+# PermissionError or WinError 32 or 33) and the backoff between tries (~2.5 s
+# worst case) are imported
+# from ``save_import``. The save import's startup install has to load without
+# Anki, and it retries the same locks with the same schedule.
 
 # One friendly, actionable message reused by every manual (modal) entry point.
 SYNC_LOCK_MESSAGE = (
@@ -86,25 +85,6 @@ SYNC_LOCK_MESSAGE = (
 )
 
 
-def _is_lock_error(exc: BaseException) -> bool:
-    """True if ``exc`` is a transient Windows file-lock error (another process
-    such as OneDrive/antivirus holding the file open).
-
-    Gated on Windows (``os.name == "nt"``): on POSIX, ``os.replace`` succeeds
-    over open handles, so a ``PermissionError`` there is a GENUINE permission
-    problem (read-only dir, bad ACL) that must NOT be retried for ~2.5 s or
-    blamed on a sync client — it falls through to the normal traceback handler
-    instead. On Windows, ``PermissionError`` covers the common WinError 5 and the
-    winerror set also catches the sharing/lock-violation variants (32/33). A
-    non-lock ``OSError`` (e.g. cross-device link, file-not-found) always returns
-    False."""
-    if os.name != "nt":
-        return False
-    if isinstance(exc, PermissionError):
-        return True
-    return isinstance(exc, OSError) and getattr(exc, "winerror", None) in _SYNC_LOCK_WINERRORS
-
-
 def _retry_on_lock(op: Callable[[], Any], delays=None) -> Any:
     """Run ``op()``, retrying while it fails with a transient file-lock error,
     with a bounded backoff between tries. A non-lock error propagates
@@ -112,9 +92,8 @@ def _retry_on_lock(op: Callable[[], Any], delays=None) -> Any:
     for the caller to translate into a friendly message.
 
     A blocking lock is held by ANOTHER process (OneDrive/antivirus), so there is
-    no handle of ours to reclaim here — callers that need to drop their own live
-    DB handle (``_atomic_replace``) do the one ``gc.collect()`` that matters
-    before calling in, rather than paying a full-heap scan on every retry."""
+    no handle of ours to reclaim here, and nothing a full-heap ``gc.collect()``
+    between tries could release."""
     if delays is None:
         delays = _SYNC_LOCK_RETRY_DELAYS
     attempts = len(delays) + 1
@@ -225,11 +204,13 @@ def _verify_sqlite_integrity(db_file: Path, timeout: float = 30.0) -> bool:
         if not db_file.is_file() or db_file.stat().st_size < 512:
             return False
         import sqlite3
-        # Build the read-only URI via as_uri() so a profile path with spaces
-        # or unicode (e.g. C:\Users\John Doe\...) is percent-encoded correctly
-        # — a raw f-string URI would fail to open a perfectly valid DB and
-        # wrongly refuse the import.
-        uri = db_file.resolve().as_uri() + "?mode=ro"
+        from ..save_import import _sqlite_uri
+        # A percent-encoded read-only URI, so a profile path with spaces or
+        # unicode (e.g. C:\Users\John Doe\...) or on a network share
+        # (\\server\share\...) opens — a raw f-string URI, or as_uri()'s
+        # server-in-the-authority form, would fail to open a perfectly valid
+        # DB and wrongly refuse the import.
+        uri = _sqlite_uri(db_file, "ro")
         conn = sqlite3.connect(uri, uri=True, timeout=timeout)
         # connect(timeout=) bounds only the wait for a LOCK. PRAGMA quick_check
         # scans the whole database, so on a big enough save it can run well past
@@ -259,18 +240,6 @@ def _verify_sqlite_integrity(db_file: Path, timeout: float = 30.0) -> bool:
         return False
 
 
-def _handle_manual_sync_error(exc: BaseException, message: str) -> bool:
-    """Present a MANUAL (modal) sync failure and return False. A transient file
-    lock (OneDrive/antivirus) that survived the retry gets the single friendly,
-    actionable ``SYNC_LOCK_MESSAGE``; a genuine error gets the raw traceback. The
-    caller early-returns on False, so neither is stacked with a second dialog."""
-    if _is_lock_error(exc):
-        showWarning(SYNC_LOCK_MESSAGE)
-    else:
-        show_warning_with_traceback(parent=mw, exception=exc, message=message)
-    return False
-
-
 class AnkimonDataSync:
     """Save-file primitives shared by the manual save transfer and the
     sync-removal migration.
@@ -280,10 +249,11 @@ class AnkimonDataSync:
     that path is gone (see this module's docstring). What survives here is the
     part that was hard-won and is still correct: the legacy ``config.obf``
     obfuscation helpers that ``settings.py`` still needs to read a pre-SQLite
-    config, the integrity gate, the backup-before-overwrite gate, and the atomic
-    replace with its Windows file-lock tolerance (issue #636).
-    ``pyobj/save_transfer.py`` builds the user-facing Export/Import on top of
-    these, and resolves the media folder itself when it needs it.
+    config, the integrity gate, and the live-DB quiescence that
+    ``pyobj/save_transfer.py`` holds while a rescue checks the local save has
+    not changed. An import stages its save for the next start, so nothing here
+    replaces the live file. The atomic copy with its Windows file-lock tolerance
+    (issue #636) is the module-level ``_atomic_write_over``.
     """
 
     _OBFUSCATION_KEY = "H0tP-!s-N0t-4-C@tG!rL_v2"
@@ -345,7 +315,16 @@ class AnkimonDataSync:
 
     @contextlib.contextmanager
     def _quiesce_live_db_connection(self, target_file: Path):
-        """Keep connection creation blocked across a live DB file replacement."""
+        """Close the live save's connections and hold new ones off for the block.
+
+        Yields whether they all closed in time. The media rescue holds it only
+        while it checks that the local save's digest still matches the one
+        taken when the rescue was offered, so nothing writes to the save while
+        it is read. Nothing replaces the file under it: the import is staged
+        for the next start. A ``target_file`` that is not the live save yields
+        True untouched; a DB manager without ``quiesce`` gets a plain close,
+        which cannot hold new connections off.
+        """
         from ..services import services
 
         db = services.db
@@ -373,80 +352,6 @@ class AnkimonDataSync:
         ``AnkimonDataSync`` (which needs a loaded Anki profile).
         """
         return _verify_sqlite_integrity(db_file, timeout=timeout)
-
-    def _backup_before_overwrite(self, required_file: str = "ankimon.db") -> bool:
-        """Timestamped backup of the local Ankimon DB(s) before an import
-        overwrites them, so a bad cross-device import is recoverable via the
-        Backup Manager. Reuses BackupManager (WAL checkpoint + summary +
-        retention) rather than a bare copy. Returns True only if a backup of
-        ``required_file`` (the file about to be overwritten) was actually
-        written — callers MUST refuse to overwrite when this is False, or a
-        failed backup would leave the live save with no recovery path."""
-        try:
-            from ..services import services
-            from .backup_manager import BackupManager
-            return bool(
-                BackupManager(services.logger, services.settings).create_backup(
-                    manual=False, required_file=required_file
-                )
-            )
-        except Exception as e:
-            try:
-                from ..services import services
-                services.logger.log("error", f"Pre-import backup failed: {e}")
-            except Exception:
-                pass
-            return False
-
-    def _atomic_replace(self, media_file: Path, source_file: Path,
-                        validate_target: Callable[[], Any] = None) -> None:
-        """Overwrite ``source_file`` with ``media_file`` atomically via
-        ``_atomic_write_over`` (temp on the same volume + ``os.replace``, retrying
-        a transient OneDrive/antivirus lock), after closing the live connection to
-        ``source_file`` so the OS releases its handle before the rename. A
-        persisting lock re-raises for the caller to surface as a friendly message;
-        a non-lock error propagates unchanged. (``_atomic_write_over`` prefers the
-        system temp dir, falling back to a same-directory sibling.)
-
-        The media file is a single-file export (no WAL sidecar), so any stale
-        ``-wal`` / ``-shm`` belonging to the OLD ``source_file`` must be removed
-        after the swap — a fresh connection that found them would try to replay
-        an unrelated WAL over the new file and hit 'database disk image is
-        malformed'.
-
-        The connection registry requests closure from GUI and background wrappers.
-        If an in-flight operation does not release its lease within the bounded
-        wait, replacement aborts and the original database remains untouched.
-        ``validate_target`` runs after writers drain and before replacement,
-        while connection creation remains blocked."""
-        source_file.parent.mkdir(parents=True, exist_ok=True)
-        quiescence = self._quiesce_live_db_connection(source_file)
-        entered = False
-
-        def _release_handles():
-            nonlocal entered
-            closed = quiescence.__enter__()
-            entered = True
-            if not closed:
-                raise RuntimeError(
-                    "Database replacement aborted because active operations did not finish"
-                )
-            if validate_target is not None:
-                validate_target()
-            gc.collect()
-
-        try:
-            _atomic_write_over(media_file, source_file, before_replace=_release_handles)
-
-            for sidecar in ("-wal", "-shm"):
-                stale = source_file.with_name(source_file.name + sidecar)
-                try:
-                    stale.unlink(missing_ok=True)
-                except Exception:
-                    pass
-        finally:
-            if entered:
-                quiescence.__exit__(None, None, None)
 
 
 # Global instance for easy access - but will be lazy initialized
@@ -508,6 +413,7 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
                     MOBILE_QUEUE_CAP,
                 )
                 from ..menu_buttons import update_mobile_badge
+                from ..save_import import rebase_after_import
 
                 dev_db_path = user_path / "ankimonDEV.db"
                 original_db_name = db.db_path.name
@@ -548,6 +454,7 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
                         # 1. Queue to ankimon.db
                         if db.db_path.name != "ankimon.db":
                             db.switch_database("ankimon.db")
+                        rebase_after_import(db, col)
                         watermark_normal = db.get_mobile_watermark()
                         all_mobile_normal = detect_mobile_reviews(col, watermark_normal, desktop_ids)
                         if all_mobile_normal:
@@ -565,6 +472,7 @@ def setup_ankimon_sync_hooks(settings_obj, logger):
                         if dev_db_path.is_file():
                             if db.db_path.name != "ankimonDEV.db":
                                 db.switch_database("ankimonDEV.db")
+                            rebase_after_import(db, col)
                             watermark_dev = db.get_mobile_watermark()
                             all_mobile_dev = detect_mobile_reviews(col, watermark_dev, desktop_ids)
                             if all_mobile_dev:

@@ -870,6 +870,12 @@ class AnkimonDB:
                     "Database switch aborted because active operations did not finish"
                 )
 
+            # Developer mode opens the other save here, long after startup tried
+            # its pending import. A missing save with journals that install has not
+            # set aside is refused, as get_db refuses it, before db_path changes.
+            from ..save_import import refuse_to_open_over_journals
+
+            refuse_to_open_over_journals(user_path / db_filename)
             self.db_path = user_path / db_filename
             self._connection = None
             try:
@@ -2644,6 +2650,61 @@ def get_db(logger=None, db_path=None) -> AnkimonDB:
     """
     global _db_instance
     if _db_instance is None:
+        # Pending transfers are installed before opening a connection or building
+        # settings/game objects. A process identity gate refuses addon reloads
+        # and profile switches in the process that staged the import.
+        from ..save_import import (
+            STARTUP_IMPORT_BUDGET, ImportInstalledError, ImportUnsafeToOpenError,
+            commit_pending_import, refuse_to_open_over_journals,
+        )
+        from ..services import services
+
+        targets = ([Path(db_path)] if db_path is not None else
+                   [user_path / "ankimon.db", user_path / "ankimonDEV.db"])
+        # One budget for the whole installation. This runs inside add-on import,
+        # which Anki performs in AnkiQt.__init__ -- before any window exists, let
+        # alone a progress dialog -- so a locked save here is Anki looking hung
+        # with nothing on screen and no way to cancel. Anything not installed in
+        # time stays pending and is retried on the next start.
+        deadline = time.monotonic() + STARTUP_IMPORT_BUDGET
+        opening = Path(db_path) if db_path is not None else user_path / AnkimonDB.DB_FILENAME
+        causes = {}
+        for target in targets:
+            installed = False
+            try:
+                installed = commit_pending_import(target, logger, deadline)
+            except ImportInstalledError as warning:
+                installed = True
+                warnings = getattr(services, "_save_import_warnings", [])
+                warnings.append(f"{target}: {warning}")
+                services._save_import_warnings = warnings
+            except Exception as error:
+                causes[target] = error
+                reason = error
+                if target != opening:
+                    # Not opened now, so not refused now, but the startup notice
+                    # has to say its journals are at stake, not only why the move
+                    # failed. switch_database refuses it if developer mode opens it.
+                    try:
+                        refuse_to_open_over_journals(target, error)
+                    except ImportUnsafeToOpenError as refusal:
+                        reason = refusal
+                failures = getattr(services, "_save_import_errors", [])
+                failures.append(f"{target}: {reason}")
+                services._save_import_errors = failures
+                if logger is not None:
+                    logger.log("error", f"Pending save import could not be installed: {error}")
+            if installed:
+                from ..events import events
+
+                events.emit("save_import_installed", target=str(target))
+        # An install that stopped short of setting aside the journals beside a
+        # missing save must not be followed by opening that path: the fresh save
+        # SQLite creates there discards them. This raises instead, which fails the
+        # add-on load with the reason and what to do. It is decided from the files,
+        # so a reload after that refused start, which this process's attempt gate
+        # keeps from installing again, is refused too.
+        refuse_to_open_over_journals(opening, causes.get(opening))
         _db_instance = AnkimonDB(logger, db_path=db_path)
     return _db_instance
 

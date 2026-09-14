@@ -4,10 +4,13 @@ Use real SQLite files, backups and atomic replacement. Only the Anki host/UI
 and external writers are controlled at the boundary.
 """
 
+import importlib
+import json
 import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from concurrent.futures import Future
@@ -18,6 +21,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from test_save_transfer import _Logger, _make_save, st
+from test_save_import import commit_in_new_process
 from Ankimon.functions import mobile_sync
 from Ankimon.pyobj import ankimon_sync, backup_manager
 from Ankimon.pyobj import settings as settings_module
@@ -49,7 +53,11 @@ def transfer(tmp_path, monkeypatch):
     monkeypatch.setattr(st, "_active_db_path", lambda: active)
     monkeypatch.setattr(st, "showInfo", MagicMock())
     monkeypatch.setattr(st, "showWarning", MagicMock())
-    monkeypatch.setattr(st, "close_anki", MagicMock())
+    def restart(**kwargs):
+        if services.db is not None:
+            services.db.close()
+        commit_in_new_process(active)
+    monkeypatch.setattr(st, "close_anki", restart)
     monkeypatch.setattr(st, "askUser", lambda *a, **k: True)
     monkeypatch.setattr(st.QFileDialog, "getOpenFileName", lambda *a, **k: (str(incoming), ""))
     monkeypatch.setattr(backup_manager, "user_path", tmp_path)
@@ -62,7 +70,7 @@ def transfer(tmp_path, monkeypatch):
     try:
         yield SimpleNamespace(active=active, incoming=incoming, sync=sync,
                               collection=collection, col=col, snapshots=snapshots,
-                              backups=tmp_path / "ankimon_backups")
+                              backups=tmp_path / "ankimon_recovery")
     finally:
         collection.close()
 
@@ -172,14 +180,15 @@ def test_export_removes_legacy_credentials_without_changing_live_save(
 
 
 def test_import_does_not_copy_a_source_changed_after_verification(transfer, monkeypatch):
-    backup = transfer.sync._backup_before_overwrite
+    from Ankimon import save_import
+    stage = save_import.stage_import
 
-    def backup_during_download(required):
-        result = backup(required)
-        transfer.incoming.write_bytes(b"corrupted during backup" * 100)
+    def stage_during_download(snapshot, target, **options):
+        result = stage(snapshot, target, **options)
+        transfer.incoming.write_bytes(b"corrupted after staging" * 100)
         return result
 
-    monkeypatch.setattr(transfer.sync, "_backup_before_overwrite", backup_during_download)
+    monkeypatch.setattr(save_import, "stage_import", stage_during_download)
     assert st.import_save()
     assert ankimon_sync._verify_sqlite_integrity(transfer.active)
     assert st.get_db_stats(transfer.active)["pokemon"] == 42
@@ -292,28 +301,21 @@ def test_deferred_rescue_invalidates_approval_when_local_save_changes(
         writer.close()
 
 
-def test_rescue_rechecks_changes_during_backup(transfer, rescue, monkeypatch):
+def test_rescue_recovery_includes_progress_after_staging(transfer, rescue, monkeypatch):
     st._apply_migration_result(st._migration_scan(rescue.media, transfer.active), _Logger())
     assert len(rescue.callbacks) == 1
-    backup = transfer.sync._backup_before_overwrite
 
-    def backup_then_progress(required):
-        success = backup(required)
-        connection = sqlite3.connect(transfer.active)
-        try:
-            with connection:
-                connection.executemany("INSERT INTO captured_pokemon VALUES (?, 0, '{}')",
-                                       [(f"mobile-{i}",) for i in range(5)])
-        finally:
-            connection.close()
-        return success
+    def finish_old_session(**kwargs):
+        with sqlite3.connect(transfer.active) as conn:
+            conn.executemany("INSERT INTO captured_pokemon VALUES (?, 0, '{}')",
+                             [(f"mobile-{i}",) for i in range(5)])
+        commit_in_new_process(transfer.active)
 
-    monkeypatch.setattr(transfer.sync, "_backup_before_overwrite", backup_then_progress)
+    monkeypatch.setattr(st, "close_anki", finish_old_session)
     rescue.callbacks.pop(0)()
-    rescue.finish_workers()
-
-    assert st.get_db_stats(transfer.active)["pokemon"] == 8
-    assert len(rescue.prompts) == 1
+    assert st.get_db_stats(transfer.active)["pokemon"] == 4
+    backups = list(transfer.backups.glob("*/ankimon.db"))
+    assert len(backups) == 1 and st.get_db_stats(backups[0])["pokemon"] == 8
     assert list(transfer.snapshots.iterdir()) == []
 
 
@@ -365,6 +367,49 @@ def test_rescue_rechecks_progress_after_waiting_for_active_writers(
     assert st.get_db_stats(transfer.active)["pokemon"] == 8
     assert len(rescue.prompts) == 1
     assert list(transfer.snapshots.iterdir()) == []
+
+
+def test_rescue_releases_the_live_save_before_staging_the_media_copy(
+    transfer, rescue, monkeypatch,
+):
+    """Staging reads only the media copy. Holding the live save's connection lock
+    through its snapshot and VACUUM stalled every background thread that needed
+    the database."""
+    from Ankimon import save_import
+
+    transfer.active.unlink()
+    db = AnkimonDB(_Logger(), db_path=transfer.active)
+    monkeypatch.setattr(services, "db", db)
+    stage = save_import.stage_import
+    lock_free = []
+
+    def stage_while_a_worker_wants_the_database(snapshot, target, **options):
+        acquired = []
+
+        def worker():
+            if db._conn_lock.acquire(timeout=0.5):
+                db._conn_lock.release()
+                acquired.append(True)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join()
+        lock_free.append(bool(acquired))
+        return stage(snapshot, target, **options)
+
+    monkeypatch.setattr(save_import, "stage_import", stage_while_a_worker_wants_the_database)
+    try:
+        db.set_config_value("trainer.cash", 250)
+        st._apply_migration_result(st._migration_scan(rescue.media, transfer.active), _Logger())
+        rescue.finish_workers()
+        assert len(rescue.callbacks) == 1
+        rescue.callbacks.pop(0)()
+
+        assert lock_free == [True]
+        assert st.get_db_stats(transfer.active)["pokemon"] == 4
+        assert list(transfer.snapshots.iterdir()) == []
+    finally:
+        db.close()
 
 
 def test_rescue_does_not_remember_a_decline_for_changed_local_progress(
@@ -546,17 +591,17 @@ def test_confirmation_cannot_follow_a_profile_switch(transfer, tmp_path, monkeyp
     assert list(transfer.snapshots.iterdir()) == []
 
 
-@pytest.mark.parametrize("failure", ["decline", "backup", "replace"])
+@pytest.mark.parametrize("failure", ["decline", "staging"])
 def test_unsuccessful_import_releases_snapshot_and_preserves_live_save(transfer, monkeypatch, failure):
     before = transfer.active.read_bytes()
     if failure == "decline":
         monkeypatch.setattr(st, "askUser", lambda *a, **k: False)
-    elif failure == "backup":
-        monkeypatch.setattr(transfer.sync, "_backup_before_overwrite", lambda *a: False)
     else:
         def disk_failure(*args):
-            raise OSError("cannot replace destination")
-        monkeypatch.setattr(transfer.sync, "_atomic_replace", disk_failure)
+            raise OSError("cannot prepare destination")
+        # The module itself, as in test_save_transfer's _stub_sync.
+        monkeypatch.setattr(importlib.import_module("Ankimon.save_import"),
+                            "stage_import", disk_failure)
     assert st.import_save() is False
     assert transfer.active.read_bytes() == before
     assert list(transfer.snapshots.iterdir()) == []
@@ -611,3 +656,263 @@ def test_busy_snapshot_obeys_migration_budget_and_cleans_up(transfer):
         writer.rollback()
         writer.close()
     assert list(transfer.snapshots.iterdir()) == []
+
+
+def test_import_published_but_unfinished_is_reported_as_pending(transfer, monkeypatch):
+    """A staged import that will install must never be announced as aborted."""
+    from Ankimon import save_import
+
+    fsync_directory = save_import._fsync_directory
+    injecting = [True]
+
+    def failing_sync(path):
+        if injecting[0] and Path(path) == transfer.active.parent:
+            raise OSError("injected directory sync failure")
+        return fsync_directory(path)
+
+    monkeypatch.setattr(save_import, "_fsync_directory", failing_sync)
+    closed = []
+    monkeypatch.setattr(st, "close_anki", lambda **kwargs: closed.append(kwargs))
+
+    assert st.import_save() is True
+    injecting[0] = False
+    message = st.showWarning.call_args.args[0]
+    assert "PENDING" in message
+    assert "Cancel Pending Save Import" in message
+    assert "aborted" not in message.lower()
+    assert "unchanged" not in message.lower()
+    # Anki is not closed on our own initiative after an I/O failure, but the
+    # warning's claim is real: the save is armed for the next full start.
+    assert closed == []
+    assert st.get_db_stats(transfer.active)["pokemon"] == 3
+    commit_in_new_process(transfer.active)
+    assert st.get_db_stats(transfer.active)["pokemon"] == 42
+
+
+def test_backup_restore_published_but_unfinished_is_reported_as_pending(transfer, monkeypatch, tmp_path):
+    """Backup Restore shares the staging path and must share its honesty."""
+    from Ankimon import save_import
+
+    backup_dir = tmp_path / "backup_2026-01-01_00-00-00"
+    backup_dir.mkdir()
+    _make_save(backup_dir / transfer.active.name, pokemon=11, name="Restored")
+    manager = backup_manager.BackupManager(_Logger(), SimpleNamespace(get=lambda *a, **k: None))
+    monkeypatch.setattr(services, "db", SimpleNamespace(db_path=transfer.active))
+    warn = MagicMock()
+    monkeypatch.setattr(backup_manager, "showWarning", warn)
+    # Warnings about an armed restore go through the presenter port.
+    monkeypatch.setattr(services, "ui", SimpleNamespace(warn=warn))
+    monkeypatch.setattr(backup_manager, "showInfo", MagicMock())
+    monkeypatch.setattr(backup_manager, "askUser", lambda *a, **k: True)
+    monkeypatch.setattr(backup_manager, "close_anki", MagicMock())
+
+    fsync_directory = save_import._fsync_directory
+    injecting = [True]
+
+    def failing_sync(path):
+        if injecting[0] and Path(path) == transfer.active.parent:
+            raise OSError("injected directory sync failure")
+        return fsync_directory(path)
+
+    monkeypatch.setattr(save_import, "_fsync_directory", failing_sync)
+    manager.restore_backup(str(backup_dir))
+    injecting[0] = False
+
+    message = warn.call_args.args[0]
+    assert "PENDING" in message
+    assert "Cancel Pending Save Import" in message
+    # The same install keeps the final save first, and Import already says so.
+    assert "final progress will still be retained in a recovery copy first" in message
+    assert "Failed to prepare" not in message
+    # Like Import, the restore does not close Anki on its own after an I/O
+    # failure; the user decides when to restart.
+    backup_manager.close_anki.assert_not_called()
+    commit_in_new_process(transfer.active)
+    assert st.get_db_stats(transfer.active)["pokemon"] == 11
+
+
+def _stage_a_record_for_a_moved_save(transfer):
+    """Stage a real import, then point its record at the save's old location.
+
+    Moving the Anki base folder leaves exactly this: the record still sits beside
+    the save but no longer matches it, and only Cancel Pending Save Import clears it.
+    """
+    from Ankimon import save_import
+
+    staged = save_import.stage_import(transfer.incoming, transfer.active)
+    manifest = staged["pending_path"].parent / "pending.json"
+    record = json.loads(manifest.read_text(encoding="utf-8"))
+    record["target"] = str(transfer.active.parent / "old-base-folder" / transfer.active.name)
+    manifest.write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_import_over_a_record_for_a_moved_save_names_the_cancel_action(transfer, monkeypatch):
+    """An abort that names no way forward leaves the user stuck behind the record."""
+    _stage_a_record_for_a_moved_save(transfer)
+    closed = []
+    monkeypatch.setattr(st, "close_anki", lambda **kwargs: closed.append(kwargs))
+
+    result = st.import_save()
+    message = st.showWarning.call_args.args[0]
+    assert "Cancel Pending Save Import" in message
+    assert "aborted" not in message.lower()
+    assert result is True
+    assert closed == []
+    assert st.get_db_stats(transfer.active)["pokemon"] == 3
+
+
+def test_backup_restore_over_a_record_for_a_moved_save_names_the_cancel_action(
+    transfer, monkeypatch, tmp_path,
+):
+    """Backup Restore refuses over the same record, so it must name the same remedy."""
+    backup_dir = tmp_path / "backup_2026-01-01_00-00-00"
+    backup_dir.mkdir()
+    _make_save(backup_dir / transfer.active.name, pokemon=11, name="Restored")
+    manager = backup_manager.BackupManager(_Logger(), SimpleNamespace(get=lambda *a, **k: None))
+    monkeypatch.setattr(services, "db", SimpleNamespace(db_path=transfer.active))
+    warn = MagicMock()
+    monkeypatch.setattr(backup_manager, "showWarning", warn)
+    monkeypatch.setattr(services, "ui", SimpleNamespace(warn=warn))
+    monkeypatch.setattr(backup_manager, "showInfo", MagicMock())
+    monkeypatch.setattr(backup_manager, "askUser", lambda *a, **k: True)
+    monkeypatch.setattr(backup_manager, "close_anki", MagicMock())
+    _stage_a_record_for_a_moved_save(transfer)
+
+    manager.restore_backup(str(backup_dir))
+
+    message = warn.call_args.args[0]
+    assert "Cancel Pending Save Import" in message
+    assert "Failed to prepare" not in message
+    backup_manager.close_anki.assert_not_called()
+    assert st.get_db_stats(transfer.active)["pokemon"] == 3
+
+
+def test_backup_restore_that_cannot_announce_itself_is_not_called_a_failure(
+    transfer, monkeypatch, tmp_path,
+):
+    """Staging succeeded outright here, so "failed to prepare" is simply false."""
+    backup_dir = tmp_path / "backup_2026-02-02_00-00-00"
+    backup_dir.mkdir()
+    _make_save(backup_dir / transfer.active.name, pokemon=13, name="Restored")
+    manager = backup_manager.BackupManager(_Logger(), SimpleNamespace(get=lambda *a, **k: None))
+    monkeypatch.setattr(services, "db", SimpleNamespace(db_path=transfer.active))
+    warn = MagicMock()
+    monkeypatch.setattr(backup_manager, "showWarning", warn)
+    monkeypatch.setattr(backup_manager, "askUser", lambda *a, **k: True)
+    monkeypatch.setattr(backup_manager, "close_anki", MagicMock())
+
+    def broken_notice(*args, **kwargs):
+        raise RuntimeError("wrapped C/C++ object has been deleted")
+
+    monkeypatch.setattr(backup_manager, "showInfo", broken_notice)
+    manager.restore_backup(str(backup_dir))
+
+    assert "Failed to prepare backup restore" not in str(warn.call_args_list)
+    # And the restore really is staged, whatever the notice did.
+    commit_in_new_process(transfer.active)
+    assert st.get_db_stats(transfer.active)["pokemon"] == 13
+
+
+def test_import_that_cannot_announce_itself_is_not_called_an_abort(transfer, monkeypatch):
+    """The notice is the last thing that can fail, and it is not the import."""
+    def broken_notice(*args, **kwargs):
+        raise RuntimeError("wrapped C/C++ object has been deleted")
+
+    monkeypatch.setattr(st, "showInfo", broken_notice)
+    warn = MagicMock()
+    monkeypatch.setattr(st, "showWarning", warn)
+
+    assert st.import_save() is True
+    assert "aborted" not in str(warn.call_args_list).lower()
+    assert "Nothing was replaced" not in str(warn.call_args_list)
+    assert st.get_db_stats(transfer.active)["pokemon"] == 42
+
+
+def test_a_rescue_that_cannot_quiet_the_save_says_why_nothing_happened(transfer):
+    """The user said yes. A silent False left no rescue, no message and no reason,
+    and the same question came back at the next launch."""
+    from Ankimon import save_import
+
+    @contextmanager
+    def still_busy(target):
+        yield False
+
+    transfer.sync._quiesce_live_db_connection = still_busy
+    digest = st._save_snapshot_digest(transfer.active)
+    assert st._replace_active_save(transfer.incoming, transfer.active, "Rescue",
+                                   collection=transfer.col, local_digest=digest) is False
+    message = st.showWarning.call_args.args[0]
+    assert message.startswith("Rescue aborted:")
+    assert "did not stop in time" in message
+    # No menu action starts a rescue; the next scan offers it again.
+    assert "offered again after the next sync or restart" in message
+    assert save_import.pending_import_info(transfer.active) is None
+
+
+def test_a_close_failure_notice_that_cannot_be_shown_is_not_called_an_abort(transfer, monkeypatch):
+    """The import is published before Anki is asked to close.
+
+    A warning about the failed close that raised unwound into import_save's
+    "Import aborted ... Nothing was replaced" handler, over a staged import.
+    """
+    from Ankimon import save_import
+
+    shown = []
+
+    def refuse_close(**kwargs):
+        raise RuntimeError("no main window")
+
+    def broken_warning(message, *args, **kwargs):
+        shown.append(message)
+        raise RuntimeError("wrapped C/C++ object has been deleted")
+
+    monkeypatch.setattr(st, "close_anki", refuse_close)
+    monkeypatch.setattr(st, "showWarning", broken_warning)
+    assert st.import_save() is True
+    assert [message.split(":")[0] for message in shown] == ["Anki could not close"]
+    assert save_import.pending_import_info(transfer.active) is not None
+
+
+@pytest.mark.parametrize("keep_it", [False, True])
+def test_import_over_a_damaged_save_asks_before_anything_is_staged(transfer, monkeypatch, keep_it):
+    """Import promised a verified copy of the save it replaces, which a damaged
+    save cannot give. Answered yes, the next start installs anyway and keeps
+    that save as it was."""
+    from Ankimon import save_import
+    from test_save_import import damage_a_table
+
+    damage_a_table(transfer.active)
+    before = transfer.active.read_bytes()
+    prompts = []
+
+    def ask(prompt, **kwargs):
+        prompts.append(prompt)
+        return keep_it if "integrity check" in prompt else True
+
+    monkeypatch.setattr(st, "askUser", ask)
+    assert st.import_save() is keep_it
+    assert len(prompts) == 2 and "the save you chose" in prompts[1]
+    if not keep_it:
+        assert save_import.pending_import_info(transfer.active) is None
+        assert transfer.active.read_bytes() == before
+        assert not st.showWarning.called
+        return
+    # The fixture's close_anki starts a fresh process, which installs the import.
+    assert st.get_db_stats(transfer.active)["pokemon"] == 42
+    [kept] = transfer.backups.glob("pre-import-*/unverified/ankimon.db")
+    assert kept.read_bytes() == before
+    assert str(kept.resolve()) in st.showInfo.call_args.args[0]
+
+
+def test_a_rescue_over_a_damaged_save_that_is_declined_stages_nothing(transfer, monkeypatch):
+    from Ankimon import save_import
+    from test_save_import import damage_a_table
+
+    damage_a_table(transfer.active)
+    prompts = []
+    monkeypatch.setattr(st, "askUser", lambda prompt, **kwargs: prompts.append(prompt) or False)
+    assert st._replace_active_save(transfer.incoming, transfer.active, "Rescue",
+                                   collection=transfer.col) is False
+    assert len(prompts) == 1 and "the rescued save" in prompts[0]
+    assert save_import.pending_import_info(transfer.active) is None
+    assert not st.showWarning.called

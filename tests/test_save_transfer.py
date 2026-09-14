@@ -19,10 +19,12 @@ real add-on modules import Qt-free, then drive the real code.
 import os
 import sys
 import atexit
+import importlib
 import types
 import shutil
 import sqlite3
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -60,6 +62,7 @@ for _n in ("showInfo", "showWarning", "tooltip", "askUser"):
         setattr(_aqt_utils, _n, MagicMock())
 
 import Ankimon.pyobj.save_transfer as st  # noqa: E402
+from test_save_import import commit_in_new_process
 
 
 class _Logger:
@@ -110,17 +113,13 @@ def _make_save(path: Path, *, pokemon=0, badges=0, history=0,
 
 
 def _protected(media: Path, target_db: str = "ankimon.db"):
-    """The content-addressed protected copies the migration wrote, by name.
-
-    The migration never writes a FIXED protected name — a fixed name can hold
-    one save, so the second one to arrive forces a choice between overwriting
-    it and leaving the newcomer under the bare, deletable name, and the
-    progress counters cannot make that choice honestly. Each distinct save is
-    preserved as ``_ankimon_save_<digest of its bytes>.db`` instead, so tests
-    ask what is protected rather than assuming one name.
-    """
+    """All verified protected copies, including legacy sync-visible ones."""
+    locations = (media, st._recovery_store(media))
     return sorted(
-        path for path in media.glob(st._SAVE_PREFIX[target_db] + "*.db")
+        path
+        for location in locations
+        if location.is_dir()
+        for path in location.glob(st._SAVE_PREFIX[target_db] + "*.db")
         if st._target_db_for(path) == target_db
     )
 
@@ -250,24 +249,24 @@ def test_export_discards_a_file_that_fails_verification(tmp_path, live_db, monke
 # --------------------------------------------------------------------------
 # Import
 # --------------------------------------------------------------------------
-def _stub_sync(monkeypatch, *, backup_ok=True):
-    """Stand in for the AnkimonDataSync primitives the import path leans on,
-    recording the order in which they were called."""
-    calls = []
+def _stub_sync(monkeypatch, *, staging_ok=True):
+    """Stand in for the one AnkimonDataSync primitive the import path still
+    holds, and optionally make staging the import fail. Nothing here touches
+    the live save, so each test checks that save itself."""
 
     class _Sync:
-        def _backup_before_overwrite(self, name):
-            calls.append(("backup", name))
-            return backup_ok
+        def _quiesce_live_db_connection(self, target):
+            return nullcontext(True)
 
-        def _atomic_replace(self, src, dest, validate_target=None):
-            if validate_target is not None:
-                validate_target()
-            calls.append(("replace", str(src), str(dest)))
-            shutil.copy2(src, dest)
-
+    if not staging_ok:
+        def fail_staging(*args):
+            raise OSError("Cannot prepare pending import")
+        # The module itself, not a dotted path: a test that re-executes the
+        # package leaves ``Ankimon`` without its ``save_import`` attribute once
+        # something imported that module earlier in the run.
+        monkeypatch.setattr(importlib.import_module("Ankimon.save_import"),
+                            "stage_import", fail_staging)
     monkeypatch.setattr("Ankimon.pyobj.ankimon_sync.get_ankimon_sync", lambda: _Sync())
-    return calls
 
 
 def test_import_refuses_a_file_that_is_not_an_ankimon_save(tmp_path, live_db, monkeypatch):
@@ -285,7 +284,7 @@ def test_import_refuses_a_file_that_is_not_an_ankimon_save(tmp_path, live_db, mo
     assert st.get_db_stats(live_db)["pokemon"] == 3
 
 
-def test_import_refuses_when_the_safety_backup_fails(tmp_path, live_db, monkeypatch):
+def test_import_refuses_when_staging_fails(tmp_path, live_db, monkeypatch):
     incoming = _make_save(tmp_path / "incoming.db", pokemon=99)
     monkeypatch.setattr(st.QFileDialog, "getOpenFileName", lambda *a, **k: (str(incoming), ""))
     monkeypatch.setattr(st, "askUser", lambda *a, **k: True)
@@ -293,11 +292,10 @@ def test_import_refuses_when_the_safety_backup_fails(tmp_path, live_db, monkeypa
     monkeypatch.setattr(st, "showInfo", MagicMock())
     closed = MagicMock()
     monkeypatch.setattr(st, "close_anki", closed)
-    calls = _stub_sync(monkeypatch, backup_ok=False)
+    _stub_sync(monkeypatch, staging_ok=False)
 
     assert st.import_save() is False
-    assert [c[0] for c in calls] == ["backup"]      # refused BEFORE replacing
-    assert st.get_db_stats(live_db)["pokemon"] == 3
+    assert st.get_db_stats(live_db)["pokemon"] == 3  # nothing touches the live database
     closed.assert_not_called()
 
 
@@ -305,24 +303,24 @@ def test_import_declined_by_user_changes_nothing(tmp_path, live_db, monkeypatch)
     incoming = _make_save(tmp_path / "incoming.db", pokemon=99)
     monkeypatch.setattr(st.QFileDialog, "getOpenFileName", lambda *a, **k: (str(incoming), ""))
     monkeypatch.setattr(st, "askUser", lambda *a, **k: False)
-    calls = _stub_sync(monkeypatch)
+    _stub_sync(monkeypatch)
 
     assert st.import_save() is False
-    assert calls == []
     assert st.get_db_stats(live_db)["pokemon"] == 3
 
 
-def test_import_backs_up_before_replacing_then_closes_anki(tmp_path, live_db, monkeypatch):
+def test_import_prepares_then_installs_only_after_full_restart(tmp_path, live_db, monkeypatch):
     incoming = _make_save(tmp_path / "incoming.db", pokemon=99, badges=4)
     monkeypatch.setattr(st.QFileDialog, "getOpenFileName", lambda *a, **k: (str(incoming), ""))
     monkeypatch.setattr(st, "askUser", lambda *a, **k: True)
     monkeypatch.setattr(st, "showInfo", MagicMock())
     closed = MagicMock()
     monkeypatch.setattr(st, "close_anki", closed)
-    calls = _stub_sync(monkeypatch)
+    _stub_sync(monkeypatch)
 
     assert st.import_save() is True
-    assert [c[0] for c in calls] == ["backup", "replace"]   # order is the safety
+    assert st.get_db_stats(live_db)["pokemon"] == 3
+    commit_in_new_process(live_db)
     assert st.get_db_stats(live_db)["pokemon"] == 99
     closed.assert_called_once()
 
@@ -330,9 +328,9 @@ def test_import_backs_up_before_replacing_then_closes_anki(tmp_path, live_db, mo
 def test_import_refuses_the_file_it_is_already_using(tmp_path, live_db, monkeypatch):
     monkeypatch.setattr(st.QFileDialog, "getOpenFileName", lambda *a, **k: (str(live_db), ""))
     monkeypatch.setattr(st, "showWarning", MagicMock())
-    calls = _stub_sync(monkeypatch)
+    _stub_sync(monkeypatch)
     assert st.import_save() is False
-    assert calls == []
+    assert st.get_db_stats(live_db)["pokemon"] == 3
 
 
 # --------------------------------------------------------------------------
@@ -442,11 +440,12 @@ def test_migration_rescue_replaces_the_save_when_accepted(media, live_db, logger
     monkeypatch.setattr(st, "askUser", lambda *a, **k: True)
     monkeypatch.setattr(st, "showInfo", MagicMock())
     monkeypatch.setattr(st, "close_anki", MagicMock())
-    calls = _stub_sync(monkeypatch)
+    _stub_sync(monkeypatch)
 
     st.run_media_migration(MagicMock(), logger)
 
-    assert [c[0] for c in calls] == ["backup", "replace"]
+    assert st.get_db_stats(live_db)["pokemon"] == 3
+    commit_in_new_process(live_db)
     assert st.get_db_stats(live_db)["pokemon"] == 42
 
 
@@ -488,14 +487,14 @@ def test_migration_never_raises_out_of_profile_open(media, live_db, logger, monk
 
 
 def test_migration_retries_the_rescue_if_the_replace_failed(media, live_db, logger, monkeypatch):
-    """A refused backup or a persisting file lock must not burn the one-shot
-    flag — that would leave the user with no offered route back to the only copy
-    of their progress."""
+    """A rescue that fails to stage must not burn the one-shot flag — that
+    would leave the user with no offered route back to the only copy of their
+    progress."""
     _make_save(media / "ankimon.db", pokemon=42, badges=8, history=99)
     ask = MagicMock(return_value=True)
     monkeypatch.setattr(st, "askUser", ask)
     monkeypatch.setattr(st, "showWarning", MagicMock())
-    _stub_sync(monkeypatch, backup_ok=False)          # backup refuses
+    _stub_sync(monkeypatch, staging_ok=False)         # staging fails
 
     st.run_media_migration(MagicMock(), logger)
     st.run_media_migration(MagicMock(), logger)
@@ -514,7 +513,8 @@ def test_migration_settles_after_a_successful_rescue(media, live_db, logger, mon
     monkeypatch.setattr(st, "close_anki", MagicMock())
     _stub_sync(monkeypatch)
 
-    st.run_media_migration(MagicMock(), logger)       # rescues, "closes" Anki
+    st.run_media_migration(MagicMock(), logger)       # prepares a rescue
+    commit_in_new_process(live_db)
     assert st.get_db_stats(live_db)["pokemon"] == 42
     st.run_media_migration(MagicMock(), logger)       # the next boot
 
@@ -624,11 +624,11 @@ def test_dev_and_normal_saves_are_not_ranked_against_each_other(media, tmp_path,
 
     st.run_media_migration(MagicMock(), logger)
 
-    # The dev save is not what got preserved, and no rescue was offered from it.
+    # Both modes are protected, but only the active mode is eligible for rescue.
     copies = _protected(media)
     assert len(copies) == 1
     assert st.get_db_stats(copies[0])["pokemon"] == 1
-    assert _protected(media, "ankimonDEV.db") == []
+    assert st.get_db_stats(_protected(media, "ankimonDEV.db")[0])["pokemon"] == 500
     ask.assert_not_called()
 
 
@@ -674,6 +674,8 @@ def test_rescue_is_deferred_off_the_profile_open_stack(media, live_db, logger, m
     assert len(scheduled) == 1                       # deferred, not called inline
     assert st.get_db_stats(live_db)["pokemon"] == 3  # nothing replaced yet
     scheduled[0]()                                   # next event-loop turn
+    assert st.get_db_stats(live_db)["pokemon"] == 3
+    commit_in_new_process(live_db)
     assert st.get_db_stats(live_db)["pokemon"] == 42
 
 
@@ -691,7 +693,7 @@ def test_rescue_keeps_the_verified_snapshot_when_the_media_file_changes(
     # Make the protect step fail, so the offer names the bare, replaceable file
     # rather than a content-addressed copy nothing overwrites.
     monkeypatch.setattr(st, "_preserve", lambda *a, **k: None)
-    calls = _stub_sync(monkeypatch)
+    _stub_sync(monkeypatch)
     scheduled = []
     monkeypatch.setattr(
         st.mw.progress, "single_shot",
@@ -708,12 +710,10 @@ def test_rescue_keeps_the_verified_snapshot_when_the_media_file_changes(
     bare.write_bytes(bytes(raw))
 
     scheduled[0]()
-
+    assert st.get_db_stats(live_db)["pokemon"] == 3
+    commit_in_new_process(live_db)
     assert st.get_db_stats(live_db)["pokemon"] == 42
-    assert [c[0] for c in calls] == ["backup", "replace"]
-    assert Path(calls[1][1]) != bare
-    assert not Path(calls[1][1]).exists()  # snapshot was released
-    warn.assert_not_called()
+    assert "unverified" in warn.call_args.args[0]
 
 
 # --------------------------------------------------------------------------

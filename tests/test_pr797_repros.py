@@ -322,15 +322,25 @@ def test_migration_does_not_block_profile_open_on_a_locked_save(
     holder.execute("PRAGMA locking_mode = EXCLUSIVE;")
     holder.execute("BEGIN EXCLUSIVE;")
     holder.execute("INSERT INTO items VALUES ('lockholder', 1)")
+    monkeypatch.setattr(st, "MIGRATION_PROBE_TIMEOUT", 0.01)
     monkeypatch.setattr(st, "askUser", lambda *a, **k: False)
+    queued = []
+    monkeypatch.setattr(st.mw.taskman, "run_in_background",
+                        lambda scan, done, **kwargs: queued.append(scan))
 
     try:
         t0 = time.monotonic()
-        st.run_media_migration(MagicMock(), logger)
+        st.start_media_migration(MagicMock(), logger)
         elapsed = time.monotonic() - t0
         assert elapsed < 1.0, (
             f"profile-open path blocked for {elapsed:.1f}s on a locked media save"
         )
+        assert len(queued) == 1
+        assert not list(st._recovery_store(media).glob("_ankimon_unverified_*.zip"))
+        assert media in st.mw.pm._ankimon_media_protection_guard["blocked"]
+        queued[0]()
+        assert list(st._recovery_store(media).glob("_ankimon_unverified_*.zip"))
+        assert not list(media.glob("_ankimon_unverified_*.zip"))
     finally:
         holder.close()
 
@@ -592,7 +602,9 @@ def test_an_empty_folder_settles_and_dispatches_no_scan_until_a_save_lands(
 
     The fingerprint makes the guard unnecessary: an empty partition settles on
     its own sentinel, and the download the old guard was waiting for is exactly
-    what expires that settle.
+    what expires that settle. Each stop still sends a worker to list the folder
+    once, which keeps that listing off the GUI thread, but a folder that matches
+    its settle is not scanned.
     """
     folder, profile = real_flag_media
     ask = MagicMock(return_value=False)
@@ -604,9 +616,15 @@ def test_an_empty_folder_settles_and_dispatches_no_scan_until_a_save_lands(
     assert profile[st._MIGRATION_FLAG] == st._EMPTY_MEDIA_FINGERPRINT
     assert st._migration_done()
 
+    scans = []
+    scan = st._migration_scan
+    monkeypatch.setattr(st, "_migration_scan",
+                        lambda *args, **kwargs: scans.append(args) or scan(*args, **kwargs))
     for _ in range(3):                                     # sync stop, stop, stop
         st.start_media_migration(MagicMock(), logger)
-    assert taskman.queued == []                            # nothing dispatched
+        while taskman.queued:
+            taskman.run_next()                             # a worker lists the folder
+    assert scans == []                                     # and scans nothing
 
     _make_save(folder / "ankimon.db", pokemon=42, badges=8, history=99)   # the download
     assert not st._migration_done()
@@ -891,8 +909,9 @@ def test_the_scan_is_dispatched_instead_of_run_on_the_caller(
 def test_a_settled_profile_starts_no_scan_at_all(
     real_flag_media, live_db, logger, monkeypatch, taskman
 ):
-    """The cheap guard stays ahead of the dispatch, or every boot pays a thread
-    and a round trip to do nothing."""
+    """A settled profile pays one worker round trip to list collection.media,
+    which keeps that listing off the GUI thread, and nothing more: no SQLite
+    open, no capture and no comparison."""
     folder, _profile = real_flag_media
     _make_save(folder / "ankimon.db", pokemon=1)
     monkeypatch.setattr(st, "askUser", lambda *a, **k: False)
@@ -901,9 +920,16 @@ def test_a_settled_profile_starts_no_scan_at_all(
     taskman.run_next()
     assert taskman.queued == []
 
+    scans = []
+    scan = st._migration_scan
+    monkeypatch.setattr(st, "_migration_scan",
+                        lambda *args, **kwargs: scans.append(args) or scan(*args, **kwargs))
     st.start_media_migration(MagicMock(), logger)
+    assert len(taskman.queued) == 1             # the settle check, on a worker
+    taskman.run_next()
 
-    assert taskman.queued == []                 # settled: not dispatched again
+    assert scans == []                          # settled: nothing scanned
+    assert taskman.queued == []
 
 
 def test_a_request_arriving_mid_scan_is_coalesced_not_dropped(
@@ -991,11 +1017,10 @@ def test_a_profile_switch_during_the_scan_discards_the_result(
     settled.assert_not_called()
 
 
-def test_start_falls_back_to_a_synchronous_run_without_a_task_manager(
+def test_start_guards_and_retries_without_a_task_manager(
     real_flag_media, live_db, logger, monkeypatch
 ):
-    """Correctness beats responsiveness: if the dispatch is refused, do the work
-    rather than skip it."""
+    """Failed dispatch keeps the sync guard and never runs inline recovery."""
     folder, _profile = real_flag_media
     _make_save(folder / "ankimon.db", pokemon=42, badges=8, history=99)
     ask = MagicMock(return_value=False)
@@ -1009,7 +1034,10 @@ def test_start_falls_back_to_a_synchronous_run_without_a_task_manager(
 
     st.start_media_migration(MagicMock(), logger)
 
-    ask.assert_called_once()
+    ask.assert_not_called()
+    assert st.get_db_stats(folder / "ankimon.db")["pokemon"] == 42
+    assert _protected(folder) == []
+    assert folder in st.mw.pm._ankimon_media_protection_guard["blocked"]
     assert st._MIGRATION_SCAN_STATE["running"] is False
 
 
@@ -1153,7 +1181,10 @@ def test_equal_counters_do_not_mean_the_save_is_already_preserved(
 
     copies = _protected(media)
     assert len(copies) == 1, "the equal-but-different bare save was left exposed"
-    assert copies[0].read_bytes() == (media / "ankimon.db").read_bytes()
+    with sqlite3.connect(copies[0]) as conn:
+        assert [row[0] for row in conn.execute(
+            "SELECT individual_id FROM captured_pokemon ORDER BY individual_id"
+        )] == ["theirs-0", "theirs-1", "theirs-2", "theirs-3"]
 
 
 def test_two_devices_converge_on_one_name_for_one_save(tmp_path, live_db, logger, monkeypatch):

@@ -8,12 +8,11 @@ one-shot media migration now depend on:
 
 * ``AnkimonDB.set_mobile_watermark`` is monotonic (never regresses) unless forced;
 * the integrity check rejects a corrupt, truncated or foreign DB;
-* the atomic replace swaps the file, holds quiescence across ``os.replace``,
-  clears stale WAL sidecars, aborts when the live DB will not drain, and
-  survives a transient Windows file lock (issue #636);
-* ``BackupManager.create_backup`` isolates per-file failures and reports failure
-  for the file a caller actually depends on, so a failed backup can refuse a
-  destructive overwrite.
+* the atomic copy (``_atomic_write_over``) survives a transient Windows file lock
+  (issue #636);
+* ``BackupManager.create_backup`` isolates per-file failures and reports success
+  only for a verified snapshot of the file it is asked about (the active-mode
+  database by default), so one file's failure does not blank another's.
 
 See ``test_save_transfer.py`` for the Export/Import and migration paths built on
 top of these.
@@ -169,106 +168,6 @@ def test_integrity_rejects_db_without_core_table(tmp_path):
     assert AnkimonDataSync._verify_sqlite_integrity(p) is False
 
 
-def test_atomic_replace_swaps_file_and_clears_stale_sidecars(tmp_path, monkeypatch):
-    prev = services.db
-    services.db = None  # so _close_live_db_connection is a no-op
-    # Capture the ACTUAL temp path used: _synctmp_path prefers a randomized
-    # system-temp file on the same volume, so a hard-coded sibling ".synctmp"
-    # assertion would be vacuously true — this checks the path actually used.
-    created = _spy_synctmp(monkeypatch)
-    try:
-        src = tmp_path / "ankimon.db"
-        src.write_bytes(b"OLD" + b"\x00" * 600)
-        media = tmp_path / "media.db"
-        media.write_bytes(b"NEW" + b"\x00" * 600)
-        # Stale WAL sidecars from the OLD db must be removed, or a reopen would
-        # try to replay them over the new file.
-        (tmp_path / "ankimon.db-wal").write_bytes(b"waldata")
-        (tmp_path / "ankimon.db-shm").write_bytes(b"shmdata")
-
-        AnkimonDataSync()._atomic_replace(media, src)
-
-        assert src.read_bytes().startswith(b"NEW")
-        assert not (tmp_path / "ankimon.db-wal").exists()
-        assert not (tmp_path / "ankimon.db-shm").exists()
-        assert created and all(not t.exists() for t in created)   # temp cleaned
-    finally:
-        services.db = prev
-
-
-def test_atomic_replace_holds_quiescence_through_os_replace(tmp_path, monkeypatch):
-    import contextlib
-    import importlib
-
-    src = tmp_path / "ankimon.db"
-    src.write_bytes(b"LOCAL" + b"\x00" * 600)
-    media = tmp_path / "media.db"
-    media.write_bytes(b"REMOTE" + b"\x00" * 600)
-
-    class QuiescingDB:
-        db_path = src
-        inside = False
-        entered = 0
-        exited = 0
-
-        @contextlib.contextmanager
-        def quiesce(self, wait_seconds=0.0):
-            self.entered += 1
-            self.inside = True
-            try:
-                yield True
-            finally:
-                self.inside = False
-                self.exited += 1
-
-    runtime_services = importlib.import_module("Ankimon.services").services
-    prev = runtime_services.db
-    fake_db = QuiescingDB()
-    runtime_services.db = fake_db
-    original_replace = aksync.os.replace
-
-    def checked_replace(source, destination):
-        assert fake_db.inside, "database lifecycle barrier released before os.replace"
-        return original_replace(source, destination)
-
-    monkeypatch.setattr(aksync.os, "replace", checked_replace)
-    try:
-        AnkimonDataSync()._atomic_replace(media, src)
-    finally:
-        runtime_services.db = prev
-
-    assert src.read_bytes().startswith(b"REMOTE")
-    assert fake_db.entered == 1
-    assert fake_db.exited == 1
-    assert fake_db.inside is False
-
-
-def test_atomic_replace_aborts_when_live_db_does_not_drain(tmp_path):
-    src = tmp_path / "ankimon.db"
-    src.write_bytes(b"LOCAL" + b"\x00" * 600)
-    media = tmp_path / "media.db"
-    media.write_bytes(b"REMOTE" + b"\x00" * 600)
-
-    class BusyDB:
-        db_path = src
-
-        def close(self, wait_seconds=0.0):
-            return False
-
-    import importlib
-
-    runtime_services = importlib.import_module("Ankimon.services").services
-    prev = runtime_services.db
-    runtime_services.db = BusyDB()
-    try:
-        with pytest.raises(RuntimeError, match="active operations did not finish"):
-            AnkimonDataSync()._atomic_replace(media, src)
-    finally:
-        runtime_services.db = prev
-
-    assert src.read_bytes().startswith(b"LOCAL")
-
-
 # --------------------------------------------------------------------------
 # BackupManager.create_backup: per-file isolation + required_file success
 # --------------------------------------------------------------------------
@@ -278,28 +177,20 @@ def _make_backup_manager(tmp_path, monkeypatch):
     monkeypatch.setattr(bm, "backups_path", tmp_path / "backups")
     (tmp_path / "backups").mkdir()
     monkeypatch.setattr(bm, "_generate_summary", lambda d: {})
-    monkeypatch.setattr(bm, "cleanup_backups", lambda: None)
+    # The real signature. create_backup passes the deadline, so a stub that
+    # cannot take it raised, and the retention guard logged that as a failure.
+    bm.retention_calls = []
+    monkeypatch.setattr(bm, "cleanup_backups",
+                        lambda deadline=None: bm.retention_calls.append(deadline))
     return bm
 
 
-def _flaky_copy_factory(fail_substr):
-    real = shutil.copy2
-
-    def flaky(src, dst, *a, **k):
-        if fail_substr in str(src):
-            raise OSError(f"simulated failure copying {src}")
-        return real(src, dst, *a, **k)
-
-    return flaky
-
-
 def test_backup_required_file_success_isolated_from_other_file_failure(tmp_path, monkeypatch):
-    """A failed ankimonDEV.db copy must NOT blank a successful ankimon.db backup
-    — otherwise a perfectly safe import would be needlessly aborted."""
-    (tmp_path / "ankimon.db").write_bytes(b"MAIN" + b"\x00" * 600)
+    """A failed ankimonDEV.db snapshot must NOT blank a successful ankimon.db backup:
+    the result reports the file that was asked about."""
+    _make_ankimon_db(tmp_path / "ankimon.db")
     (tmp_path / "ankimonDEV.db").write_bytes(b"DEV" + b"\x00" * 600)
     bm = _make_backup_manager(tmp_path, monkeypatch)
-    monkeypatch.setattr(shutil, "copy2", _flaky_copy_factory("ankimonDEV.db"))
 
     prev = services.db
     services.db = None   # active-mode default is "ankimon.db"
@@ -308,13 +199,20 @@ def test_backup_required_file_success_isolated_from_other_file_failure(tmp_path,
     finally:
         services.db = prev
 
-    assert ok is True   # ankimon.db was backed up despite the DEV copy failing
+    assert ok is True   # ankimon.db was backed up despite the corrupt DEV file
+    assert bm.retention_calls == [None]   # retention ran, with no shutdown deadline
+    backup_dir = next(bm.backups_path.glob("backup_*"))
+    conn = sqlite3.connect(backup_dir / "ankimon.db")
+    try:
+        assert conn.execute("SELECT * FROM captured_pokemon").fetchall() == [(1, "x")]
+    finally:
+        conn.close()
+    assert not (backup_dir / "ankimonDEV.db").exists()
 
 
 def test_backup_returns_false_when_required_file_not_backed_up(tmp_path, monkeypatch):
     (tmp_path / "ankimon.db").write_bytes(b"MAIN" + b"\x00" * 600)
     bm = _make_backup_manager(tmp_path, monkeypatch)
-    monkeypatch.setattr(shutil, "copy2", _flaky_copy_factory("ankimon.db"))
 
     prev = services.db
     services.db = None
@@ -434,37 +332,33 @@ def test_retry_on_lock_gives_up_after_exhausting_attempts(monkeypatch):
     assert calls["n"] == len(aksync._SYNC_LOCK_RETRY_DELAYS) + 1
 
 
-def test_atomic_replace_recovers_from_transient_lock(tmp_path, monkeypatch):
+def test_atomic_write_over_recovers_from_transient_lock(tmp_path, monkeypatch):
     """A transient OneDrive/AV lock on os.replace must be retried into a success,
-    not surfaced as an error — the whole point of issue #636's fix."""
-    prev = services.db
-    services.db = None
+    not surfaced as an error — the whole point of issue #636's fix. The media
+    migration's protect and archive copies go through this."""
     _no_sleep(monkeypatch)
     created = _spy_synctmp(monkeypatch)
-    try:
-        src = tmp_path / "ankimon.db"
-        src.write_bytes(b"OLD" + b"\x00" * 600)
-        media = tmp_path / "media.db"
-        media.write_bytes(b"NEW" + b"\x00" * 600)
+    dest = tmp_path / "ankimon.db"
+    dest.write_bytes(b"OLD" + b"\x00" * 600)
+    src = tmp_path / "copy.db"
+    src.write_bytes(b"NEW" + b"\x00" * 600)
 
-        real_replace = os.replace
-        calls = {"n": 0}
+    real_replace = os.replace
+    calls = {"n": 0}
 
-        def flaky_replace(a, b, *ar, **k):
-            calls["n"] += 1
-            if calls["n"] < 3:                   # locked twice, then released
-                raise PermissionError(5, "Access is denied")
-            return real_replace(a, b, *ar, **k)
+    def flaky_replace(a, b, *ar, **k):
+        calls["n"] += 1
+        if calls["n"] < 3:                   # locked twice, then released
+            raise PermissionError(5, "Access is denied")
+        return real_replace(a, b, *ar, **k)
 
-        monkeypatch.setattr(aksync.os, "replace", flaky_replace)
+    monkeypatch.setattr(aksync.os, "replace", flaky_replace)
 
-        AnkimonDataSync()._atomic_replace(media, src)
+    aksync._atomic_write_over(src, dest)
 
-        assert src.read_bytes().startswith(b"NEW")   # swap eventually succeeded
-        assert calls["n"] == 3
-        assert created and all(not t.exists() for t in created)   # temp cleaned
-    finally:
-        services.db = prev
+    assert dest.read_bytes().startswith(b"NEW")   # swap eventually succeeded
+    assert calls["n"] == 3
+    assert created and all(not t.exists() for t in created)   # temp cleaned
 
 
 
