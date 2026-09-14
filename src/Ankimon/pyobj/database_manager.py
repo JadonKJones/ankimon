@@ -1033,6 +1033,26 @@ class AnkimonDB:
         conn = self._get_connection()
         cursor = conn.cursor()
 
+        # A file modified outside of Anki (e.g. a sync tool overwriting/partially
+        # writing it while Anki was closed) can leave it corrupted without ever
+        # passing through AnkimonDB.execute()'s reactive repair path — this is the
+        # very first touch of a freshly (re)opened file. Catch that here, before
+        # any schema DDL runs against it.
+        if not self._is_repairing and self.db_path.exists() and self.db_path.stat().st_size > 0:
+            try:
+                cursor.execute("PRAGMA quick_check")
+                result = cursor.fetchone()
+                if not result or result[0] != "ok":
+                    raise sqlite3.DatabaseError(f"quick_check failed: {result}")
+            except sqlite3.DatabaseError as e:
+                self._log(
+                    "warning",
+                    f"Startup integrity check failed for {self.db_path.name}: {e}",
+                )
+                self.repair_database()
+                conn = self._get_connection()
+                cursor = conn.cursor()
+
         # Table for captured pokemon (replaces mypokemon.json AND mainpokemon.json)
         # is_main flag: 0 = not main, 1 = main pokemon
         cursor.execute("""
