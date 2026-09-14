@@ -14,7 +14,7 @@ import gc
 import time
 import contextlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterable, List, Optional, Union
 
 import csv
 from ..resources import user_path, csv_file_items_cost, mypokemon_path, mainpokemon_path, items_path, badges_path, team_pokemon_path as team_path
@@ -80,6 +80,14 @@ class CursorWrapper:
 
     def __getattr__(self, name):
         return getattr(self._cursor, name)
+
+
+class _MainPokemonVanished(Exception):
+    """Internal: the target row of set_main_pokemon() does not exist.
+
+    Raised inside the transaction purely to trigger its rollback, and caught
+    by set_main_pokemon() itself -- it never escapes this module.
+    """
 
 
 class ConnectionWrapper:
@@ -333,6 +341,11 @@ class AnkimonDB:
         self._local_conn = threading.local()                       # per-background-thread
         self._all_connections = []
         self._conn_lock = threading.RLock()
+        # Serialises the read-modify-write of the pokedex_caught / pokedex_seen
+        # user_data lists. save_pokemon() runs on the background mobile-sync
+        # thread as well as the GUI thread, and those two lists are rewritten
+        # wholesale, so without this an interleaved save loses an id.
+        self._pokedex_lock = threading.Lock()
         self._is_repairing = False
         # When non-None, mark_mobile_battle_resolved defers the mirror-DB sync
         # (which commits on a separate connection, escaping any outer transaction)
@@ -342,6 +355,7 @@ class AnkimonDB:
         self._connection_epoch = 0
         self._connection_epoch_gui = -1
         self._setup_database()
+        self._reconcile_pokedex_history_safely()
 
     def _prepare_connection(self, conn):
         """Apply row factory, a generous busy-timeout, and (only when opted in)
@@ -743,7 +757,13 @@ class AnkimonDB:
                 raise
 
             self._log("info", f"Switched database to {db_filename}")
-            return True
+
+        # Deliberately outside ``quiesce``: that holds ``_conn_lock`` for the whole
+        # block, and the sweep takes ``_pokedex_lock`` and *then* a connection
+        # (i.e. ``_conn_lock``). Running it in there would invert the order every
+        # mark_as_caught uses and could deadlock against a concurrent save.
+        self._reconcile_pokedex_history_safely()
+        return True
 
     # --- Obfuscation / De-obfuscation ---
 
@@ -939,6 +959,27 @@ class AnkimonDB:
             )
         """)
 
+        # A level-up move that needs the player to pick which of four moves it
+        # replaces. The decision cannot be taken on a QueryOp worker thread (a
+        # QDialog is GUI-thread-only), so it is parked here and replayed on the
+        # GUI thread. This table exists because parking it in memory ALONE lost
+        # the move outright whenever the process went away first -- Anki quit or
+        # crashed after the XP was committed, the profile closed with a decision
+        # pending, or the database stayed locked through the retry window. The
+        # mobile battle is already marked resolved by then, so nothing can
+        # reconstruct it. A row is deleted only once the move is genuinely
+        # settled: learned, declined by the player, or moot (already known, or
+        # the Pokemon is gone).
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pending_move_learns (
+                individual_id TEXT NOT NULL,
+                name          TEXT,
+                new_attack    TEXT NOT NULL,
+                created_at    INTEGER NOT NULL,
+                PRIMARY KEY (individual_id, new_attack)
+            )
+        """)
+
         conn.commit()
         self._log("info", "AnkimonDB: Database schema initialized.")
         try:
@@ -1018,6 +1059,23 @@ class AnkimonDB:
             )
         conn.commit()
         self._clear_reviewer_ownership_cache()
+
+        # Automatically mark the pokemon as caught. The row is already committed,
+        # so a failure here must not fail the save -- but it is logged as an error
+        # (not a warning) because it means the Pokedex is now behind the
+        # collection until _reconcile_pokedex_history heals it on the next launch.
+        pokemon_id = pokemon_data.get("id")
+        if pokemon_id:
+            try:
+                self.mark_as_caught(int(pokemon_id))
+            except Exception as e:
+                self._log("error", f"Failed to mark saved pokemon as caught: {e}")
+            if pokemon_data.get("shiny"):
+                try:
+                    self.mark_shiny_owned(int(pokemon_id))
+                except Exception as e:
+                    self._log("error", f"Failed to mark saved pokemon as shiny-owned: {e}")
+
         return True
 
     def get_pokemon(self, individual_id: str) -> Optional[Dict[str, Any]]:
@@ -1199,6 +1257,22 @@ class AnkimonDB:
         )
         conn.commit()
         self._clear_reviewer_ownership_cache()
+
+        # Automatically mark the pokemon as caught (see save_pokemon: logged as an
+        # error because the Pokedex is left behind the collection until the next
+        # _reconcile_pokedex_history sweep).
+        pokemon_id = pokemon_data.get("id")
+        if pokemon_id:
+            try:
+                self.mark_as_caught(int(pokemon_id))
+            except Exception as e:
+                self._log("error", f"Failed to mark saved main pokemon as caught: {e}")
+            if pokemon_data.get("shiny"):
+                try:
+                    self.mark_shiny_owned(int(pokemon_id))
+                except Exception as e:
+                    self._log("error", f"Failed to mark saved main pokemon as shiny-owned: {e}")
+
         return True
 
     def get_main_pokemon(self) -> Optional[Dict[str, Any]]:
@@ -1210,21 +1284,125 @@ class AnkimonDB:
         return None
 
     def set_main_pokemon(self, individual_id: str) -> bool:
-        """Sets a pokemon as the main pokemon by individual_id. Returns False if pokemon not found."""
+        """Make one Pokemon the main/active companion, atomically.
+
+        Returns False -- having changed NOTHING -- when ``individual_id`` has
+        no captured_pokemon row.
+
+        Both UPDATEs run inside one transaction, and the new main is set
+        FIRST, so this can never leave the save with zero ``is_main = 1``
+        rows. The previous version checked existence with a separate SELECT,
+        then cleared the old main and set the new one with no rowcount check
+        and no transaction, so:
+
+            this call                     another writer
+            ---------                     --------------
+            SELECT target -> exists
+                                          release/delete target
+            UPDATE ... is_main = 0        (old main cleared)
+            UPDATE ... is_main = 1        (0 rows matched)
+            commit; return True
+
+        left the database with NO main Pokemon while reporting success. The
+        next load then fell through update_main_pokemon() to
+        MAIN_POKEMON_DEFAULT -- the level-5 Ditto named "Please Restart Anki".
+        Ordering the writes this way means the failure mode is "the main
+        Pokemon did not change", never "there is no main Pokemon".
+        """
+        conn = self._get_connection()
+        try:
+            with conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE captured_pokemon SET is_main = 1 WHERE individual_id = ?",
+                    (individual_id,),
+                )
+                if cursor.rowcount != 1:
+                    # No such row (or it vanished mid-flight). Roll back before
+                    # anything has cleared the incumbent main.
+                    raise _MainPokemonVanished(individual_id)
+                cursor.execute(
+                    "UPDATE captured_pokemon SET is_main = 0 "
+                    "WHERE is_main = 1 AND individual_id != ?",
+                    (individual_id,),
+                )
+        except _MainPokemonVanished:
+            return False
+        return True
+
+    def clear_main_pokemon(self) -> None:
+        """Clears the is_main flag from whichever Pokémon currently holds it,
+        leaving no main Pokémon persisted.
+
+        Deliberately does not touch the live in-memory main_pokemon singleton
+        for the current session — this only affects what the NEXT load reads
+        back, the same way get_main_pokemon() already tolerates returning
+        None (a brand-new save with no starter picked yet is this exact
+        state).
+
+        NOTE: nothing in the add-on calls this today. It used to back the Team
+        screen's "companion cleared" case, but leaving zero is_main=1 rows
+        makes the next load fall through update_main_pokemon() to
+        MAIN_POKEMON_DEFAULT — the level-5 Ditto named "Please Restart Anki" —
+        so handle_save_team now promotes another team member (or leaves the
+        existing row alone when it can't) instead. Kept as a primitive; think
+        hard about that fallback before wiring it to anything."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        
-        # Check if pokemon exists
-        cursor.execute("SELECT individual_id FROM captured_pokemon WHERE individual_id = ?", (individual_id,))
-        if not cursor.fetchone():
-            return False
-        
-        # Clear old main
         cursor.execute("UPDATE captured_pokemon SET is_main = 0 WHERE is_main = 1")
-        # Set new main
-        cursor.execute("UPDATE captured_pokemon SET is_main = 1 WHERE individual_id = ?", (individual_id,))
+        conn.commit()
+
+    # --- Pending move-learn decisions (durable) ---
+
+    def add_pending_move_learn(self, individual_id: str, name: str, new_attack: str) -> bool:
+        """Durably park one move-replacement decision.
+
+        Idempotent on (individual_id, new_attack): re-queuing the same move for
+        the same Pokemon keeps the original ``created_at`` rather than stacking
+        duplicate prompts. Does NOT commit when a caller already holds a
+        transaction (``conn._disable_commit``), so this can join the same
+        transaction that writes the level/XP the move came from.
+        """
+        if not individual_id or not new_attack:
+            return False
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR IGNORE INTO pending_move_learns "
+            "(individual_id, name, new_attack, created_at) VALUES (?, ?, ?, ?)",
+            (str(individual_id), str(name or ""), str(new_attack), int(time.time())),
+        )
         conn.commit()
         return True
+
+    def get_pending_move_learns(self) -> List[Dict[str, Any]]:
+        """Every parked move-replacement decision, oldest first."""
+        cursor = self.execute(
+            "SELECT individual_id, name, new_attack, created_at "
+            "FROM pending_move_learns ORDER BY created_at ASC, rowid ASC"
+        )
+        return [
+            {
+                "individual_id": row[0],
+                "name": row[1],
+                "new_attack": row[2],
+                "created_at": row[3],
+            }
+            for row in cursor.fetchall()
+        ]
+
+    def delete_pending_move_learn(self, individual_id: str, new_attack: str) -> bool:
+        """Drop one parked decision. Call ONLY once the move is settled --
+        learned, declined, or moot. A transient failure (locked database, no UI
+        available) must leave the row in place so the next pass can retry it."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM pending_move_learns WHERE individual_id = ? AND new_attack = ?",
+            (str(individual_id), str(new_attack)),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
     # --- Item Operations ---
 
@@ -1494,6 +1672,231 @@ class AnkimonDB:
             except:
                 return val
         return default
+
+    @staticmethod
+    def _coerce_pokedex_id_list(raw: Any) -> List[int]:
+        """Normalises a stored pokedex id list to plain ints.
+
+        Legacy stores (and hand-edited/corrupt data) can hold string ids such as
+        ``"25"`` alongside ints, or entries that are not ids at all. Without
+        normalising, ``25 not in ["25"]`` is True (so the id is appended a
+        second time) and the resulting mixed set breaks both the Ankidex's
+        ``seen - caught`` subtraction and profile_data's ``search_pokedex_by_id``
+        lookup. Unhashable/garbage entries are dropped rather than allowed to
+        raise out of the getters.
+        """
+        if not isinstance(raw, list):
+            return []
+        ids: List[int] = []
+        for entry in raw:
+            try:
+                ids.append(int(entry))
+            except (TypeError, ValueError):
+                continue
+        return ids
+
+    def _append_pokedex_ids(self, additions: Dict[str, Iterable[Any]]) -> Dict[str, int]:
+        """Append ids to the pokedex ``user_data`` lists in ONE transaction.
+
+        ``additions`` maps ``"pokedex_caught"`` / ``"pokedex_seen"`` to the ids
+        to record. Every key is read, merged and rewritten on the same
+        connection and committed exactly once, so the two lists cannot diverge:
+        either both land or neither does. Driving them through two
+        ``set_user_data`` calls instead (a commit each) can persist a caught id
+        whose matching seen id was lost to whatever failed in between — a disk
+        error, the busy-timeout expiring under write contention, or the process
+        going away — leaving the Ankidex with a species it counts as caught but
+        never saw, and no way to tell that happened.
+
+        The commit goes through the ConnectionWrapper rather than the raw
+        sqlite3 handle so a bulk mobile "Resolve All" (which sets
+        ``_disable_commit`` and holds one long write transaction) still folds
+        these writes into its outer transaction and rolls them back with it.
+
+        Callers must hold ``self._pokedex_lock``. Returns the number of ids
+        newly added per key.
+        """
+        conn = self._get_connection()
+        pending: List[tuple] = []
+        added: Dict[str, int] = {}
+
+        for key, ids in additions.items():
+            # De-duplicated on the way out as well as in: a list that a legacy
+            # write left holding "25" alongside 25 is stored back normalised
+            # once we have a reason to rewrite it.
+            known: set = set()
+            stored: List[int] = []
+            for pokemon_id in self._coerce_pokedex_id_list(self.get_user_data(key, [])):
+                if pokemon_id not in known:
+                    known.add(pokemon_id)
+                    stored.append(pokemon_id)
+
+            new_ids: List[int] = []
+            for raw_id in ids:
+                try:
+                    pokemon_id = int(raw_id)
+                except (TypeError, ValueError):
+                    continue
+                if pokemon_id not in known:
+                    known.add(pokemon_id)
+                    new_ids.append(pokemon_id)
+
+            added[key] = len(new_ids)
+            if new_ids:
+                pending.append((key, json.dumps(stored + new_ids)))
+
+        if pending:
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    "INSERT OR REPLACE INTO user_data (key, value) VALUES (?, ?)",
+                    pending,
+                )
+            conn.commit()
+        return added
+
+    def mark_as_caught(self, pokemon_id: int):
+        """Marks a pokemon as caught (and seen) in the pokedex history.
+
+        Raises if the write fails — callers on a save path swallow and log that,
+        but the failure must be visible rather than reported as a success.
+        """
+        try:
+            pokemon_id = int(pokemon_id)
+        except (TypeError, ValueError):
+            self._log("warning", f"Ignoring non-numeric pokedex id: {pokemon_id!r}")
+            return
+
+        # Both lists are rewritten wholesale, so hold the lock across the whole
+        # read-modify-write (save_pokemon also runs on the mobile-sync thread).
+        # Catching implies seeing, so both are recorded in the same transaction.
+        with self._pokedex_lock:
+            self._append_pokedex_ids(
+                {"pokedex_caught": (pokemon_id,), "pokedex_seen": (pokemon_id,)}
+            )
+
+    def _reconcile_pokedex_history_safely(self):
+        """``_reconcile_pokedex_history`` that can never stop the DB from opening."""
+        try:
+            self._reconcile_pokedex_history()
+        except Exception as e:
+            self._log("error", f"Failed to reconcile pokedex history: {e}")
+
+    def _reconcile_pokedex_history(self):
+        """Heal the caught/seen lists from the Pokemon the DB still knows about.
+
+        ``mark_as_caught`` is best-effort at every call site — ``save_pokemon``
+        and the evolution window log a failure and carry on rather than fail the
+        catch — so one locked or failed write would otherwise drop a species
+        from the Ankidex permanently once its ``captured_pokemon`` row is
+        overwritten by an evolution. This idempotent startup sweep re-derives
+        the lists from the rows that are still authoritative (every owned
+        Pokemon, plus every released one in ``pokemon_history``), so a missed
+        mark heals on the next launch instead of becoming silent data loss.
+
+        It doubles as the backfill for databases written before the caught list
+        existed: those start empty, and without this the list only ever covers
+        Pokemon saved after the upgrade.
+        """
+        ids: set = set()
+
+        try:
+            cursor = self.execute(
+                "SELECT DISTINCT pokedex_id FROM captured_pokemon "
+                "WHERE pokedex_id IS NOT NULL"
+            )
+            ids.update(
+                self._coerce_pokedex_id_list([row[0] for row in cursor.fetchall()])
+            )
+        except Exception as e:
+            self._log("warning", f"Pokedex reconcile: could not read captured_pokemon: {e}")
+
+        # Released Pokemon: still caught for Pokedex purposes. Wrapped separately
+        # so an older DB without pokemon_history still reconciles the owned rows.
+        try:
+            cursor = self.execute(
+                "SELECT DISTINCT json_extract(data, '$.id') FROM pokemon_history"
+            )
+            ids.update(
+                self._coerce_pokedex_id_list([row[0] for row in cursor.fetchall()])
+            )
+        except Exception as e:
+            self._log("warning", f"Pokedex reconcile: could not read pokemon_history: {e}")
+
+        # Same idea for the shiny-owned registry: back-fill it from whatever
+        # currently-live/released rows still say shiny=1. Can't recover a
+        # pre-evolution's shiny status once its row has been overwritten (that
+        # is what mark_shiny_owned at evolve-time now prevents going forward),
+        # but this still heals a missed write and backfills DBs from before
+        # the registry existed.
+        shiny_ids: set = set()
+        try:
+            cursor = self.execute(
+                "SELECT DISTINCT pokedex_id FROM captured_pokemon "
+                "WHERE shiny = 1 AND pokedex_id IS NOT NULL"
+            )
+            shiny_ids.update(
+                self._coerce_pokedex_id_list([row[0] for row in cursor.fetchall()])
+            )
+        except Exception as e:
+            self._log("warning", f"Pokedex reconcile: could not read shiny captured_pokemon: {e}")
+        try:
+            cursor = self.execute(
+                "SELECT DISTINCT json_extract(data, '$.id') FROM pokemon_history "
+                "WHERE json_extract(data, '$.shiny') = 1"
+            )
+            shiny_ids.update(
+                self._coerce_pokedex_id_list([row[0] for row in cursor.fetchall()])
+            )
+        except Exception as e:
+            self._log("warning", f"Pokedex reconcile: could not read shiny pokemon_history: {e}")
+
+        if not ids and not shiny_ids:
+            return
+
+        sorted_ids = sorted(ids)
+        additions = {"pokedex_caught": sorted_ids, "pokedex_seen": sorted_ids}
+        if shiny_ids:
+            additions["pokedex_shiny"] = sorted(shiny_ids)
+        with self._pokedex_lock:
+            added = self._append_pokedex_ids(additions)
+        if any(added.values()):
+            self._log(
+                "info",
+                "Pokedex history reconciled from stored Pokemon: "
+                f"+{added.get('pokedex_caught', 0)} caught, "
+                f"+{added.get('pokedex_seen', 0)} seen, "
+                f"+{added.get('pokedex_shiny', 0)} shiny.",
+            )
+
+    def get_caught_ids(self) -> set[int]:
+        """Returns a set of all pokemon IDs explicitly marked as caught."""
+        return set(self._coerce_pokedex_id_list(self.get_user_data("pokedex_caught", [])))
+
+    def get_seen_ids(self) -> set[int]:
+        """Returns a set of all pokemon IDs marked as seen."""
+        return set(self._coerce_pokedex_id_list(self.get_user_data("pokedex_seen", [])))
+
+    def mark_shiny_owned(self, pokemon_id: int):
+        """Marks a species as having been owned in its shiny form, for good.
+
+        Mirrors mark_as_caught, but for the Ankidex's shiny badge — that badge
+        was read live off ``captured_pokemon`` (``WHERE shiny = 1``), so a
+        shiny Pokemon that evolved lost its badge the moment its row's id
+        changed to the new species (the OLD species had never itself been
+        marked shiny-owned anywhere durable). Raises so a save-path caller can
+        log the same way mark_as_caught's callers do.
+        """
+        try:
+            pokemon_id = int(pokemon_id)
+        except (TypeError, ValueError):
+            self._log("warning", f"Ignoring non-numeric shiny pokedex id: {pokemon_id!r}")
+            return
+        with self._pokedex_lock:
+            self._append_pokedex_ids({"pokedex_shiny": (pokemon_id,)})
+
+    def get_shiny_ids(self) -> set[int]:
+        """Returns a set of all pokemon IDs ever owned in their shiny form."""
+        return set(self._coerce_pokedex_id_list(self.get_user_data("pokedex_shiny", [])))
 
     def get_all_user_data(self) -> Dict[str, Any]:
         """Retrieves all user data as a dictionary."""
