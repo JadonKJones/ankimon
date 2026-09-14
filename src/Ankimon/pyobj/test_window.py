@@ -719,6 +719,36 @@ class TestWindow(QWidget):
         self._gif_native[side] = None
         self._gif_scaled[side] = None
 
+    def _paint_gif_frame(self, side):
+        """Scale the movie's CURRENT frame to ``self._gif_scaled[side]`` and
+        push it onto the label by hand.
+
+        This is the single place a frame is ever resized, called on every
+        ``frameChanged`` tick (see the label.setMovie() comment where the
+        connection is made) — so no individual frame, whatever its own raw
+        decoded size, can ever reach the screen unscaled.
+        """
+        movie_attr = "_enemy_gif_movie" if side == "enemy" else "_main_gif_movie"
+        label = self._enemy_gif_label if side == "enemy" else self._main_gif_label
+        movie = getattr(self, movie_attr, None)
+        target = self._gif_scaled.get(side)
+        if movie is None or target is None:
+            return
+        image = movie.currentImage()
+        if image.isNull():
+            return
+        fw, fh = target
+        scaled = image.scaled(
+            fw,
+            fh,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        try:
+            label.setPixmap(QPixmap.fromImage(scaled))
+        except RuntimeError:
+            pass
+
     def hide_gif_overlays(self):
         """Retire both overlays — call whenever main_label stops showing the
         battle scene (death screen, logo, item/badge takeovers)."""
@@ -797,11 +827,19 @@ class TestWindow(QWidget):
                     if native.width() > 0 and native.height() > 0
                     else (w, h)
                 )
-                label.setMovie(movie)
-                # Belt-and-braces repaint: QLabel wires this internally, but a
-                # missed connection here is exactly what "the GIF doesn't move"
-                # looks like, so force it.
-                movie.frameChanged.connect(label.update)
+                # Deliberately NOT label.setMovie(movie): that lets Qt scale
+                # each decoded frame to setScaledSize() internally, and on
+                # some Qt/GIF-plugin builds a frame whose own raw sub-image
+                # differs in size from frame 0 (common in hand-made sprite
+                # sheets — an attack frame's extended limb needs a taller
+                # canvas than the idle frame) is briefly emitted at ITS OWN
+                # native size before the scale re-applies: one frame flashes
+                # huge, then snaps back. Driving the label's pixmap by hand on
+                # every frameChanged makes our own resize the only source of
+                # truth for what's drawn, so no frame can ever bypass it.
+                movie.frameChanged.connect(
+                    lambda _idx, _side=side: self._paint_gif_frame(_side)
+                )
                 setattr(self, movie_attr, movie)
                 self._gif_scaled[side] = None
                 self._gif_sprite_key[side] = path
@@ -837,12 +875,14 @@ class TestWindow(QWidget):
             # measured the PNG padding correctly on this Qt build.
             baseline = min(y + h, self._MESSAGE_BOX_RECT.top())
             fy = baseline - fh
-            # Only re-scale when the slot size actually changed. Calling
-            # setScaledSize() on every repaint (shakes fire it ~20x/turn)
-            # makes some Qt builds re-decode and visibly stutter.
+            # Record the target size for _paint_gif_frame (every frame is
+            # rescaled to this on the fly — see the label.setMovie() comment
+            # above). Only force an immediate repaint of the current frame
+            # when the target actually changed, so a shake's ~20 calls/turn
+            # don't re-render the same frame at the same size repeatedly.
             if self._gif_scaled.get(side) != (fw, fh):
-                movie.setScaledSize(QSize(fw, fh))
                 self._gif_scaled[side] = (fw, fh)
+                self._paint_gif_frame(side)
             gx, gy = int(fx + ox), int(fy + oy)
             # TEMP diagnostic: flag a jump bigger than a shake step (±7,±3).
             _prev = getattr(self, "_gifjit_pos", {}).get(side)
