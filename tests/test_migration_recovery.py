@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from PyQt6.QtWidgets import QApplication
 
+from Ankimon.pyobj import database_manager
 from Ankimon.pyobj.database_manager import AnkimonDB
 from Ankimon.pyobj.migration_dialog import MigrationDialog
 
@@ -49,6 +50,16 @@ def run(dialog):
         dialog._run_migration()
 
 
+def _write_item_catalogue(tmp_path):
+    catalogue = tmp_path / "items.csv"
+    catalogue.write_text(
+        "id,identifier,category_id,cost,fling_power,fling_effect_id\n"
+        "1,master-ball,34,0,,\n",
+        encoding="utf-8",
+    )
+    return catalogue
+
+
 def assert_preserved(db, box):
     rows = db.get_all_pokemon()
     assert len(rows) == 158
@@ -74,6 +85,70 @@ def test_dialog_preserves_158_pokemon_and_string_inventory(migration):
         json.loads((paths["mypokemon_path"].parent / "json/mypokemon.json").read_text())
         == box
     )
+
+
+def test_uncatalogued_item_does_not_collide_with_catalogue_id(migration, tmp_path):
+    db, dialog, paths, _ = migration
+    paths["mypokemon_path"].write_text("[]")
+    paths["mainpokemon_path"].write_text("[]")
+    paths["items_path"].write_text('["custom-item", "master-ball"]')
+    paths["team_path"].write_text("[]")
+
+    with patch.object(
+        database_manager, "csv_file_items_cost", _write_item_catalogue(tmp_path)
+    ):
+        run(dialog)
+
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_item("custom-item")["quantity"] == 1
+    assert db.get_item("master-ball")["quantity"] == 1
+    assert db.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 2
+
+
+def test_catalogued_item_relocates_existing_positive_id_occupant(migration, tmp_path):
+    db, dialog, paths, _ = migration
+    db.save_item(1, "custom-item", 3)
+    paths["mypokemon_path"].write_text("[]")
+    paths["mainpokemon_path"].write_text("[]")
+    paths["items_path"].write_text('["master-ball"]')
+    paths["team_path"].write_text("[]")
+
+    with patch.object(
+        database_manager, "csv_file_items_cost", _write_item_catalogue(tmp_path)
+    ):
+        run(dialog)
+
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_item("custom-item")["quantity"] == 3
+    assert db.get_item("custom-item")["id"] < 0
+    assert db.get_item("master-ball")["id"] == 1
+
+
+def test_inventory_final_verification_rolls_back_late_stack_loss(migration, tmp_path):
+    db, dialog, paths, _ = migration
+    paths["mypokemon_path"].write_text("[]")
+    paths["mainpokemon_path"].write_text("[]")
+    paths["items_path"].write_text('["custom-item", "master-ball"]')
+    paths["team_path"].write_text("[]")
+    original = db.add_item
+
+    def lose_prior_stack(name, *args, **kwargs):
+        saved = original(name, *args, **kwargs)
+        if name == "master-ball":
+            db.execute("DELETE FROM items WHERE item_name = ?", ("custom-item",))
+        return saved
+
+    with (
+        patch.object(
+            database_manager, "csv_file_items_cost", _write_item_catalogue(tmp_path)
+        ),
+        patch.object(db, "add_item", side_effect=lose_prior_stack),
+    ):
+        run(dialog)
+
+    assert not dialog.migration_successful
+    assert not db.is_migrated_phase1()
+    assert db.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
 
 
 def test_false_pokemon_save_never_completes_or_archives(migration):
@@ -177,6 +252,23 @@ def test_corrupt_captured_row_does_not_break_team_matching(migration):
     assert [db.get_pokemon(p["individual_id"])["level"] for p in db.get_team()] == [
         1,
         2,
+    ]
+
+
+def test_team_species_id_alias_matches_collection_id_with_ivs(migration):
+    db, dialog, paths, box = migration
+    captured = dict(box[0])
+    team_member = dict(captured)
+    team_member["species_id"] = team_member.pop("id")
+    paths["mypokemon_path"].write_text(json.dumps([captured]))
+    paths["mainpokemon_path"].write_text("[]")
+    paths["team_path"].write_text(json.dumps([team_member]))
+
+    run(dialog)
+
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_team() == [
+        {"individual_id": db.get_all_pokemon()[0]["individual_id"]}
     ]
 
 
@@ -385,6 +477,94 @@ def test_verified_phase1_retry_does_not_restore_a_released_pokemon(migration):
     run(dialog)
     assert dialog.migration_successful, dialog.log_area.toPlainText()
     assert db.get_pokemon_count() == 0
+
+
+def test_pending_team_retry_uses_checkpointed_identity_after_level_up(migration):
+    db, dialog, paths, box = migration
+    legacy = dict(box[9])
+    paths["mypokemon_path"].write_text(json.dumps([legacy]))
+    paths["mainpokemon_path"].write_text("[]")
+    paths["team_path"].write_text(json.dumps([legacy]))
+
+    def cancel_at_team():
+        if dialog.status_label.text() == "Migrating team...":
+            dialog.cancelled = True
+
+    with patch.object(QApplication, "processEvents", side_effect=cancel_at_team):
+        dialog._run_migration()
+
+    assert not dialog.migration_successful
+    assert db.is_migrated_phase1()
+    captured = db.get_all_pokemon()[0]
+    captured["level"] = 11
+    assert db.save_pokemon(captured)
+
+    run(dialog)
+
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_team() == [{"individual_id": captured["individual_id"]}]
+    assert db.get_pokemon(captured["individual_id"])["level"] == 11
+
+
+def test_item_failure_retry_preserves_main_level_and_release(migration):
+    db, dialog, paths, box = migration
+    paths["mypokemon_path"].write_text(json.dumps([box[9], box[19]]))
+    paths["mainpokemon_path"].write_text(json.dumps([box[9]]))
+    paths["team_path"].write_text("[]")
+    original = db.add_item
+
+    def fail_second(name, *args, **kwargs):
+        if name == "old-gateau":
+            raise RuntimeError("injected items failure")
+        return original(name, *args, **kwargs)
+
+    with patch.object(db, "add_item", side_effect=fail_second):
+        run(dialog)
+
+    assert not dialog.migration_successful
+    assert not db.is_migrated_phase1()
+    survivor, released = sorted(db.get_all_pokemon(), key=lambda row: row["level"])
+    survivor["level"] = 11
+    assert db.save_main_pokemon(survivor)
+    assert db.delete_pokemon(released["individual_id"])
+
+    run(dialog)
+
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_pokemon_count() == 1
+    assert db.get_pokemon(survivor["individual_id"])["level"] == 11
+    assert db.get_main_pokemon()["level"] == 11
+    assert db.get_pokemon(released["individual_id"]) is None
+
+
+def test_collection_summary_cancel_retry_preserves_progress_and_release(migration):
+    db, dialog, paths, box = migration
+    paths["mypokemon_path"].write_text(json.dumps([box[9], box[19]]))
+    paths["mainpokemon_path"].write_text("[]")
+    paths["team_path"].write_text("[]")
+
+    def cancel_at_collection_summary():
+        if "Pokemon verified" in dialog.status_label.text():
+            dialog.cancelled = True
+
+    with patch.object(
+        QApplication, "processEvents", side_effect=cancel_at_collection_summary
+    ):
+        dialog._run_migration()
+
+    assert not dialog.migration_successful
+    assert not db.is_migrated_phase1()
+    survivor, released = sorted(db.get_all_pokemon(), key=lambda row: row["level"])
+    survivor["level"] = 11
+    assert db.save_pokemon(survivor)
+    assert db.delete_pokemon(released["individual_id"])
+
+    run(dialog)
+
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_pokemon_count() == 1
+    assert db.get_pokemon(survivor["individual_id"])["level"] == 11
+    assert db.get_pokemon(released["individual_id"]) is None
 
 
 def test_verified_team_retry_preserves_idless_member_after_level_up(migration):

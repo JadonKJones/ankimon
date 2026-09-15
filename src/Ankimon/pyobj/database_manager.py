@@ -387,6 +387,12 @@ def canonical_pokemon_name(name: Any) -> str:
     return str(name or "").replace(" ", "").replace("-", "").replace("_", "").lower()
 
 
+def legacy_species_id(record: Dict[str, Any]) -> str:
+    """Return a comparable species key across legacy ``id`` aliases."""
+    value = record.get("species_id", record.get("id"))
+    return "" if value is None else str(value)
+
+
 def coerce_item_quantity(value: Any) -> Optional[int]:
     """Normalise a legacy item quantity to a positive int, or None if invalid.
 
@@ -484,7 +490,7 @@ def find_matching_captured(
         if not isinstance(candidate, dict):
             continue
         if (
-            candidate.get("id") == main_pokemon.get("id")
+            legacy_species_id(candidate) == legacy_species_id(main_pokemon)
             and candidate.get("level") == main_pokemon.get("level")
             and canonical_pokemon_name(candidate.get("name")) == target_name
             and candidate.get("iv") == main_pokemon.get("iv")
@@ -1605,23 +1611,48 @@ class AnkimonDB:
         cursor = conn.cursor()
 
         # Lenient metadata resolution: try to fetch existing metadata from DB if NOT provided
-        if item_name and (item_id is None or cost is None or category_id is None):
+        existing = None
+        if item_name:
             cursor.execute(
                 "SELECT id, category_id, cost, fling_power, fling_effect_id FROM items WHERE item_name = ?",
                 (item_name,),
             )
-            row = cursor.fetchone()
-            if row:
+            existing = cursor.fetchone()
+            if existing:
                 if item_id is None:
-                    item_id = row["id"]
+                    item_id = existing["id"]
                 if category_id is None:
-                    category_id = row["category_id"]
+                    category_id = existing["category_id"]
                 if cost is None:
-                    cost = row["cost"]
+                    cost = existing["cost"]
                 if fling_power is None:
-                    fling_power = row["fling_power"]
+                    fling_power = existing["fling_power"]
                 if fling_effect_id is None:
-                    fling_effect_id = row["fling_effect_id"]
+                    fling_effect_id = existing["fling_effect_id"]
+
+        def next_uncatalogued_id() -> int:
+            row = cursor.execute("SELECT MIN(id) AS min_id FROM items").fetchone()
+            minimum = row["min_id"]
+            return -1 if minimum is None or minimum >= 0 else minimum - 1
+
+        if item_id is None:
+            # PokeAPI catalogue IDs are positive. Keeping locally-known items in
+            # the negative range prevents a later catalogue insert from
+            # replacing an automatically numbered row with the same ID.
+            item_id = next_uncatalogued_id()
+        else:
+            # Older databases may already contain an uncatalogued row under a
+            # positive SQLite-assigned ID. Relocate it before claiming the
+            # catalogue ID; both statements share this transaction.
+            occupied = cursor.execute(
+                "SELECT item_name FROM items WHERE id = ? AND item_name <> ?",
+                (item_id, item_name),
+            ).fetchone()
+            if occupied:
+                cursor.execute(
+                    "UPDATE items SET id = ? WHERE id = ?",
+                    (next_uncatalogued_id(), item_id),
+                )
 
         # Ensure type: "TM" for UI filtering if applicable
         if category_id == 37:

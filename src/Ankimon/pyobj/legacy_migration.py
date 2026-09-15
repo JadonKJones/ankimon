@@ -10,12 +10,17 @@ from .database_manager import (
     canonical_pokemon_name,
     find_matching_captured,
     is_valid_individual_id,
+    legacy_species_id,
     normalize_legacy_item,
 )
 
 
 class _Cancelled(Exception):
     pass
+
+
+_CHECKPOINT_VERSION = 2
+_LEGACY_INDIVIDUAL_ID = "_legacy_individual_id"
 
 
 class LegacyMigration:
@@ -38,6 +43,7 @@ class LegacyMigration:
         )
         self.expected_pokemon = {}
         self.collection = []
+        self.main_candidate = None
         self.duplicate_ids = set()
         self.percent = 0
 
@@ -91,6 +97,21 @@ class LegacyMigration:
         return str(
             uuid.uuid5(uuid.NAMESPACE_URL, f"ankimon-legacy:{source}:{index}:{payload}")
         )
+
+    @staticmethod
+    def mapping_candidate(original, individual_id):
+        """Keep legacy matching fields separate from mutable live state."""
+        legacy_id = original.get("individual_id")
+        return {
+            "individual_id": individual_id,
+            _LEGACY_INDIVIDUAL_ID: (
+                legacy_id if is_valid_individual_id(legacy_id) else None
+            ),
+            "name": canonical_pokemon_name(original.get("name")),
+            "level": original.get("level"),
+            "id": legacy_species_id(original),
+            "iv": original.get("iv"),
+        }
 
     def migrate_collection(self, data, preserve_existing=False):
         entries = self.require_list(data)
@@ -157,7 +178,6 @@ class LegacyMigration:
                 )
                 continue
             used.add(individual_id)
-            self.collection.append(pokemon)
             try:
                 existing = self.db.get_pokemon(individual_id)
                 if preserve_existing and isinstance(existing, dict):
@@ -168,21 +188,18 @@ class LegacyMigration:
                     raise ValueError("save_pokemon returned False")
                 if self.db.get_pokemon(individual_id) != pokemon:
                     raise ValueError("saved Pokemon did not pass the read-back check")
+                self.collection.append(self.mapping_candidate(original, individual_id))
                 self.expected_pokemon[individual_id] = pokemon
                 self.stats["pokemon"] += 1
             except Exception as exc:
                 self.db._get_connection().rollback()
                 self.stats["pokemon_failed"] += 1
                 self.error(f"mypokemon.json: entry {index + 1} failed: {exc}")
-            if index % 20 == 0 or index == len(entries) - 1:
+            if index != len(entries) - 1 and index % 20 == 0:
                 self.report(
                     5 + int(45 * (index + 1) / len(entries)),
                     f"Migrating Pokemon {index + 1}/{len(entries)}...",
                 )
-        self.report(
-            50,
-            f"{self.stats['pokemon']} Pokemon verified; {self.stats['pokemon_failed']} failed",
-        )
 
     def resolve_member(self, member, candidates, *, team=False):
         old_id = member.get("individual_id")
@@ -197,6 +214,17 @@ class LegacyMigration:
             # A distinct explicit identity denotes a separate captured Pokemon,
             # even when its species, level and IVs happen to match another one.
             return None
+        mapped = [
+            p
+            for p in candidates
+            if is_valid_individual_id(old_id) and p.get(_LEGACY_INDIVIDUAL_ID) == old_id
+        ]
+        if mapped:
+            match = find_matching_captured(member, mapped)
+            if match is not None:
+                return match
+            if not member.get("name"):
+                return mapped[0]
         # Match the full legacy identity first: duplicate IDs may have been
         # reassigned during collection migration (including across a retry).
         match = find_matching_captured(member, candidates)
@@ -210,7 +238,7 @@ class LegacyMigration:
                 return (
                     canonical_pokemon_name(p.get("name")),
                     str(p.get("level", "")),
-                    str(p.get("species_id", p.get("id", ""))),
+                    legacy_species_id(p),
                 )
 
             match = next(
@@ -221,6 +249,12 @@ class LegacyMigration:
     def captured_candidates(self):
         candidates = list(self.collection)
         known = {p["individual_id"] for p in candidates}
+        if (
+            self.main_candidate is not None
+            and self.main_candidate["individual_id"] not in known
+        ):
+            candidates.append(self.main_candidate)
+            known.add(self.main_candidate["individual_id"])
         candidates.extend(
             p
             for p in self.db.get_all_pokemon()
@@ -236,7 +270,8 @@ class LegacyMigration:
         member = data[0] if isinstance(data, list) else data
         if not isinstance(member, dict):
             raise ValueError("expected a main Pokemon object")
-        member = dict(member)
+        original = dict(member)
+        member = dict(original)
         candidates = self.captured_candidates()
         match = self.resolve_member(member, candidates)
         if match:
@@ -248,6 +283,7 @@ class LegacyMigration:
             or self.db.get_main_pokemon() != member
         ):
             raise ValueError("main Pokemon failed the save/read-back check")
+        self.main_candidate = self.mapping_candidate(original, member["individual_id"])
         self.expected_pokemon[member["individual_id"]] = member
         self.stats["main"] = 1
 
@@ -261,6 +297,17 @@ class LegacyMigration:
             self.check_cancelled()
             if not self.db.add_item(name, quantity, extra_data=extra, commit=False):
                 raise ValueError(f"failed to save item {name}")
+            saved = self.db.get_item(name)
+            if not saved or saved["quantity"] != quantity:
+                message = (
+                    f"items: {name} expected quantity {quantity}; saved stack differs"
+                )
+                self.stats.setdefault("integrity_issues", []).append(message)
+                raise ValueError(message)
+        # A later INSERT OR REPLACE can displace a stack that already passed
+        # its immediate check, so validate the entire expected inventory only
+        # after every write has run and before committing the batch.
+        for name, (quantity, _extra) in totals.items():
             saved = self.db.get_item(name)
             if not saved or saved["quantity"] != quantity:
                 message = (
@@ -413,6 +460,111 @@ class LegacyMigration:
             if not self.db.set_user_data("rate_this", True):
                 raise ValueError("failed to save rating preference")
 
+    @staticmethod
+    def validated_mapping_candidate(record):
+        if not isinstance(record, dict):
+            raise ValueError("migration identity checkpoint contains a non-object")
+        individual_id = record.get("individual_id")
+        if not is_valid_individual_id(individual_id):
+            raise ValueError("migration identity checkpoint has an invalid assigned ID")
+        legacy_id = record.get(_LEGACY_INDIVIDUAL_ID)
+        if legacy_id is not None and not is_valid_individual_id(legacy_id):
+            raise ValueError("migration identity checkpoint has an invalid legacy ID")
+        return {
+            "individual_id": individual_id,
+            _LEGACY_INDIVIDUAL_ID: legacy_id,
+            "name": canonical_pokemon_name(record.get("name")),
+            "level": record.get("level"),
+            "id": legacy_species_id(record),
+            "iv": record.get("iv"),
+        }
+
+    def save_checkpoint(self, key, payload):
+        conn = self.db._get_connection()
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)",
+            (key, json.dumps(payload, sort_keys=True)),
+        )
+        conn.commit()
+
+    def save_collection_checkpoint(self):
+        self.save_checkpoint(
+            "migration_verified_collection",
+            {
+                "version": _CHECKPOINT_VERSION,
+                "duplicate_ids": sorted(self.duplicate_ids),
+                "records": self.collection,
+            },
+        )
+
+    def restore_collection_checkpoint(self, value):
+        payload = json.loads(value)
+        if (
+            not isinstance(payload, dict)
+            or payload.get("version") != _CHECKPOINT_VERSION
+        ):
+            raise ValueError(
+                "migration collection checkpoint has an unsupported format"
+            )
+        duplicate_ids = payload.get("duplicate_ids")
+        records = payload.get("records")
+        if not isinstance(duplicate_ids, list) or not all(
+            is_valid_individual_id(value) for value in duplicate_ids
+        ):
+            raise ValueError(
+                "migration collection checkpoint has invalid duplicate IDs"
+            )
+        if not isinstance(records, list):
+            raise ValueError("migration collection checkpoint has invalid records")
+        candidates = [self.validated_mapping_candidate(record) for record in records]
+        assigned = [candidate["individual_id"] for candidate in candidates]
+        if len(assigned) != len(set(assigned)):
+            raise ValueError("migration collection checkpoint reuses an assigned ID")
+        self.duplicate_ids = set(duplicate_ids)
+        self.collection = candidates
+
+    def save_main_checkpoint(self):
+        self.save_checkpoint(
+            "migration_verified_main",
+            {"version": _CHECKPOINT_VERSION, "record": self.main_candidate},
+        )
+
+    def restore_main_checkpoint(self, value):
+        payload = json.loads(value)
+        if (
+            not isinstance(payload, dict)
+            or payload.get("version") != _CHECKPOINT_VERSION
+        ):
+            raise ValueError("migration main checkpoint has an unsupported format")
+        record = payload.get("record")
+        self.main_candidate = (
+            None if record is None else self.validated_mapping_candidate(record)
+        )
+
+    def preserve_existing_main(self, data):
+        """Checkpoint a legacy main identity without replacing live progress."""
+        if not data:
+            return
+        member = data[0] if isinstance(data, list) else data
+        if not isinstance(member, dict):
+            raise ValueError("expected a main Pokemon object")
+        candidates = self.captured_candidates()
+        match = self.resolve_member(member, candidates)
+        if match is None and is_valid_individual_id(member.get("individual_id")):
+            saved = self.db.get_pokemon(member["individual_id"])
+            if isinstance(saved, dict):
+                match = saved
+        if match is None:
+            current = self.db.get_main_pokemon()
+            if isinstance(current, dict):
+                match = current
+        if match is None or not isinstance(
+            self.db.get_pokemon(match["individual_id"]), dict
+        ):
+            raise ValueError("verified main Pokemon has no captured Pokemon")
+        self.main_candidate = self.mapping_candidate(member, match["individual_id"])
+        self.stats["main"] = 1
+
     def verify_collection(self):
         missing = [
             individual_id
@@ -423,7 +575,8 @@ class LegacyMigration:
             message = f"pokemon: {len(missing)} saved entries failed final verification"
             self.stats.setdefault("integrity_issues", []).append(message)
             self.db.execute(
-                "DELETE FROM metadata WHERE key IN ('migrated', 'migration_verified_collection')"
+                "DELETE FROM metadata WHERE key IN "
+                "('migrated', 'migration_verified_collection', 'migration_verified_main')"
             )
             self.db._get_connection().commit()
             self.error(message)
@@ -437,20 +590,18 @@ class LegacyMigration:
             return self.stats
         phase1_done = self.db.is_migrated_phase1()
         try:
-            verified = conn.execute(
+            collection_checkpoint = conn.execute(
                 "SELECT value FROM metadata WHERE key = 'migration_verified_collection'"
             ).fetchone()
-            if phase1_done and verified:
-                # Gameplay can resume after cancelling Phase 2. A collection
-                # verified by this runner must not be imported again on Retry:
-                # that could resurrect released Pokemon or revert progress.
-                self.duplicate_ids = set(json.loads(verified["value"])["duplicate_ids"])
+            if collection_checkpoint:
+                self.restore_collection_checkpoint(collection_checkpoint["value"])
                 self.stats["pokemon"] = self.db.get_pokemon_count()
                 self.report(
                     50,
                     "Previously verified collection preserved; continuing remaining migration.",
                 )
             else:
+                collection_errors = len(self.stats.get("errors", ()))
                 self.step(
                     "mypokemon",
                     5,
@@ -459,26 +610,50 @@ class LegacyMigration:
                         data, preserve_existing=phase1_done
                     ),
                 )
-            if not phase1_done:
-                self.step(
-                    "mainpokemon", 52, "Migrating main Pokemon...", self.migrate_main
+                self.verify_collection()
+                if len(self.stats.get("errors", ())) == collection_errors:
+                    self.save_collection_checkpoint()
+                self.report(
+                    50,
+                    f"{self.stats['pokemon']} Pokemon verified; "
+                    f"{self.stats['pokemon_failed']} failed",
                 )
+
+            main_checkpoint = conn.execute(
+                "SELECT value FROM metadata WHERE key = 'migration_verified_main'"
+            ).fetchone()
+            if main_checkpoint:
+                self.restore_main_checkpoint(main_checkpoint["value"])
+                if self.main_candidate is not None and isinstance(
+                    self.db.get_pokemon(self.main_candidate["individual_id"]), dict
+                ):
+                    self.stats["main"] = 1
+                self.report(55, "Previously verified main Pokemon preserved.")
+            else:
+                main_errors = len(self.stats.get("errors", ()))
+                self.step(
+                    "mainpokemon",
+                    52,
+                    "Migrating main Pokemon...",
+                    self.preserve_existing_main if phase1_done else self.migrate_main,
+                )
+                self.verify_collection()
+                if len(self.stats.get("errors", ())) == main_errors:
+                    self.save_main_checkpoint()
+
+            if not phase1_done:
                 self.step("items", 58, "Migrating items...", self.migrate_items)
                 self.step("badges", 61, "Migrating badges...", self.migrate_badges)
             self.verify_collection()
             if self.stats.get("errors"):
-                # Old versions could mark a partial collection as completed.
-                conn.execute(
-                    "DELETE FROM metadata WHERE key IN ('migrated', 'migration_verified_collection')"
-                )
+                # Old versions could mark a partial Phase 1 as completed. Keep
+                # independently verified source checkpoints, but never retain
+                # the broader marker while any source still failed.
+                conn.execute("DELETE FROM metadata WHERE key = 'migrated'")
                 conn.commit()
                 return self.stats
             self.report(65, "Collection migration verified.")
             conn.execute("INSERT OR REPLACE INTO metadata VALUES ('migrated', 'true')")
-            conn.execute(
-                "INSERT OR REPLACE INTO metadata VALUES ('migration_verified_collection', ?)",
-                (json.dumps({"duplicate_ids": sorted(self.duplicate_ids)}),),
-            )
             conn.commit()
 
             self.step("team", 66, "Migrating team...", self.migrate_team)
