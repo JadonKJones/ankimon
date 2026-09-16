@@ -77,6 +77,39 @@ def main():
 
     calls = []
     session.aqt.mw.reviewer.web.eval = lambda script, *a, **kw: calls.append(script)
+
+    # The report's missing bars/plain black text is also the intentional
+    # Styling-off mode: empty divs lose their height and text uses normal flow.
+    # Re-enable Styling before the first normal render below to verify recovery.
+    session.services.settings.set("gui.hud_styling", False)
+    session.services.reviewer.refresh_hud()
+    for script in calls:
+        _run_javascript(page, script)
+    unstyled = _run_javascript(
+        page,
+        """
+        (() => {
+            const root = window.testHudRoot;
+            const style = id => getComputedStyle(root.querySelector('#' + id));
+            return {
+                css: window.__ankimonHudData.css,
+                xpColor: style('xp_text').color,
+                xpPosition: style('xp_text').position,
+                hpHeight: style('life-bar').height,
+                xpHeight: style('xp-bar').height,
+            };
+        })()
+        """,
+    )
+    assert unstyled == {
+        "css": "",
+        "xpColor": "rgb(0, 0, 0)",
+        "xpPosition": "static",
+        "hpHeight": "0px",
+        "xpHeight": "0px",
+    }, unstyled
+    session.services.settings.set("gui.hud_styling", True)
+
     cases = 0
     for mode, dark, location in itertools.product((0, 1, 2), (False, True), (1, 2)):
         case = (mode, dark, location)
@@ -103,6 +136,8 @@ def main():
                     xpTop: xp.top, xpBottom: xp.bottom,
                     hpColor: hp.color, hpBackground: hp.backgroundColor,
                     lifePosition: style('life-bar').position,
+                    lifeHeight: parseFloat(style('life-bar').height),
+                    xpHeight: parseFloat(style('xp-bar').height),
                     mainBar: Boolean(root.querySelector('#mylife-bar')),
                     outline: style('ankimon-hud').getPropertyValue('--ankimon-outline').trim(),
                     xpVisible: root.querySelector('#xp_text').getBoundingClientRect().height > 0,
@@ -121,6 +156,8 @@ def main():
         ), (case, result)
         assert result["outline"] == ("#1F1F1F" if dark else "#FFFFFF"), (case, result)
         assert result["lifePosition"] == "fixed", (case, result)
+        assert result["lifeHeight"] > 0, (case, result)
+        assert result["xpHeight"] > 0, (case, result)
         assert result["mainBar"] == (mode > 0), (case, result)
         assert result["xpVisible"], (case, result)
         # Appending a rule to the exact emitted CSS also detects an unclosed
@@ -141,7 +178,8 @@ def main():
     if len(sys.argv) > 1:
         assert view.grab().save(sys.argv[1]), "could not save screenshot"
     print(
-        f"PASS: Chromium {qWebEngineChromiumVersion()}, {cases} HUD layout/theme/XP cases"
+        f"PASS: Chromium {qWebEngineChromiumVersion()}, Styling-off reproduction "
+        f"and recovery, {cases} HUD layout/theme/XP cases"
     )
     view.close()
     return 0
