@@ -30,16 +30,23 @@ def main():
         box = []
         for i in range(158):
             pokemon = build_pokemon(
-                {"species": "Pikachu", "level": i % 80 + 5}
+                {
+                    "species": "Pikachu",
+                    "level": i % 80 + 5,
+                    "iv": {"hp": i % 32, "atk": i // 32},
+                }
             ).to_dict()
             pokemon.pop("individual_id", None)
             box.append(pokemon)
+        box[0]["individual_id"] = "main"
+        newer_main = dict(box[0], level=box[0]["level"] + 1)
+        team_main = {k: v for k, v in newer_main.items() if k != "individual_id"}
         sources = {
             "mypokemon": box,
-            "mainpokemon": [box[0]],
+            "mainpokemon": [newer_main],
             "items": ["pass-orb", "old-gateau", "pass-orb"],
             "badges": list(range(1, 15)),
-            "team": [box[0], box[1]],
+            "team": [team_main, box[1]],
         }
         paths = {}
         for name, data in sources.items():
@@ -75,6 +82,8 @@ def main():
         assert db.is_migrated()
         assert db.get_item("pass-orb")["quantity"] == 2
         assert len(db.get_team()) == 2
+        assert db.get_main_pokemon() == newer_main
+        assert db.get_team()[0] == {"individual_id": "main"}
         assert json.loads((root / "json/mypokemon.json").read_text()) == box
         assert dialog.continue_button.isVisible()
         assert not dialog.start_button.isVisible()
@@ -83,9 +92,86 @@ def main():
         dialog.continue_button.click()
         assert dialog.result() == dialog.DialogCode.Accepted
         db.close()
+    probe_retry_boundaries(session, output)
     print(
         f"probe_real_migration: OK — 158 Pokemon preserved after failure/retry; screenshots: {output}"
     )
+
+
+def probe_retry_boundaries(session, output):
+    from Ankimon.pyobj.database_manager import AnkimonDB
+    from Ankimon.pyobj.migration_dialog import MigrationDialog
+    from harness.fixtures import build_pokemon
+
+    for scenario in ("collection-failure", "pending-main", "old-marker"):
+        with tempfile.TemporaryDirectory(prefix="ankimon-overlap-") as directory:
+            root = Path(directory)
+            captured = build_pokemon({"species": "Pikachu", "level": 10}).to_dict()
+            captured["individual_id"] = "main"
+            other = dict(captured, individual_id="other")
+            main = dict(captured, level=11)
+            paths = {}
+            for name, data in {
+                "mypokemon": [captured, other],
+                "mainpokemon": [main],
+                "items": [],
+                "badges": [],
+                "team": [],
+            }.items():
+                path = root / f"{name}.json"
+                path.write_text(json.dumps(data), encoding="utf-8")
+                paths[f"{name}_path"] = path
+            db = AnkimonDB(db_path=root / "ankimon.db")
+            dialog = MigrationDialog(db, **paths)
+            dialog.show()
+            session.app.processEvents()
+            if scenario == "collection-failure":
+                save = db.save_pokemon
+
+                def fail_other(pokemon):
+                    return (
+                        False if pokemon["individual_id"] == "other" else save(pokemon)
+                    )
+
+                with patch.object(db, "save_pokemon", side_effect=fail_other):
+                    dialog.start_button.click()
+                assert not dialog.migration_successful
+                dialog.start_button.click()
+                assert dialog.migration_successful, dialog.log_area.toPlainText()
+                assert db.get_main_pokemon() == main
+            elif scenario == "pending-main":
+                progress = dialog._update_progress
+
+                def cancel_at_summary(percent, message):
+                    progress(percent, message)
+                    if "Pokemon verified" in message:
+                        dialog.cancelled = True
+
+                with patch.object(
+                    dialog, "_update_progress", side_effect=cancel_at_summary
+                ):
+                    dialog.start_button.click()
+                assert not dialog.migration_successful
+                live = dict(db.get_pokemon("main"), level=20)
+                db.save_pokemon(live)
+                dialog.start_button.click()
+                assert dialog.migration_successful, dialog.log_area.toPlainText()
+                assert db.get_main_pokemon() == live
+            else:
+                db.save_pokemon(other)
+                db.add_to_history(captured)
+                db.execute("INSERT INTO metadata VALUES ('migrated', 'true')")
+                db._get_connection().commit()
+                for _ in range(2):
+                    dialog.start_button.click()
+                    assert not dialog.migration_successful
+                    assert db.get_all_pokemon() == [other]
+                    assert paths["mypokemon_path"].exists()
+                    assert "explicit recovery" in dialog.log_area.toPlainText().lower()
+            session.app.processEvents()
+            assert dialog.grab().save(str(output / f"migration-{scenario}.png"))
+            dialog.close()
+            db.close()
 
 
 if __name__ == "__main__":

@@ -389,7 +389,9 @@ def canonical_pokemon_name(name: Any) -> str:
 
 def legacy_species_id(record: Dict[str, Any]) -> str:
     """Return a comparable species key across legacy ``id`` aliases."""
-    value = record.get("species_id", record.get("id"))
+    value = record.get("species_id")
+    if value is None:
+        value = record.get("id")
     return "" if value is None else str(value)
 
 

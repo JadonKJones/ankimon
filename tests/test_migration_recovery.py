@@ -200,17 +200,22 @@ def test_items_failure_then_retry_preserves_committed_collection(migration):
     assert db.get_item("pass-orb")["quantity"] == 2
 
 
-def test_stale_phase1_marker_does_not_hide_missing_collection(migration):
+def test_stale_phase1_marker_requires_explicit_recovery_for_missing_collection(
+    migration,
+):
     db, dialog, _, box = migration
     survivor = dict(box[0], individual_id="survivor")
     db.save_main_pokemon(survivor)
     db.execute("INSERT OR REPLACE INTO metadata VALUES ('migrated', 'true')")
     db._get_connection().commit()
     run(dialog)
-    assert dialog.migration_successful, dialog.log_area.toPlainText()
-    assert_preserved(db, box)
-    assert db.get_main_pokemon()["individual_id"] == "survivor"
-    assert "158 Pokemon" in dialog.log_area.toPlainText()
+    assert not dialog.migration_successful
+    assert db.get_all_pokemon() == [survivor]
+    assert db.is_migrated_phase1()
+    assert "explicit recovery" in dialog.log_area.toPlainText().lower()
+    run(dialog)
+    assert not dialog.migration_successful
+    assert db.get_all_pokemon() == [survivor]
 
 
 @pytest.mark.parametrize("contents", [{"unexpected": "wrapper"}, "bad", ["bad"], None])
@@ -609,3 +614,300 @@ def test_team_checkpoint_failure_rolls_back_team_replacement(migration):
         "SELECT 1 FROM metadata WHERE key = 'migration_verified_team'"
     ).fetchone()
     assert not conn.in_transaction
+
+
+def overlap_sources(migration):
+    db, dialog, paths, box = migration
+    captured = dict(box[0], individual_id="main", level=10)
+    other = dict(box[1], individual_id="other", level=5)
+    main = dict(captured, level=11)
+    for key, data in {
+        "mypokemon": [captured, other],
+        "mainpokemon": [main],
+        "team": [],
+    }.items():
+        paths[f"{key}_path"].write_text(json.dumps(data))
+    return db, dialog, paths, captured, other, main
+
+
+def test_overlap_collection_failure_retry_preserves_newer_main(migration):
+    db, dialog, _, _, _, main = overlap_sources(migration)
+    save = db.save_pokemon
+    with patch.object(
+        db,
+        "save_pokemon",
+        side_effect=lambda p: False if p["individual_id"] == "other" else save(p),
+    ):
+        run(dialog)
+    assert not dialog.migration_successful
+    run(dialog)
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_main_pokemon() == main
+
+
+def test_pending_main_after_collection_cancel_preserves_progress(migration):
+    db, dialog, _, _, _, _ = overlap_sources(migration)
+
+    def cancel():
+        if "Pokemon verified" in dialog.status_label.text():
+            dialog.cancelled = True
+
+    with patch.object(QApplication, "processEvents", side_effect=cancel):
+        dialog._run_migration()
+    assert not dialog.migration_successful
+    live = dict(db.get_pokemon("main"), level=20, nickname="Progress")
+    db.save_pokemon(live)
+    run(dialog)
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_main_pokemon() == live
+
+
+@pytest.mark.parametrize("released", [False, True])
+def test_old_phase1_marker_never_reimports_ambiguous_rows(migration, released):
+    db, dialog, paths, captured, other, _ = overlap_sources(migration)
+    if released:
+        db.save_pokemon(other)
+        db.add_to_history(captured)
+    else:
+        captured.pop("individual_id")
+        paths["mypokemon_path"].write_text(json.dumps([captured]))
+        db.save_pokemon(dict(captured, individual_id="old-random-id", level=20))
+    paths["mainpokemon_path"].write_text("[]")
+    db.execute("INSERT INTO metadata VALUES ('migrated', 'true')")
+    db._get_connection().commit()
+    before = db.get_all_pokemon()
+    for _ in range(2):
+        run(dialog)
+        assert not dialog.migration_successful
+        assert db.get_all_pokemon() == before
+        assert paths["mypokemon_path"].exists()
+        assert "explicit recovery" in dialog.log_area.toPlainText().lower()
+
+
+@pytest.mark.parametrize("retry", [False, True])
+def test_idless_team_matches_newer_main_alias(migration, retry):
+    db, dialog, paths, _, _, main = overlap_sources(migration)
+    team = dict(main)
+    team.pop("individual_id")
+    paths["team_path"].write_text(json.dumps([team]))
+    if retry:
+        with patch.object(db, "save_badge", return_value=False):
+            run(dialog)
+        assert not dialog.migration_successful
+    run(dialog)
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_team() == [{"individual_id": "main"}]
+
+
+def test_two_aliases_cannot_fill_two_team_slots(migration):
+    db, dialog, paths, captured, _, main = overlap_sources(migration)
+    captured.pop("individual_id")
+    main.pop("individual_id")
+    paths["team_path"].write_text(json.dumps([captured, main]))
+    run(dialog)
+    assert not dialog.migration_successful
+    assert db.get_team() == []
+    assert paths["team_path"].exists()
+
+
+@pytest.mark.parametrize("source", ["mainpokemon", "items", "badges"])
+def test_missing_collection_succeeds_first_attempt(migration, source):
+    db, dialog, paths, _ = migration
+    for key, path in paths.items():
+        if key != f"{source}_path":
+            path.unlink()
+    run(dialog)
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.is_migrated()
+
+
+def test_none_species_alias_falls_back_to_id(migration):
+    db, dialog, paths, box = migration
+    assert database_manager.legacy_species_id({"id": 25, "species_id": None}) == "25"
+    paths["mypokemon_path"].write_text(json.dumps([box[0]]))
+    paths["mainpokemon_path"].write_text("[]")
+    paths["team_path"].write_text(json.dumps([dict(box[0], species_id=None)]))
+    run(dialog)
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert len(db.get_team()) == 1
+
+
+def test_cancel_during_generic_error_reporting_returns_cancelled(migration):
+    from Ankimon.pyobj.legacy_migration import LegacyMigration
+
+    db, _, _, _ = migration
+    cancelled = False
+
+    def progress(_, message):
+        nonlocal cancelled
+        if message.startswith("Migration incomplete:"):
+            cancelled = True
+
+    runner = LegacyMigration(db, {}, progress, lambda: cancelled)
+    with patch.object(
+        runner, "save_collection_checkpoint", side_effect=RuntimeError("disk full")
+    ):
+        stats = runner.run()
+    assert stats["cancelled"]
+    assert not db.is_migrated()
+
+
+def test_inventory_checkpoint_preserves_consumption_after_badge_failure(migration):
+    db, dialog, paths, _ = migration
+    paths["items_path"].write_text(json.dumps([{"item": "potion", "quantity": 5}]))
+    with patch.object(db, "save_badge", return_value=False):
+        run(dialog)
+    assert not dialog.migration_successful
+    db.add_item("potion", 3)
+    run(dialog)
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_item("potion")["quantity"] == 3
+
+
+@pytest.mark.parametrize(
+    "checkpoint",
+    [
+        "migration_collection_row:",
+        "migration_verified_main",
+        "migration_verified_items",
+    ],
+)
+def test_checkpoint_failure_rolls_back_owned_writes(migration, checkpoint):
+    db, dialog, paths, captured, _, _ = overlap_sources(migration)
+    paths["mypokemon_path"].write_text(json.dumps([captured]))
+    if checkpoint == "migration_collection_row:":
+        paths["mainpokemon_path"].write_text("[]")
+    conn = db._get_connection()
+    execute = conn.execute
+
+    def fail_checkpoint(sql, parameters=()):
+        if "INSERT" in sql and parameters and str(parameters[0]).startswith(checkpoint):
+            raise RuntimeError("injected checkpoint failure")
+        return execute(sql, parameters)
+
+    with patch.object(conn, "execute", side_effect=fail_checkpoint):
+        run(dialog)
+    assert not dialog.migration_successful
+    assert not conn.in_transaction
+    assert not conn._disable_commit
+    if checkpoint == "migration_collection_row:":
+        assert db.get_pokemon("main") is None
+    elif checkpoint == "migration_verified_main":
+        assert db.get_pokemon("main") == captured
+        assert db.get_main_pokemon() is None
+    else:
+        assert db.get_item("pass-orb") is None
+    assert not conn.execute(
+        "SELECT 1 FROM metadata WHERE key LIKE ?", (checkpoint + "%",)
+    ).fetchone()
+    run(dialog)
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+
+
+@pytest.mark.parametrize("checkpoint", ["collection", "main"])
+def test_upgrade_preserves_rows_owned_by_older_source_checkpoint(migration, checkpoint):
+    from Ankimon.pyobj.legacy_migration import LegacyMigration
+
+    db, dialog, _, captured, _, main = overlap_sources(migration)
+    runner = LegacyMigration(db, {})
+    if checkpoint == "collection":
+        runner.collection = [runner.mapping_candidate(captured, "main")]
+        runner.save_collection_checkpoint()
+        db.save_pokemon(dict(main, level=20))
+    else:
+        runner.main_candidate = runner.mapping_candidate(main, "main")
+        runner.save_main_checkpoint()
+        db.save_main_pokemon(main)
+    before = db.get_pokemon("main")
+    run(dialog)
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_pokemon("main") == before
+
+
+def test_pending_main_never_resurrects_released_collection_row(migration):
+    db, dialog, paths, captured, _, _ = overlap_sources(migration)
+
+    def cancel():
+        if "Pokemon verified" in dialog.status_label.text():
+            dialog.cancelled = True
+
+    with patch.object(QApplication, "processEvents", side_effect=cancel):
+        dialog._run_migration()
+    db.add_to_history(captured)
+    db.delete_pokemon("main")
+    run(dialog)
+    assert not dialog.migration_successful
+    assert db.get_pokemon("main") is None
+    assert paths["mainpokemon_path"].exists()
+
+
+def test_partial_collection_retry_preserves_row_progress_and_release(migration):
+    db, dialog, paths, captured, other, _ = overlap_sources(migration)
+    third = dict(other, individual_id="third")
+    paths["mypokemon_path"].write_text(json.dumps([captured, other, third]))
+    paths["mainpokemon_path"].write_text("[]")
+    save = db.save_pokemon
+    with patch.object(
+        db,
+        "save_pokemon",
+        side_effect=lambda p: False if p["individual_id"] == "third" else save(p),
+    ):
+        run(dialog)
+    live = dict(db.get_pokemon("main"), level=20)
+    db.save_pokemon(live)
+    db.delete_pokemon("other")
+    run(dialog)
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_pokemon("main") == live
+    assert db.get_pokemon("other") is None
+    assert db.get_pokemon("third") == third
+
+
+def test_retry_reserves_random_ids_owned_by_later_collection_entries(migration):
+    db, dialog, paths, box = migration
+    source = box[0]
+    first = dict(source, individual_id="old-a")
+    second = dict(source, individual_id="old-b")
+    db.save_pokemon(first)
+    db.save_pokemon(second)
+    paths["mypokemon_path"].write_text(json.dumps([source, source]))
+    paths["mainpokemon_path"].write_text("[]")
+    paths["team_path"].write_text("[]")
+    save = db.save_pokemon
+    with patch.object(
+        db,
+        "save_pokemon",
+        side_effect=lambda p: False if p["individual_id"] == "old-a" else save(p),
+    ):
+        run(dialog)
+    assert not dialog.migration_successful
+    db.delete_pokemon("old-a")
+    progressed = dict(second, nickname="Progress")
+    db.save_pokemon(progressed)
+    run(dialog)
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_pokemon("old-b") == progressed
+    assert db.get_pokemon_count() == 2
+
+
+def test_final_readback_failure_retains_old_marker_recovery_mode(migration):
+    db, dialog, paths, captured, _, _ = overlap_sources(migration)
+    db.save_pokemon(captured)
+    paths["mainpokemon_path"].write_text("[]")
+    db.execute("INSERT INTO metadata VALUES ('migrated', 'true')")
+    db._get_connection().commit()
+    progress = dialog._update_progress
+
+    def change_live_row(percent, message):
+        progress(percent, message)
+        if "Pokemon verified" in message:
+            db.save_pokemon(dict(captured, level=20))
+
+    with patch.object(dialog, "_update_progress", side_effect=change_live_row):
+        run(dialog)
+    assert not dialog.migration_successful
+    assert db.is_migrated_phase1()
+    run(dialog)
+    assert not dialog.migration_successful
+    assert db.get_pokemon_count() == 1
+    assert db.get_pokemon("main")["level"] == 20

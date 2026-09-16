@@ -132,3 +132,34 @@ migration runner. They will first fail against `a31c0b67` and then cover:
 
 After targeted migration tests pass, run the full Python suite, the Tier-1
 `harness/check.py` gate, and the real migration probe required by the branch.
+
+## PR #861 review corrections — 2026-09-16
+
+The source boundaries above are insufficient for collection and main records
+that share a captured-Pokemon row. The implementation now adds per-entry
+collection provenance: the assigned identity and imported snapshot commit
+atomically with the row. A partial Retry skips these owned entries, including
+rows subsequently released, and reserves their assigned IDs before matching
+pending entries. Main ownership is restored before pending collection writes.
+Main writes and their checkpoint also commit together. A pending main source
+can replace an unchanged imported collection snapshot; later live changes take
+precedence. Older source checkpoints without row snapshots preserve live data.
+
+An old Phase-1 marker without collection provenance enables conservative
+continuation only. Existing rows can be identified without overwriting them;
+missing or unresolvable records produce an explicit-recovery error and retain
+all sources. The old marker remains present across errors, including final
+read-back failure, so Retry cannot accidentally become a fresh import. No
+relaxation of level or IV matching is permitted.
+
+Collection, main and live snapshots remain matching aliases for each assigned
+ID. Resolving one team slot consumes all aliases for that ID. Inventory now
+commits its verified batch and checkpoint together, preserving consumption
+after a later badge failure. Missing source files initialize empty counters;
+null species_id falls back to id; cancellation during generic error reporting
+returns the ordinary cancelled result.
+
+Completed migrations are still not reopened. Recovery of an already-completed
+historical save requires inspecting its original sources and live database.
+See [the review correction plan](../plans/2026-09-16-pr861-review-fixes.md) for
+verification evidence.
