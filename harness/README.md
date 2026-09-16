@@ -125,6 +125,7 @@ bash harness/setup_webengine.sh
 source .tier2/env.sh
 export LD_LIBRARY_PATH="$PWD/.tier2/we-libs/extract/usr/lib/$(uname -m)-linux-gnu:$LD_LIBRARY_PATH"
 python -m harness.checks.probe_real_webengine  # real Chromium Settings page + DOM save
+python -m harness.checks.probe_real_hud_css    # reviewer styles in the real closed shadow root
 ```
 
 Drive it from Python (same action surface as Tier 1, via real hooks/windows):
@@ -169,6 +170,28 @@ remain useful on machines without Chromium. The dedicated
 `probe_real_webengine` check is strict: it imports `PyQt6-WebEngine`, refuses to
 fall back, opens the real HTML Settings shell, edits Trainer Name through the
 DOM, clicks Save, and verifies the SQLite-backed Settings service changed.
+
+`probe_real_hud_css` captures the real reviewer's generated JavaScript and runs
+it through the shipped HUD portal in Chromium. It checks computed XP/HP text
+styles, bar positioning, and a trailing-rule sentinel for all three layouts,
+both Anki themes, and both XP-bar positions. It prints the Chromium version;
+an optional PNG path saves a screenshot. CI runs it in the WebEngine job.
+
+For issue #864, the `font-color` typo and missing semicolon were already fixed
+on main by #795. Chromium 140 ignores the unknown declaration rather than
+rejecting the whole stylesheet; the visible regression is loss of the XP text
+color. Restoring that typo makes this probe fail its computed-color assertion.
+An unclosed block can instead swallow later rules, which the sentinel detects.
+
+The fuller report describes missing HP/XP bars and plain black text aligned
+left. Disabling **Styling** reproduces that presentation: the reviewer emits
+no CSS, the empty bar elements have zero height, and text uses normal flow.
+The probe verifies this state and recovery after enabling Styling again.
+If Styling is disabled, restore the normal display via **Ankimon Settings → HUD and Reviewer →
+HUD Element Toggles**, enable **Styling**, **HP Bars**, and **XP Progress Bar**,
+then save and reopen the reviewer. If those toggles are already enabled, this
+reproduction does not establish the reporter's cause; collect the exact Anki
+and Ankimon versions, a screenshot, and any reviewer console errors.
 
 ## Drive it from Python
 
