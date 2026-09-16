@@ -109,6 +109,9 @@ def probe_retry_boundaries(session, output):
         "old-marker",
         "repaired-source",
         "known-verification-failure",
+        "pending-idless-progress",
+        "pending-idless-release",
+        "pending-explicit-release",
     ):
         with tempfile.TemporaryDirectory(prefix="ankimon-overlap-") as directory:
             root = Path(directory)
@@ -188,6 +191,45 @@ def probe_retry_boundaries(session, output):
                 assert db.get_pokemon_count() == 2
                 assert paths["mypokemon_path"].exists()
                 assert "reconciliation" in dialog.log_area.toPlainText().lower()
+            elif scenario.startswith("pending-"):
+                if "idless" in scenario:
+                    captured.pop("individual_id")
+                paths["mypokemon_path"].write_text(json.dumps([captured]))
+                paths["mainpokemon_path"].write_text(json.dumps([captured]))
+                original_bytes = {key: path.read_bytes() for key, path in paths.items()}
+                with patch.object(db, "save_pokemon", return_value=False):
+                    dialog.start_button.click()
+                assert not dialog.migration_successful
+                live = db.get_main_pokemon()
+                assert live is not None
+                if scenario.endswith("release"):
+                    db.add_to_history(live)
+                    assert db.delete_pokemon(live["individual_id"])
+                else:
+                    live = dict(live, level=20)
+                    assert db.save_main_pokemon(live)
+                db.close()
+                db = AnkimonDB(db_path=root / "ankimon.db")
+                dialog.db = db
+                dialog.start_button.click()
+                if scenario.endswith("release"):
+                    assert not dialog.migration_successful
+                    assert not db.is_migrated()
+                    assert db.get_all_pokemon() == []
+                    assert "explicit recovery" in dialog.log_area.toPlainText().lower()
+                    assert {
+                        key: path.read_bytes() for key, path in paths.items()
+                    } == original_bytes
+                    assert not (root / "json").exists()
+                    assert dialog.start_button.isEnabled()
+                    assert not dialog.continue_button.isVisible()
+                else:
+                    assert dialog.migration_successful, dialog.log_area.toPlainText()
+                    assert db.get_all_pokemon() == [live]
+                    assert db.is_migrated()
+                    assert (root / "json/mypokemon.json").read_bytes() == original_bytes[
+                        "mypokemon_path"
+                    ]
             else:
                 paths["mainpokemon_path"].write_text("[]")
                 progress = dialog._update_progress

@@ -26,6 +26,13 @@ been repaired, or the discrepancy has been explicitly reconciled with support.
 This is separate from releasing a Pokémon after a successfully verified import;
 that release remains respected.
 
+If the main Pokémon was verified but its collection entry is still pending,
+Retry uses the saved legacy main identity even after a level-up. A missing main
+row or an ambiguous match between identical pending entries requires an explicit
+recovery decision; Retry neither creates a replacement nor archives the sources.
+A null collection-row snapshot is not valid verification evidence. This does not
+change release handling for entries with valid committed collection checkpoints.
+
 The dialog rechecks the fingerprints after its last progress event before
 archiving. If the source changed, it preserves the files and leaves migration
 incomplete.

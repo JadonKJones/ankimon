@@ -206,6 +206,11 @@ class LegacyMigration:
         ).fetchall():
             payload = json.loads(row["value"])
             candidate = self.validated_mapping_candidate(payload["record"])
+            if not isinstance(payload.get("snapshot"), dict):
+                raise ValueError(
+                    "collection row checkpoint has no Pokemon snapshot; "
+                    "explicit recovery decision required"
+                )
             self.collection_snapshots[candidate["individual_id"]] = payload["snapshot"]
 
     def migrate_collection(self, data, preserve_existing=False):
@@ -241,6 +246,38 @@ class LegacyMigration:
         # Older imports may have assigned random IDs. Pending entries must not
         # claim an ID already durably assigned to another source entry.
         reserved.update(self.collection_snapshots)
+        main_index = None
+        if self.main_candidate is not None:
+            main_id = self.main_candidate["individual_id"]
+            if (
+                main_id not in reserved
+                and self.main_candidate.get(_LEGACY_INDIVIDUAL_ID) is None
+            ):
+                # Main may have committed after a collection write failed. Its
+                # immutable alias, not its live level or presence, proves the
+                # overlap. Check all pending entries before choosing an owner.
+                matches = [
+                    index
+                    for index, original in enumerate(entries)
+                    if isinstance(original, dict)
+                    and not is_valid_individual_id(original.get("individual_id"))
+                    and find_matching_captured(original, [self.main_candidate])
+                    and not self.db.execute(
+                        "SELECT 1 FROM metadata WHERE key = ?",
+                        (self.collection_row_key(index, original),),
+                    ).fetchone()
+                ]
+                if len(matches) > 1:
+                    raise ValueError(
+                        "ambiguous legacy main identity among collection entries; "
+                        "explicit recovery decision required"
+                    )
+                if matches:
+                    main_index = matches[0]
+            # Explicit main identities remain distinct without a collection
+            # claim (as in resolve_member). Existing collection claims also
+            # reserve this ID; no twin may claim it through live matching.
+            reserved.add(main_id)
         used = set()
         for index, original in enumerate(entries):
             self.check_cancelled()
@@ -269,7 +306,9 @@ class LegacyMigration:
                 continue
             pokemon = dict(original)
             old_id = pokemon.get("individual_id")
-            if not is_valid_individual_id(old_id) or old_id in used:
+            if index == main_index:
+                pokemon["individual_id"] = self.main_candidate["individual_id"]
+            elif not is_valid_individual_id(old_id) or old_id in used:
                 # A later identical twin may have committed while this entry
                 # failed. Never steal that twin's deterministic identity.
                 own_id = generated[index]
@@ -299,7 +338,9 @@ class LegacyMigration:
                     self.main_candidate is not None
                     and self.main_candidate["individual_id"] == individual_id
                 )
-                if preserve_existing and not isinstance(existing, dict):
+                if (preserve_existing or protected_main) and not isinstance(
+                    existing, dict
+                ):
                     raise ValueError(
                         "unresolved legacy identity; explicit recovery decision required "
                         "before restoring a missing Pokemon"
@@ -313,7 +354,10 @@ class LegacyMigration:
                     if not (preserve_existing or protected_main):
                         if not self.db.save_pokemon(pokemon):
                             raise ValueError("save_pokemon returned False")
-                    if self.db.get_pokemon(individual_id) != pokemon:
+                    if (
+                        not isinstance(pokemon, dict)
+                        or self.db.get_pokemon(individual_id) != pokemon
+                    ):
                         raise ValueError(
                             "saved Pokemon did not pass the read-back check"
                         )
