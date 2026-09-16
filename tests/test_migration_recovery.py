@@ -805,7 +805,9 @@ def test_checkpoint_failure_rolls_back_owned_writes(migration, checkpoint):
 
 
 @pytest.mark.parametrize("checkpoint", ["collection", "main"])
-def test_upgrade_preserves_rows_owned_by_older_source_checkpoint(migration, checkpoint):
+def test_older_source_checkpoint_requires_reconciliation_without_overwrite(
+    migration, checkpoint
+):
     from Ankimon.pyobj.legacy_migration import LegacyMigration
 
     db, dialog, _, captured, _, main = overlap_sources(migration)
@@ -820,7 +822,8 @@ def test_upgrade_preserves_rows_owned_by_older_source_checkpoint(migration, chec
         db.save_main_pokemon(main)
     before = db.get_pokemon("main")
     run(dialog)
-    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert not dialog.migration_successful
+    assert "reconciliation" in dialog.log_area.toPlainText().lower()
     assert db.get_pokemon("main") == before
 
 
@@ -911,3 +914,131 @@ def test_final_readback_failure_retains_old_marker_recovery_mode(migration):
     assert not dialog.migration_successful
     assert db.get_pokemon_count() == 1
     assert db.get_pokemon("main")["level"] == 20
+
+
+@pytest.mark.parametrize("variant", ["idless", "progressed", "released"])
+def test_repaired_partial_source_requires_reconciliation(migration, variant):
+    db, dialog, paths, box = migration
+    first, second = dict(box[0]), dict(box[1])
+    if variant != "idless":
+        second["individual_id"] = "second"
+    paths["mypokemon_path"].write_text(json.dumps([first, "bad", second]))
+    paths["mainpokemon_path"].write_text("[]")
+    paths["team_path"].write_text("[]")
+    run(dialog)
+    assert not dialog.migration_successful
+    assert db.get_pokemon_count() == 2
+    if variant == "progressed":
+        db.save_pokemon(dict(second, level=99, nickname="Keep me"))
+    elif variant == "released":
+        db.delete_pokemon("second")
+    before = db.get_all_pokemon()
+    paths["mypokemon_path"].write_text(json.dumps([first, second]))
+    run(dialog)
+    assert not dialog.migration_successful
+    assert not db.is_migrated()
+    assert db.get_all_pokemon() == before
+    assert paths["mypokemon_path"].exists()
+    assert "reconciliation" in dialog.log_area.toPlainText().lower()
+
+
+@pytest.mark.parametrize("replacement", ["expanded", "missing"])
+def test_checkpointed_source_replacement_is_not_archived(migration, replacement):
+    db, dialog, paths, box = migration
+    paths["mypokemon_path"].write_text(json.dumps([box[0]]))
+    paths["mainpokemon_path"].write_text("[]")
+    paths["team_path"].write_text("[]")
+
+    def cancel():
+        if "Pokemon verified" in dialog.status_label.text():
+            dialog.cancelled = True
+
+    with patch.object(QApplication, "processEvents", side_effect=cancel):
+        dialog._run_migration()
+    assert not dialog.migration_successful
+    if replacement == "expanded":
+        paths["mypokemon_path"].write_text(json.dumps(box[:2]))
+    else:
+        paths["mypokemon_path"].unlink()
+    run(dialog)
+    assert not dialog.migration_successful
+    assert not db.is_migrated()
+    assert db.get_pokemon_count() == 1
+    assert not (paths["mypokemon_path"].parent / "json").exists()
+
+
+@pytest.mark.parametrize("fault", ["missing", "changed"])
+def test_known_verification_failure_survives_database_reopen(migration, fault):
+    from Ankimon.pyobj.legacy_migration import LegacyMigration
+
+    db, _, paths, box = migration
+    first = dict(box[0], individual_id="first")
+    second = dict(box[1], individual_id="second")
+    paths["mypokemon_path"].write_text(json.dumps([first, second]))
+    sources = {"mypokemon": paths["mypokemon_path"]}
+
+    def corrupt_after_checkpoint(_, message):
+        if "Pokemon verified" in message:
+            if fault == "missing":
+                db.delete_pokemon("second")
+            else:
+                db.save_pokemon(dict(second, level=99))
+
+    stats = LegacyMigration(db, sources, corrupt_after_checkpoint).run()
+    assert stats.get("integrity_issues")
+    assert not db.is_migrated()
+    db.close()
+    reopened = AnkimonDB(db_path=db.db_path)
+    try:
+        before = reopened.get_all_pokemon()
+        retry = LegacyMigration(reopened, sources).run()
+        assert retry.get("integrity_issues")
+        assert not reopened.is_migrated()
+        assert reopened.get_all_pokemon() == before
+        # Repair is an explicit external action; Retry must never restore it.
+        reopened.save_pokemon(second)
+        repaired = LegacyMigration(reopened, sources).run()
+        assert not repaired.get("errors"), repaired
+        assert reopened.is_migrated()
+    finally:
+        reopened.close()
+
+
+def test_source_replacement_at_archive_boundary_stays_unresolved(migration):
+    db, dialog, paths, box = migration
+    paths["mypokemon_path"].write_text(json.dumps([box[0]]))
+    paths["mainpokemon_path"].write_text("[]")
+    paths["team_path"].write_text("[]")
+    progress = dialog._update_progress
+
+    def replace_before_archive(percent, message):
+        progress(percent, message)
+        if percent == 96:
+            paths["mypokemon_path"].write_text(json.dumps(box[:2]))
+
+    with patch.object(dialog, "_update_progress", side_effect=replace_before_archive):
+        run(dialog)
+    assert not dialog.migration_successful
+    assert not db.is_migrated()
+    assert paths["mypokemon_path"].exists()
+    assert not (paths["mypokemon_path"].parent / "json").exists()
+    run(dialog)
+    assert not dialog.migration_successful
+    assert db.get_pokemon_count() == 1
+
+
+def test_missing_all_sources_cannot_bypass_retry_at_startup(migration):
+    from Ankimon.pyobj import migration_dialog
+
+    db, dialog, paths, box = migration
+    paths["mypokemon_path"].write_text(json.dumps([box[0], "bad"]))
+    run(dialog)
+    assert not dialog.migration_successful
+    for path in paths.values():
+        path.unlink()
+    # Exercise the real entry point without blocking on a modal event loop.
+    with patch.object(migration_dialog.MigrationDialog, "exec", new=run):
+        successful = migration_dialog.show_migration_dialog_if_needed(db, **paths)
+    assert not successful
+    assert not db.is_migrated()
+    assert db.get_pokemon_count() == 1

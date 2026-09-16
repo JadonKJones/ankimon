@@ -103,7 +103,13 @@ def probe_retry_boundaries(session, output):
     from Ankimon.pyobj.migration_dialog import MigrationDialog
     from harness.fixtures import build_pokemon
 
-    for scenario in ("collection-failure", "pending-main", "old-marker"):
+    for scenario in (
+        "collection-failure",
+        "pending-main",
+        "old-marker",
+        "repaired-source",
+        "known-verification-failure",
+    ):
         with tempfile.TemporaryDirectory(prefix="ankimon-overlap-") as directory:
             root = Path(directory)
             captured = build_pokemon({"species": "Pikachu", "level": 10}).to_dict()
@@ -157,7 +163,7 @@ def probe_retry_boundaries(session, output):
                 dialog.start_button.click()
                 assert dialog.migration_successful, dialog.log_area.toPlainText()
                 assert db.get_main_pokemon() == live
-            else:
+            elif scenario == "old-marker":
                 db.save_pokemon(other)
                 db.add_to_history(captured)
                 db.execute("INSERT INTO metadata VALUES ('migrated', 'true')")
@@ -168,6 +174,43 @@ def probe_retry_boundaries(session, output):
                     assert db.get_all_pokemon() == [other]
                     assert paths["mypokemon_path"].exists()
                     assert "explicit recovery" in dialog.log_area.toPlainText().lower()
+            elif scenario == "repaired-source":
+                paths["mypokemon_path"].write_text(json.dumps([captured, "bad", other]))
+                dialog.start_button.click()
+                assert not dialog.migration_successful
+                live = dict(other, level=99, nickname="Keep me")
+                db.save_pokemon(live)
+                paths["mypokemon_path"].write_text(json.dumps([captured, other]))
+                dialog.start_button.click()
+                assert not dialog.migration_successful
+                assert not db.is_migrated()
+                assert db.get_pokemon("other") == live
+                assert db.get_pokemon_count() == 2
+                assert paths["mypokemon_path"].exists()
+                assert "reconciliation" in dialog.log_area.toPlainText().lower()
+            else:
+                paths["mainpokemon_path"].write_text("[]")
+                progress = dialog._update_progress
+
+                def lose_after_checkpoint(percent, message):
+                    progress(percent, message)
+                    if "Pokemon verified" in message:
+                        db.delete_pokemon("other")
+
+                with patch.object(
+                    dialog, "_update_progress", side_effect=lose_after_checkpoint
+                ):
+                    dialog.start_button.click()
+                assert not dialog.migration_successful
+                db.close()
+                db = AnkimonDB(db_path=root / "ankimon.db")
+                dialog.db = db
+                dialog.start_button.click()
+                assert not dialog.migration_successful
+                assert not db.is_migrated()
+                assert db.get_pokemon("other") is None
+                assert paths["mypokemon_path"].exists()
+                assert "final verification" in dialog.log_area.toPlainText().lower()
             session.app.processEvents()
             assert dialog.grab().save(str(output / f"migration-{scenario}.png"))
             dialog.close()

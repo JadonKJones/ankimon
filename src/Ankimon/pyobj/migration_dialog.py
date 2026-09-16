@@ -220,6 +220,29 @@ class MigrationDialog(QDialog):
 
     def _cleanup_json_files(self):
         """Move old JSON files to json/ subfolder after successful migration."""
+        from .legacy_migration import LegacyMigration
+
+        # Progress updates pump Qt events. Recheck after the last update, before
+        # moving anything, so a newly replaced save is not archived as verified.
+        paths = {
+            key: getattr(self, f"{key}_path")
+            for key in (
+                "mypokemon",
+                "mainpokemon",
+                "items",
+                "badges",
+                "team",
+                "history",
+                "data",
+                "rate",
+            )
+        }
+        try:
+            LegacyMigration(self.db, paths).validate_sources()
+        except Exception:
+            self.db.execute("DELETE FROM metadata WHERE key = 'migrated_phase2'")
+            self.db._get_connection().commit()
+            raise
         # Move to user_files/json/ - ensures path change breaks any remaining JSON usage
         backup_dir = self.mypokemon_path.parent / "json"
 
@@ -309,8 +332,12 @@ def show_migration_dialog_if_needed(
     ]
 
     has_legacy_files = any(Path(p).is_file() for p in files_to_check if p)
+    has_migration_state = db.execute(
+        "SELECT 1 FROM metadata WHERE key = 'migrated' "
+        "OR key GLOB 'migration_*' LIMIT 1"
+    ).fetchone()
 
-    if not has_legacy_files:
+    if not has_legacy_files and not has_migration_state:
         # Fresh install, no need to migrate. Just mark as done.
         conn = db._get_connection()
         conn.cursor().execute(

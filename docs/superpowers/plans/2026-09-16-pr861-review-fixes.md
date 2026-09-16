@@ -35,3 +35,29 @@ Independent review additionally reproduced two provenance failures: clearing an
 old Phase-1 marker during final read-back failure, and a pending idless entry
 claiming a later entry's checkpointed random ID. Both have real database/dialog
 regressions and independently verified fixes.
+
+## Follow-up review of 0ae3b2f2
+
+- [x] Reproduce repaired partial sources (ID-less, progressed, released), replaced
+  and missing verified sources, and reopened-database verification failures using
+  the shipped database/dialog rather than transcribed SQL.
+- [x] Pin source bytes before writes; reject changed or removed sources before
+  trusting checkpoints. Retain provenance and require explicit reconciliation for
+  older checkpoints without fingerprints. Recheck at the final archive boundary.
+- [x] Persist failed verification identities and expected records; recheck them
+  before any retry writes, without restoring missing rows automatically.
+- [x] Reproduce competing item writers, serialize allocation before the identity
+  read, use a name-targeted upsert, and roll back a failed relocation locally while
+  retaining caller transactions and commit=False behavior.
+- [x] Extend the real-Qt probe and document the conservative recovery policy and
+  historical-save limitations in `docs/legacy_migration_recovery.md`.
+- [x] Complete full pytest, Tier-1, real-Qt, formatting and independent review.
+  Commit the corrections inline on the existing PR branch.
+
+Follow-up validation: 1,846 pytest passes, 41 skips and 9 passing subtests; all
+13 Tier-1 checks; real-Qt migration and boot probes; Ruff lint and format checks.
+The full pytest suite passed outside the sandbox because unrelated Chromium and
+multimedia tests cannot run under its restrictions. Independent review also
+verified 160 simultaneous item inserts and found the missing-files startup bypass;
+the bypass now has a failing-before/passing-after regression and a guard against
+treating an incomplete migration as a fresh install.

@@ -1,5 +1,6 @@
 """Shared, Qt-free legacy JSON migration used by the database and upgrade dialog."""
 
+import hashlib
 import json
 import uuid
 from collections import Counter
@@ -82,11 +83,15 @@ class LegacyMigration:
     def step(self, key, percent, label, action):
         path = self.paths.get(key)
         if path is None or not path.is_file():
+            self.pin_source(key, None)
             return
         self.report(percent, label)
         try:
-            with path.open(encoding="utf-8") as source:
-                data = json.load(source)
+            contents = path.read_bytes()
+            data = json.loads(contents.decode("utf-8"))
+            # Bind provenance before the first possible write, including partial
+            # imports. Invalid JSON can still be repaired if nothing was read.
+            self.pin_source(key, hashlib.sha256(contents).hexdigest())
             action(data)
         except _Cancelled:
             raise
@@ -95,6 +100,58 @@ class LegacyMigration:
             # uncommitted batch (e.g. items), never an earlier source's records.
             self.db._get_connection().rollback()
             self.error(f"{path.name}: {exc}")
+
+    def pin_source(self, key, fingerprint):
+        checkpoint = "migration_source:" + key
+        saved = self.db.execute(
+            "SELECT value FROM metadata WHERE key = ?", (checkpoint,)
+        ).fetchone()
+        if saved and json.loads(saved["value"]) != fingerprint:
+            raise ValueError(f"{key} source changed; explicit reconciliation required")
+        if not saved:
+            self.save_checkpoint(checkpoint, fingerprint)
+
+    def validate_sources(self):
+        """Reject changed or removed inputs before trusting any saved identity."""
+        pinned = {}
+        for row in self.db.execute(
+            "SELECT key, value FROM metadata WHERE key LIKE 'migration_source:%'"
+        ).fetchall():
+            key = row["key"].split(":", 1)[1]
+            pinned[key] = json.loads(row["value"])
+            path = self.paths.get(key)
+            current = (
+                hashlib.sha256(path.read_bytes()).hexdigest()
+                if path is not None and path.is_file()
+                else None
+            )
+            if current != pinned[key]:
+                raise ValueError(
+                    f"{key} source changed or is missing; explicit reconciliation "
+                    "required. Restore the original source or seek recovery support; "
+                    "do not delete migration checkpoints."
+                )
+        # Older checkpoints have ownership evidence but no source fingerprint.
+        # Adopting today's file would incorrectly certify a repaired/replaced save.
+        for key, checkpoints in (
+            (
+                "mypokemon",
+                ("migration_verified_collection", "migration_collection_row:%"),
+            ),
+            ("mainpokemon", ("migration_verified_main",)),
+            ("items", ("migration_verified_items",)),
+            ("team", ("migration_verified_team",)),
+        ):
+            if key not in pinned and any(
+                self.db.execute(
+                    "SELECT 1 FROM metadata WHERE key LIKE ?", (checkpoint,)
+                ).fetchone()
+                for checkpoint in checkpoints
+            ):
+                raise ValueError(
+                    f"{key}: older checkpoint has no source fingerprint; "
+                    "explicit reconciliation required"
+                )
 
     @staticmethod
     def require_list(data):
@@ -664,14 +721,34 @@ class LegacyMigration:
             if self.db.get_pokemon(individual_id) != expected
         ]
         if missing:
-            message = f"pokemon: {len(missing)} saved entries failed final verification"
-            self.stats.setdefault("integrity_issues", []).append(message)
-            self.db.execute(
-                "DELETE FROM metadata WHERE key IN "
-                "('migration_verified_collection', 'migration_verified_main')"
+            message = (
+                f"pokemon: {len(missing)} saved entries failed final verification: "
+                + ", ".join(missing)
             )
-            self.db._get_connection().commit()
+            self.stats.setdefault("integrity_issues", []).append(message)
+            with self.atomic_batch():
+                self.save_checkpoint(
+                    "migration_unresolved_pokemon",
+                    {key: self.expected_pokemon[key] for key in missing},
+                )
+                self.db.execute(
+                    "DELETE FROM metadata WHERE key IN "
+                    "('migration_verified_collection', 'migration_verified_main')"
+                )
             self.error(message)
+
+    def verify_unresolved(self):
+        row = self.db.execute(
+            "SELECT value FROM metadata WHERE key = 'migration_unresolved_pokemon'"
+        ).fetchone()
+        if row:
+            self.expected_pokemon.update(json.loads(row["value"]))
+            self.verify_collection()
+            if not self.stats.get("integrity_issues"):
+                self.db.execute(
+                    "DELETE FROM metadata WHERE key = 'migration_unresolved_pokemon'"
+                )
+                self.db._get_connection().commit()
 
     def run(self):
         if self.db.is_migrated():
@@ -682,6 +759,10 @@ class LegacyMigration:
             return self.stats
         phase1_done = self.db.is_migrated_phase1()
         try:
+            self.validate_sources()
+            self.verify_unresolved()
+            if self.stats.get("integrity_issues"):
+                return self.stats
             self.load_collection_rows()
             # Restore main ownership before any pending collection writes.
             main_checkpoint = conn.execute(
@@ -710,6 +791,8 @@ class LegacyMigration:
                     ),
                 )
                 self.verify_collection()
+                if self.stats.get("integrity_issues"):
+                    return self.stats
                 if len(self.stats.get("errors", ())) == collection_errors:
                     self.save_collection_checkpoint()
                 self.report(
@@ -733,6 +816,8 @@ class LegacyMigration:
                     self.preserve_existing_main if phase1_done else self.migrate_main,
                 )
                 self.verify_collection()
+                if self.stats.get("integrity_issues"):
+                    return self.stats
                 if len(self.stats.get("errors", ())) == main_errors and (
                     phase1_done or self.main_candidate is None
                 ):
@@ -771,6 +856,10 @@ class LegacyMigration:
             if self.stats.get("errors"):
                 return self.stats
             self.report(95, "All migrated data verified.")
+            self.validate_sources()
+            self.verify_collection()
+            if self.stats.get("errors"):
+                return self.stats
             conn.execute(
                 "INSERT OR REPLACE INTO metadata VALUES ('migrated_phase2', 'true')"
             )

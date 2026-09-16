@@ -1610,75 +1610,97 @@ class AnkimonDB:
         existing DB records but DOES NOT perform CSV lookups.
         """
         conn = self._get_connection()
-        cursor = conn.cursor()
+        # Acquire the writer lock before reading either identity or metadata.
+        # A savepoint keeps relocation + upsert atomic without rolling back an
+        # existing caller transaction. commit=False still leaves our BEGIN open.
+        owns_transaction = not conn.in_transaction
+        if owns_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        conn.execute("SAVEPOINT ankimon_save_item")
+        try:
+            if not owns_transaction:
+                conn.execute("UPDATE items SET id = id WHERE 0")
+            cursor = conn.cursor()
 
-        # Lenient metadata resolution: try to fetch existing metadata from DB if NOT provided
-        existing = None
-        if item_name:
-            cursor.execute(
-                "SELECT id, category_id, cost, fling_power, fling_effect_id FROM items WHERE item_name = ?",
-                (item_name,),
-            )
-            existing = cursor.fetchone()
-            if existing:
-                if item_id is None:
-                    item_id = existing["id"]
-                if category_id is None:
-                    category_id = existing["category_id"]
-                if cost is None:
-                    cost = existing["cost"]
-                if fling_power is None:
-                    fling_power = existing["fling_power"]
-                if fling_effect_id is None:
-                    fling_effect_id = existing["fling_effect_id"]
-
-        def next_uncatalogued_id() -> int:
-            row = cursor.execute("SELECT MIN(id) AS min_id FROM items").fetchone()
-            minimum = row["min_id"]
-            return -1 if minimum is None or minimum >= 0 else minimum - 1
-
-        if item_id is None:
-            # PokeAPI catalogue IDs are positive. Keeping locally-known items in
-            # the negative range prevents a later catalogue insert from
-            # replacing an automatically numbered row with the same ID.
-            item_id = next_uncatalogued_id()
-        else:
-            # Older databases may already contain an uncatalogued row under a
-            # positive SQLite-assigned ID. Relocate it before claiming the
-            # catalogue ID; both statements share this transaction.
-            occupied = cursor.execute(
-                "SELECT item_name FROM items WHERE id = ? AND item_name <> ?",
-                (item_id, item_name),
-            ).fetchone()
-            if occupied:
+            # Lenient metadata resolution: try to fetch existing metadata from DB if NOT provided
+            existing = None
+            if item_name:
                 cursor.execute(
-                    "UPDATE items SET id = ? WHERE id = ?",
-                    (next_uncatalogued_id(), item_id),
+                    "SELECT id, category_id, cost, fling_power, fling_effect_id FROM items WHERE item_name = ?",
+                    (item_name,),
                 )
+                existing = cursor.fetchone()
+                if existing:
+                    if item_id is None:
+                        item_id = existing["id"]
+                    if category_id is None:
+                        category_id = existing["category_id"]
+                    if cost is None:
+                        cost = existing["cost"]
+                    if fling_power is None:
+                        fling_power = existing["fling_power"]
+                    if fling_effect_id is None:
+                        fling_effect_id = existing["fling_effect_id"]
 
-        # Ensure type: "TM" for UI filtering if applicable
-        if category_id == 37:
-            if extra_data is None:
-                extra_data = {}
-            if extra_data.get("type") != "TM":
-                extra_data["type"] = "TM"
+            def next_uncatalogued_id() -> int:
+                row = cursor.execute("SELECT MIN(id) AS min_id FROM items").fetchone()
+                minimum = row["min_id"]
+                return -1 if minimum is None or minimum >= 0 else minimum - 1
 
-        obfuscated_data = self._obfuscate(extra_data) if extra_data else None
-        cursor.execute(
-            """INSERT OR REPLACE INTO items 
-               (id, item_name, quantity, data, category_id, cost, fling_power, fling_effect_id) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                item_id,
-                item_name,
-                quantity,
-                obfuscated_data,
-                category_id,
-                cost,
-                fling_power,
-                fling_effect_id,
-            ),
-        )
+            if item_id is None:
+                # PokeAPI catalogue IDs are positive. Keeping locally-known items in
+                # the negative range prevents a later catalogue insert from
+                # replacing an automatically numbered row with the same ID.
+                item_id = next_uncatalogued_id()
+            else:
+                # Older databases may already contain an uncatalogued row under a
+                # positive SQLite-assigned ID. Relocate it before claiming the
+                # catalogue ID; both statements share this transaction.
+                occupied = cursor.execute(
+                    "SELECT item_name FROM items WHERE id = ? AND item_name <> ?",
+                    (item_id, item_name),
+                ).fetchone()
+                if occupied:
+                    cursor.execute(
+                        "UPDATE items SET id = ? WHERE id = ?",
+                        (next_uncatalogued_id(), item_id),
+                    )
+
+            # Ensure type: "TM" for UI filtering if applicable
+            if category_id == 37:
+                if extra_data is None:
+                    extra_data = {}
+                if extra_data.get("type") != "TM":
+                    extra_data["type"] = "TM"
+
+            obfuscated_data = self._obfuscate(extra_data) if extra_data else None
+            cursor.execute(
+                """INSERT INTO items
+                   (id, item_name, quantity, data, category_id, cost, fling_power, fling_effect_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(item_name) DO UPDATE SET
+                       id = excluded.id, quantity = excluded.quantity,
+                       data = excluded.data, category_id = excluded.category_id,
+                       cost = excluded.cost, fling_power = excluded.fling_power,
+                       fling_effect_id = excluded.fling_effect_id""",
+                (
+                    item_id,
+                    item_name,
+                    quantity,
+                    obfuscated_data,
+                    category_id,
+                    cost,
+                    fling_power,
+                    fling_effect_id,
+                ),
+            )
+            conn.execute("RELEASE SAVEPOINT ankimon_save_item")
+        except Exception:
+            conn.execute("ROLLBACK TO SAVEPOINT ankimon_save_item")
+            conn.execute("RELEASE SAVEPOINT ankimon_save_item")
+            if owns_transaction:
+                conn.rollback()
+            raise
         if commit:
             conn.commit()
         return True
