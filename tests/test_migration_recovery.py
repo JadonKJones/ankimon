@@ -1,6 +1,7 @@
 """Exercise the shipped migration with real SQLite and disposable legacy saves."""
 
 import json
+from contextlib import nullcontext
 from unittest.mock import patch
 
 import pytest
@@ -645,20 +646,55 @@ def test_overlap_collection_failure_retry_preserves_newer_main(migration):
     assert db.get_main_pokemon() == main
 
 
-def pending_collection_with_verified_main(migration, *, explicit=False, twins=False):
+def pending_collection_with_verified_main(
+    migration,
+    *,
+    collection_explicit=False,
+    main_explicit=False,
+    twins=False,
+    team=False,
+    failure="save",
+):
     from Ankimon.pyobj.legacy_migration import LegacyMigration
 
     db, _, paths, box = migration
     pokemon = dict(box[0], level=10)
-    if explicit:
+    main = dict(pokemon)
+    if collection_explicit:
         pokemon["individual_id"] = "main"
+    if main_explicit:
+        main["individual_id"] = "main"
     paths["mypokemon_path"].write_text(json.dumps([pokemon] * (2 if twins else 1)))
-    paths["mainpokemon_path"].write_text(json.dumps([pokemon]))
-    paths["team_path"].write_text("[]")
+    paths["mainpokemon_path"].write_text(json.dumps([main]))
+    team_member = (
+        {"individual_id": pokemon["individual_id"]} if team == "id-only" else pokemon
+    )
+    paths["team_path"].write_text(json.dumps([team_member] if team else []))
     sources = {key.removesuffix("_path"): path for key, path in paths.items()}
     original_bytes = {key: path.read_bytes() for key, path in sources.items()}
-    with patch.object(db, "save_pokemon", return_value=False):
-        stats = LegacyMigration(db, sources).run()
+    if failure == "insert":
+        db.execute("""
+            CREATE TRIGGER fail_collection BEFORE INSERT ON captured_pokemon
+            WHEN NEW.is_main = 0
+            BEGIN SELECT RAISE(ABORT, 'injected collection insert failure'); END
+        """)
+    elif failure == "checkpoint":
+        db.execute("""
+            CREATE TRIGGER fail_collection BEFORE INSERT ON metadata
+            WHEN NEW.key LIKE 'migration_collection_row:%'
+            BEGIN SELECT RAISE(ABORT, 'injected collection checkpoint failure'); END
+        """)
+    try:
+        with (
+            patch.object(db, "save_pokemon", return_value=False)
+            if failure == "save"
+            else nullcontext()
+        ):
+            stats = LegacyMigration(db, sources).run()
+    finally:
+        if failure != "save":
+            db.execute("DROP TRIGGER fail_collection")
+            db._get_connection().commit()
     assert stats.get("errors")
     assert stats["main"] == 1
     assert not db.is_migrated_phase1()
@@ -668,19 +704,27 @@ def pending_collection_with_verified_main(migration, *, explicit=False, twins=Fa
     assert db.execute(
         "SELECT 1 FROM metadata WHERE key = 'migration_verified_main'"
     ).fetchone()
+    assert db.get_all_pokemon() == [db.get_main_pokemon()]
     return sources, original_bytes, db.get_main_pokemon()
 
 
-@pytest.mark.parametrize("explicit", [False, True], ids=["idless", "explicit"])
+@pytest.mark.parametrize("collection_explicit", [False, True])
+@pytest.mark.parametrize("main_explicit", [False, True])
+@pytest.mark.parametrize("team", [False, True])
+@pytest.mark.parametrize("failure", ["save", "insert", "checkpoint"])
 @pytest.mark.parametrize("state", ["unchanged", "progressed", "released"])
 def test_pending_collection_retry_uses_verified_main_identity(
-    migration, explicit, state
+    migration, collection_explicit, main_explicit, team, failure, state
 ):
     from Ankimon.pyobj.legacy_migration import LegacyMigration
 
     db, _, _, _ = migration
     sources, original_bytes, main = pending_collection_with_verified_main(
-        migration, explicit=explicit
+        migration,
+        collection_explicit=collection_explicit,
+        main_explicit=main_explicit,
+        team=team,
+        failure=failure,
     )
     if state == "progressed":
         main = dict(main, level=20, nickname="Progress")
@@ -694,7 +738,22 @@ def test_pending_collection_retry_uses_verified_main_identity(
         for _ in range(2):
             stats = LegacyMigration(reopened, sources).run()
             rows = reopened.get_all_pokemon()
-            if state == "released":
+            # An explicit main absent from the collection is a separate Pokemon.
+            distinct_main = main_explicit and not collection_explicit
+            if distinct_main:
+                collection = [p for p in rows if p["individual_id"] != "main"]
+                assert len(collection) == 1
+                assert collection[0]["level"] == 10
+                assert reopened.get_pokemon("main") == (
+                    None if state == "released" else main
+                )
+                assert not stats.get("errors"), stats
+                assert reopened.is_migrated()
+                if team:
+                    assert reopened.get_team() == [
+                        {"individual_id": collection[0]["individual_id"]}
+                    ]
+            elif state == "released":
                 assert rows == []
                 assert stats.get("errors"), stats
                 assert stats["pokemon"] == 0
@@ -706,6 +765,10 @@ def test_pending_collection_retry_uses_verified_main_identity(
                 assert rows == [main]
                 assert not stats.get("errors"), stats
                 assert reopened.is_migrated()
+                if team:
+                    assert reopened.get_team() == [
+                        {"individual_id": main["individual_id"]}
+                    ]
             assert {
                 key: path.read_bytes() for key, path in sources.items()
             } == original_bytes
@@ -713,11 +776,44 @@ def test_pending_collection_retry_uses_verified_main_identity(
         reopened.close()
 
 
-@pytest.mark.parametrize("explicit", [False, True], ids=["idless", "explicit"])
-def test_pending_collection_missing_main_dialog_preserves_sources(migration, explicit):
+def test_mixed_collection_alias_survives_reopen_for_pending_id_only_team(migration):
+    from Ankimon.pyobj.legacy_migration import LegacyMigration
+
+    db, _, _, _ = migration
+    sources, original_bytes, main = pending_collection_with_verified_main(
+        migration, collection_explicit=True, team="id-only", failure="checkpoint"
+    )
+    assert main["individual_id"] != "main"
+    main = dict(main, level=20, nickname="Progress")
+    assert db.save_main_pokemon(main)
+    # First retry checkpoints the collection alias, but team saving still fails.
+    with patch.object(db, "save_team", return_value=False):
+        stats = LegacyMigration(db, sources).run()
+    assert stats.get("errors")
+    assert db.get_all_pokemon() == [main]
+    assert not db.is_migrated()
+    db.close()
+    reopened = AnkimonDB(db_path=db.db_path)
+    try:
+        stats = LegacyMigration(reopened, sources).run()
+        assert not stats.get("errors"), stats
+        assert reopened.is_migrated()
+        assert reopened.get_all_pokemon() == [main]
+        assert reopened.get_team() == [{"individual_id": main["individual_id"]}]
+        assert {key: path.read_bytes() for key, path in sources.items()} == original_bytes
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize(
+    "collection_explicit,main_explicit", [(False, False), (True, False), (True, True)]
+)
+def test_pending_collection_missing_main_dialog_preserves_sources(
+    migration, collection_explicit, main_explicit
+):
     db, dialog, _, _ = migration
     sources, original_bytes, main = pending_collection_with_verified_main(
-        migration, explicit=explicit
+        migration, collection_explicit=collection_explicit, main_explicit=main_explicit
     )
     db.add_to_history(main)
     assert db.delete_pokemon(main["individual_id"])
@@ -734,12 +830,13 @@ def test_pending_collection_missing_main_dialog_preserves_sources(migration, exp
 
 
 @pytest.mark.parametrize("progressed", [False, True])
+@pytest.mark.parametrize("collection_explicit", [False, True])
 def test_pending_identical_twins_cannot_guess_verified_main_owner(
-    migration, progressed
+    migration, progressed, collection_explicit
 ):
     db, dialog, _, _ = migration
     sources, original_bytes, main = pending_collection_with_verified_main(
-        migration, twins=True
+        migration, twins=True, collection_explicit=collection_explicit
     )
     if progressed:
         main = dict(main, level=20)
@@ -769,6 +866,48 @@ def test_pending_idless_collection_does_not_claim_distinct_explicit_main(migrati
     assert dialog.migration_successful, dialog.log_area.toPlainText()
     assert db.get_pokemon_count() == 2
     assert db.get_main_pokemon() == main
+
+
+@pytest.mark.parametrize("include_main", [False, True])
+@pytest.mark.parametrize("collection_explicit", [False, True])
+@pytest.mark.parametrize(
+    "difference",
+    [{"id": 1, "name": "Bulbasaur"}, {"level": 5}, {"iv": {"hp": 7}}],
+    ids=["species", "level", "ivs"],
+)
+def test_pending_collection_matches_main_fields_not_missing_ids(
+    migration, include_main, collection_explicit, difference
+):
+    db, dialog, paths, box = migration
+    main = dict(box[0], level=10)
+    other = dict(main, **difference)
+    if collection_explicit:
+        other["individual_id"] = "other"
+    entries = [other, main] if include_main else [other]
+    paths["mypokemon_path"].write_text(json.dumps(entries))
+    paths["mainpokemon_path"].write_text(json.dumps([main]))
+    paths["team_path"].write_text(json.dumps(entries))
+    with patch.object(db, "save_pokemon", return_value=False):
+        run(dialog)
+    assert not dialog.migration_successful
+    live = dict(db.get_main_pokemon(), level=20)
+    assert db.save_main_pokemon(live)
+    run(dialog)
+    assert dialog.migration_successful, dialog.log_area.toPlainText()
+    assert db.get_pokemon_count() == 2
+    assert db.get_main_pokemon() == live
+    saved_other = next(
+        p
+        for p in db.get_all_pokemon()
+        if p["individual_id"] != live["individual_id"]
+    )
+    assert {k: v for k, v in saved_other.items() if k != "individual_id"} == {
+        k: v for k, v in other.items() if k != "individual_id"
+    }
+    expected_team = [{"individual_id": saved_other["individual_id"]}]
+    if include_main:
+        expected_team.append({"individual_id": live["individual_id"]})
+    assert db.get_team() == expected_team
 
 
 @pytest.mark.parametrize("committed", [False, True])

@@ -112,6 +112,9 @@ def probe_retry_boundaries(session, output):
         "pending-idless-progress",
         "pending-idless-release",
         "pending-explicit-release",
+        "pending-mixed-unchanged",
+        "pending-mixed-progress",
+        "pending-mixed-release",
     ):
         with tempfile.TemporaryDirectory(prefix="ankimon-overlap-") as directory:
             root = Path(directory)
@@ -194,8 +197,12 @@ def probe_retry_boundaries(session, output):
             elif scenario.startswith("pending-"):
                 if "idless" in scenario:
                     captured.pop("individual_id")
+                main = dict(captured)
+                if "mixed" in scenario:
+                    main.pop("individual_id")
+                    paths["team_path"].write_text(json.dumps([captured]))
                 paths["mypokemon_path"].write_text(json.dumps([captured]))
-                paths["mainpokemon_path"].write_text(json.dumps([captured]))
+                paths["mainpokemon_path"].write_text(json.dumps([main]))
                 original_bytes = {key: path.read_bytes() for key, path in paths.items()}
                 with patch.object(db, "save_pokemon", return_value=False):
                     dialog.start_button.click()
@@ -205,7 +212,7 @@ def probe_retry_boundaries(session, output):
                 if scenario.endswith("release"):
                     db.add_to_history(live)
                     assert db.delete_pokemon(live["individual_id"])
-                else:
+                elif scenario.endswith("progress"):
                     live = dict(live, level=20)
                     assert db.save_main_pokemon(live)
                 db.close()
@@ -227,6 +234,8 @@ def probe_retry_boundaries(session, output):
                     assert dialog.migration_successful, dialog.log_area.toPlainText()
                     assert db.get_all_pokemon() == [live]
                     assert db.is_migrated()
+                    if "mixed" in scenario:
+                        assert db.get_team() == [{"individual_id": live["individual_id"]}]
                     assert (root / "json/mypokemon.json").read_bytes() == original_bytes[
                         "mypokemon_path"
                     ]

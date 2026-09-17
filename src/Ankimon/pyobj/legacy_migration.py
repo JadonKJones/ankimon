@@ -249,19 +249,22 @@ class LegacyMigration:
         main_index = None
         if self.main_candidate is not None:
             main_id = self.main_candidate["individual_id"]
-            if (
-                main_id not in reserved
-                and self.main_candidate.get(_LEGACY_INDIVIDUAL_ID) is None
-            ):
+            if main_id not in reserved:
                 # Main may have committed after a collection write failed. Its
                 # immutable alias, not its live level or presence, proves the
                 # overlap. Check all pending entries before choosing an owner.
+                # Use the same main-to-collection rule as a fresh import. The
+                # assigned ID is ownership evidence, not the main's source ID;
+                # an ID-less main can also own an explicit collection alias.
+                main_source = dict(
+                    self.main_candidate,
+                    individual_id=self.main_candidate.get(_LEGACY_INDIVIDUAL_ID),
+                )
                 matches = [
                     index
                     for index, original in enumerate(entries)
                     if isinstance(original, dict)
-                    and not is_valid_individual_id(original.get("individual_id"))
-                    and find_matching_captured(original, [self.main_candidate])
+                    and self.resolve_member(main_source, [original]) is not None
                     and not self.db.execute(
                         "SELECT 1 FROM metadata WHERE key = ?",
                         (self.collection_row_key(index, original),),
@@ -382,7 +385,7 @@ class LegacyMigration:
     def resolve_member(self, member, candidates, *, team=False):
         old_id = member.get("individual_id")
         exact = next((p for p in candidates if p.get("individual_id") == old_id), None)
-        if exact and (
+        if is_valid_individual_id(old_id) and exact and (
             old_id not in self.duplicate_ids
             or not member.get("name")
             or find_matching_captured(member, [exact])
