@@ -115,6 +115,10 @@ def probe_retry_boundaries(session, output):
         "pending-mixed-unchanged",
         "pending-mixed-progress",
         "pending-mixed-release",
+        "duplicate-insert",
+        "duplicate-checkpoint",
+        "duplicate-second-insert",
+        "duplicate-second-checkpoint",
     ):
         with tempfile.TemporaryDirectory(prefix="ankimon-overlap-") as directory:
             root = Path(directory)
@@ -194,6 +198,76 @@ def probe_retry_boundaries(session, output):
                 assert db.get_pokemon_count() == 2
                 assert paths["mypokemon_path"].exists()
                 assert "reconciliation" in dialog.log_area.toPlainText().lower()
+            elif scenario.startswith("duplicate-"):
+                from Ankimon.pyobj.legacy_migration import LegacyMigration
+
+                captured["individual_id"] = "duplicate"
+                other = build_pokemon({"species": "Bulbasaur", "level": 10}).to_dict()
+                other["individual_id"] = "duplicate"
+                paths["mypokemon_path"].write_text(json.dumps([captured, other]))
+                paths["mainpokemon_path"].write_text(json.dumps([other]))
+                paths["team_path"].write_text(json.dumps([captured, other]))
+                original_bytes = {key: path.read_bytes() for key, path in paths.items()}
+                failed_index = 1 if "second" in scenario else 0
+                failed_source = [captured, other][failed_index]
+                runner = LegacyMigration(db, {})
+                if scenario.endswith("insert"):
+                    failed_id = (
+                        runner.generated_id("collection", 1, other)
+                        if failed_index
+                        else "duplicate"
+                    )
+                    db.execute(f"""
+                        CREATE TRIGGER fail_first BEFORE INSERT ON captured_pokemon
+                        WHEN NEW.individual_id = '{failed_id}' AND NEW.is_main = 0
+                        BEGIN SELECT RAISE(ABORT, 'injected collection failure'); END
+                    """)
+                else:
+                    key = runner.collection_row_key(failed_index, failed_source)
+                    db.execute(f"""
+                        CREATE TRIGGER fail_first BEFORE INSERT ON metadata
+                        WHEN NEW.key = '{key}'
+                        BEGIN SELECT RAISE(ABORT, 'injected checkpoint failure'); END
+                    """)
+                dialog.start_button.click()
+                assert not dialog.migration_successful
+                assert not db.is_migrated()
+                assert db.get_pokemon_count() == 1
+                if failed_index:
+                    assert db.get_all_pokemon() == [captured]
+                    assert db.get_main_pokemon() is None
+                    live = None
+                else:
+                    live = dict(db.get_main_pokemon(), level=20)
+                    assert live["id"] == other["id"]
+                    assert live["individual_id"] != "duplicate"
+                db.execute("DROP TRIGGER fail_first")
+                db._get_connection().commit()
+                if live is not None:
+                    assert db.save_main_pokemon(live)
+                db.close()
+                db = AnkimonDB(db_path=root / "ankimon.db")
+                dialog.db = db
+                dialog.start_button.click()
+                assert dialog.migration_successful, dialog.log_area.toPlainText()
+                assert db.is_migrated()
+                assert db.get_pokemon_count() == 2
+                assert db.get_pokemon("duplicate") == captured
+                if live is None:
+                    live = dict(
+                        other, individual_id=db.get_main_pokemon()["individual_id"]
+                    )
+                    assert live["individual_id"] != "duplicate"
+                assert db.get_main_pokemon() == live
+                assert db.get_team() == [
+                    {"individual_id": "duplicate"},
+                    {"individual_id": live["individual_id"]},
+                ]
+                for key, path in paths.items():
+                    assert not path.exists()
+                    assert (root / "json" / path.name).read_bytes() == original_bytes[
+                        key
+                    ]
             elif scenario.startswith("pending-"):
                 if "idless" in scenario:
                     captured.pop("individual_id")
@@ -235,10 +309,12 @@ def probe_retry_boundaries(session, output):
                     assert db.get_all_pokemon() == [live]
                     assert db.is_migrated()
                     if "mixed" in scenario:
-                        assert db.get_team() == [{"individual_id": live["individual_id"]}]
-                    assert (root / "json/mypokemon.json").read_bytes() == original_bytes[
-                        "mypokemon_path"
-                    ]
+                        assert db.get_team() == [
+                            {"individual_id": live["individual_id"]}
+                        ]
+                    assert (
+                        root / "json/mypokemon.json"
+                    ).read_bytes() == original_bytes["mypokemon_path"]
             else:
                 paths["mainpokemon_path"].write_text("[]")
                 progress = dialog._update_progress

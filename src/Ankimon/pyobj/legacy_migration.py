@@ -249,6 +249,10 @@ class LegacyMigration:
         main_index = None
         if self.main_candidate is not None:
             main_id = self.main_candidate["individual_id"]
+            main_source = dict(
+                self.main_candidate,
+                individual_id=self.main_candidate.get(_LEGACY_INDIVIDUAL_ID),
+            )
             if main_id not in reserved:
                 # Main may have committed after a collection write failed. Its
                 # immutable alias, not its live level or presence, proves the
@@ -256,10 +260,6 @@ class LegacyMigration:
                 # Use the same main-to-collection rule as a fresh import. The
                 # assigned ID is ownership evidence, not the main's source ID;
                 # an ID-less main can also own an explicit collection alias.
-                main_source = dict(
-                    self.main_candidate,
-                    individual_id=self.main_candidate.get(_LEGACY_INDIVIDUAL_ID),
-                )
                 matches = [
                     index
                     for index, original in enumerate(entries)
@@ -341,6 +341,17 @@ class LegacyMigration:
                     self.main_candidate is not None
                     and self.main_candidate["individual_id"] == individual_id
                 )
+                if (
+                    protected_main
+                    and self.resolve_member(main_source, [original]) is None
+                ):
+                    # A shared database ID alone is not ownership evidence:
+                    # older retries may have assigned it to a different source.
+                    # Compare immutable source identities, never live gameplay.
+                    raise ValueError(
+                        "collection identity conflicts with checkpointed main; "
+                        "explicit recovery decision required"
+                    )
                 if (preserve_existing or protected_main) and not isinstance(
                     existing, dict
                 ):
@@ -385,16 +396,16 @@ class LegacyMigration:
     def resolve_member(self, member, candidates, *, team=False):
         old_id = member.get("individual_id")
         exact = next((p for p in candidates if p.get("individual_id") == old_id), None)
-        if is_valid_individual_id(old_id) and exact and (
-            old_id not in self.duplicate_ids
-            or not member.get("name")
-            or find_matching_captured(member, [exact])
+        if (
+            is_valid_individual_id(old_id)
+            and exact
+            and (
+                old_id not in self.duplicate_ids
+                or not member.get("name")
+                or find_matching_captured(member, [exact])
+            )
         ):
             return exact
-        if not team and is_valid_individual_id(old_id) and exact is None:
-            # A distinct explicit identity denotes a separate captured Pokemon,
-            # even when its species, level and IVs happen to match another one.
-            return None
         mapped = [
             p
             for p in candidates
@@ -406,13 +417,16 @@ class LegacyMigration:
                 return match
             if not member.get("name"):
                 return mapped[0]
+        if not team and is_valid_individual_id(old_id) and exact is None:
+            # A proven alias can own a reassigned row. Without that evidence,
+            # a distinct explicit identity denotes a separate captured Pokemon,
+            # even when its species, level and IVs happen to match another one.
+            return None
         # Match the full legacy identity first: duplicate IDs may have been
         # reassigned during collection migration (including across a retry).
         match = find_matching_captured(member, candidates)
-        if match is None and is_valid_individual_id(old_id):
-            match = next(
-                (p for p in candidates if p.get("individual_id") == old_id), None
-            )
+        # An exact duplicate ID rejected above must not bypass the source-field
+        # checks here, including when a team member has not yet been imported.
         if match is None and team and not member.get("iv"):
             # Some legacy team entries have no IVs and use species_id.
             def identity(p):
@@ -456,6 +470,18 @@ class LegacyMigration:
             member["individual_id"] = self.generated_id("main", 0, member)
         individual_id = member["individual_id"]
         existing = self.db.get_pokemon(individual_id)
+        if (
+            match is None
+            and individual_id in self.duplicate_ids
+            and existing is not None
+        ):
+            # A failed collection entry can leave its main alias pointing at a
+            # different entry that did commit. Retry collection first; never
+            # overwrite that owner with an unresolved duplicate main identity.
+            raise ValueError(
+                "unresolved duplicate main identity; retry after resolving "
+                "collection failures or seek explicit recovery"
+            )
         owned = any(p["individual_id"] == individual_id for p in self.collection)
         if owned and (
             individual_id not in self.collection_snapshots
