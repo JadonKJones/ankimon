@@ -1049,6 +1049,13 @@ class AnkimonDB:
                     "warning",
                     f"Startup integrity check failed for {self.db_path.name}: {e}",
                 )
+                # repair_database() quiesces (closes) every connection on this
+                # instance -- drop our own cursor/connection reference first
+                # rather than holding one the close is about to invalidate.
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
                 self.repair_database()
                 conn = self._get_connection()
                 cursor = conn.cursor()
