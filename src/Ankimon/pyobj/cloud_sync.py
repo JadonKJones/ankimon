@@ -28,18 +28,50 @@ from ..utils import close_anki
 
 CLOUD_DB_NAME = "_ankimon_cloud.db"
 
+# Config keys never written to the cloud copy. collection.media is uploaded to
+# AnkiWeb's servers on the next sync, so a credential stored in ankimon.db's
+# config table (unlike ankimon.db itself, which never leaves the local
+# machine) would otherwise be handed to a third party.
+_SECRET_CONFIG_KEYS = ("leaderboard.api_key",)
+
 
 class CloudSync:
     """Handles pushing/pulling the active Ankimon database to its cloud copy."""
 
     def __init__(self, logger, settings_obj):
+        """Store the shared logger/settings used for backups and diagnostics."""
         self.logger = logger
         self.settings_obj = settings_obj
 
     def _cloud_db_path(self) -> Path:
+        """Path of the cloud copy inside the current profile's collection.media."""
         return Path(mw.pm.profileFolder()) / "collection.media" / CLOUD_DB_NAME
 
+    def _scrub_secrets(self, path: Path) -> None:
+        """Blank credential-bearing config rows in a standalone db copy.
+
+        Called only on the copy about to be uploaded to AnkiWeb — never on the
+        live ``ankimon.db``, which stays local.
+        """
+        try:
+            with closing(sqlite3.connect(str(path))) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='config'"
+                )
+                if cursor.fetchone() is None:
+                    return
+                cursor.executemany(
+                    "UPDATE config SET value = '' WHERE key = ?",
+                    [(key,) for key in _SECRET_CONFIG_KEYS],
+                )
+                conn.commit()
+        except Exception as e:
+            self.logger.log("error", f"Cloud sync: failed to scrub secrets from {path}: {e}")
+            raise
+
     def _verify_sqlite_integrity(self, path: Path) -> bool:
+        """Run a quick_check and confirm the core game table is present."""
         try:
             with closing(sqlite3.connect(str(path))) as conn:
                 cursor = conn.cursor()
@@ -78,6 +110,10 @@ class CloudSync:
                     return
                 shutil.copy2(local_path, tmp_path)
 
+            # Scrub credentials from the STANDALONE copy (never the live db)
+            # before it can be finalized into collection.media / uploaded.
+            self._scrub_secrets(tmp_path)
+
             if not self._verify_sqlite_integrity(tmp_path):
                 tmp_path.unlink(missing_ok=True)
                 showWarning("Push failed: the copied database did not pass an integrity check.")
@@ -112,16 +148,11 @@ class CloudSync:
         try:
             from .backup_manager import BackupManager
 
-            backup_ok = BackupManager(self.logger, self.settings_obj).create_backup(
-                manual=True, required_file=local_path.name
-            )
-            if not backup_ok:
-                showWarning(
-                    "Pull aborted: could not create a safety backup of your "
-                    "current data, so nothing was changed."
-                )
-                return
-
+            # Backup and replace share ONE quiesce: a backup taken before
+            # (or after releasing) the lock could still race a write landing
+            # between the checkpoint and the file copy, making it an
+            # inconsistent recovery point. Holding the lock across both means
+            # nothing can write to the live db from backup through replace.
             with services.db.quiesce(2.0) as drained:
                 if not drained:
                     showWarning(
@@ -129,6 +160,17 @@ class CloudSync:
                         "(an operation is still in progress). Try again shortly."
                     )
                     return
+
+                backup_ok = BackupManager(self.logger, self.settings_obj).create_backup(
+                    manual=True, required_file=local_path.name
+                )
+                if not backup_ok:
+                    showWarning(
+                        "Pull aborted: could not create a safety backup of your "
+                        "current data, so nothing was changed."
+                    )
+                    return
+
                 tmp_local = local_path.with_name(local_path.name + ".pulling")
                 shutil.copy2(cloud_path, tmp_local)
                 tmp_local.replace(local_path)
