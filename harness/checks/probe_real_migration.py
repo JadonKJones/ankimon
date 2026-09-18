@@ -119,6 +119,8 @@ def probe_retry_boundaries(session, output):
         "duplicate-checkpoint",
         "duplicate-second-insert",
         "duplicate-second-checkpoint",
+        "duplicate-both-insert",
+        "duplicate-both-checkpoint",
     ):
         with tempfile.TemporaryDirectory(prefix="ankimon-overlap-") as directory:
             root = Path(directory)
@@ -209,6 +211,7 @@ def probe_retry_boundaries(session, output):
                 paths["team_path"].write_text(json.dumps([captured, other]))
                 original_bytes = {key: path.read_bytes() for key, path in paths.items()}
                 failed_index = 1 if "second" in scenario else 0
+                fail_both = "both" in scenario
                 failed_source = [captured, other][failed_index]
                 runner = LegacyMigration(db, {})
                 if scenario.endswith("insert"):
@@ -219,21 +222,26 @@ def probe_retry_boundaries(session, output):
                     )
                     db.execute(f"""
                         CREATE TRIGGER fail_first BEFORE INSERT ON captured_pokemon
-                        WHEN NEW.individual_id = '{failed_id}' AND NEW.is_main = 0
+                        WHEN ({int(fail_both)} OR NEW.individual_id = '{failed_id}')
+                             AND NEW.is_main = 0
                         BEGIN SELECT RAISE(ABORT, 'injected collection failure'); END
                     """)
                 else:
                     key = runner.collection_row_key(failed_index, failed_source)
                     db.execute(f"""
                         CREATE TRIGGER fail_first BEFORE INSERT ON metadata
-                        WHEN NEW.key = '{key}'
+                        WHEN NEW.key = '{key}' OR
+                             ({int(fail_both)} AND NEW.key LIKE 'migration_collection_row:%')
                         BEGIN SELECT RAISE(ABORT, 'injected checkpoint failure'); END
                     """)
                 dialog.start_button.click()
                 assert not dialog.migration_successful
                 assert not db.is_migrated()
-                assert db.get_pokemon_count() == 1
-                if failed_index:
+                assert db.get_pokemon_count() == (0 if fail_both else 1)
+                if fail_both:
+                    assert db.get_main_pokemon() is None
+                    live = None
+                elif failed_index:
                     assert db.get_all_pokemon() == [captured]
                     assert db.get_main_pokemon() is None
                     live = None

@@ -164,6 +164,78 @@ def test_duplicate_id_partial_retry_preserves_both_species(
         db.close()
 
 
+@pytest.mark.parametrize("team", [False, True])
+@pytest.mark.parametrize("main_index", [0, 1])
+@pytest.mark.parametrize("failure", ["insert", "checkpoint"])
+def test_duplicate_id_retry_after_all_collection_entries_fail(
+    tmp_path, duplicate_sources, failure, main_index, team
+):
+    from Ankimon.pyobj.legacy_migration import LegacyMigration
+
+    sources, pikachu, bulbasaur = duplicate_sources
+    originals = [pikachu, bulbasaur]
+    sources["mainpokemon"].write_text(json.dumps([originals[main_index]]))
+    if not team:
+        sources["team"].write_text("[]")
+    original_bytes = {key: path.read_bytes() for key, path in sources.items()}
+    db = AnkimonDB(db_path=tmp_path / "ankimon.db")
+    try:
+        if failure == "insert":
+            db.execute("""
+                CREATE TRIGGER fail_collection BEFORE INSERT ON captured_pokemon
+                WHEN NEW.is_main = 0
+                BEGIN SELECT RAISE(ABORT, 'injected collection failure'); END
+            """)
+        else:
+            db.execute("""
+                CREATE TRIGGER fail_collection BEFORE INSERT ON metadata
+                WHEN NEW.key LIKE 'migration_collection_row:%'
+                BEGIN SELECT RAISE(ABORT, 'injected collection checkpoint failure'); END
+            """)
+        stats = LegacyMigration(db, sources).run()
+        assert stats["pokemon_failed"] == 2
+        assert stats.get("errors"), stats
+        assert not db.is_migrated()
+        db.execute("DROP TRIGGER fail_collection")
+        db._get_connection().commit()
+        # Reopen on every attempt: ownership must survive process boundaries,
+        # and further retries must neither add copies nor change team aliases.
+        for _ in range(3):
+            db.close()
+            db = AnkimonDB(db_path=tmp_path / "ankimon.db")
+            stats = LegacyMigration(db, sources).run()
+            assert not stats.get("errors"), stats
+            assert db.is_migrated()
+            rows = db.get_all_pokemon()
+            assert sorted(p["id"] for p in rows) == [1, 25]
+            by_species = {p["id"]: p for p in rows}
+            for original in originals:
+                saved = by_species[original["id"]]
+                assert saved == dict(original, individual_id=saved["individual_id"])
+            assert db.get_main_pokemon() == by_species[originals[main_index]["id"]]
+            assert db.get_team() == (
+                [
+                    {"individual_id": by_species[p["id"]]["individual_id"]}
+                    for p in originals
+                ]
+                if team
+                else []
+            )
+            checkpoints = db.execute(
+                "SELECT value FROM metadata WHERE key LIKE 'migration_collection_row:%'"
+            ).fetchall()
+            assert len(checkpoints) == 2
+            for row in checkpoints:
+                payload = json.loads(row["value"])
+                assert str(payload["record"]["id"]) == str(payload["snapshot"]["id"])
+                assert payload["record"]["name"] == payload["snapshot"]["name"].lower()
+            assert {
+                key: path.read_bytes() for key, path in sources.items()
+            } == original_bytes
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("state", ["unchanged", "progressed", "released"])
 def test_pending_collection_cannot_claim_unrelated_checkpointed_main(
     tmp_path, duplicate_sources, state

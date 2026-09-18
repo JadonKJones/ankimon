@@ -470,14 +470,10 @@ class LegacyMigration:
             member["individual_id"] = self.generated_id("main", 0, member)
         individual_id = member["individual_id"]
         existing = self.db.get_pokemon(individual_id)
-        if (
-            match is None
-            and individual_id in self.duplicate_ids
-            and existing is not None
-        ):
-            # A failed collection entry can leave its main alias pointing at a
-            # different entry that did commit. Retry collection first; never
-            # overwrite that owner with an unresolved duplicate main identity.
+        if match is None and individual_id in self.duplicate_ids:
+            # Collection sources reserve duplicate identities even when every
+            # write fails. Wait for a collection mapping before letting main
+            # claim an ID that may belong to a different source entry.
             raise ValueError(
                 "unresolved duplicate main identity; retry after resolving "
                 "collection failures or seek explicit recovery"
