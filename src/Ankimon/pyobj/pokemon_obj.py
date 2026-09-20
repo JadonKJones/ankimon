@@ -117,7 +117,7 @@ class PokemonObject:
         self.friendship = friendship
 
         # Battle and status
-        self.battle_status = str(battle_status)
+        self.battle_status = self._normalize_battle_status(battle_status)
         self.position = (
             tuple(position) if isinstance(position, (list, tuple)) else (0, 0)
         )
@@ -169,8 +169,14 @@ class PokemonObject:
             if pretty_name == "No Translation in this language":
                 pretty_name = get_pretty_name_for_name(self.name)
 
+            # The English pretty name — the catch flow auto-stores THIS as the
+            # "nickname" regardless of the current language, so a JP/DE/… player
+            # would otherwise see "Paldean Wooper" instead of パルデアウパー.
+            english_name = get_pretty_name_for_name(self.name)
+
             if self.nickname:
-                # Check if the nickname is just a variation of the internal/pretty name.
+                # Check if the nickname is just a variation of the internal /
+                # localized / English name.
                 def normalize(s):
                     return (
                         str(s)
@@ -183,8 +189,10 @@ class PokemonObject:
                     )
 
                 norm_nick = normalize(self.nickname)
-                if norm_nick != normalize(self.name) and norm_nick != normalize(
-                    pretty_name
+                if norm_nick not in (
+                    normalize(self.name),
+                    normalize(pretty_name),
+                    normalize(english_name),
                 ):
                     return self.nickname
 
@@ -465,6 +473,21 @@ class PokemonObject:
     })
 
     @staticmethod
+    def _normalize_battle_status(value):
+        """Return a lowercase status string; None/blank means healthy.
+
+        Every comparison in the codebase is against lowercase literals
+        ("fighting", "fainted", ...), and update_stats() writes whatever the
+        database row holds — including None for older records — straight onto
+        the attribute. Normalising here keeps validate_pokemon_status() and
+        to_engine_format() from seeing a None or a capitalised "Fighting".
+        """
+        if value is None:
+            return "fighting"
+
+        return str(value).strip().lower() or "fighting"
+
+    @staticmethod
     def _normalize_hp(value, fallback, max_hp):
         """Return an integer HP value constrained to the Pokemon's valid range."""
         try:
@@ -498,12 +521,15 @@ class PokemonObject:
         hp_fallback = raw_current_hp if raw_current_hp is not None else self.max_hp
         self.hp = self._normalize_hp(raw_hp, hp_fallback, self.max_hp)
         self.current_hp = self._normalize_hp(raw_current_hp, self.hp, self.max_hp)
+        self.battle_status = self._normalize_battle_status(
+            getattr(self, "battle_status", None)
+        )
         self._update_battle_stats()  # Update battle stats
 
     def reset_stats(self):
         """Reset the stats of the Pokémon to default values."""
         self.hp = self.max_hp
-        self.battle_status = "Fighting"
+        self.battle_status = "fighting"
         self._update_battle_stats()
 
     def _update_battle_stats(self):
@@ -601,7 +627,7 @@ class PokemonObject:
                     ["hp", "atk", "def", "spa", "spd", "spe"], engine_data["ivs"]
                 )
             },
-            battlestatus=engine_data.get("status", "fighting"),
+            battle_status=engine_data.get("status", "fighting"),
             moves=engine_data["moves"],
             stat_stages={
                 "atk": engine_data["stat_stages"]["attack"],
