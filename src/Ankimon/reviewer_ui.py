@@ -128,6 +128,11 @@ def cycle_team_pokemon():
                 return
             pokemon_data["base_stats"] = base_stats
 
+            # The mutable main singleton is about to represent another
+            # individual. The pending faint belongs to the previous one.
+            from .battle_loop import _cancel_main_faint_deferral
+
+            _cancel_main_faint_deferral()
             main_pokemon.update_stats(**pokemon_data)
             main_pokemon.max_hp = main_pokemon.calculate_max_hp()
             main_pokemon.hp = main_pokemon.max_hp
@@ -195,21 +200,9 @@ def set_collected_ids(ids):
 
 def catch_shortcut_function():
     if enemy_pokemon.hp < 1:
-        catch_pokemon(
-            enemy_pokemon,
-            ankimon_tracker_obj,
-            logger,
-            "",
-            _collected_pokemon_ids,
-            achievements,
-        )
-        new_pokemon(
-            enemy_pokemon,
-            get_test_window(),
-            ankimon_tracker_obj,
-            reviewer_obj,
-            update_hud=True,
-        )
+        from .hook_registry import CatchPokemonHook
+
+        CatchPokemonHook(_collected_pokemon_ids)
     else:
         if get_auto_battle_setting(services.settings) == 0:
             # Auto-battle disabled - show the original message
@@ -221,21 +214,9 @@ def catch_shortcut_function():
 
 def defeat_shortcut_function():
     if enemy_pokemon.hp < 1:
-        kill_pokemon(
-            main_pokemon,
-            enemy_pokemon,
-            get_evo_window(),
-            logger,
-            achievements,
-            trainer_card,
-        )
-        new_pokemon(
-            enemy_pokemon,
-            get_test_window(),
-            ankimon_tracker_obj,
-            reviewer_obj,
-            update_hud=True,
-        )
+        from .hook_registry import DefeatPokemonHook
+
+        DefeatPokemonHook()
     else:
         if get_auto_battle_setting(services.settings) == 0:
             # Auto-battle disabled - show the original message

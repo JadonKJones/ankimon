@@ -1272,6 +1272,13 @@ def new_pokemon(
     pokemon.hp = max_hp
     pokemon.max_hp = max_hp
 
+    # A successful manual choice settles its faint before reaching here. Any
+    # deferral still pending belongs to the encounter this one replaces.
+    from ..battle_loop import _cancel_main_faint_deferral
+
+    _cancel_main_faint_deferral()
+    pokemon._ankimon_encounter_token = object()
+
     ankimon_tracker.randomize_battle_scene()
     if test_window is not None:
         try:

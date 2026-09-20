@@ -41,8 +41,13 @@ def _ankidex_i18n(settings, flavor_species_ids=None):
             if lid == norm_lang and name:
                 out["names"][str(sid)] = name
 
-        # Regional / mega / gmax form ids carry a distinct localized name.
-        for fid in getattr(encounter_data, "REGIONAL_FORM_REGION", {}):
+        # Include every displayed alternate form, including Mega and Gmax.
+        form_ids = (
+            set(getattr(encounter_data, "REGIONAL_FORM_REGION", {}))
+            | set(getattr(encounter_data, "MEGA", ()))
+            | set(getattr(encounter_data, "GMAX", ()))
+        )
+        for fid in form_ids:
             try:
                 loc = get_pokemon_diff_lang_name(int(fid), lang)
                 if loc and loc != "No Translation in this language":

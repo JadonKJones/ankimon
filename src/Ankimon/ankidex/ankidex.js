@@ -138,7 +138,10 @@ function applyI18nToSpecies() {
   const types = (state.i18n && state.i18n.types) || {};
   state.allPokemon.forEach((p) => {
     if (p._enName === undefined) p._enName = p.name;
-    p.name = names[p.actual_id] || names[p.species_id] || p._enName;
+    // A missing form translation must retain its form designation. Applying
+    // the translated base name to a Mega/Gmax would make distinct forms equal.
+    p.name = names[p.actual_id] ||
+      (p.actual_id === p.species_id ? names[p.species_id] : null) || p._enName;
     p.typesLocal = (Array.isArray(p.types) ? p.types : []).map(
       (t) => types[t] || t,
     );

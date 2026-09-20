@@ -37,47 +37,19 @@ enemy_pokemon = None
 settings_obj = None
 
 # Set while a manual-mode double faint is waiting on the player's enemy
-# catch/defeat choice, so a later battle round doesn't register a second
-# resolution callback for the same pending main faint.
+# catch/defeat choice, so a later battle round does not arm a second deferral.
 _main_faint_deferred = False
-# The callback currently registered on the catch/defeat hook buckets. Kept at
-# module scope so an ABANDONED deferral can be disarmed from outside _resolve()
-# itself -- see _cancel_main_faint_deferral().
-_main_faint_resolver = None
+# The active individuals and encounter must still match when the choice is made.
+# Both Pokémon objects are mutable singletons, so retaining their references is
+# insufficient to identify the battle that produced the double faint.
+_main_faint_context = None
 
 
 def _cancel_main_faint_deferral():
-    """Disarm a pending main-faint deferral and unregister its callback.
-
-    ``_resolve()`` used to be the only thing that ever cleared
-    ``_main_faint_deferred`` or removed itself from the hook buckets. So a
-    deferral the player never answered -- they closed the Ankimon Window
-    instead of the death screen, and the next round healed the main Pokemon
-    through the immediate branch in on_review_card() -- stayed armed forever.
-    The stale callback then fired on the next unrelated catch/defeat and ran
-    handle_main_pokemon_faint() against a FULL-HP Pokemon: a bogus faint
-    message and sound, a spurious ``faint`` event, and reset_bonuses()
-    silently wiping that battle's stat boosts.
-
-    Safe to call unconditionally -- a no-op when nothing is armed.
-    """
-    global _main_faint_deferred, _main_faint_resolver
-
+    """Discard a pending faint when its companion or encounter is abandoned."""
+    global _main_faint_deferred, _main_faint_context
     _main_faint_deferred = False
-    resolver, _main_faint_resolver = _main_faint_resolver, None
-    if resolver is None:
-        return
-
-    from . import hook_registry
-
-    for bucket in (
-        hook_registry.catch_pokemon_hooks,
-        hook_registry.defeat_pokemon_hooks,
-    ):
-        try:
-            bucket.remove(resolver)
-        except ValueError:
-            pass
+    _main_faint_context = None
 
 
 def _defer_main_faint_until_enemy_resolved(
@@ -93,54 +65,65 @@ def _defer_main_faint_until_enemy_resolved(
     On False the caller MUST handle the faint immediately; a deferral nothing
     can resolve would strand the main Pokemon at 0 HP forever.
     """
-    global _main_faint_deferred, _main_faint_resolver
+    global _main_faint_deferred, _main_faint_context
     if _main_faint_deferred:
         return True
 
     try:
-        from . import hook_registry
+        from . import hook_registry  # noqa: F401 - verify the dispatcher exists
     except Exception:
-        # hook_registry imports aqt, so this is the headless / no-Anki case.
-        # Nothing there could ever fire the resolver, and deferring anyway
+        # The headless harness has no catch/defeat dispatcher. Deferring there
         # would park the main Pokemon at 0 HP with no way back -- so report
         # failure and let the caller handle the faint immediately.
         return False
 
-    def _resolve():
-        if not _main_faint_deferred:
-            return
-        # Clears the flag AND unregisters this callback from both buckets
-        # before any of the work below, so an exception here cannot leave the
-        # deferral armed with a callback nothing will ever remove.
-        _cancel_main_faint_deferral()
-        resolve_window = services.test_window
-        handle_main_pokemon_faint(
-            main_pokemon,
-            enemy_pokemon,
-            resolve_window if is_alive(resolve_window) else None,
-            reviewer_obj,
-            translator,
-            spawn_replacement=False,
-        )
-        try:
-            reviewer_obj.refresh_hud()
-        except Exception:
-            pass
-        # The catch/defeat that triggered this already ran new_pokemon(), which
-        # composited the fresh encounter's intro frame while main_pokemon.hp
-        # was still 0. Repaint so the healed main HP bar is visible now rather
-        # than only after the next answered card.
-        try:
-            if is_alive(resolve_window) and resolve_window.current_view == "battle":
-                resolve_window.force_display_battle()
-        except Exception:
-            pass
-
+    # new_pokemon() gives every encounter a fresh token. An encounter already
+    # in progress before this change gets one here, without replacing it.
+    encounter_token = getattr(enemy_pokemon, "_ankimon_encounter_token", None)
+    if encounter_token is None:
+        encounter_token = object()
+        enemy_pokemon._ankimon_encounter_token = encounter_token
     _main_faint_deferred = True
-    _main_faint_resolver = _resolve
-    hook_registry.add_catch_pokemon_hook(_resolve)
-    hook_registry.add_defeat_pokemon_hook(_resolve)
+    _main_faint_context = (
+        main_pokemon,
+        getattr(main_pokemon, "individual_id", None),
+        enemy_pokemon,
+        encounter_token,
+        reviewer_obj,
+        translator,
+    )
     return True
+
+
+def _resolve_main_faint_for_enemy(main, enemy):
+    """Settle the pending faint for this choice before the enemy is replaced."""
+    context = _main_faint_context
+    if not _main_faint_deferred or context is None:
+        return
+    original_main, individual_id, original_enemy, token, reviewer, translator = context
+    _cancel_main_faint_deferral()
+    if (
+        main is not original_main
+        or getattr(main, "individual_id", None) != individual_id
+        or enemy is not original_enemy
+        or getattr(enemy, "_ankimon_encounter_token", None) is not token
+        or main.hp > 0
+        or enemy.hp > 0
+    ):
+        return
+    resolve_window = services.test_window
+    handle_main_pokemon_faint(
+        main,
+        enemy,
+        resolve_window if is_alive(resolve_window) else None,
+        reviewer,
+        translator,
+        spawn_replacement=False,
+    )
+    try:
+        reviewer.refresh_hud()
+    except Exception:
+        pass
 reviewer_obj = None
 ankimon_tracker_obj = None
 test_window = None
