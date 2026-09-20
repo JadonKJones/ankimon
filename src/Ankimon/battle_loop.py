@@ -52,6 +52,20 @@ def _cancel_main_faint_deferral():
     _main_faint_context = None
 
 
+def _main_faint_pending_for(main_pokemon, individual_id):
+    """Whether this active individual still owns the unresolved double faint."""
+    if not _main_faint_deferred or _main_faint_context is None:
+        return False
+    original_main, original_id = _main_faint_context[:2]
+    return (
+        main_pokemon is original_main
+        and original_id is not None
+        and individual_id is not None
+        and str(getattr(main_pokemon, "individual_id", None)) == str(original_id)
+        and str(individual_id) == str(original_id)
+    )
+
+
 def _defer_main_faint_until_enemy_resolved(
     main_pokemon, enemy_pokemon, reviewer_obj, translator
 ):

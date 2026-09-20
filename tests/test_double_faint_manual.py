@@ -170,6 +170,51 @@ def test_cycling_companion_cancels_pending_faint(game, monkeypatch):
     assert game.main.reset_count == 1  # only the intentional switch reset
 
 
+def test_reselecting_active_companion_keeps_reviewer_catch_recovery(game, monkeypatch):
+    """The PC may select its current row while the enemy choice is pending."""
+    game.battle._defer_main_faint_until_enemy_resolved(
+        game.main, game.enemy, game.reviewer, translator=None
+    )
+    sys.modules["aqt"].mw = types.SimpleNamespace()
+    sys.modules["aqt.utils"].showInfo = lambda *args: None
+    sys.modules["aqt.utils"].showWarning = lambda *args: None
+    pyqt = types.ModuleType("PyQt6")
+    pyqt.__path__ = []
+    monkeypatch.setitem(sys.modules, "PyQt6", pyqt)
+    for leaf in ("QtWidgets", "QtGui", "QtCore"):
+        module = types.ModuleType(f"PyQt6.{leaf}")
+        module.__all__ = []
+        monkeypatch.setitem(sys.modules, module.__name__, module)
+    for leaf, symbol in (
+        ("InfoLogger", "ShowInfoLogger"),
+        ("pokemon_obj", "PokemonObject"),
+        ("translator", "Translator"),
+        ("test_window", "TestWindow"),
+        ("reviewer_obj", "Reviewer_Manager"),
+    ):
+        module = types.ModuleType(f"Ankimon.pyobj.{leaf}")
+        setattr(module, symbol, type(symbol, (), {}))
+        monkeypatch.setitem(sys.modules, module.__name__, module)
+    migration = types.ModuleType("Ankimon.functions.migration")
+    migration.migrate_starter_individual_id = lambda *args: None
+    monkeypatch.setitem(sys.modules, migration.__name__, migration)
+
+    collection = _load(
+        monkeypatch, "Ankimon.pyobj.collection_dialog", "pyobj/collection_dialog.py"
+    )
+    collection.MainPokemon(
+        {"individual_id": "main-1", "id": game.main.id, "current_hp": 0},
+        game.main, None, None, game.reviewer, None,
+    )
+
+    assert game.main.hp == 0
+    assert game.battle._main_faint_deferred is True
+    game.ui.catch_shortcut_function()
+    assert game.main.hp == game.main.max_hp
+    assert game.fainted == [("main-1", 19, {"spawn_replacement": False})]
+    assert len(game.spawned) == 1
+
+
 def test_mutated_main_identity_cannot_receive_original_faint(game):
     game.battle._defer_main_faint_until_enemy_resolved(
         game.main, game.enemy, game.reviewer, translator=None

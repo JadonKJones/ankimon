@@ -58,6 +58,17 @@ def MainPokemon(
     test_window: TestWindow,
 ):
     from ..functions.migration import migrate_starter_individual_id
+    from ..battle_loop import (
+        _cancel_main_faint_deferral,
+        _main_faint_pending_for,
+    )
+
+    # Re-selecting the active companion while both Pokémon are fainted is not
+    # a switch. Reloading its saved row can overwrite the live 0 HP, and
+    # cancelling the deferral would strand the pending enemy choice without
+    # the main's faint recovery. Keep this selection inert until that choice.
+    if _main_faint_pending_for(main_pokemon, pokemon_data.get("individual_id")):
+        return
 
     db = mw.ankimon_db
     
@@ -166,8 +177,6 @@ def MainPokemon(
     new_main_pokemon.special_form = pokemon_data.get("special_form", None)
 
     # Update existing reference
-    from ..battle_loop import _cancel_main_faint_deferral
-
     _cancel_main_faint_deferral()
     main_pokemon.__dict__.update(new_main_pokemon.__dict__)
 
