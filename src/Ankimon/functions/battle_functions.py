@@ -118,6 +118,24 @@ def update_pokemon_battle_status(battle_info: dict, enemy_pokemon, main_pokemon)
         return False, False
 
 
+def _display_item_name(engine_item: str, holder=None) -> str:
+    """The item's own spelling where it is available, not the engine's id.
+
+    ``to_engine_format`` normalises "cell-battery" to "cellbattery", and no rule
+    turns that back into "Cell Battery". The holder still carries the stored
+    name -- consumption happens on the engine state, which is rebuilt from the
+    Pokemon object on every reset -- so read it off there when the two describe
+    the same item, and fall back to the id otherwise.
+    """
+    engine_item = str(engine_item)
+    stored = getattr(holder, "held_item", None)
+    if isinstance(stored, str) and stored:
+        squashed = stored.replace("-", "").replace("_", "").replace(" ", "").lower()
+        if squashed == engine_item.replace("-", "").replace("_", "").lower():
+            return stored.replace("-", " ").replace("_", " ").title()
+    return engine_item.replace("-", " ").replace("_", " ").title()
+
+
 def _process_battle_effects(
     instructions: list,  # Keep for compatibility but won't use
     translator,
@@ -161,6 +179,8 @@ def _process_battle_effects(
         except (KeyError, AttributeError, Exception) as e:
             print(f"Translation error for key '{key}': {e}")
 
+        if "pokemon_name" in kwargs and "item" in kwargs:
+            return f"{kwargs['pokemon_name']} used up its {kwargs['item']}!"
         if "pokemon_name" in kwargs and "status_name" in kwargs:
             if "apply" in key or "still" in key:
                 return (
@@ -431,6 +451,20 @@ def _process_battle_effects(
                     )
                     effect_messages.append(message)
 
+            # Handle a held item being spent
+            elif key.endswith(".item"):
+                # Only consumption. An item ARRIVING (Thief, Trick, a switch-in)
+                # is a different event and reads wrong in this wording.
+                if before and after is None:
+                    target = "user" if key.startswith("user.") else "opponent"
+                    holder = main_pokemon if target == "user" else enemy_pokemon
+                    message = safe_translate(
+                        "effect_item_consumed",
+                        pokemon_name=get_pokemon_name(target),
+                        item=_display_item_name(before, holder),
+                    )
+                    effect_messages.append(message)
+
             # Handle stat boost changes
             elif any(
                 key.endswith(f".{stat}_boost")
@@ -609,7 +643,13 @@ def validate_pokemon_status(pokemon):
         FIGHTING,
     }
 
-    current_status = getattr(pokemon, "battle_status", FIGHTING)
+    # Mirror PokemonObject._normalize_battle_status: strip + lower, None/blank
+    # means healthy. A padded "  par  " must stay "par", not fall through the
+    # invalid-status branch and be silently reset to "fighting".
+    current_status = (
+        str(getattr(pokemon, "battle_status", None) or "").strip().lower()
+        or "fighting"
+    )
 
     # Ensure volatile_status exists
     if not hasattr(pokemon, "volatile_status"):
@@ -625,6 +665,10 @@ def validate_pokemon_status(pokemon):
     # If Pokemon is fainted but status isn't fainted, override
     if hasattr(pokemon, "hp") and pokemon.hp <= 0 and current_status != FAINTED:
         return FAINTED
+
+    # If Pokemon has HP > 0 but status is fainted, revert to fighting
+    if hasattr(pokemon, "hp") and pokemon.hp > 0 and current_status == "fainted":
+        return "fighting"
 
     return current_status
 
@@ -791,7 +835,5 @@ def calculate_hp(base_stat_hp, level, ev, iv):
     ev_value = ev["hp"] / 4
     iv_value = iv["hp"]
     # hp = int(((iv + 2 * (base_stat_hp + ev) + 100) * level) / 100 + 10)
-    hp = int(
-        ((((2 * base_stat_hp) + iv_value + ev_value) * level) / 100) + level + 10
-    )
+    hp = int(((((2 * base_stat_hp) + iv_value + ev_value) * level) / 100) + level + 10)
     return hp

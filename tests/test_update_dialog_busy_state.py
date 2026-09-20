@@ -5,6 +5,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 
 _SRC = Path(__file__).parent.parent / "src"
 
@@ -86,6 +88,13 @@ def _load_update_dialog():
             # to import at collection time.
             "published_at_for_tag",
             "stamp_addon_mod",
+            # Git-checkout helpers. The default stub returns None, so
+            # is_git_clone() is falsy here and these tests keep exercising the
+            # non-Git download path.
+            "is_git_clone",
+            "get_git_checkout_info",
+            "git_checkout_source",
+            "fetch_branch_relation",
         ):
             setattr(update_manager, name, lambda *args, **kwargs: None)
         sys.modules["Ankimon.pyobj.update_manager"] = update_manager
@@ -231,6 +240,13 @@ def _make_dialog():
         _close_finalized=False,
         _sprites_busy_token=None,
         sprites_thread=None,
+        # Non-Git install: _run_update branches on _git_clone to choose between
+        # the download and the git-checkout path, and _git_info gates the
+        # fast-forward button. These fakes exercise the download path.
+        _git_clone=False,
+        _git_info={},
+        _git_remote_sha=None,
+        _git_ff_blocked=False,
     )
     dialog._action_buttons = types.MethodType(
         update_dialog.UpdateDialog._action_buttons, dialog
@@ -267,6 +283,33 @@ def test_busy_state_disables_all_actions_and_restores_prior_state():
         True,
     ]
     assert dialog.status_label.text == ""
+
+
+def test_git_pull_button_joins_the_busy_cycle_and_restores_its_gate():
+    # Git-checkout mode adds git_pull_btn. It must be disabled with the others
+    # while busy and come back to the state the checkout gate chose (disabled on
+    # a dirty or detached tree), because _end_busy restores from
+    # _action_button_states rather than re-deriving it.
+    dialog, _ = _make_dialog()
+    dialog._git_clone = True
+    dialog._git_info = {"branch": "main", "sha": "abc1234", "dirty": True}
+    dialog._git_remote_sha = "f" * 40
+    dialog._git_ff_blocked = False
+    dialog.git_pull_btn = _Control(True)
+    update_dialog.UpdateDialog._set_action_enabled(dialog, dialog.git_pull_btn, False)
+    assert dialog.git_pull_btn in dialog._action_buttons()
+
+    busy_token = update_dialog.UpdateDialog._begin_busy(dialog)
+    assert dialog.git_pull_btn.enabled is False
+    update_dialog.UpdateDialog._end_busy(dialog, busy_token)
+    assert dialog.git_pull_btn.enabled is False
+
+    # A clean, attached checkout is allowed to pull, and that survives a cycle.
+    update_dialog.UpdateDialog._set_action_enabled(dialog, dialog.git_pull_btn, True)
+    busy_token = update_dialog.UpdateDialog._begin_busy(dialog)
+    assert dialog.git_pull_btn.enabled is False
+    update_dialog.UpdateDialog._end_busy(dialog, busy_token)
+    assert dialog.git_pull_btn.enabled is True
 
 
 def test_overlapping_operations_keep_busy_and_apply_latest_button_states():
@@ -625,6 +668,54 @@ def test_sprite_workflows_share_busy_lifecycle(tmp_path):
                 sys.modules[name] = module
 
 
+@pytest.mark.parametrize("outcome", ["success", "failure", "crash", "closing"])
+def test_updates_dialog_refreshes_sprite_cache(monkeypatch, tmp_path, outcome):
+    """The central Updates dialog must invalidate partial sprite installations."""
+    from Ankimon import resources
+    from Ankimon.functions import sprite_functions as sf
+
+    root = tmp_path / "sprites"
+    (root / "front_default").mkdir(parents=True)
+    (root / "front_default" / "25.png").touch()
+    monkeypatch.setattr(sf, "pkmnimgfolder", root)
+    monkeypatch.setattr(sf.services, "logger", types.SimpleNamespace(log=lambda *args: None))
+    monkeypatch.setattr(resources, "user_path_sprites", root)
+    worker_module = types.ModuleType("Ankimon.pyobj.sprite_updater")
+    worker_module.SpriteUpdateDiffThread = _FakeSpriteThread
+    monkeypatch.setitem(sys.modules, worker_module.__name__, worker_module)
+    monkeypatch.setattr(
+        update_dialog, "mw",
+        types.SimpleNamespace(taskman=types.SimpleNamespace(run_on_main=lambda fn: fn())),
+    )
+    sf._clear_sprite_cache()
+    try:
+        assert sf.get_sprite_path("front", "png", 25, False, "F") == (
+            f"{root}/front_default/25.png"
+        )
+        dialog, _buttons = _make_dialog()
+        dialog.sprites_added = []
+        dialog.sprites_modified = []
+        dialog.sprites_deleted = []
+        dialog.sprites_remote_sha = "abc123"
+        dialog.reject = lambda: None
+        update_dialog.UpdateDialog._start_sprites_download(dialog)
+        thread = dialog.sprites_thread
+
+        preferred = root / "front_default" / "female" / "25.png"
+        preferred.parent.mkdir()
+        preferred.touch()
+        if outcome == "closing":
+            dialog._closing = True
+        if outcome != "crash":
+            thread.finished_signal.emit(outcome == "success", "Update finished")
+        thread.running = False
+        thread.finished.emit()
+
+        assert sf.get_sprite_path("front", "png", 25, False, "F") == str(preferred)
+    finally:
+        sf._clear_sprite_cache()
+
+
 def test_branch_progress_malformed_result_uses_failure_path():
     class MessageBox:
         warnings = []
@@ -958,3 +1049,61 @@ def test_branch_progress_dialog_does_not_stamp_when_the_install_failed():
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
+
+
+def test_branch_completion_action_matches_outcome(monkeypatch):
+    """Failures dismiss the dialog; success explicitly offers to close Anki."""
+    from unittest.mock import Mock
+
+    manager = types.ModuleType("Ankimon.pyobj.update_manager")
+    manager._download_branch_zip = Mock(return_value="archive.zip")
+    manager._download_zip_to_temp = Mock(return_value="archive.zip")
+    manager.apply_update = Mock(return_value=(True, "Installed", None))
+    manager.stamp_addon_mod = Mock()
+    monkeypatch.setitem(sys.modules, manager.__name__, manager)
+    monkeypatch.setattr(update_dialog, "QueryOp", _FakeQueryOp)
+    monkeypatch.setattr(update_dialog, "QMessageBox", Mock())
+    main_window = Mock()
+    monkeypatch.setattr(update_dialog, "mw", main_window)
+
+    for outcome in ("success", "download", "install", "worker", "malformed", "submission"):
+        for release in (None, {"name": "2.1", "zipball_url": "test"}):
+            main_window.reset_mock()
+            dialog = types.SimpleNamespace(
+                release=release,
+                branch_name="main",
+                remote_sha="abc123",
+                on_progress=lambda *args: None,
+                btn_close=_Control(False),
+                status_label=_Label(),
+                progress_bar=_Progress(),
+                _update_succeeded=False,
+                accept=Mock(),
+            )
+            manager._download_branch_zip.return_value = (
+                None if outcome == "download" else "archive.zip"
+            )
+            manager._download_zip_to_temp.return_value = manager._download_branch_zip.return_value
+            manager.apply_update.return_value = (
+                outcome != "install", "Install result", None
+            )
+            with monkeypatch.context() as context:
+                context.setattr(_FakeQueryOp, "raise_on_run", outcome == "submission")
+                update_dialog.BranchUpdateProgressDialog.start_update(dialog)
+            op = _FakeQueryOp.last
+            if outcome == "worker":
+                op.fail(RuntimeError("download crashed"))
+            elif outcome == "malformed":
+                op.success(None)
+            elif outcome != "submission":
+                op.success(op.op(None))
+
+            assert dialog.btn_close.enabled
+            succeeded = outcome == "success"
+            assert dialog.btn_close.text == ("Close Anki" if succeeded else "Close")
+            assert dialog.progress_bar.value == (100 if succeeded else 0)
+            if succeeded:
+                assert "reopen" in dialog.status_label.text
+            update_dialog.BranchUpdateProgressDialog._on_close_clicked(dialog)
+            dialog.accept.assert_called_once_with()
+            assert main_window.close.call_count == int(succeeded)

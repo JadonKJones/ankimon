@@ -147,6 +147,11 @@ def test_cycling_companion_cancels_pending_faint(game, monkeypatch):
     }
     save_module = types.ModuleType("Ankimon.functions.update_main_pokemon")
     save_module.save_main_pokemon = lambda pokemon: None
+    def apply_loaded_hp(pokemon, data):
+        pokemon.max_hp = pokemon.calculate_max_hp()
+        pokemon.hp = pokemon.current_hp = data.get("current_hp", pokemon.max_hp)
+
+    save_module._apply_loaded_hp = apply_loaded_hp
     monkeypatch.setitem(sys.modules, save_module.__name__, save_module)
     pokedex = types.ModuleType("Ankimon.functions.pokedex_functions")
     pokedex.search_pokedex_by_id = lambda pokemon_id: "bulbasaur"
