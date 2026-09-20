@@ -958,3 +958,61 @@ def test_branch_progress_dialog_does_not_stamp_when_the_install_failed():
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
+
+
+def test_branch_completion_action_matches_outcome(monkeypatch):
+    """Failures dismiss the dialog; success explicitly offers to close Anki."""
+    from unittest.mock import Mock
+
+    manager = types.ModuleType("Ankimon.pyobj.update_manager")
+    manager._download_branch_zip = Mock(return_value="archive.zip")
+    manager._download_zip_to_temp = Mock(return_value="archive.zip")
+    manager.apply_update = Mock(return_value=(True, "Installed", None))
+    manager.stamp_addon_mod = Mock()
+    monkeypatch.setitem(sys.modules, manager.__name__, manager)
+    monkeypatch.setattr(update_dialog, "QueryOp", _FakeQueryOp)
+    monkeypatch.setattr(update_dialog, "QMessageBox", Mock())
+    main_window = Mock()
+    monkeypatch.setattr(update_dialog, "mw", main_window)
+
+    for outcome in ("success", "download", "install", "worker", "malformed", "submission"):
+        for release in (None, {"name": "2.1", "zipball_url": "test"}):
+            main_window.reset_mock()
+            dialog = types.SimpleNamespace(
+                release=release,
+                branch_name="main",
+                remote_sha="abc123",
+                on_progress=lambda *args: None,
+                btn_close=_Control(False),
+                status_label=_Label(),
+                progress_bar=_Progress(),
+                _update_succeeded=False,
+                accept=Mock(),
+            )
+            manager._download_branch_zip.return_value = (
+                None if outcome == "download" else "archive.zip"
+            )
+            manager._download_zip_to_temp.return_value = manager._download_branch_zip.return_value
+            manager.apply_update.return_value = (
+                outcome != "install", "Install result", None
+            )
+            with monkeypatch.context() as context:
+                context.setattr(_FakeQueryOp, "raise_on_run", outcome == "submission")
+                update_dialog.BranchUpdateProgressDialog.start_update(dialog)
+            op = _FakeQueryOp.last
+            if outcome == "worker":
+                op.fail(RuntimeError("download crashed"))
+            elif outcome == "malformed":
+                op.success(None)
+            elif outcome != "submission":
+                op.success(op.op(None))
+
+            assert dialog.btn_close.enabled
+            succeeded = outcome == "success"
+            assert dialog.btn_close.text == ("Close Anki" if succeeded else "Close")
+            assert dialog.progress_bar.value == (100 if succeeded else 0)
+            if succeeded:
+                assert "reopen" in dialog.status_label.text
+            update_dialog.BranchUpdateProgressDialog._on_close_clicked(dialog)
+            dialog.accept.assert_called_once_with()
+            assert main_window.close.call_count == int(succeeded)

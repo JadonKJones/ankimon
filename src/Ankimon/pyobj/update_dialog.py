@@ -1489,7 +1489,7 @@ class BranchUpdatePromptDialog(QDialog):
 
 
 class BranchUpdateProgressDialog(QDialog):
-    """Dialog shown during the update process with progress bar and restart functionality."""
+    """Show update progress and offer the appropriate completion action."""
 
     DOWNLOAD_PROGRESS_MAX = 40  # Download uses 0-40% of the total progress
     INSTALL_PROGRESS_START = 40  # Installation starts at 40%
@@ -1579,10 +1579,11 @@ class BranchUpdateProgressDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
-        self.btn_restart = QPushButton("Restart Anki")
-        self.btn_restart.setEnabled(False)
-        self.btn_restart.clicked.connect(self._restart_anki)
-        btn_layout.addWidget(self.btn_restart)
+        self._update_succeeded = False
+        self.btn_close = QPushButton("Close")
+        self.btn_close.setEnabled(False)
+        self.btn_close.clicked.connect(self._on_close_clicked)
+        btn_layout.addWidget(self.btn_close)
 
         layout.addLayout(btn_layout)
         self.update_started = False
@@ -1593,10 +1594,11 @@ class BranchUpdateProgressDialog(QDialog):
             self.update_started = True
             self.start_update()
 
-    def _restart_anki(self):
-        """Restart Anki after an update."""
-        from aqt import mw
-        mw.close()
+    def _on_close_clicked(self):
+        """Only a successfully installed update needs an application shutdown."""
+        self.accept()
+        if self._update_succeeded:
+            mw.close()
 
     def start_update(self):
         from .update_manager import (
@@ -1658,21 +1660,20 @@ class BranchUpdateProgressDialog(QDialog):
             if success and pending_mod:
                 stamp_addon_mod(pending_mod)
 
-            # Enable the Restart Anki button (with fallback for tests)
-            if hasattr(self, 'btn_restart'):
-                self.btn_restart.setEnabled(True)
-            if hasattr(self, 'btn_close'):
-                self.btn_close.setEnabled(True)
+            self._update_succeeded = bool(success)
+            self.btn_close.setText("Close Anki" if success else "Close")
+            self.btn_close.setEnabled(True)
 
             if success:
                 self.status_label.setText(
-                    "Update applied successfully! Please restart Anki."
+                    "Update applied successfully! Close Anki, then reopen it "
+                    "for the changes to take effect."
                 )
                 self.progress_bar.setValue(100)
                 QMessageBox.information(
                     self,
                     "Update Complete",
-                    f"{msg}\n\nPlease restart Anki for changes to take effect.",
+                    f"{msg}\n\nClick Close Anki, then reopen Anki for the changes to take effect.",
                 )
             else:
                 self.status_label.setText(f"Update failed: {msg}")
@@ -1680,10 +1681,9 @@ class BranchUpdateProgressDialog(QDialog):
                 QMessageBox.warning(self, "Update Failed", msg)
 
         def on_failed(exc):
-            if hasattr(self, 'btn_restart'):
-                self.btn_restart.setEnabled(True)
-            if hasattr(self, 'btn_close'):
-                self.btn_close.setEnabled(True)
+            self._update_succeeded = False
+            self.btn_close.setText("Close")
+            self.btn_close.setEnabled(True)
             self.status_label.setText(
                 "Update stopped unexpectedly. Please check your connection and try again."
             )
