@@ -1,6 +1,8 @@
 """Focused Tier-1 coverage for the updater dialog's busy-state controls."""
 
 import importlib.util
+import json
+import string
 import sys
 import types
 from pathlib import Path
@@ -122,6 +124,20 @@ def _load_update_dialog():
 
 
 update_dialog = _load_update_dialog()
+
+
+def _use_catalog(monkeypatch, locale="en"):
+    catalog = json.loads(
+        (_SRC / "Ankimon" / "lang" / f"{locale}_text.json").read_text(encoding="utf-8")
+    )
+    monkeypatch.setattr(
+        update_dialog.services,
+        "translator",
+        types.SimpleNamespace(
+            translate=lambda key, **kwargs: catalog[key].format(**kwargs)
+        ),
+    )
+    return catalog
 
 
 class _Control:
@@ -1128,12 +1144,15 @@ def test_release_notes_keep_html_escaped_and_unsafe_links_inert():
 
 @pytest.mark.parametrize("action", ["update", "later", "close"])
 @pytest.mark.parametrize("checked", [False, True])
-def test_release_prompt_snoozes_only_when_dismissed(monkeypatch, action, checked):
+@pytest.mark.parametrize("locale", ["en", "de"])
+def test_release_prompt_snoozes_only_when_dismissed(monkeypatch, action, checked, locale):
     """A checked snooze must not suppress the next release after Update Now."""
     from unittest.mock import Mock
 
     buttons = {}
     dialogs = []
+    labels = []
+    catalog = _use_catalog(monkeypatch, locale)
 
     class Signal:
         def __init__(self):
@@ -1148,7 +1167,8 @@ def test_release_prompt_snoozes_only_when_dismissed(monkeypatch, action, checked
 
     class Widget:
         def __init__(self, *args):
-            pass
+            if args and isinstance(args[0], str):
+                labels.append(args[0])
 
         def __getattr__(self, name):
             return lambda *args: None
@@ -1170,7 +1190,8 @@ def test_release_prompt_snoozes_only_when_dismissed(monkeypatch, action, checked
             if action == "close":
                 self.reject()
             else:
-                buttons["Update Now" if action == "update" else "Later"].clicked.emit()
+                key = "release_update_now" if action == "update" else "release_later"
+                buttons[catalog[key]].clicked.emit()
 
     class Button(Widget):
         def __init__(self, label):
@@ -1202,6 +1223,11 @@ def test_release_prompt_snoozes_only_when_dismissed(monkeypatch, action, checked
     update_dialog.show_release_update_prompt("Experimental", release)
 
     assert len(dialogs) == 1
+    assert catalog["release_data_preserved"] in labels
+    assert catalog["release_snooze_week"] in labels
+    assert catalog["release_update_now"] in buttons
+    assert catalog["release_later"] in buttons
+    assert any(catalog["release_channel_experimental"] in label for label in labels)
     assert manager.set_update_skip_until.call_count == (checked and action != "update")
     if checked and action != "update":
         import time
@@ -1219,13 +1245,38 @@ def test_release_prompt_rejects_incomplete_release(monkeypatch):
 
     messages = Mock()
     dialog = Mock()
+    catalog = _use_catalog(monkeypatch, "de")
     monkeypatch.setattr(update_dialog, "QMessageBox", messages)
     monkeypatch.setattr(update_dialog, "QDialog", dialog)
 
     update_dialog.show_release_update_prompt("Stable", {"name": "2.4-E"})
 
     messages.warning.assert_called_once()
+    assert messages.warning.call_args.args[1:] == (
+        catalog["release_invalid_title"],
+        catalog["release_invalid_body"],
+    )
     dialog.assert_not_called()
+
+
+def test_release_prompt_keys_and_placeholders_exist_in_every_catalog():
+    lang_dir = _SRC / "Ankimon" / "lang"
+    english = json.loads((lang_dir / "en_text.json").read_text(encoding="utf-8"))
+    prompt_keys = {key for key in english if key.startswith("release_")}
+    reviewed_keys = prompt_keys | {
+        "ankimon_update_button", "nature_chart_button", "effect_item_consumed",
+        "weather_rain_still",
+    }
+    formatter = string.Formatter()
+
+    def fields(template):
+        return {field for _, field, _, _ in formatter.parse(template) if field}
+
+    for path in lang_dir.glob("*_text.json"):
+        catalog = json.loads(path.read_text(encoding="utf-8"))
+        for key in reviewed_keys:
+            assert key in catalog, (path.name, key)
+            assert fields(catalog[key]) == fields(english[key]), (path.name, key)
 
 
 def test_branch_completion_action_matches_outcome(monkeypatch):
