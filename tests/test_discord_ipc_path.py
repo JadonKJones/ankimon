@@ -69,11 +69,19 @@ def test_finds_native_discord_socket(runtime_dir):
     assert get_ipc_path() == str(sock_path)
 
 
-def test_finds_discord_socket_in_parent_of_runtime_dir(tmp_path, monkeypatch):
-    """macOS can put Discord's socket one level above the reported temp dir."""
+def test_macos_finds_discord_socket_above_tempdir(tmp_path, monkeypatch):
+    """Exercise the macOS tempfile fallback, not just an XDG override."""
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir()
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setattr(pypresence_utils.sys, "platform", "darwin")
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    monkeypatch.setattr(pypresence_utils.tempfile, "gettempdir", lambda: str(runtime_dir))
+    real_exists = pypresence_utils.os.path.exists
+    monkeypatch.setattr(
+        pypresence_utils.os.path,
+        "exists",
+        lambda path: False if str(path).startswith("/run/user/") else real_exists(path),
+    )
     sock_path = tmp_path / "discord-ipc-0"
     sock_path.write_text("")
 
