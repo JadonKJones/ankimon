@@ -57,11 +57,12 @@ try:
 except ImportError:
     GUI_AVAILABLE = False
 
+
 def _start_query_op(parent, op, success, failure):
     try:
-        QueryOp(
-            parent=parent, op=op, success=success
-        ).failure(failure).without_collection().run_in_background()
+        QueryOp(parent=parent, op=op, success=success).failure(
+            failure
+        ).without_collection().run_in_background()
     except Exception as exc:
         # Submission happens on the Qt thread, so synchronous failures can use
         # the same UI-safe cleanup callback as background worker failures.
@@ -71,15 +72,16 @@ def _start_query_op(parent, op, success, failure):
 import re
 from html import escape as _escape
 
+
 def _format_inline(text: str) -> str:
     """
     Apply inline formatting (bold, italic, strikethrough) to text.
     """
-    
-    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
-    text = re.sub(r'\*(.*?)\*', r'<i>\1</i>', text)
-    text = re.sub(r'~~(.*?)~~', r'<s>\1</s>', text)
-    
+
+    text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"\*(.*?)\*", r"<i>\1</i>", text)
+    text = re.sub(r"~~(.*?)~~", r"<s>\1</s>", text)
+
     return text
 
 
@@ -92,18 +94,30 @@ def markdown_to_html(text: str) -> str:
     """
     if not text:
         return ""
-    
+
     text = _escape(text)
-    
+
     # Look for patterns like "Download:", "**Download:**", "**Download**:", etc.
     download_match = re.search(
-        r'(?im)^\s*(?:\*{1,3})?Download(?:\*{1,3})?:',
+        r"(?im)^\s*(?:\*{1,3})?Download(?:\*{1,3})?:",
         text,
     )
     if download_match:
-        text = text[:download_match.start()]
+        text = text[: download_match.start()]
         text = text.rstrip()
-    
+
+    # Keep generated links opaque until all Markdown formatting is complete.
+    # Input (including URL quotes and ampersands) has already been escaped once.
+    links = []
+    link_prefix = "\x00ankimon-link:"
+    while link_prefix in text:
+        link_prefix += ":"
+
+    def store_link(url, label):
+        token = f"{link_prefix}{len(links)}\x00"
+        links.append(f'<a href="{url}">{label}</a>')
+        return token
+
     def fix_markdown_link(match):
         """
         Handle Markdown links: [text](url) - convert to HTML links
@@ -111,100 +125,97 @@ def markdown_to_html(text: str) -> str:
         text_content = match.group(1)
         url = match.group(2)
         # Only allow http/https schemes for security
-        if not re.match(r'https?://', url, re.IGNORECASE):
-            return _escape(match.group(0))
-        safe_url = _escape(url, quote=True)
-        return f'<a href="{safe_url}">{text_content}</a>'
-    
-    text = re.sub(r'\[(.*?)\]\((.*?)\)', fix_markdown_link, text)
-    
+        if not re.match(r"https?://", url, re.IGNORECASE):
+            return match.group(0)
+        return store_link(url, _format_inline(text_content))
+
+    text = re.sub(r"\[(.*?)\]\((.*?)\)", fix_markdown_link, text)
+
     def fix_plain_url(match):
         """
         Handle plain URLs - convert to clickable links
         """
         url = match.group(0)
-        if not re.match(r'https?://', url, re.IGNORECASE):
-            return _escape(url)
-        safe_url = _escape(url, quote=True)
-        return f'<a href="{safe_url}">{url}</a>'
-    
-    # Match URLs that aren't already inside an <a> tag
-    url_pattern = r'https?://[^\s<>"\'()]+'
-    parts = re.split(r'(<a[^>]*>.*?</a>)', text, flags=re.DOTALL)
-    processed_parts = []
-    for part in parts:
-        if part.startswith('<a'):
-            processed_parts.append(part)
-        else:
-            processed_parts.append(re.sub(url_pattern, fix_plain_url, part))
-    text = ''.join(processed_parts)
-    
-    lines = text.split('\n')
+        if not re.match(r"https?://", url, re.IGNORECASE):
+            return url
+        return store_link(url, url)
+
+    # Markdown links are placeholders, so plain URL matching cannot relink them.
+    url_pattern = r'https?://[^\s<>"\'()\x00]+'
+    text = re.sub(url_pattern, fix_plain_url, text)
+
+    lines = text.split("\n")
     processed_lines = []
-    
+
     for line in lines:
         stripped = line.rstrip()
 
         if not stripped:
-            processed_lines.append('')
+            processed_lines.append("")
             continue
-        
+
         # Headers
-        if re.match(r'^###\s+', stripped):
-            content = re.sub(r'^###\s+', '', stripped)
-            processed_lines.append(f'<b>{_format_inline(content)}</b>')
+        if re.match(r"^###\s+", stripped):
+            content = re.sub(r"^###\s+", "", stripped)
+            processed_lines.append(f"<b>{_format_inline(content)}</b>")
             continue
-        elif re.match(r'^##\s+', stripped):
-            content = re.sub(r'^##\s+', '', stripped)
-            processed_lines.append(f'<b>{_format_inline(content)}</b>')
+        elif re.match(r"^##\s+", stripped):
+            content = re.sub(r"^##\s+", "", stripped)
+            processed_lines.append(f"<b>{_format_inline(content)}</b>")
             continue
-        elif re.match(r'^#\s+', stripped):
-            content = re.sub(r'^#\s+', '', stripped)
-            processed_lines.append(f'<b>{_format_inline(content)}</b>')
+        elif re.match(r"^#\s+", stripped):
+            content = re.sub(r"^#\s+", "", stripped)
+            processed_lines.append(f"<b>{_format_inline(content)}</b>")
             continue
-        
+
         # Horizontal rules
-        if stripped in ['---', '___', '***']:
-            processed_lines.append('<hr style="border: none; border-top: 1px solid #444; margin: 4px 0;">')
+        if stripped in ["---", "___", "***"]:
+            processed_lines.append(
+                '<hr style="border: none; border-top: 1px solid #444; margin: 4px 0;">'
+            )
             continue
-        
+
         # Bullet points
-        bullet_match = re.match(r'^[-*•]\s+(.*)$', stripped)
+        bullet_match = re.match(r"^[-*•]\s+(.*)$", stripped)
         if bullet_match:
             content = bullet_match.group(1)
             # Apply inline formatting to bullet content
             content = _format_inline(content)
             # Bold any "feat:" or "fix:" labels
-            content = re.sub(r'(feat\([^)]*\)|fix\([^)]*\)|add\([^)]*\)|update\([^)]*\)):', r'<b>\1:</b>', content)
-            processed_lines.append(f'• {content}')
+            content = re.sub(
+                r"(feat\([^)]*\)|fix\([^)]*\)|add\([^)]*\)|update\([^)]*\)):",
+                r"<b>\1:</b>",
+                content,
+            )
+            processed_lines.append(f"• {content}")
             continue
-        
+
         # Regular text
         line_text = _format_inline(stripped)
-        
+
         processed_lines.append(line_text)
-    
-    html = '\n'.join(processed_lines)
-    
-    lines = html.split('\n')
+
+    html = "\n".join(processed_lines)
+
+    lines = html.split("\n")
     collapsed_lines = []
     prev_empty = False
     for line in lines:
-        if line == '':
+        if line == "":
             if not prev_empty:
-                collapsed_lines.append('')
+                collapsed_lines.append("")
                 prev_empty = True
         else:
             collapsed_lines.append(line)
             prev_empty = False
-    html = '\n'.join(collapsed_lines)
-    
-    html = html.replace('\n\n', '<br><br>')
-    html = html.replace('\n', '<br>')
-    
+    html = "\n".join(collapsed_lines)
+
+    html = html.replace("\n\n", "<br><br>")
+    html = html.replace("\n", "<br>")
+
     # Clean up excessive breaks - maximum of two consecutive <br> tags
-    html = re.sub(r'(<br>){3,}', '<br><br>', html)
-    
+    html = re.sub(r"(<br>){3,}", "<br><br>", html)
+
     def add_link_style(match):
         """
         Add styles to all links in the HTML - but only if they don't already have styles
@@ -212,13 +223,16 @@ def markdown_to_html(text: str) -> str:
         href = match.group(1)
         text_content = match.group(2)
         # Check if style already exists
-        if 'style=' in match.group(0):
+        if "style=" in match.group(0):
             return match.group(0)
         return f'<a href="{href}" style="color: #1A73E8; text-decoration: none;">{text_content}</a>'
-    
+
+    for index, link in enumerate(links):
+        html = html.replace(f"{link_prefix}{index}\x00", link)
     html = re.sub(r'<a href="(.*?)">(.*?)</a>', add_link_style, html)
-    
+
     return html
+
 
 class UpdateDialog(QDialog):
     def __init__(self, parent=None, select_tab=None):
@@ -872,11 +886,14 @@ class UpdateDialog(QDialog):
         layout.addWidget(self.sprites_progress)
 
         self.sprites_snooze_checkbox = QCheckBox("Snooze these updates for 7 days")
-        self.sprites_snooze_checkbox.setStyleSheet(f"color: {c['muted']}; font-size: 11px;")
-        
+        self.sprites_snooze_checkbox.setStyleSheet(
+            f"color: {c['muted']}; font-size: 11px;"
+        )
+
         from ..resources import user_path_sprites
         import json
         import time
+
         dest_dir = Path(user_path_sprites)
         state_path = dest_dir.parent / "sprites_update_state.json"
         is_snoozed = False
@@ -884,11 +901,16 @@ class UpdateDialog(QDialog):
             try:
                 state_data = json.loads(state_path.read_text(encoding="utf-8"))
                 snooze_until = state_data.get("snooze_until")
-                is_snoozed = isinstance(snooze_until, (int, float)) and time.time() < snooze_until
+                is_snoozed = (
+                    isinstance(snooze_until, (int, float))
+                    and time.time() < snooze_until
+                )
             except Exception:
                 pass
         self.sprites_snooze_checkbox.setChecked(is_snoozed)
-        self.sprites_snooze_checkbox.stateChanged.connect(self._on_sprites_snooze_changed)
+        self.sprites_snooze_checkbox.stateChanged.connect(
+            self._on_sprites_snooze_changed
+        )
         layout.addWidget(self.sprites_snooze_checkbox)
 
         btn_layout = QHBoxLayout()
@@ -911,21 +933,22 @@ class UpdateDialog(QDialog):
         from ..resources import user_path_sprites
         import json
         import time
+
         dest_dir = Path(user_path_sprites)
         state_path = dest_dir.parent / "sprites_update_state.json"
-        
+
         state_data = {}
         if state_path.exists():
             try:
                 state_data = json.loads(state_path.read_text(encoding="utf-8"))
             except Exception:
                 pass
-                
+
         if self.sprites_snooze_checkbox.isChecked():
             state_data["snooze_until"] = time.time() + 7 * 24 * 60 * 60
         else:
             state_data["snooze_until"] = 0
-            
+
         try:
             state_path.write_text(json.dumps(state_data, indent=2), encoding="utf-8")
         except Exception:
@@ -1246,9 +1269,7 @@ class UpdateDialog(QDialog):
 
         def on_failed(exc):
             if self._end_busy(busy_token):
-                self.status_label.setText(
-                    f"Could not load developer options: {exc}"
-                )
+                self.status_label.setText(f"Could not load developer options: {exc}")
 
         _start_query_op(self, bg, on_done, on_failed)
 
@@ -1500,9 +1521,7 @@ class UpdateDialog(QDialog):
                     # installs byte-identical code to the Releases tab. Date it
                     # the same way, or the tag's (earlier) commit timestamp lets
                     # the AnkiWeb upload look newer than the code just installed.
-                    published_at=published_at_for_tag(
-                        data["name"], self._releases
-                    ),
+                    published_at=published_at_for_tag(data["name"], self._releases),
                 )
 
 
@@ -1650,7 +1669,9 @@ class BranchUpdatePromptDialog(QDialog):
 
 
 class BranchUpdateProgressDialog(QDialog):
-    def __init__(self, branch_name: str, remote_sha: str, parent=None, release: dict = None):
+    def __init__(
+        self, branch_name: str, remote_sha: str, parent=None, release: dict = None
+    ):
         super().__init__(parent or mw)
         self.setWindowTitle("Updating Ankimon")
         self.setMinimumWidth(440)
@@ -1755,11 +1776,23 @@ class BranchUpdateProgressDialog(QDialog):
 
         release = self.release
         if release:
-            source_type, source_name, commit_sha = "release", release["name"], release["name"]
-            download = lambda: _download_zip_to_temp(release["zipball_url"], progress_cb=self.on_progress)
+            source_type, source_name, commit_sha = (
+                "release",
+                release["name"],
+                release["name"],
+            )
+            download = lambda: _download_zip_to_temp(
+                release["zipball_url"], progress_cb=self.on_progress
+            )
         else:
-            source_type, source_name, commit_sha = "branch", self.branch_name, self.remote_sha
-            download = lambda: _download_branch_zip(self.branch_name, progress_cb=self.on_progress)
+            source_type, source_name, commit_sha = (
+                "branch",
+                self.branch_name,
+                self.remote_sha,
+            )
+            download = lambda: _download_branch_zip(
+                self.branch_name, progress_cb=self.on_progress
+            )
         published_at = release.get("published_at") if release else None
 
         def bg(_col):
@@ -1842,31 +1875,31 @@ def show_release_update_prompt(channel: str, release: dict):
     installs it through the shared progress dialog. "Later" plus the snooze
     checkbox defers for a week — mirroring the branch prompt's behaviour.
     """
-    
+
     tag = release.get("name", "?")
     notes = (release.get("body") or "").strip()
     notes_html = ""
-    
+
     if notes:
         notes_html = markdown_to_html(notes)
-    
+
     # Validate that the release has the required keys before proceeding
     if not release.get("name") or not release.get("zipball_url"):
         QMessageBox.warning(
             mw,
             "Invalid Release",
             "The release data is incomplete and cannot be installed.\n\n"
-            "Please try again later or check for updates manually."
+            "Please try again later or check for updates manually.",
         )
         return
-    
+
     dialog = QDialog(mw)
     dialog.setWindowTitle("Ankimon Update Available")
     dialog.setMinimumWidth(550)
     dialog.setMinimumHeight(450)
     if icon_path:
         dialog.setWindowIcon(QIcon(str(icon_path)))
-    
+
     is_dark = theme_manager.night_mode
     if is_dark:
         bg = "#0d1117"
@@ -1890,7 +1923,7 @@ def show_release_update_prompt(channel: str, release: dict):
         btn_bg = "rgba(9, 105, 218, 0.08)"
         btn_hover = "rgba(9, 105, 218, 0.18)"
         update_btn_text = "#e6ffea"
-    
+
     dialog.setStyleSheet(f"""
         QDialog {{
             background-color: {bg};
@@ -1974,11 +2007,11 @@ def show_release_update_prompt(channel: str, release: dict):
             border-color: {accent_blue};
         }}
     """)
-    
+
     layout = QVBoxLayout(dialog)
     layout.setContentsMargins(24, 24, 24, 24)
     layout.setSpacing(16)
-    
+
     # Escape dynamic content to prevent HTML injection
     escaped_channel = _escape(channel)
     escaped_tag = _escape(tag)
@@ -1987,65 +2020,68 @@ def show_release_update_prompt(channel: str, release: dict):
     )
     title_label.setWordWrap(True)
     layout.addWidget(title_label)
-    
+
     info_label = QLabel("Your Pokémon data, team, and settings will be preserved.")
     info_label.setStyleSheet(f"color: {text}; font-size: 0.88rem;")
     info_label.setWordWrap(True)
     layout.addWidget(info_label)
-    
+
     if notes_html:
         notes_label = QLabel("<b>Release Notes:</b>")
-        notes_label.setStyleSheet(f"color: {text}; font-weight: 700; font-size: 0.92rem;")
+        notes_label.setStyleSheet(
+            f"color: {text}; font-weight: 700; font-size: 0.92rem;"
+        )
         layout.addWidget(notes_label)
-        
+
         notes_browser = QTextBrowser()
         notes_browser.setOpenExternalLinks(True)
         notes_browser.setHtml(notes_html)
         notes_browser.setMinimumHeight(200)
         notes_browser.setMaximumHeight(350)
         layout.addWidget(notes_browser)
-    
+
     snooze = QCheckBox("Don't notify me for 1 week")
     layout.addWidget(snooze)
-    
+
     button_layout = QHBoxLayout()
     button_layout.addStretch()
-    
+
     later_btn = QPushButton("Later")
     later_btn.setObjectName("laterBtn")
     later_btn.setMinimumWidth(100)
     button_layout.addWidget(later_btn)
-    
+
     update_btn = QPushButton("Update Now")
     update_btn.setObjectName("updateBtn")
     update_btn.setMinimumWidth(120)
     button_layout.addWidget(update_btn)
-    
+
     layout.addLayout(button_layout)
-    
+
     # Helper to persist snooze if checkbox is checked
     def _persist_snooze_if_checked():
         if snooze.isChecked():
             import time
             from .update_manager import set_update_skip_until
+
             set_update_skip_until(time.time() + 604800)
-    
+
     def on_update():
         dialog.accept()
         BranchUpdateProgressDialog(tag, tag, mw, release=release).exec()
-    
+
     def on_later():
         dialog.reject()
         QMessageBox.information(
             mw,
             "Update Later",
-            "No problem! You can always check for updates and install them later by going to Ankimon => Help => Check for Updates."
+            "No problem! You can always check for updates and install them later by going to Ankimon => Help => Check for Updates.",
         )
-    
+
     # Connect the finished signal to persist snooze on any close path
     dialog.finished.connect(_persist_snooze_if_checked)
-    
+
     update_btn.clicked.connect(on_update)
     later_btn.clicked.connect(on_later)
-    
+
     dialog.exec()
