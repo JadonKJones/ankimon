@@ -166,6 +166,9 @@ def MainPokemon(
     new_main_pokemon.special_form = pokemon_data.get("special_form", None)
 
     # Update existing reference
+    from ..battle_loop import _cancel_main_faint_deferral
+
+    _cancel_main_faint_deferral()
     main_pokemon.__dict__.update(new_main_pokemon.__dict__)
 
     # Save to database

@@ -192,11 +192,40 @@ def test_different_encounter_cannot_resolve_pending_faint(game):
     assert game.battle._main_faint_deferred is False
 
 
-def test_abandoned_faint_does_not_fire_on_later_choice(game):
+def test_new_encounter_cancels_abandoned_faint(game, monkeypatch):
+    from Ankimon.functions import encounter_functions as encounters
+
     game.battle._defer_main_faint_until_enemy_resolved(
         game.main, game.enemy, game.reviewer, translator=None
     )
-    game.battle._cancel_main_faint_deferral()
+    old_token = game.enemy._ankimon_encounter_token
+    game.main.level = 5
+    monkeypatch.setattr(encounters, "main_pokemon", game.main)
+    monkeypatch.setattr(encounters, "ankimon_tracker_obj", types.SimpleNamespace())
+    monkeypatch.setattr(encounters, "clear_auto_battle_override", lambda: None)
+    monkeypatch.setattr(
+        encounters,
+        "generate_random_pokemon",
+        lambda *args: (
+            "caterpie", 10, 5, None, ["Bug"], {"hp": 45}, ["tackle"],
+            39, "medium", {}, {}, "M", "fighting", {}, "Normal", {},
+            False, "Hardy",
+        ),
+    )
+
+    class StopAfterReplacement(Exception):
+        pass
+
+    def stop():
+        raise StopAfterReplacement()
+
+    tracker = types.SimpleNamespace(randomize_battle_scene=stop)
+    with pytest.raises(StopAfterReplacement):
+        encounters.new_pokemon(game.enemy, None, tracker, None)
+
+    assert game.enemy._ankimon_encounter_token is not old_token
+    assert game.battle._main_faint_deferred is False
     game.main.hp = 100
+    game.enemy.hp = 0
     game.registry.CatchPokemonHook(set())
     assert game.fainted == []
