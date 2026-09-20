@@ -39,6 +39,7 @@ def _load_update_dialog():
         )
         for name in (
             "QDialog",
+            "QIcon",
             "QVBoxLayout",
             "QHBoxLayout",
             "QLabel",
@@ -254,7 +255,9 @@ def _make_dialog():
     dialog._set_action_enabled = types.MethodType(
         update_dialog.UpdateDialog._set_action_enabled, dialog
     )
-    dialog._begin_busy = types.MethodType(update_dialog.UpdateDialog._begin_busy, dialog)
+    dialog._begin_busy = types.MethodType(
+        update_dialog.UpdateDialog._begin_busy, dialog
+    )
     dialog._end_busy = types.MethodType(update_dialog.UpdateDialog._end_busy, dialog)
     dialog._defer_close_for_sprite_thread = types.MethodType(
         update_dialog.UpdateDialog._defer_close_for_sprite_thread, dialog
@@ -678,14 +681,19 @@ def test_updates_dialog_refreshes_sprite_cache(monkeypatch, tmp_path, outcome):
     (root / "front_default").mkdir(parents=True)
     (root / "front_default" / "25.png").touch()
     monkeypatch.setattr(sf, "pkmnimgfolder", root)
-    monkeypatch.setattr(sf.services, "logger", types.SimpleNamespace(log=lambda *args: None))
+    monkeypatch.setattr(
+        sf.services, "logger", types.SimpleNamespace(log=lambda *args: None)
+    )
     monkeypatch.setattr(resources, "user_path_sprites", root)
     worker_module = types.ModuleType("Ankimon.pyobj.sprite_updater")
     worker_module.SpriteUpdateDiffThread = _FakeSpriteThread
     monkeypatch.setitem(sys.modules, worker_module.__name__, worker_module)
     monkeypatch.setattr(
-        update_dialog, "mw",
-        types.SimpleNamespace(taskman=types.SimpleNamespace(run_on_main=lambda fn: fn())),
+        update_dialog,
+        "mw",
+        types.SimpleNamespace(
+            taskman=types.SimpleNamespace(run_on_main=lambda fn: fn())
+        ),
     )
     sf._clear_sprite_cache()
     try:
@@ -1051,6 +1059,73 @@ def test_branch_progress_dialog_does_not_stamp_when_the_install_failed():
                 sys.modules[name] = module
 
 
+def _release_note_links(markdown):
+    from html.parser import HTMLParser
+
+    class Links(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.targets = []
+            self.text = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "a":
+                self.targets.append(dict(attrs)["href"])
+
+        def handle_data(self, data):
+            self.text.append(data)
+
+    parser = Links()
+    parser.feed(update_dialog.markdown_to_html(markdown))
+    return parser.targets, "".join(parser.text)
+
+
+def test_release_notes_preserve_query_and_literal_entity_urls():
+    for url in (
+        "https://example.org/notes?version=2.0&channel=stable",
+        "https://example.org/notes?literal=&amp;value",
+        "https://example.org/search?q=\"pokemon\"&kind='fire'",
+    ):
+        for markdown in (url, f"[Release details]({url})"):
+            targets, _ = _release_note_links(markdown)
+            assert targets == [url]
+
+
+def test_release_notes_do_not_format_urls_as_markdown():
+    for url in (
+        "https://example.org/search?q=*pokemon*",
+        "https://example.org/search?q=**pokemon**",
+        "https://example.org/search?q=~~pokemon~~",
+    ):
+        for prefix in ("", "# ", "## ", "### ", "- "):
+            for markdown in (url, f"[**Search**]({url})"):
+                targets, text = _release_note_links(prefix + markdown)
+                assert targets == [url]
+                assert (url if markdown == url else "Search") in text
+
+
+def test_release_notes_keep_link_label_and_surrounding_formatting():
+    url = "https://example.org/notes?a=1&b=2"
+    html = update_dialog.markdown_to_html(f"**See [*notes*]({url}) now**")
+    assert html.startswith("<b>See ")
+    assert html.endswith(" now</b>")
+    assert "<i>notes</i>" in html
+    assert _release_note_links(f"[A & B]({url})") == ([url], "A & B")
+
+
+def test_release_notes_keep_html_escaped_and_unsafe_links_inert():
+    html = update_dialog.markdown_to_html(
+        "<script>alert</script> [unsafe](javascript:alert) "
+        '[safe](https://example.org/?q="onmouseover"&value=<b>)'
+    )
+    assert "<script>" not in html
+    assert "<b>" not in html
+    targets, _ = _release_note_links(
+        '[unsafe](javascript:alert) [safe](https://example.org/?q="onmouseover"&value=<b>)'
+    )
+    assert targets == ['https://example.org/?q="onmouseover"&value=<b>']
+
+
 def test_branch_completion_action_matches_outcome(monkeypatch):
     """Failures dismiss the dialog; success explicitly offers to close Anki."""
     from unittest.mock import Mock
@@ -1066,7 +1141,14 @@ def test_branch_completion_action_matches_outcome(monkeypatch):
     main_window = Mock()
     monkeypatch.setattr(update_dialog, "mw", main_window)
 
-    for outcome in ("success", "download", "install", "worker", "malformed", "submission"):
+    for outcome in (
+        "success",
+        "download",
+        "install",
+        "worker",
+        "malformed",
+        "submission",
+    ):
         for release in (None, {"name": "2.1", "zipball_url": "test"}):
             main_window.reset_mock()
             dialog = types.SimpleNamespace(
@@ -1083,9 +1165,13 @@ def test_branch_completion_action_matches_outcome(monkeypatch):
             manager._download_branch_zip.return_value = (
                 None if outcome == "download" else "archive.zip"
             )
-            manager._download_zip_to_temp.return_value = manager._download_branch_zip.return_value
+            manager._download_zip_to_temp.return_value = (
+                manager._download_branch_zip.return_value
+            )
             manager.apply_update.return_value = (
-                outcome != "install", "Install result", None
+                outcome != "install",
+                "Install result",
+                None,
             )
             with monkeypatch.context() as context:
                 context.setattr(_FakeQueryOp, "raise_on_run", outcome == "submission")
