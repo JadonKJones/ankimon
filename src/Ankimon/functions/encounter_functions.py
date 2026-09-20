@@ -625,8 +625,7 @@ def _modify_percentages_legacy(
             ):
                 percentages[tier] = 0
 
-    # Force starter probability to 0 and normalize
-    percentages["Starter"] = 0  # Comment to activate starters
+    # Normalize
     total = sum(percentages.values())
     for tier in percentages:
         percentages[tier] = (percentages[tier] / total) * 100 if total > 0 else 0
@@ -853,6 +852,7 @@ def get_base_species_gen(actual_id: int) -> int:
 
 
 def get_all_pokemon_in_tier(tier: str) -> list[int]:
+    """Return the configured encounter pool for a tier, including starters."""
     if tier == "Normal":
         return encounter_data.NORMAL
     if tier == "Baby":
@@ -867,9 +867,8 @@ def get_all_pokemon_in_tier(tier: str) -> list[int]:
         return encounter_data.MEGA
     if tier == "Gmax":
         return encounter_data.GMAX
-    # if tier == "Starter": return encounter_data.STARTERS #Uncomment to activate starters
     if tier == "Starter":
-        return []
+        return encounter_data.STARTERS
     return []
 
 
