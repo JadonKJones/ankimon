@@ -2,6 +2,7 @@ import sys
 import unittest.mock as mock
 from pathlib import Path
 import importlib.util
+import pytest
 
 # Mock necessary modules
 sys.modules["aqt"] = mock.MagicMock()
@@ -72,6 +73,73 @@ ef.main_pokemon = mock.MagicMock()
 ef.settings_obj = mock.MagicMock()
 ef.ankimon_tracker_obj = mock.MagicMock()
 ef.trainer_card = mock.MagicMock()
+
+
+def test_starter_legacy_weight_obeys_level_gate():
+    at_level_80 = ef._modify_percentages_legacy(
+        total_reviews=80, daily_average=100, trainer_level=1, main_level=80
+    )
+    at_level_79 = ef._modify_percentages_legacy(
+        total_reviews=80, daily_average=100, trainer_level=1, main_level=79
+    )
+
+    assert at_level_80["Starter"] > 0
+    assert at_level_79["Starter"] == 0
+    assert sum(at_level_80.values()) == pytest.approx(100)
+    assert sum(at_level_79.values()) == pytest.approx(100)
+
+
+def test_starter_tier_uses_configured_pool():
+    assert ef.get_all_pokemon_in_tier("Starter") is ef.encounter_data.STARTERS
+    assert 1 in ef.get_all_pokemon_in_tier("Starter")
+
+
+def test_starter_generation_uses_real_eligibility_guards(monkeypatch):
+    """A rolled Starter must survive generation, level and prerequisite checks."""
+    const_spec = importlib.util.spec_from_file_location(
+        "ankimon_const_pr841", _src / "Ankimon" / "const.py"
+    )
+    const = importlib.util.module_from_spec(const_spec)
+    const_spec.loader.exec_module(const)
+    monkeypatch.setattr(ef, "gen_ids", const.gen_ids)
+    resource_spec = importlib.util.spec_from_file_location(
+        "ankimon_resources_pr841", _src / "Ankimon" / "resources.py"
+    )
+    resources = importlib.util.module_from_spec(resource_spec)
+    resource_spec.loader.exec_module(resources)
+    for name in ("pokemon_csv", "stats_csv", "poke_species_path", "moves_file_path"):
+        monkeypatch.setattr(pdx, name, getattr(resources, name))
+    for name in ("_pokemon_csv_cache", "_stats_csv_cache", "_poke_species_cache", "_moves_cache"):
+        monkeypatch.setattr(pdx, name, None)
+    settings = mock.MagicMock()
+    settings.get.side_effect = lambda key: (
+        True if key.startswith("misc.gen") else None
+    )
+    monkeypatch.setattr(ef, "settings_obj", settings)
+    monkeypatch.setattr(ef, "get_tier", lambda *args, **kwargs: "Starter")
+    guard_calls = {"generation": 0, "level": 0, "prerequisites": 0}
+    for key, name in (
+        ("generation", "check_id_ok"),
+        ("level", "check_min_generate_level"),
+        ("prerequisites", "_meets_prerequisites"),
+    ):
+        original = getattr(ef, name)
+
+        def checked(*args, _original=original, _key=key, **kwargs):
+            guard_calls[_key] += 1
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(ef, name, checked)
+
+    tracker = mock.MagicMock()
+    tracker.get_total_reviews.return_value = 80
+    result = ef.generate_random_pokemon(
+        80, tracker, trainer_level=1, main_level=80, collected_ids=set()
+    )
+
+    assert result[14] == "Starter"
+    assert result[1] in ef.encounter_data.STARTERS
+    assert all(count > 0 for count in guard_calls.values())
 
 
 def test_modify_percentages_does_not_raise_nameerror():
