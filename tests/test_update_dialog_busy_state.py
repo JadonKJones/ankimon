@@ -1126,6 +1126,108 @@ def test_release_notes_keep_html_escaped_and_unsafe_links_inert():
     assert targets == ['https://example.org/?q="onmouseover"&value=<b>']
 
 
+@pytest.mark.parametrize("action", ["update", "later", "close"])
+@pytest.mark.parametrize("checked", [False, True])
+def test_release_prompt_snoozes_only_when_dismissed(monkeypatch, action, checked):
+    """A checked snooze must not suppress the next release after Update Now."""
+    from unittest.mock import Mock
+
+    buttons = {}
+    dialogs = []
+
+    class Signal:
+        def __init__(self):
+            self.callbacks = []
+
+        def connect(self, callback):
+            self.callbacks.append(callback)
+
+        def emit(self, *args):
+            for callback in self.callbacks:
+                callback(*args)
+
+    class Widget:
+        def __init__(self, *args):
+            pass
+
+        def __getattr__(self, name):
+            return lambda *args: None
+
+    class Dialog(Widget):
+        DialogCode = types.SimpleNamespace(Accepted=1, Rejected=0)
+
+        def __init__(self, *args):
+            self.finished = Signal()
+            dialogs.append(self)
+
+        def accept(self):
+            self.finished.emit(self.DialogCode.Accepted)
+
+        def reject(self):
+            self.finished.emit(self.DialogCode.Rejected)
+
+        def exec(self):
+            if action == "close":
+                self.reject()
+            else:
+                buttons["Update Now" if action == "update" else "Later"].clicked.emit()
+
+    class Button(Widget):
+        def __init__(self, label):
+            self.clicked = Signal()
+            buttons[label] = self
+
+    class CheckBox(Widget):
+        def isChecked(self):
+            return checked
+
+    manager = types.ModuleType("Ankimon.pyobj.update_manager")
+    manager.set_update_skip_until = Mock()
+    messages = Mock()
+    progress = Mock()
+    monkeypatch.setitem(sys.modules, manager.__name__, manager)
+    monkeypatch.setattr(update_dialog, "QDialog", Dialog)
+    monkeypatch.setattr(update_dialog, "QVBoxLayout", Widget)
+    monkeypatch.setattr(update_dialog, "QHBoxLayout", Widget)
+    monkeypatch.setattr(update_dialog, "QLabel", Widget)
+    monkeypatch.setattr(update_dialog, "QPushButton", Button)
+    monkeypatch.setattr(update_dialog, "QCheckBox", CheckBox)
+    monkeypatch.setattr(update_dialog, "QMessageBox", messages)
+    monkeypatch.setattr(update_dialog, "BranchUpdateProgressDialog", progress)
+    monkeypatch.setattr(update_dialog, "icon_path", None)
+    icon = Mock()
+    monkeypatch.setattr(update_dialog, "QIcon", icon)
+
+    release = {"name": "2.4-E", "zipball_url": "https://example.org/archive.zip"}
+    update_dialog.show_release_update_prompt("Experimental", release)
+
+    assert len(dialogs) == 1
+    assert manager.set_update_skip_until.call_count == (checked and action != "update")
+    if checked and action != "update":
+        import time
+
+        skip_until = manager.set_update_skip_until.call_args.args[0]
+        assert abs(skip_until - (time.time() + 604800)) < 5
+    assert progress.call_count == (action == "update")
+    assert messages.information.call_count == (action == "later")
+    icon.assert_not_called()
+
+
+def test_release_prompt_rejects_incomplete_release(monkeypatch):
+    """Malformed release data shows a warning before creating a dialog."""
+    from unittest.mock import Mock
+
+    messages = Mock()
+    dialog = Mock()
+    monkeypatch.setattr(update_dialog, "QMessageBox", messages)
+    monkeypatch.setattr(update_dialog, "QDialog", dialog)
+
+    update_dialog.show_release_update_prompt("Stable", {"name": "2.4-E"})
+
+    messages.warning.assert_called_once()
+    dialog.assert_not_called()
+
+
 def test_branch_completion_action_matches_outcome(monkeypatch):
     """Failures dismiss the dialog; success explicitly offers to close Anki."""
     from unittest.mock import Mock

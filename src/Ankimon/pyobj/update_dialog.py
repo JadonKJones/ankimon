@@ -2363,9 +2363,10 @@ def show_release_update_prompt(channel: str, release: dict):
 
     layout.addLayout(button_layout)
 
-    # Helper to persist snooze if checkbox is checked
-    def _persist_snooze_if_checked():
-        if snooze.isChecked():
+    # A checked snooze applies only when the user defers the update. Qt emits
+    # finished for both accept and reject, including the window close button.
+    def _persist_snooze_if_checked(result):
+        if result != QDialog.DialogCode.Accepted and snooze.isChecked():
             import time
             from .update_manager import set_update_skip_until
 
@@ -2383,7 +2384,7 @@ def show_release_update_prompt(channel: str, release: dict):
             "No problem! You can always check for updates and install them later by going to Ankimon => Help => Check for Updates.",
         )
 
-    # Connect the finished signal to persist snooze on any close path
+    # Persist a requested snooze when the dialog is dismissed.
     dialog.finished.connect(_persist_snooze_if_checked)
 
     update_btn.clicked.connect(on_update)
