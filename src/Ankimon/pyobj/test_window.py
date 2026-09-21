@@ -126,6 +126,9 @@ class TestWindow(QWidget):
         # Per-window render caches — see _cached_pixmap()/_scaled_sprite().
         self._pixmap_cache = {}
         self._sprite_cache = {}
+        # The last composite handed to main_label at its native (unscaled)
+        # resolution — see _display_scene_pixmap()/_refresh_scene_pixmap().
+        self._scene_native_pixmap = None
 
         self.init_ui()
         # self.update()
@@ -148,14 +151,16 @@ class TestWindow(QWidget):
         # Main label that will persist and show everything (Logo, Battle, Death)
         self.main_label = QLabel()
         self.main_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # Stretch whatever composite pixmap is set to the label's own current
-        # size instead of showing it at native resolution — otherwise the
-        # scene stays pinned at its native pixel size and dragging the window
-        # bigger just exposes blank background around it (the sprites never
-        # "move"). Paired with the Expanding size policy below so the label
-        # actually claims the extra layout space instead of the layout
-        # shrink-wrapping it back to the pixmap's own size.
-        self.main_label.setScaledContents(True)
+        # Deliberately NOT setScaledContents(True): Qt's own pixmap scaling
+        # for QLabel uses a smooth/bilinear resample, which turns hand-drawn
+        # pixel art into a blurry smear at any size off its native 556x371 —
+        # blown up OR shrunk, since bilinear downscaling of low-res source
+        # art looks just as mushy as upscaling it. _display_scene_pixmap() /
+        # _refresh_scene_pixmap() below do the scaling by hand instead, with
+        # nearest-neighbor sampling, so the art stays crisp at every size.
+        # Expanding size policy so the label still claims the extra layout
+        # space on resize instead of the layout shrink-wrapping it back to
+        # the pixmap's own native size.
         self.main_label.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -211,7 +216,7 @@ class TestWindow(QWidget):
         pixmap = QPixmap(str(image_path))
         if not pixmap.isNull():
             scaled_pixmap = pixmap.scaled(400, 400, Qt.AspectRatioMode.KeepAspectRatio)
-            self.main_label.setPixmap(scaled_pixmap)
+            self._display_scene_pixmap(scaled_pixmap)
 
         self.setStyleSheet("background-color: rgb(44,44,44);")
         self._reset_window_title()
@@ -701,20 +706,57 @@ class TestWindow(QWidget):
         except RuntimeError:
             pass
 
+    def _display_scene_pixmap(self, pixmap):
+        """Set ``pixmap`` (a native-resolution scene composite) as the scene
+        main_label shows, scaled to the label's current size by hand.
+
+        Not setScaledContents(True) — Qt's own QLabel pixmap scaling is a
+        smooth/bilinear resample, which reads as a blurry smear on hand-drawn
+        pixel art at any size off native (both blown up AND shrunk — a
+        bilinear downscale of low-res source art looks just as mushy as
+        upscaling it). Scaling here with FastTransformation keeps sprites and
+        background crisp at whatever size the window is."""
+        self._scene_native_pixmap = pixmap
+        self._refresh_scene_pixmap()
+
+    def _refresh_scene_pixmap(self):
+        """Re-scale the last composite to main_label's CURRENT size.
+
+        Called after _display_scene_pixmap() sets a new composite, and again
+        from resizeEvent() so an already-on-screen composite (e.g. the death
+        screen sitting there while the player drags the window) rescales too
+        instead of staying pinned at whatever size it was first drawn at."""
+        pixmap = self._scene_native_pixmap
+        if pixmap is None or pixmap.isNull():
+            return
+        target = self.main_label.size()
+        if target.width() <= 0 or target.height() <= 0:
+            return
+        if target == pixmap.size():
+            scaled = pixmap
+        else:
+            scaled = pixmap.scaled(
+                target,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.FastTransformation,
+            )
+        self.main_label.setPixmap(scaled)
+
     def _gif_pixmap_origin(self):
         """Top-left offset and (x, y) scale factor of the composited scene
         inside main_label, as (ox, oy, sx, sy).
 
-        main_label stretches its pixmap to fill the label (setScaledContents),
-        so the scene fills the whole label with no offset — but the overlay
-        labels are still positioned in the composite's own NATIVE pixel
-        coordinates, so their geometry needs scaling by the same factor the
-        label is stretching the pixmap by to land in the right spot."""
-        pm = self.main_label.pixmap()
-        if pm is None or pm.isNull() or pm.width() <= 0 or pm.height() <= 0:
+        main_label's displayed pixmap is scaled by hand to fill the label
+        (see _refresh_scene_pixmap), so the scene fills the whole label with
+        no offset — but the overlay labels are still positioned in the
+        composite's own NATIVE pixel coordinates (self._scene_native_pixmap),
+        so their geometry needs scaling by that same factor to land in the
+        right spot."""
+        native = self._scene_native_pixmap
+        if native is None or native.isNull() or native.width() <= 0 or native.height() <= 0:
             return 0, 0, 1.0, 1.0
-        sx = self.main_label.width() / pm.width()
-        sy = self.main_label.height() / pm.height()
+        sx = self.main_label.width() / native.width()
+        sy = self.main_label.height() / native.height()
         return 0, 0, sx, sy
 
     def _clear_gif_overlay(self, side):
@@ -790,11 +832,12 @@ class TestWindow(QWidget):
         # every turn before the next paint corrects it. Only trust the origin
         # once the label actually matches the scene pixmap; until then pin the
         # overlay to (0, 0) (its resting origin) and re-run after layout.
-        pm = self.main_label.pixmap()
-        # main_label now stretches its pixmap to fill whatever size it was
-        # last laid out at (setScaledContents), so "settled" no longer means
-        # the label matches the pixmap's native size — it means the label has
-        # actually been laid out at all (non-zero) since the pixmap was set.
+        pm = self._scene_native_pixmap
+        # main_label's displayed pixmap is a hand-scaled copy of pm sized to
+        # whatever the label was last laid out at (_refresh_scene_pixmap), so
+        # "settled" no longer means the label matches the pixmap's native
+        # size — it means the label has actually been laid out at all
+        # (non-zero) since the composite was set.
         settled = (
             pm is not None
             and not pm.isNull()
@@ -1617,7 +1660,7 @@ class TestWindow(QWidget):
         # encounter's last render (which could land inside the 50 ms window).
         self._last_display_time = 0
         new_label = self.pokemon_display_first_encounter()
-        self.main_label.setPixmap(new_label.pixmap())
+        self._display_scene_pixmap(new_label.pixmap())
         self._sync_gif_overlays()
         self.button_widget.hide()
         self.setStyleSheet("background-color: rgb(44,44,44);")
@@ -1653,7 +1696,7 @@ class TestWindow(QWidget):
 
         # Update the existing label without clearing the layout
         new_label = self.pokemon_display_battle()
-        self.main_label.setPixmap(new_label.pixmap())
+        self._display_scene_pixmap(new_label.pixmap())
         self._sync_gif_overlays()
         self.button_widget.hide()
         self.current_view = "battle"
@@ -1825,7 +1868,7 @@ class TestWindow(QWidget):
         img_label, kill_btn, catch_btn, nick_input = self.pokemon_display_dead_pokemon()
 
         # Update the image
-        self.main_label.setPixmap(img_label.pixmap())
+        self._display_scene_pixmap(img_label.pixmap())
         self.hide_gif_overlays()
 
         # Sync the persistent buttons (update text/placeholder)
@@ -1862,12 +1905,13 @@ class TestWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # The scene composite scales with main_label automatically
-        # (setScaledContents), but the gif overlay labels are positioned by
-        # hand in screen coordinates — re-place them whenever the window
-        # (and therefore main_label) changes size, or they stay pinned where
-        # the previous size put them.
+        # Neither the scene composite nor the gif overlay labels resize
+        # themselves — both are placed by hand (see _refresh_scene_pixmap /
+        # _sync_gif_overlays) — so re-run both whenever the window (and
+        # therefore main_label) changes size, or they stay pinned at
+        # whatever size/position the previous layout put them at.
         try:
+            self._refresh_scene_pixmap()
             self._sync_gif_overlays()
         except RuntimeError:
             pass
