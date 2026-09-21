@@ -2255,7 +2255,7 @@ def handle_main_pokemon_faint(
     main_pokemon.current_hp = main_pokemon.max_hp
     main_pokemon.reset_bonuses()
 
-    from Ankimon.functions.update_main_pokemon import save_main_pokemon
+    from ..functions.update_main_pokemon import save_main_pokemon
 
     save_main_pokemon(main_pokemon)
 
