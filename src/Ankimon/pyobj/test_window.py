@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QHBoxLayout,
     QLineEdit,
+    QSizePolicy,
 )
 
 from ..utils import random_item, load_custom_font
@@ -140,12 +141,24 @@ class TestWindow(QWidget):
         # The battle scene is a full-bleed backdrop, not a widget on a page, so
         # the layout keeps no contents margins: QVBoxLayout's default 11px inset
         # left only 534px for a 556px-wide scene, silently cropping 11px off
-        # each side (the window is sized to the scene, see setFixedWidth below).
+        # each side (the composite is stretched to fill main_label — see
+        # setScaledContents below).
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Main label that will persist and show everything (Logo, Battle, Death)
         self.main_label = QLabel()
         self.main_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Stretch whatever composite pixmap is set to the label's own current
+        # size instead of showing it at native resolution — otherwise the
+        # scene stays pinned at its native pixel size and dragging the window
+        # bigger just exposes blank background around it (the sprites never
+        # "move"). Paired with the Expanding size policy below so the label
+        # actually claims the extra layout space instead of the layout
+        # shrink-wrapping it back to the pixmap's own size.
+        self.main_label.setScaledContents(True)
+        self.main_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         layout.addWidget(self.main_label)
 
         # Animated-sprite overlays (gui.gif_in_ankimon_window, default off).
@@ -203,15 +216,16 @@ class TestWindow(QWidget):
         self.setStyleSheet("background-color: rgb(44,44,44);")
         self._reset_window_title()
         self.setWindowIcon(QIcon(str(icon_path)))
-        # Pin the width to the battle scenes' own width (the art is 556x371 with
-        # the dialog box, 555x258 without) and let the layout own the height.
-        # A fixed 556x300 cropped every view: the scene with its dialog box needs
-        # 371, so the message bar at its foot was cut off, and the death screen
-        # needs 297 for the pokedex card plus the catch/defeat row. Heights vary
-        # per view, and Qt only ever raises a shown top-level window's minimum,
-        # so the window grows to whichever view needs the most and then holds
-        # steady — no per-view resize flicker.
-        self.setFixedWidth(556)
+        # The art is drawn at a fixed native resolution (556x371 with the
+        # dialog box, 555x258 without), but the window itself is user
+        # resizable — main_label's setScaledContents(True) above stretches
+        # whichever composite is on screen to fill the label's current size,
+        # so the whole scene (background, sprites, dialog boxes) scales and
+        # repositions together instead of staying pinned at native size with
+        # blank space around it. Only enforce a floor so the scene never
+        # shrinks to something illegible.
+        self.setMinimumSize(278, 150)
+        self.resize(556, 371)
 
     def open_dynamic_window(self):
         # Create and show the dynamic window
@@ -688,14 +702,20 @@ class TestWindow(QWidget):
             pass
 
     def _gif_pixmap_origin(self):
-        """Top-left of the composited scene inside main_label — non-zero only
-        if the label was stretched larger than the scene art."""
+        """Top-left offset and (x, y) scale factor of the composited scene
+        inside main_label, as (ox, oy, sx, sy).
+
+        main_label stretches its pixmap to fill the label (setScaledContents),
+        so the scene fills the whole label with no offset — but the overlay
+        labels are still positioned in the composite's own NATIVE pixel
+        coordinates, so their geometry needs scaling by the same factor the
+        label is stretching the pixmap by to land in the right spot."""
         pm = self.main_label.pixmap()
-        if pm is None or pm.isNull():
-            return 0, 0
-        ox = max(0, (self.main_label.width() - pm.width()) // 2)
-        oy = max(0, (self.main_label.height() - pm.height()) // 2)
-        return ox, oy
+        if pm is None or pm.isNull() or pm.width() <= 0 or pm.height() <= 0:
+            return 0, 0, 1.0, 1.0
+        sx = self.main_label.width() / pm.width()
+        sy = self.main_label.height() / pm.height()
+        return 0, 0, sx, sy
 
     def _clear_gif_overlay(self, side):
         movie_attr = "_enemy_gif_movie" if side == "enemy" else "_main_gif_movie"
@@ -771,21 +791,26 @@ class TestWindow(QWidget):
         # once the label actually matches the scene pixmap; until then pin the
         # overlay to (0, 0) (its resting origin) and re-run after layout.
         pm = self.main_label.pixmap()
+        # main_label now stretches its pixmap to fill whatever size it was
+        # last laid out at (setScaledContents), so "settled" no longer means
+        # the label matches the pixmap's native size — it means the label has
+        # actually been laid out at all (non-zero) since the pixmap was set.
         settled = (
             pm is not None
             and not pm.isNull()
-            and self.main_label.width() == pm.width()
-            and self.main_label.height() == pm.height()
+            and self.main_label.width() > 0
+            and self.main_label.height() > 0
         )
         if not settled and has_gif and not _deferred:
             QTimer.singleShot(0, self._deferred_gif_sync)
 
         if settled:
-            ox, oy = self._gif_pixmap_origin()
-            self._gif_origin = (ox, oy)
+            ox, oy, sx, sy = self._gif_pixmap_origin()
+            self._gif_origin = (ox, oy, sx, sy)
         else:
-            # Reuse the last settled origin rather than a mid-layout bogus one.
-            ox, oy = getattr(self, "_gif_origin", (0, 0))
+            # Reuse the last settled origin/scale rather than a mid-layout
+            # bogus one.
+            ox, oy, sx, sy = getattr(self, "_gif_origin", (0, 0, 1.0, 1.0))
 
         # TEMP diagnostic: log only the anomalies that could cause the reported
         # "jitters down-and-right at random" — a non-zero origin or a
@@ -875,15 +900,23 @@ class TestWindow(QWidget):
             # measured the PNG padding correctly on this Qt build.
             baseline = min(y + h, self._MESSAGE_BOX_RECT.top())
             fy = baseline - fh
+            # Everything above is in the composite's NATIVE pixel coordinates
+            # (same space the static PNG sprites are painted in). main_label
+            # now stretches that composite to its own current size, so the
+            # overlay's screen geometry needs the same (sx, sy) scale factor
+            # applied, or it stays pinned at native size/position while the
+            # background scales around it.
+            sfw = max(1, int(fw * sx))
+            sfh = max(1, int(fh * sy))
             # Record the target size for _paint_gif_frame (every frame is
             # rescaled to this on the fly — see the label.setMovie() comment
             # above). Only force an immediate repaint of the current frame
             # when the target actually changed, so a shake's ~20 calls/turn
             # don't re-render the same frame at the same size repeatedly.
-            if self._gif_scaled.get(side) != (fw, fh):
-                self._gif_scaled[side] = (fw, fh)
+            if self._gif_scaled.get(side) != (sfw, sfh):
+                self._gif_scaled[side] = (sfw, sfh)
                 self._paint_gif_frame(side)
-            gx, gy = int(fx + ox), int(fy + oy)
+            gx, gy = int(ox + fx * sx), int(oy + fy * sy)
             # TEMP diagnostic: flag a jump bigger than a shake step (±7,±3).
             _prev = getattr(self, "_gifjit_pos", {}).get(side)
             if _prev is not None and (abs(_prev[0] - gx) > 10 or abs(_prev[1] - gy) > 10):
@@ -898,7 +931,7 @@ class TestWindow(QWidget):
                     pass
             self._gifjit_pos = getattr(self, "_gifjit_pos", {})
             self._gifjit_pos[side] = (gx, gy)
-            label.setGeometry(gx, gy, int(fw), int(fh))
+            label.setGeometry(gx, gy, sfw, sfh)
             label.raise_()
             label.show()
             if self.isVisible():
@@ -1826,6 +1859,18 @@ class TestWindow(QWidget):
 
             if widget:
                 widget.deleteLater()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # The scene composite scales with main_label automatically
+        # (setScaledContents), but the gif overlay labels are positioned by
+        # hand in screen coordinates — re-place them whenever the window
+        # (and therefore main_label) changes size, or they stay pinned where
+        # the previous size put them.
+        try:
+            self._sync_gif_overlays()
+        except RuntimeError:
+            pass
 
     def closeEvent(self, event):
         # Nothing cancels the singleShot timers on close, so a shake mid-flight
