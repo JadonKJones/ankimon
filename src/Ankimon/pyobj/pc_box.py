@@ -2676,11 +2676,38 @@ class GiveItemWindow(QDialog):
     NOT_YET_IMPLEMENTED_ITEMS = {
         "focus-sash",
         "focus-band",
-        "white-herb",
         "mental-herb",
         "power-herb",
         "throat-spray",
-        "weakness-policy",
+    }
+
+    # Berries with a real battle effect wired into the engine (see
+    # poke_engine/special_effects/items/end_of_turn.py). Every other
+    # "*-berry" item stays blocked below — most are Poffin/EV-training
+    # berries with no mainline battle effect, or pinch berries (type-resist,
+    # Custap, Micle) that need hooks this engine doesn't expose yet.
+    IMPLEMENTED_BERRIES = {
+        "oran-berry",
+        "sitrus-berry",
+        "figy-berry",
+        "wiki-berry",
+        "mago-berry",
+        "aguav-berry",
+        "iapapa-berry",
+        "enigma-berry",
+        "cheri-berry",
+        "chesto-berry",
+        "pecha-berry",
+        "rawst-berry",
+        "aspear-berry",
+        "persim-berry",
+        "lum-berry",
+        "liechi-berry",
+        "ganlon-berry",
+        "salac-berry",
+        "petaya-berry",
+        "apicot-berry",
+        "starf-berry",
     }
 
     def __init__(self, item_list: list[str], give_item_func: Callable, logger):
@@ -2713,7 +2740,7 @@ class GiveItemWindow(QDialog):
             )
             if (
                 item in GiveItemWindow.NOT_YET_IMPLEMENTED_ITEMS
-                or item.endswith("-berry")
+                or (item.endswith("-berry") and item not in GiveItemWindow.IMPLEMENTED_BERRIES)
                 or item.endswith("-gem")
             ):
                 # NOTE (Axil): As time of writing, single use items are not yet implemented.

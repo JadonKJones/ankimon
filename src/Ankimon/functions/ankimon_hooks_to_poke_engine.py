@@ -464,6 +464,15 @@ def simulate_battle_with_poke_engine(
         enemy_pokemon.hp = state.opponent.active.hp
         enemy_pokemon.current_hp = state.opponent.active.hp
 
+        # A single-use item (e.g. a berry) consumes itself mid-battle by
+        # setting the engine-side item to None. Mirror that back onto the
+        # real Pokemon so it doesn't come back on the next turn's reset_side()
+        # and isn't silently returned to the bag.
+        if state.user.active.item is None and main_pokemon.held_item:
+            main_pokemon.consume_held_item()
+        if state.opponent.active.item is None and getattr(enemy_pokemon, "held_item", None):
+            enemy_pokemon.held_item = None
+
         main_pokemon.stat_stages = {
             "atk": state.user.active.attack_boost,
             "def": state.user.active.defense_boost,

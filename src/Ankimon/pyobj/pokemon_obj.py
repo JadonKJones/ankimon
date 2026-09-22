@@ -717,6 +717,38 @@ class PokemonObject:
         ):
             main_pkmn.held_item = held_item
 
+    def consume_held_item(self) -> None:
+        """
+        Clears the held item without returning it to the bag — used when a
+        single-use item (e.g. a berry) is consumed by its own battle effect,
+        as opposed to the player manually unequipping it via remove_held_item().
+        """
+        if self.held_item is None:
+            return
+
+        db = services.db
+        self.held_item = None
+
+        # Save to captured_pokemon in database
+        pokemon_data = db.get_pokemon(self.individual_id)
+        if pokemon_data:
+            pokemon_data["held_item"] = None
+            db.save_pokemon(pokemon_data)
+
+        # Also update main_pokemon if this is the main pokemon
+        main_pokemon = db.get_main_pokemon()
+        if main_pokemon and main_pokemon.get("individual_id") == self.individual_id:
+            main_pokemon["held_item"] = None
+            db.save_main_pokemon(main_pokemon)
+
+        # Sync the in-memory main_pokemon singleton if it is the target.
+        main_pkmn = services.main_pokemon
+        if (
+            main_pkmn is not None
+            and getattr(main_pkmn, "individual_id", None) == self.individual_id
+        ):
+            main_pkmn.held_item = None
+
     def remove_held_item(self) -> None:
         """
         Removes the held item from the Pokémon and updates the database.
