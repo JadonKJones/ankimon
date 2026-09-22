@@ -2256,6 +2256,32 @@ def handle_main_pokemon_faint(
     main_pokemon.current_hp = main_pokemon.max_hp
     main_pokemon.reset_bonuses()
 
+    # Patch the stored row. Saving the live object would replace that row with
+    # to_dict(), whose attacks stay stale after a level-up (the new move is
+    # written only onto the DB dict), and save_main_pokemon() would force
+    # is_main=1 even when this row is not the saved main.
+    db = services.db
+    individual_id = getattr(main_pokemon, "individual_id", None)
+    stored = (
+        db.get_pokemon(individual_id)
+        if db is not None and individual_id is not None
+        else None
+    )
+    if stored:
+        healed = int(main_pokemon.max_hp)
+        stored["hp"] = healed
+        stored["current_hp"] = healed
+        main_row = db.get_main_pokemon()
+        same_main = (
+            main_row is not None
+            and main_row.get("individual_id") is not None
+            and str(main_row.get("individual_id")) == str(individual_id)
+        )
+        if same_main:
+            db.save_main_pokemon(stored)
+        else:
+            db.save_pokemon(stored)
+
     if spawn_replacement:
         new_pokemon(
             enemy_pokemon, test_window, ankimon_tracker_obj, reviewer_obj
