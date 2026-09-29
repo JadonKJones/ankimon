@@ -431,7 +431,6 @@ class ItemWindow(QWidget):
         elif (
             item_name in GiveItemWindow.NOT_YET_IMPLEMENTED_ITEMS
             or (item_name.endswith("-berry") and item_name not in GiveItemWindow.IMPLEMENTED_BERRIES)
-            or item_name.endswith("-gem")
         ):
             use_item_button = QLabel("Not implemented yet")
             use_item_button.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -500,7 +499,6 @@ class ItemWindow(QWidget):
             if (
                 name in GiveItemWindow.NOT_YET_IMPLEMENTED_ITEMS
                 or (name.endswith("-berry") and name not in GiveItemWindow.IMPLEMENTED_BERRIES)
-                or name.endswith("-gem")
             ):
                 return {"ok": False, "message": "This item isn't usable yet."}
             self._prompt_and_give_held_item(name)

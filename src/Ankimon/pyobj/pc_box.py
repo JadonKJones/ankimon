@@ -2741,7 +2741,6 @@ class GiveItemWindow(QDialog):
             if (
                 item in GiveItemWindow.NOT_YET_IMPLEMENTED_ITEMS
                 or (item.endswith("-berry") and item not in GiveItemWindow.IMPLEMENTED_BERRIES)
-                or item.endswith("-gem")
             ):
                 # NOTE (Axil): As time of writing, single use items are not yet implemented.
                 # It seems to me that, actually, they are not even implemented in the Poke-engine. Although
