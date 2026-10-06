@@ -72,6 +72,8 @@ def get_pokemon_from_collection(individual_id):
 
 
 def switch_to_team_member(next_id):
+    from .functions.update_main_pokemon import save_main_pokemon
+
     pokemon_data = get_pokemon_from_collection(next_id)
     if not pokemon_data or not pokemon_data.get("id"):
         tooltip("Invalid pokemon data")
