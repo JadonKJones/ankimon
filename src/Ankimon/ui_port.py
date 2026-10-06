@@ -49,6 +49,9 @@ class HeadlessPresenter:
 
     # --- questions (return a value) ---------------------------------------
 
+    def switch_team_member(self, individual_id: str) -> None:
+        """Make the team member ``individual_id`` the active pokemon. GUI-less: no-op."""
+
     def choose_move(self, attacks: Sequence[str]) -> Optional[str]:
         """Pick which of ``attacks`` to use this turn. None → caller decides."""
         events.emit(

@@ -222,6 +222,60 @@ def reset_side(pokemon: Pokemon, side_conditions: Union[dict, None] = None) -> S
     return side
 
 
+def pick_best_move(attacker: Pokemon, defender: Pokemon) -> str:
+    """Attack from attacker's moveset with the highest average damage vs defender."""
+    from ..poke_engine.damage_calculator import calculate_damage
+
+    attacks = attacker.attacks or [constants.DO_NOTHING_MOVE]
+    state = State(
+        user=reset_side(attacker.to_poke_engine_Pokemon()),
+        opponent=reset_side(defender.to_poke_engine_Pokemon()),
+        weather=None,
+        field=None,
+        trick_room=False,
+    )
+
+    def expected_damage(move):
+        try:
+            rolls = calculate_damage(
+                copy.deepcopy(state), constants.USER, normalize_name(move), constants.DO_NOTHING_MOVE
+            )
+        except Exception:
+            return 0
+        return sum(rolls) / len(rolls) if rolls else 0
+
+    return max(attacks, key=expected_damage)
+
+
+def pick_switch_target(current_id, my_types, enemy_types, candidates):
+    """Team member id to switch to when the active pokemon is type-disadvantaged, else None.
+
+    candidates: iterable of (individual_id, types, hp). Fainted members are skipped.
+    """
+    from ..poke_engine.damage_calculator import type_effectiveness_modifier
+
+    my_types = [t.lower() for t in my_types]
+    enemy_types = [t.lower() for t in enemy_types]
+
+    def matchup(types):
+        offense = max(type_effectiveness_modifier(t, enemy_types) for t in types)
+        defense = max(type_effectiveness_modifier(e, types) for e in enemy_types)
+        return offense - defense
+
+    current_score = matchup(my_types)
+    if current_score >= 0:
+        return None
+
+    best_id, best_score = None, current_score
+    for individual_id, types, hp in candidates:
+        if individual_id == current_id or hp <= 0 or not types:
+            continue
+        score = matchup([t.lower() for t in types])
+        if score > best_score:
+            best_id, best_score = individual_id, score
+    return best_id
+
+
 def simulate_battle_with_poke_engine(
     main_pokemon: Pokemon,
     enemy_pokemon: Pokemon,
@@ -265,9 +319,9 @@ def simulate_battle_with_poke_engine(
 
     # If no move is provided, use a random move
     if main_move is None and main_pokemon.attacks:
-        main_move = random.choice(main_pokemon.attacks)
+        main_move = pick_best_move(main_pokemon, enemy_pokemon)
     if enemy_move is None and enemy_pokemon.attacks:
-        enemy_move = random.choice(enemy_pokemon.attacks)
+        enemy_move = pick_best_move(enemy_pokemon, main_pokemon)
     if not main_move:
         main_move = "Splash"
     if not enemy_move:

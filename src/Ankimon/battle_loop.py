@@ -24,7 +24,12 @@ from .utils import (
     is_alive,
     random_item,
 )
-from .functions.ankimon_hooks_to_poke_engine import simulate_battle_with_poke_engine
+from .functions.ankimon_hooks_to_poke_engine import (
+    pick_best_move,
+    pick_switch_target,
+    simulate_battle_with_poke_engine,
+)
+from .functions.pokedex_functions import find_details_move
 from .pyobj.error_handler import show_warning_with_traceback
 
 # Shared game state used as bare module globals below. core.bind_runtime_globals()
@@ -184,6 +189,32 @@ def _get_cards_per_round() -> int:
     return 2
 
 
+def _auto_switch_if_outmatched():
+    """Switch the active pokemon to a rotation-team member with a better type matchup."""
+    try:
+        rotation = int(settings_obj.get("controls.team_cycle_count", 3))
+    except (TypeError, ValueError):
+        rotation = 3
+    if rotation <= 1:
+        return
+
+    candidates = []
+    for entry in services.db.get_team()[:rotation]:
+        individual_id = entry.get("individual_id")
+        record = services.db.get_pokemon(individual_id) if individual_id else None
+        if record:
+            candidates.append((individual_id, record.get("type") or [], record.get("hp", 0)))
+
+    target = pick_switch_target(
+        getattr(main_pokemon, "individual_id", None),
+        main_pokemon.type,
+        enemy_pokemon.type,
+        candidates,
+    )
+    if target:
+        services.ui.switch_team_member(target)
+
+
 def on_review_card(*args):
     # Startup-readiness gate: a review that arrives before the async boot has
     # finished cannot be battled. Instead of reading exp's raw
@@ -197,8 +228,8 @@ def on_review_card(*args):
 
     try:
         multiplier = ankimon_tracker_obj.multiplier
-        user_attack = random.choice(main_pokemon.attacks) if main_pokemon.attacks else "splash"
-        enemy_attack = random.choice(enemy_pokemon.attacks) if enemy_pokemon.attacks else "splash"
+        user_attack = "splash"
+        enemy_attack = "splash"
 
         battle_sounds = settings_obj.get("audio.battle_sounds")
 
@@ -297,12 +328,18 @@ def on_review_card(*args):
             ankimon_tracker_obj.pokemon_encounter += 1
             multiplier = ankimon_tracker_obj.multiplier
 
+            if main_pokemon.hp > 0 and enemy_pokemon.hp > 0:
+                _auto_switch_if_outmatched()
+
+            user_attack = pick_best_move(main_pokemon, enemy_pokemon) if main_pokemon.attacks else "splash"
+            enemy_attack = pick_best_move(enemy_pokemon, main_pokemon) if enemy_pokemon.attacks else "splash"
+
             if (
                 ankimon_tracker_obj.pokemon_encounter > 0
                 and enemy_pokemon.hp > 0
                 and multiplier < 1
             ):
-                enemy_move = safe_get_random_move(enemy_pokemon.attacks, logger=logger)
+                enemy_move = find_details_move(enemy_attack) or safe_get_random_move(enemy_pokemon.attacks, logger=logger)
                 enemy_move_category = enemy_move.get("category")
                 if enemy_move_category == "Status":
                     color = "#F7DC6F"
@@ -313,7 +350,7 @@ def on_review_card(*args):
             else:
                 enemy_attack = "splash"
 
-            move = safe_get_random_move(main_pokemon.attacks, logger=logger)
+            move = find_details_move(user_attack) or safe_get_random_move(main_pokemon.attacks, logger=logger)
             category = move.get("category")
 
             if (
@@ -326,6 +363,8 @@ def on_review_card(*args):
                     chosen = services.ui.choose_move(main_pokemon.attacks)
                     if chosen:
                         user_attack = chosen
+                        move = find_details_move(chosen) or move
+                        category = move.get("category")
 
                 if category == "Status":
                     color = "#F7DC6F"

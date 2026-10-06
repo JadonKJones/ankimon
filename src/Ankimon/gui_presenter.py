@@ -24,6 +24,12 @@ from .pyobj.error_handler import show_warning_with_traceback
 class QtPresenter:
     """Shows real Qt dialogs for the UI-port interactions."""
 
+    def switch_team_member(self, individual_id):
+        from .reviewer_ui import switch_to_team_member
+
+        switch_to_team_member(individual_id)
+
+
     def choose_move(self, attacks):
         # Parent to mw and force it to the front: a parentless QDialog can
         # spawn behind the main Anki window (or the Ankimon battle popup)

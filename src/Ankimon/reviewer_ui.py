@@ -71,6 +71,86 @@ def get_pokemon_from_collection(individual_id):
         return None
 
 
+def switch_to_team_member(next_id):
+    pokemon_data = get_pokemon_from_collection(next_id)
+    if not pokemon_data or not pokemon_data.get("id"):
+        tooltip("Invalid pokemon data")
+        return
+
+    try:
+        from .functions.pokedex_functions import (
+            search_pokedex_by_id,
+            search_pokedex,
+        )
+
+        pokemon_name = pokemon_data.get("name")
+        if not pokemon_name:
+            pokemon_name = search_pokedex_by_id(pokemon_data.get("id", 1))
+            pokemon_data["name"] = pokemon_name
+
+        # search_pokedex returns [] (not None) when the name is unknown.
+        # base_stats must be a dict with an "hp" key, or update_stats ->
+        # calculate_max_hp would raise on base_stats["hp"] AFTER partially
+        # mutating main_pokemon. Guard before touching main_pokemon.
+        base_stats = search_pokedex(pokemon_name, "baseStats")
+        if not isinstance(base_stats, dict) or "hp" not in base_stats:
+            tooltip(f"Error: base stats not found for {pokemon_name}")
+            return
+        pokemon_data["base_stats"] = base_stats
+
+        main_pokemon.update_stats(**pokemon_data)
+        main_pokemon.max_hp = main_pokemon.calculate_max_hp()
+        main_pokemon.hp = main_pokemon.max_hp
+        main_pokemon.reset_bonuses()
+
+        save_main_pokemon(main_pokemon)
+    except Exception as e:
+        print(f"Error updating pokemon: {e}")
+        tooltip(f"Error switching pokemon: {e}")
+        return
+
+    # Repaint immediately through the HUD's single repaint entry point.
+    try:
+        reviewer_obj.refresh_hud()
+    except Exception as e:
+        print(f"Error updating HUD: {e}")
+
+    pkmn_name = pokemon_data.get("nickname") or pokemon_data.get("name", "Unknown")
+    pkmn_level = pokemon_data.get("level", "?")
+    # main_pokemon now holds the switched-in Pokémon (update_stats above), so
+    # its display_name gives the localized species / regional-form name and
+    # honours a genuinely custom nickname.
+    display_name = getattr(main_pokemon, "display_name", None) or pkmn_name
+    try:
+        switch_msg = services.translator.translate(
+            "switched_pokemon", pokemon_name=display_name, level=pkmn_level
+        )
+    except Exception:
+        switch_msg = f"Switched to {display_name}! Lv. {pkmn_level}"
+
+    # The HUD refresh above only repaints the bottom-of-reviewer bars —
+    # the separate Ankimon Window popup has its own sprite/name label and
+    # message box, and was never told a swap happened, so it kept showing
+    # the pokemon (and battle text) from before the cycle. Routes the
+    # switch message into the window's own message box rather than
+    # leaving it to the floating Anki tooltip below — with the window
+    # open the two used to visually overlap/compete for the same
+    # on-screen space.
+    shown_in_window = False
+    try:
+        from .functions.drawing_utils import show_in_ankimon_window
+
+        shown_in_window = show_in_ankimon_window(switch_msg)
+    except Exception as e:
+        print(f"Error updating Ankimon Window: {e}")
+
+    # Only float the tooltip when the window did NOT take the message —
+    # otherwise the same sentence appears twice at once, which is the
+    # overlap show_in_ankimon_window() exists to remove.
+    if not shown_in_window:
+        tooltip(switch_msg)
+
+
 def cycle_team_pokemon():
     """Cycle the active (main) pokemon to the next team slot and repaint the HUD."""
     global _team_cycle_index, _team_cycle_pokemon_ids
@@ -102,83 +182,7 @@ def cycle_team_pokemon():
         _team_cycle_index = (_team_cycle_index + 1) % len(team_ids)
         next_id = team_ids[_team_cycle_index]
 
-        pokemon_data = get_pokemon_from_collection(next_id)
-        if not pokemon_data or not pokemon_data.get("id"):
-            tooltip("Invalid pokemon data")
-            return
-
-        try:
-            from .functions.pokedex_functions import (
-                search_pokedex_by_id,
-                search_pokedex,
-            )
-
-            pokemon_name = pokemon_data.get("name")
-            if not pokemon_name:
-                pokemon_name = search_pokedex_by_id(pokemon_data.get("id", 1))
-                pokemon_data["name"] = pokemon_name
-
-            # search_pokedex returns [] (not None) when the name is unknown.
-            # base_stats must be a dict with an "hp" key, or update_stats ->
-            # calculate_max_hp would raise on base_stats["hp"] AFTER partially
-            # mutating main_pokemon. Guard before touching main_pokemon.
-            base_stats = search_pokedex(pokemon_name, "baseStats")
-            if not isinstance(base_stats, dict) or "hp" not in base_stats:
-                tooltip(f"Error: base stats not found for {pokemon_name}")
-                return
-            pokemon_data["base_stats"] = base_stats
-
-            main_pokemon.update_stats(**pokemon_data)
-            main_pokemon.max_hp = main_pokemon.calculate_max_hp()
-            main_pokemon.hp = main_pokemon.max_hp
-            main_pokemon.reset_bonuses()
-
-            save_main_pokemon(main_pokemon)
-        except Exception as e:
-            print(f"Error updating pokemon: {e}")
-            tooltip(f"Error switching pokemon: {e}")
-            return
-
-        # Repaint immediately through the HUD's single repaint entry point.
-        try:
-            reviewer_obj.refresh_hud()
-        except Exception as e:
-            print(f"Error updating HUD: {e}")
-
-        pkmn_name = pokemon_data.get("nickname") or pokemon_data.get("name", "Unknown")
-        pkmn_level = pokemon_data.get("level", "?")
-        # main_pokemon now holds the switched-in Pokémon (update_stats above), so
-        # its display_name gives the localized species / regional-form name and
-        # honours a genuinely custom nickname.
-        display_name = getattr(main_pokemon, "display_name", None) or pkmn_name
-        try:
-            switch_msg = services.translator.translate(
-                "switched_pokemon", pokemon_name=display_name, level=pkmn_level
-            )
-        except Exception:
-            switch_msg = f"Switched to {display_name}! Lv. {pkmn_level}"
-
-        # The HUD refresh above only repaints the bottom-of-reviewer bars —
-        # the separate Ankimon Window popup has its own sprite/name label and
-        # message box, and was never told a swap happened, so it kept showing
-        # the pokemon (and battle text) from before the cycle. Routes the
-        # switch message into the window's own message box rather than
-        # leaving it to the floating Anki tooltip below — with the window
-        # open the two used to visually overlap/compete for the same
-        # on-screen space.
-        shown_in_window = False
-        try:
-            from .functions.drawing_utils import show_in_ankimon_window
-
-            shown_in_window = show_in_ankimon_window(switch_msg)
-        except Exception as e:
-            print(f"Error updating Ankimon Window: {e}")
-
-        # Only float the tooltip when the window did NOT take the message —
-        # otherwise the same sentence appears twice at once, which is the
-        # overlap show_in_ankimon_window() exists to remove.
-        if not shown_in_window:
-            tooltip(switch_msg)
+        switch_to_team_member(next_id)
 
     except Exception as e:
         print(f"Unexpected error: {e}")
