@@ -72,7 +72,7 @@ def get_pokemon_from_collection(individual_id):
 
 
 def switch_to_team_member(next_id):
-    from .functions.update_main_pokemon import save_main_pokemon
+    from .functions.update_main_pokemon import _apply_loaded_hp, save_main_pokemon
 
     pokemon_data = get_pokemon_from_collection(next_id)
     if not pokemon_data or not pokemon_data.get("id"):
@@ -100,9 +100,18 @@ def switch_to_team_member(next_id):
             return
         pokemon_data["base_stats"] = base_stats
 
+        # The mutable main singleton is about to represent another
+        # individual. The pending faint belongs to the previous one.
+        from .battle_loop import _cancel_main_faint_deferral
+
+        _cancel_main_faint_deferral()
         main_pokemon.update_stats(**pokemon_data)
-        main_pokemon.max_hp = main_pokemon.calculate_max_hp()
-        main_pokemon.hp = main_pokemon.max_hp
+        # update_stats only overwrites the HP keys the incoming row carries,
+        # so hp/current_hp can still hold the outgoing Pokemon's values.
+        # Resolve HP from the incoming row like the launch-time loader does
+        # (current_hp, then hp, then max HP) and write it to both fields;
+        # this also recalculates max_hp.
+        _apply_loaded_hp(main_pokemon, pokemon_data)
         main_pokemon.reset_bonuses()
 
         save_main_pokemon(main_pokemon)
@@ -158,7 +167,10 @@ def cycle_team_pokemon():
     global _team_cycle_index, _team_cycle_pokemon_ids
 
     try:
-        from .functions.update_main_pokemon import save_main_pokemon
+        from .functions.update_main_pokemon import (
+            _apply_loaded_hp,
+            save_main_pokemon,
+        )
 
         cycle_count = _team_cycle_count()
         if cycle_count <= 1:
@@ -201,21 +213,9 @@ def set_collected_ids(ids):
 
 def catch_shortcut_function():
     if enemy_pokemon.hp < 1:
-        catch_pokemon(
-            enemy_pokemon,
-            ankimon_tracker_obj,
-            logger,
-            "",
-            _collected_pokemon_ids,
-            achievements,
-        )
-        new_pokemon(
-            enemy_pokemon,
-            get_test_window(),
-            ankimon_tracker_obj,
-            reviewer_obj,
-            update_hud=True,
-        )
+        from .hook_registry import CatchPokemonHook
+
+        CatchPokemonHook(_collected_pokemon_ids)
     else:
         if get_auto_battle_setting(services.settings) == 0:
             # Auto-battle disabled - show the original message
@@ -227,21 +227,9 @@ def catch_shortcut_function():
 
 def defeat_shortcut_function():
     if enemy_pokemon.hp < 1:
-        kill_pokemon(
-            main_pokemon,
-            enemy_pokemon,
-            get_evo_window(),
-            logger,
-            achievements,
-            trainer_card,
-        )
-        new_pokemon(
-            enemy_pokemon,
-            get_test_window(),
-            ankimon_tracker_obj,
-            reviewer_obj,
-            update_hud=True,
-        )
+        from .hook_registry import DefeatPokemonHook
+
+        DefeatPokemonHook()
     else:
         if get_auto_battle_setting(services.settings) == 0:
             # Auto-battle disabled - show the original message

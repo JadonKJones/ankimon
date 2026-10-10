@@ -17,11 +17,11 @@ from datetime import datetime
 from aqt import QDialog, QVBoxLayout, QWebEngineView, QWebEnginePage, mw
 from aqt.qt import Qt, QUrl, QFrame, QWebEngineProfile
 from PyQt6.QtCore import QObject, pyqtSlot, QTimer, QByteArray
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QIcon
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWidgets import QStackedWidget
 import csv
-from ..utils import give_item, is_alive
+from ..utils import get_item_sprite_path, give_item, is_alive
 from ..pyobj.settings import DEFAULT_CONFIG, HUD_TOGGLE_AUTO_SYNC_KEYS
 
 try:
@@ -32,7 +32,8 @@ except ImportError:  # dev helper not landed yet (thread-reload-and-misc-utils u
         return False
 
 
-from ..resources import items_path, csv_file_items_cost, csv_file_descriptions
+from ..resources import items_path, csv_file_items_cost, csv_file_descriptions, icon_path
+
 
 
 class SafeWebEnginePage(QWebEnginePage):
@@ -76,6 +77,7 @@ from ..functions.pokedex_functions import (
     _load_pokedex_cache,
     check_evolution_by_item,
     evolution_gender_allows,
+    evolution_time_allows,
     return_id_for_item_name,
 )
 from ..business import calculate_cp_from_dict
@@ -1101,6 +1103,7 @@ class AnkimonItemsWeb(QDialog):
         self._live_refresh_pending = False
         self.current_screen = None
         self.setWindowTitle("Ankimon")
+        self.setWindowIcon(QIcon(str(icon_path)))
 
         # Paint the shell dark from the first frame. The web views set their
         # own page background, but the surrounding QDialog/QFrame/QStackedWidget
@@ -1837,7 +1840,7 @@ class AnkimonItemsWeb(QDialog):
             )
         else:
             entry["image_url"] = QUrl.fromLocalFile(
-                str(items_path / f"{name}.png")
+                str(get_item_sprite_path(name))
             ).toString()
             entry["description"] = _item_desc(
                 name, self._lookup_description(name) or f"A useful item: {ui_name}"
@@ -2198,6 +2201,9 @@ class AnkimonItemsWeb(QDialog):
                                 ):
                                     continue
 
+                                if not evolution_time_allows(target_data):
+                                    continue
+
                                 # "trade" belongs here alongside "useItem": Ankimon has no
                                 # trading, so the trade-with-held-item species (Rhydon ->
                                 # Rhyperior via Protector, Onix -> Steelix via Metal Coat,
@@ -2208,8 +2214,12 @@ class AnkimonItemsWeb(QDialog):
                                 # Normalize both sides by stripping spaces, hyphens and
                                 # apostrophes so pokedex.json display names (e.g.
                                 # "King's Rock") match items.csv identifiers (e.g.
-                                # "kings-rock"), which drop the apostrophe. Mirrors the
-                                # canonical logic in functions/pokedex_functions.py.
+                                # "kings-rock"), which drop the apostrophe. This is a
+                                # LOOSER fold than pokedex_functions.normalize_item_identifier:
+                                # it also strips hyphens (so "up-grade" and "upgrade" meet)
+                                # but does no NFKD or U+2019 folding. Deliberately separate —
+                                # it matches pokedex.json evoItem names, not items.csv keys —
+                                # so do not "unify" the two without checking both call sites.
                                 required_item = (
                                     (target_data.get("evoItem") or "")
                                     .lower()

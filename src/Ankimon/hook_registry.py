@@ -37,6 +37,11 @@ def CatchPokemonHook(collected_pokemon_ids):
             collected_pokemon_ids,
             achievements,
         )
+        # Resolve while this is still the defeated encounter. new_pokemon()
+        # mutates the enemy singleton, so its identity cannot be checked later.
+        from .battle_loop import _resolve_main_faint_for_enemy
+
+        _resolve_main_faint_for_enemy(main_pokemon, enemy_pokemon)
         new_pokemon(
             enemy_pokemon,
             get_test_window(),
@@ -63,6 +68,9 @@ def DefeatPokemonHook():
             achievements,
             trainer_card,
         )
+        from .battle_loop import _resolve_main_faint_for_enemy
+
+        _resolve_main_faint_for_enemy(main_pokemon, enemy_pokemon)
         new_pokemon(
             enemy_pokemon,
             get_test_window(),

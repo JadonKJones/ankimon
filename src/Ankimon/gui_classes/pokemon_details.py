@@ -1,5 +1,4 @@
 import math
-import json
 from typing import Any, Callable
 import re
 
@@ -11,6 +10,7 @@ from PyQt6.QtCore import (
     QRectF,
     QPropertyAnimation,
     QEasingCurve,
+    QTimer,
     pyqtProperty,
 )
 from PyQt6.QtWidgets import QScrollArea
@@ -50,6 +50,7 @@ from ..functions.pokedex_functions import (
     search_pokedex,
     search_pokedex_by_id,
 )
+from ..functions.tm_learnset import get_tm_learnset
 from ..functions.pokemon_functions import find_experience_for_level
 from ..functions.friendship_evolution import evolution_readiness
 from ..functions.gui_functions import type_icon_path, move_category_path
@@ -59,7 +60,6 @@ from ..utils import format_move_name, load_custom_font
 from ..resources import (
     icon_path,
     addon_dir,
-    pokemon_tm_learnset_path,
 )
 from ..texts import (
     attack_details_window_template,
@@ -423,9 +423,17 @@ def PokemonCollectionDetailsSplit(
             readiness["method"] != "friendship" or friendship_time_enabled
         )
         if show_evolution_ui:
-            if trigger_evo_callback is None and readiness["ready"]:
+            # We want to show the Evolve button if the pokemon is completely ready,
+            # or if it has an item evolution and the UI wants to show an item trigger.
+            # `readiness["ready"]` is intentionally False for item evolutions
+            # to prevent auto-prompting on level-up.
+            show_button = readiness["ready"] or readiness["method"] == "item"
+            if trigger_evo_callback is None and show_button:
                 evo_name = readiness["evo_name"] or "the next form"
-                evolve_now_button = QPushButton(f"✨ Evolve into {evo_name} now")
+                if readiness["method"] == "item":
+                    evolve_now_button = QPushButton(f"✨ Use Evolution Item")
+                else:
+                    evolve_now_button = QPushButton(f"✨ Evolve into {evo_name} now")
                 evolve_now_button.setFont(custom_font)
                 evolve_now_button.setFixedWidth(230)
                 evolve_now_button.setStyleSheet(
@@ -435,16 +443,23 @@ def PokemonCollectionDetailsSplit(
                 )
 
                 def evolve_now():
-                    # Lazy import: evo_window is a singleton built after this
-                    # module is first imported, so importing it at module top
-                    # would cycle.
-                    from ..singletons import evo_window
+                    if readiness["method"] == "item":
+                        # Trigger the item giving window for this Pokémon
+                        from ..singletons import get_pc_box
+                        pc = get_pc_box()
+                        if pc:
+                            pc.give_held_item({"individual_id": individual_id})
+                    else:
+                        # Lazy import: evo_window is a singleton built after this
+                        # module is first imported, so importing it at module top
+                        # would cycle.
+                        from ..singletons import evo_window
 
-                    # ask_pokemon_evo is modeless and returns immediately, so a
-                    # refresh here would run BEFORE the user confirms — a no-op.
-                    # The real refresh happens inside evolve_pokemon after
-                    # confirmation.
-                    evo_window.ask_pokemon_evo(individual_id, id, readiness["evo_id"])
+                        # ask_pokemon_evo is modeless and returns immediately, so a
+                        # refresh here would run BEFORE the user confirms — a no-op.
+                        # The real refresh happens inside evolve_pokemon after
+                        # confirmation.
+                        evo_window.ask_pokemon_evo(individual_id, id, readiness["evo_id"])
 
                 qconnect(evolve_now_button.clicked, evolve_now)
                 evolution_req_widget = evolve_now_button
@@ -459,14 +474,15 @@ def PokemonCollectionDetailsSplit(
                     evolution_note_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     evolution_note_label.setStyleSheet("color: #FF69B4;")
                     evolution_note_widget = evolution_note_label
-            elif not readiness["ready"] and readiness["status_text"]:
-                evolution_req_label = QLabel(readiness["status_text"])
-                evolution_req_label.setFont(custom_font)
-                evolution_req_label.setWordWrap(True)
-                evolution_req_label.setFixedWidth(230)
-                evolution_req_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                evolution_req_label.setStyleSheet("color: #FF69B4;")
-                evolution_req_widget = evolution_req_label
+
+        if show_evolution_ui and not readiness["ready"] and readiness.get("status_text"):
+            evolution_req_label = QLabel(readiness["status_text"])
+            evolution_req_label.setFont(custom_font)
+            evolution_req_label.setWordWrap(True)
+            evolution_req_label.setFixedWidth(230)
+            evolution_req_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            evolution_req_label.setStyleSheet("color: #FF69B4;")
+            evolution_req_widget = evolution_req_label
 
         first_layout = QHBoxLayout()
         TopL_layout_Box = QVBoxLayout()
@@ -574,50 +590,70 @@ def PokemonCollectionDetailsSplit(
         # Caller-driven evolution trigger (split-panel path): render the evolve
         # button in the right-hand column and delegate the actual evolution to
         # the callback. The same friendship master-toggle gating applies.
-        if readiness["ready"] and trigger_evo_callback and show_evolution_ui:
-            translator = services.translator or Translator(language)
-            evolve_text = translator.translate(
-                "evolve_now_button",
-                evo_name=readiness["evo_name"] or "the next form",
-            )
-            evolve_now_button = QPushButton(evolve_text.upper())
-            evolve_now_button.setCursor(Qt.CursorShape.PointingHandCursor)
-            evolve_now_button.setObjectName("evolveNowButton")
+        if trigger_evo_callback and show_evolution_ui:
+            if readiness["ready"]:
+                if readiness.get("rejected"):
+                    evolution_note_label = QLabel(
+                        "Evolution rejected — tap Evolve now to override"
+                    )
+                    evolution_note_label.setFont(custom_font)
+                    evolution_note_label.setWordWrap(True)
+                    evolution_note_label.setFixedWidth(230)
+                    evolution_note_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    evolution_note_label.setStyleSheet("color: #FF69B4;")
+                    TopR_layout_Box.addWidget(evolution_note_label)
 
-            # Match TM button typography/color exactly, but increase height to 40px
-            evolve_now_button.setFixedHeight(40)
-            evolve_now_button.setStyleSheet("""
-                QPushButton {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2563eb, stop:1 #1d4ed8);
-                    color: #f8fafc;
-                    font-size: 11px;
-                    font-weight: 800;
-                    letter-spacing: 0.5px;
-                    border: 1px solid #1e40af;
-                    border-radius: 6px;
-                    margin-top: 12px;
-                    padding: 4px 8px;
-                    text-align: center;
-                }
-                QPushButton:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3b82f6, stop:1 #2563eb);
-                    border-color: #3b82f6;
-                    margin-top: 12px;
-                    padding: 4px 8px;
-                    text-align: center;
-                }
-                QPushButton:pressed {
-                    background: #1e40af;
-                    margin-top: 12px;
-                    padding: 5px 8px 3px 8px;
-                    text-align: center;
-                }
-            """)
-            qconnect(
-                evolve_now_button.clicked,
-                lambda: trigger_evo_callback(readiness["method"]),
-            )
-            TopR_layout_Box.addWidget(evolve_now_button)
+                translator = services.translator or Translator(language)
+                evolve_text = translator.translate(
+                    "evolve_now_button",
+                    evo_name=readiness["evo_name"] or "the next form",
+                )
+                evolve_now_button = QPushButton(evolve_text.upper())
+                evolve_now_button.setCursor(Qt.CursorShape.PointingHandCursor)
+                evolve_now_button.setObjectName("evolveNowButton")
+
+                # Match TM button typography/color exactly, but increase height to 40px
+                evolve_now_button.setFixedHeight(40)
+                evolve_now_button.setStyleSheet("""
+                    QPushButton {
+                        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2563eb, stop:1 #1d4ed8);
+                        color: #f8fafc;
+                        font-size: 11px;
+                        font-weight: 800;
+                        letter-spacing: 0.5px;
+                        border: 1px solid #1e40af;
+                        border-radius: 6px;
+                        margin-top: 12px;
+                        padding: 4px 8px;
+                        text-align: center;
+                    }
+                    QPushButton:hover {
+                        background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3b82f6, stop:1 #2563eb);
+                        border-color: #3b82f6;
+                        margin-top: 12px;
+                        padding: 4px 8px;
+                        text-align: center;
+                    }
+                    QPushButton:pressed {
+                        background: #1e40af;
+                        margin-top: 12px;
+                        padding: 5px 8px 3px 8px;
+                        text-align: center;
+                    }
+                """)
+                qconnect(
+                    evolve_now_button.clicked,
+                    lambda: trigger_evo_callback(readiness["method"]),
+                )
+                TopR_layout_Box.addWidget(evolve_now_button)
+            elif readiness.get("status_text"):
+                evolution_req_label = QLabel(readiness["status_text"])
+                evolution_req_label.setFont(custom_font)
+                evolution_req_label.setWordWrap(True)
+                evolution_req_label.setFixedWidth(230)
+                evolution_req_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                evolution_req_label.setStyleSheet("color: #FF69B4;")
+                TopR_layout_Box.addWidget(evolution_req_label)
 
         TopR_widget = QWidget()
         TopR_widget.setLayout(TopR_layout_Box)
@@ -1449,9 +1485,13 @@ def remember_attack(
             logger.log_and_showinfo("info", f"{msg}")
         else:
             dialog = AttackDialog(attacks, new_attack, parent=mw)
-            dialog.show()
-            dialog.raise_()
-            dialog.activateWindow()
+            QTimer.singleShot(
+                0,
+                lambda: (
+                    dialog.raise_(),
+                    dialog.activateWindow(),
+                ),
+            )
             try:
                 result = dialog.exec()
             finally:
@@ -1535,25 +1575,20 @@ def tm_attack_details_window(
     """
     from ..pyobj.move_picker import MovePickerDialog
 
-    # 1. Get species/base name for TM lookup
+    # 1. Resolve the Pokédex key, then let the shared data-layer helper handle
+    # form aliases and base-species fallback. search_pokedex_by_id() also warms
+    # the Pokédex cache before get_tm_learnset() consults form metadata.
     internal_name = search_pokedex_by_id(id)
-    if not internal_name:
+    if not internal_name or internal_name == "Pokémon not found":
         logger.log_and_showinfo("error", f"Could not find Pokémon data for ID: {id}")
         return
 
-    base_name = internal_name.split("-")[0].lower()
-    internal_name = internal_name.lower()
-
-    # 2. Load TM learnsets
+    # 2. Get valid TMs for this species/form from the startup-warmed cache.
     try:
-        with open(pokemon_tm_learnset_path, "r", encoding="utf-8") as f:
-            tm_learnsets = json.load(f)
+        valid_tms = get_tm_learnset(internal_name)
     except Exception as e:
         logger.log_and_showinfo("error", f"Failed to load TM learnsets: {e}")
         return
-
-    # 3. Get valid TMs for this species (check specific form then base species)
-    valid_tms = tm_learnsets.get(internal_name) or tm_learnsets.get(base_name)
     if not valid_tms:
         logger.log_and_showinfo("info", "This Pokémon cannot learn any moves from TMs.")
         return

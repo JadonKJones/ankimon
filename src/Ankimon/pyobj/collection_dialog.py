@@ -58,6 +58,17 @@ def MainPokemon(
     test_window: TestWindow,
 ):
     from ..functions.migration import migrate_starter_individual_id
+    from ..battle_loop import (
+        _cancel_main_faint_deferral,
+        _main_faint_pending_for,
+    )
+
+    # Re-selecting the active companion while both Pokémon are fainted is not
+    # a switch. Reloading its saved row can overwrite the live 0 HP, and
+    # cancelling the deferral would strand the pending enemy choice without
+    # the main's faint recovery. Keep this selection inert until that choice.
+    if _main_faint_pending_for(main_pokemon, pokemon_data.get("individual_id")):
+        return
 
     db = mw.ankimon_db
     
@@ -72,10 +83,23 @@ def MainPokemon(
             # Use main_pokemon.to_dict() to capture in-memory stats like xp.
             db.save_pokemon(main_pokemon.to_dict())
     except Exception as exc:
-        # Keep going -- a failure here must not block the switch -- but do not
-        # swallow it silently: since the incoming main is no longer full-healed,
-        # this save is the only thing preserving the outgoing Pokemon's HP.
+        # Keep going -- a failure here must not block the switch -- but tell the
+        # PLAYER, not just the log file. Since the incoming main is no longer
+        # full-healed, this save is the only thing preserving the outgoing
+        # Pokemon's HP/xp/friendship earned since its last write; the switch
+        # below then overwrites that state in memory. Someone who is never told
+        # cannot know to re-check their old main.
+        # Two lines on purpose: the exception text is diagnostic, and dropping a
+        # raw repr into a message box tells the player nothing they can act on.
+        # Keep it in the log file and show a message that names the Pokemon and
+        # says what to check.
         logger.log("error", f"Could not save outgoing main pokemon: {exc}")
+        logger.log_and_showinfo(
+            "error",
+            f"Could not save {getattr(main_pokemon, 'name', 'your previous main')} "
+            "before switching. Any progress it gained since the last save may be "
+            "lost - check it in your PC box. See the Ankimon log for details.",
+        )
 
     # --- Now proceed to set the new mainpokemon as before ---
     pokemon_id = pokemon_data.get("id")
@@ -153,6 +177,7 @@ def MainPokemon(
     new_main_pokemon.special_form = pokemon_data.get("special_form", None)
 
     # Update existing reference
+    _cancel_main_faint_deferral()
     main_pokemon.__dict__.update(new_main_pokemon.__dict__)
 
     # Save to database
