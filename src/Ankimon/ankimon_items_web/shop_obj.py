@@ -2076,7 +2076,10 @@ class AnkimonItemsWeb(QDialog):
             active_region = services.settings.get("misc.active_region")
             if active_region:
                 active_region = active_region.strip()
-            lang = int(services.settings.get("misc.language", 9))
+            try:
+                lang = int(services.settings.get("misc.language", 9))
+            except (TypeError, ValueError):
+                lang = 9
 
         choices = []
         for data in pokemons:

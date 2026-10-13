@@ -533,9 +533,18 @@ class ItemWindow(QWidget):
             if name in self.ev_items:
                 if not self.main_pokemon:
                     return {"ok": False, "message": "No active Pokémon to train."}
-                if not self._use_ev_item(name):
+                spent, granted = self._use_ev_item(name)
+                if not spent:
                     return {"ok": False, "message": f"No {name} left in your bag."}
-                return {"ok": True, "message": f"Trained {self.main_pokemon.name}'s EVs with {name}."}
+                if granted > 0:
+                    return {
+                        "ok": True,
+                        "message": f"Trained {self.main_pokemon.name}'s EVs with {name}! (+{granted} EV)",
+                    }
+                return {
+                    "ok": True,
+                    "message": f"Used {name}, but it had no effect on {self.main_pokemon.name}.",
+                }
             if (
                 name in GiveItemWindow.NOT_YET_IMPLEMENTED_ITEMS
                 or name.endswith("-berry")
@@ -927,28 +936,58 @@ class ItemWindow(QWidget):
             self.achievements,
         )
 
-    def _use_ev_item(self, item_name: str) -> bool:
+    def _use_ev_item(self, item_name: str) -> tuple[bool, int]:
         """Train the main Pokemon's EVs with a vitamin/wing/mochi/candy.
 
-        Returns True only when the item was actually spent. Consume BEFORE
-        training for the same reason as Check_Heal_Item: paying first makes
-        the effect impossible to get for free if anything below raises.
+        Returns ``(spent, granted)``. ``spent`` is True only when the item
+        was actually taken from the bag. Consume BEFORE training for the same
+        reason as Check_Heal_Item: paying first makes the effect impossible
+        to get for free if anything below raises.
 
-        Any item still consumes once the stat is at the 252 cap or the
-        Pokemon is at the 510 total — matching the mainline games, where
-        using one on a maxed stat wastes it rather than refusing the click.
+        If the Pokemon save then fails, the in-memory EV change is rolled
+        back and the item is refunded -- an EV gain that only exists in
+        memory would silently vanish on the next reload, which is worse than
+        just refusing the click.
+
+        A successful save still consumes the item even when the stat is at
+        the 252 cap or the Pokemon is at the 510 total -- matching the
+        mainline games, where using one on a maxed stat wastes it rather
+        than refusing the click.
         """
         if self.main_pokemon is None:
             self.logger.log_and_showinfo("error", "No active Pokemon to train.")
-            return False
+            return False, 0
 
-        if not self._consume_one(item_name):
+        item = services.db.get_item(item_name)
+        if not item or not self._consume_one(item_name):
             self.logger.log_and_showinfo("info", f"You have no {item_name} left.")
-            return False
+            return False, 0
 
+        previous_ev = dict(self.main_pokemon.ev)
         self.main_pokemon.ev, granted = apply_ev_item(self.main_pokemon.ev, item_name)
         self.main_pokemon.invalidate_cp_cache()
-        save_main_pokemon(self.main_pokemon)
+        try:
+            save_main_pokemon(self.main_pokemon)
+        except Exception as exc:
+            self.main_pokemon.ev = previous_ev
+            self.main_pokemon.invalidate_cp_cache()
+            try:
+                services.db.refund_item(item)
+            except Exception as refund_exc:
+                self.logger.log(
+                    "error",
+                    f"Could not return {item_name} after a failed EV save: {refund_exc}",
+                )
+            self.logger.log(
+                "error", f"Could not save {self.main_pokemon.name} after EV training: {exc}"
+            )
+            self.logger.log_and_showinfo(
+                "error",
+                f"Could not train {self.main_pokemon.name}'s EVs; the {item_name} "
+                "was returned to your bag.",
+            )
+            return False, 0
+
         self._refresh_bag()
         play_effect_sound(self.settings_obj, "HpHeal")
         if granted > 0:
@@ -959,7 +998,7 @@ class ItemWindow(QWidget):
             self.logger.log_and_showinfo(
                 "info", f"It won't have any effect on {self.main_pokemon.name}."
             )
-        return True
+        return True, granted
 
     def Check_Evo_Item(
         self,

@@ -55,6 +55,10 @@ class _FakeItemDB:
             self.inventory[item_name] = current - count
         return True
 
+    def refund_item(self, item, count=1):
+        self.quantity_calls.append((item["item_name"], count))
+        self.inventory[item["item_name"]] = self.inventory.get(item["item_name"], 0) + count
+
 
 class _FakePokemon:
     def __init__(self, name="mewtwo", ev=None):
@@ -164,7 +168,7 @@ def test_vitamin_consumes_exactly_one_item(item_window_mod):
     pokemon = _FakePokemon()
     win = _make_window(item_window_mod, db, pokemon)
 
-    assert win._use_ev_item("protein") is True
+    assert win._use_ev_item("protein") == (True, 10)
     assert pokemon.ev["atk"] == 10
     assert db.quantity_calls == [("protein", -1)]
     assert db.inventory["protein"] == 1
@@ -177,7 +181,7 @@ def test_ev_item_is_refused_when_the_bag_is_empty(item_window_mod):
     pokemon = _FakePokemon()
     win = _make_window(item_window_mod, db, pokemon)
 
-    assert win._use_ev_item("protein") is False
+    assert win._use_ev_item("protein") == (False, 0)
     assert pokemon.ev["atk"] == 0
     assert db.quantity_calls == []
 
@@ -186,7 +190,7 @@ def test_no_main_pokemon_does_not_burn_an_item(item_window_mod):
     db = _FakeItemDB({"protein": 1})
     win = _make_window(item_window_mod, db, main_pokemon=None)
 
-    assert win._use_ev_item("protein") is False
+    assert win._use_ev_item("protein") == (False, 0)
     assert db.quantity_calls == []
     assert db.inventory["protein"] == 1
 
@@ -197,7 +201,7 @@ def test_vitamin_has_no_soft_cap_and_keeps_training_past_100(item_window_mod):
     pokemon = _FakePokemon(ev={"hp": 0, "atk": 100, "def": 0, "spa": 0, "spd": 0, "spe": 0})
     win = _make_window(item_window_mod, db, pokemon)
 
-    assert win._use_ev_item("protein") is True
+    assert win._use_ev_item("protein") == (True, 10)
     assert pokemon.ev["atk"] == 110, "vitamins must not stop at the mainline 100-EV soft cap"
 
 
@@ -206,7 +210,8 @@ def test_vitamin_still_stops_at_the_252_hard_cap(item_window_mod):
     pokemon = _FakePokemon(ev={"hp": 0, "atk": 251, "def": 0, "spa": 0, "spd": 0, "spe": 0})
     win = _make_window(item_window_mod, db, pokemon)
 
-    assert win._use_ev_item("protein") is True
+    spent, granted = win._use_ev_item("protein")
+    assert spent is True
     assert pokemon.ev["atk"] == 252, "the item is still spent on a maxed stat"
     assert db.inventory.get("protein", 0) == 0
 
@@ -216,7 +221,7 @@ def test_wing_has_no_soft_cap_but_still_hits_252(item_window_mod):
     pokemon = _FakePokemon(ev={"hp": 0, "atk": 251, "def": 0, "spa": 0, "spd": 0, "spe": 0})
     win = _make_window(item_window_mod, db, pokemon)
 
-    assert win._use_ev_item("muscle-wing") is True
+    assert win._use_ev_item("muscle-wing") == (True, 1)
     assert pokemon.ev["atk"] == 252
 
 
@@ -225,7 +230,8 @@ def test_candy_xl_fills_a_stat_to_the_cap_in_one_use(item_window_mod):
     pokemon = _FakePokemon()
     win = _make_window(item_window_mod, db, pokemon)
 
-    assert win._use_ev_item("health-candy-xl") is True
+    spent, granted = win._use_ev_item("health-candy-xl")
+    assert spent is True
     assert pokemon.ev["hp"] == 252
 
 
@@ -234,7 +240,7 @@ def test_ev_item_respects_the_510_total_cap_across_stats(item_window_mod):
     pokemon = _FakePokemon(ev={"hp": 252, "atk": 252, "def": 0, "spa": 0, "spd": 0, "spe": 0})
     win = _make_window(item_window_mod, db, pokemon)
 
-    assert win._use_ev_item("tough-candy-l") is True
+    assert win._use_ev_item("tough-candy-l") == (True, 6)
     assert pokemon.ev["def"] == 6, "only 6 EV of room remained under the 510 total"
 
 
@@ -267,7 +273,39 @@ def test_dispatch_use_reports_a_real_ev_grant(item_window_mod):
     result = win.dispatch_use("protein")
 
     assert result["ok"] is True
+    assert "trained" in result["message"].lower()
     assert db.quantity_calls == [("protein", -1)]
+
+
+def test_dispatch_use_does_not_claim_a_training_that_did_not_happen(item_window_mod):
+    """The toast must not say "Trained" when the item had zero effect."""
+    db = _FakeItemDB({"protein": 1})
+    pokemon = _FakePokemon(ev={"hp": 0, "atk": 252, "def": 0, "spa": 0, "spd": 0, "spe": 0})
+    win = _make_window(item_window_mod, db, pokemon)
+
+    result = win.dispatch_use("protein")
+
+    assert result["ok"] is True
+    assert "trained" not in result["message"].lower()
+    assert "no effect" in result["message"].lower()
+
+
+def test_a_failed_save_rolls_back_the_ev_and_refunds_the_item(item_window_mod):
+    """A save failure must not leave a phantom EV gain or a lost item.
+
+    The in-memory EV change would otherwise silently vanish on the next
+    reload (since it never reached the database), while the item stayed
+    spent -- so it has to roll back the object AND return the item.
+    """
+    db = _FakeItemDB({"protein": 1})
+    pokemon = _FakePokemon()
+    win = _make_window(item_window_mod, db, pokemon)
+    item_window_mod.save_main_pokemon.side_effect = RuntimeError("disk on fire")
+
+    assert win._use_ev_item("protein") == (False, 0)
+    assert pokemon.ev["atk"] == 0, "the EV gain must be rolled back"
+    assert db.inventory.get("protein", 0) == 1, "the item must be refunded"
+    assert db.quantity_calls == [("protein", -1), ("protein", 1)]
 
 
 def test_rare_candy_is_untouched_by_the_ev_item_branch(item_window_mod):
