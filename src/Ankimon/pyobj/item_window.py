@@ -42,6 +42,7 @@ from ..resources import icon_path, items_path, csv_file_items_cost, poke_evo_pat
 from ..functions.badges_functions import check_for_badge, receive_badge
 from ..functions.pokemon_functions import save_fossil_pokemon
 from ..functions.update_main_pokemon import save_main_pokemon
+from ..functions.ev_items import VITAMINS, WINGS, MOCHI, CANDIES, apply_ev_item
 from ..services import services
 from ..utils import get_item_sprite_path, play_effect_sound, is_alive
 from .error_handler import show_warning_with_traceback
@@ -101,6 +102,11 @@ class ItemWindow(QWidget):
             "cover-fossil": 564,
             "plume-fossil": 566,
         }
+
+        # Vitamins/wings/mochi/candies: covered by functions.ev_items, not a
+        # literal dict here — this set is only for the "is it one of these"
+        # branch below.
+        self.ev_items = set(VITAMINS) | set(WINGS) | set(MOCHI) | set(CANDIES)
 
         self.pokeball_chances = {
             "dive-ball": 11,  # Increased chance when fishing or underwater
@@ -441,6 +447,11 @@ class ItemWindow(QWidget):
             use_item_button.clicked.connect(
                 lambda: self._prompt_and_check_evo_item(item_name)
             )
+        elif item_name in self.ev_items:
+            use_item_button = QPushButton("Train Mainpokemon's EVs")
+            use_item_button.clicked.connect(
+                lambda: self._use_ev_item(item_name)
+            )
         elif (
             item_name in GiveItemWindow.NOT_YET_IMPLEMENTED_ITEMS
             or item_name.endswith("-berry")
@@ -519,6 +530,12 @@ class ItemWindow(QWidget):
             if name in self.evolution_items:
                 self._prompt_and_check_evo_item(name)
                 return {"ok": True, "message": ""}
+            if name in self.ev_items:
+                if not self.main_pokemon:
+                    return {"ok": False, "message": "No active Pokémon to train."}
+                if not self._use_ev_item(name):
+                    return {"ok": False, "message": f"No {name} left in your bag."}
+                return {"ok": True, "message": f"Trained {self.main_pokemon.name}'s EVs with {name}."}
             if (
                 name in GiveItemWindow.NOT_YET_IMPLEMENTED_ITEMS
                 or name.endswith("-berry")
@@ -909,6 +926,40 @@ class ItemWindow(QWidget):
             item_name,
             self.achievements,
         )
+
+    def _use_ev_item(self, item_name: str) -> bool:
+        """Train the main Pokemon's EVs with a vitamin/wing/mochi/candy.
+
+        Returns True only when the item was actually spent. Consume BEFORE
+        training for the same reason as Check_Heal_Item: paying first makes
+        the effect impossible to get for free if anything below raises.
+
+        Any item still consumes once the stat is at the 252 cap or the
+        Pokemon is at the 510 total — matching the mainline games, where
+        using one on a maxed stat wastes it rather than refusing the click.
+        """
+        if self.main_pokemon is None:
+            self.logger.log_and_showinfo("error", "No active Pokemon to train.")
+            return False
+
+        if not self._consume_one(item_name):
+            self.logger.log_and_showinfo("info", f"You have no {item_name} left.")
+            return False
+
+        self.main_pokemon.ev, granted = apply_ev_item(self.main_pokemon.ev, item_name)
+        self.main_pokemon.invalidate_cp_cache()
+        save_main_pokemon(self.main_pokemon)
+        self._refresh_bag()
+        play_effect_sound(self.settings_obj, "HpHeal")
+        if granted > 0:
+            self.logger.log_and_showinfo(
+                "info", f"{self.main_pokemon.name}'s stats rose! (+{granted} EV)"
+            )
+        else:
+            self.logger.log_and_showinfo(
+                "info", f"It won't have any effect on {self.main_pokemon.name}."
+            )
+        return True
 
     def Check_Evo_Item(
         self,
