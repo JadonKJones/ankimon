@@ -18,7 +18,15 @@ from aqt.qt import (
 
 from aqt.utils import showWarning
 
-from PyQt6.QtGui import QIcon, QColor, QFontMetrics, QPainterPath, QMovie, QRegion, QImage
+from PyQt6.QtGui import (
+    QIcon,
+    QColor,
+    QFontMetrics,
+    QPainterPath,
+    QMovie,
+    QRegion,
+    QImage,
+)
 from PyQt6.QtCore import QTimer, QRect, QSize, QEvent
 
 from PyQt6.QtWidgets import (
@@ -164,6 +172,13 @@ class TestWindow(QWidget):
         self.main_label.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
+        # QLabel's minimumSizeHint() tracks whatever pixmap is currently set,
+        # so without this floor the layout can't shrink main_label (and so
+        # the window) below the size of the last composite drawn — fighting
+        # the window's own setMinimumSize() below. _refresh_scene_pixmap()
+        # always rescales the composite to main_label's actual size, so a
+        # tiny declared minimum here doesn't affect what's drawn.
+        self.main_label.setMinimumSize(1, 1)
         layout.addWidget(self.main_label)
 
         # Animated-sprite overlays (gui.gif_in_ankimon_window, default off).
@@ -228,12 +243,12 @@ class TestWindow(QWidget):
         self.setWindowIcon(QIcon(str(icon_path)))
         # The art is drawn at a fixed native resolution (556x371 with the
         # dialog box, 555x258 without), but the window itself is user
-        # resizable — main_label's setScaledContents(True) above stretches
-        # whichever composite is on screen to fill the label's current size,
-        # so the whole scene (background, sprites, dialog boxes) scales and
-        # repositions together instead of staying pinned at native size with
-        # blank space around it. Only enforce a floor so the scene never
-        # shrinks to something illegible.
+        # resizable — _display_scene_pixmap() / _refresh_scene_pixmap() above
+        # rescale whichever composite is on screen to the label's current
+        # size by hand, so the whole scene (background, sprites, dialog
+        # boxes) scales and repositions together instead of staying pinned
+        # at native size with blank space around it. Only enforce a floor so
+        # the scene never shrinks to something illegible.
         self.setMinimumSize(278, 150)
         self.resize(556, 371)
 
@@ -554,7 +569,10 @@ class TestWindow(QWidget):
         if pixmap.width() <= 0 or pixmap.height() <= 0:
             return pixmap
         return pixmap.scaled(
-            max_w, max_h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            max_w,
+            max_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
         )
 
     def _load_sprite(self, pokemon, side):
@@ -588,7 +606,9 @@ class TestWindow(QWidget):
             pixmap.load(str(self.default_path))
         return pixmap, bool(loaded)
 
-    def _draw_pokemon_sprite(self, painter, pixmap, x, y, w, h, fainted, tip_direction=1):
+    def _draw_pokemon_sprite(
+        self, painter, pixmap, x, y, w, h, fainted, tip_direction=1
+    ):
         """Draw one battler's sprite at (x, y), tipped over on its side when
         fainted — the classic Game Boy-era faint animation, instead of just
         sitting there at full HP-bar-empty looking no different from normal.
@@ -759,7 +779,12 @@ class TestWindow(QWidget):
         so their geometry needs scaling by that same factor to land in the
         right spot."""
         native = self._scene_native_pixmap
-        if native is None or native.isNull() or native.width() <= 0 or native.height() <= 0:
+        if (
+            native is None
+            or native.isNull()
+            or native.width() <= 0
+            or native.height() <= 0
+        ):
             return 0, 0, 1.0, 1.0
         sx = self.main_label.width() / native.width()
         sy = self.main_label.height() / native.height()
@@ -1030,8 +1055,28 @@ class TestWindow(QWidget):
         enemy_y = (170 - wpkmn_height) + self._enemy_shake_offset[1]
         main_x = (144 - mpkmn_width) + self._main_shake_offset[0]
         main_y = (275 - mpkmn_height) + self._main_shake_offset[1]
-        self._stash_gif_geom("enemy", self.enemy_pokemon, "front", pixmap, enemy_x, enemy_y, new_width, new_height, False)
-        self._stash_gif_geom("main", self.main_pokemon, "back", pixmap2, main_x, main_y, new_width2, new_height2, False)
+        self._stash_gif_geom(
+            "enemy",
+            self.enemy_pokemon,
+            "front",
+            pixmap,
+            enemy_x,
+            enemy_y,
+            new_width,
+            new_height,
+            False,
+        )
+        self._stash_gif_geom(
+            "main",
+            self.main_pokemon,
+            "back",
+            pixmap2,
+            main_x,
+            main_y,
+            new_width2,
+            new_height2,
+            False,
+        )
         if self._gif_geom["enemy"] is None:
             painter.drawPixmap(enemy_x, enemy_y, pixmap)
         if self._gif_geom["main"] is None:
@@ -1248,19 +1293,55 @@ class TestWindow(QWidget):
         main_y = (275 - mpkmn_height) + self._main_shake_offset[1]
         # A Pokemon mid-Dig is underground until the move lands next turn —
         # draw its slot empty rather than leaving it standing on the surface.
-        enemy_hidden = "dig" in (getattr(self.enemy_pokemon, "volatile_status", None) or ())
-        main_hidden = "dig" in (getattr(self.main_pokemon, "volatile_status", None) or ())
-        self._stash_gif_geom("enemy", self.enemy_pokemon, "front", pixmap, enemy_x, enemy_y, new_width, new_height, enemy_hp <= 0 or enemy_hidden)
-        self._stash_gif_geom("main", self.main_pokemon, "back", pixmap2, main_x, main_y, new_width2, new_height2, main_hp <= 0 or main_hidden)
+        enemy_hidden = "dig" in (
+            getattr(self.enemy_pokemon, "volatile_status", None) or ()
+        )
+        main_hidden = "dig" in (
+            getattr(self.main_pokemon, "volatile_status", None) or ()
+        )
+        self._stash_gif_geom(
+            "enemy",
+            self.enemy_pokemon,
+            "front",
+            pixmap,
+            enemy_x,
+            enemy_y,
+            new_width,
+            new_height,
+            enemy_hp <= 0 or enemy_hidden,
+        )
+        self._stash_gif_geom(
+            "main",
+            self.main_pokemon,
+            "back",
+            pixmap2,
+            main_x,
+            main_y,
+            new_width2,
+            new_height2,
+            main_hp <= 0 or main_hidden,
+        )
         if self._gif_geom["enemy"] is None and not enemy_hidden:
             self._draw_pokemon_sprite(
-                painter, pixmap, enemy_x, enemy_y,
-                new_width, new_height, enemy_hp <= 0, tip_direction=1,
+                painter,
+                pixmap,
+                enemy_x,
+                enemy_y,
+                new_width,
+                new_height,
+                enemy_hp <= 0,
+                tip_direction=1,
             )
         if self._gif_geom["main"] is None and not main_hidden:
             self._draw_pokemon_sprite(
-                painter, pixmap2, main_x, main_y,
-                new_width2, new_height2, main_hp <= 0, tip_direction=-1,
+                painter,
+                pixmap2,
+                main_x,
+                main_y,
+                new_width2,
+                new_height2,
+                main_hp <= 0,
+                tip_direction=-1,
             )
 
         experience = int(
