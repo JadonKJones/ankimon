@@ -113,6 +113,7 @@ GROUPS = [
             "Team Overview in Deck Overview",
             "Animate Time",
             "Show GIFs in Collection",
+            "Show GIFs in Ankimon Window",
             "Show Sprites Across Ankimon",
         ],
     },

@@ -19,7 +19,7 @@ from aqt.qt import (
 from aqt.utils import showWarning
 
 from PyQt6.QtGui import QIcon, QColor, QFontMetrics, QPainterPath, QMovie, QRegion, QImage
-from PyQt6.QtCore import QTimer, QRect, QSize
+from PyQt6.QtCore import QTimer, QRect, QSize, QEvent
 
 from PyQt6.QtWidgets import (
     QDialog,
@@ -188,12 +188,17 @@ class TestWindow(QWidget):
             # opaque.
             _gl.setStyleSheet("background: transparent;")
             _gl.hide()
+        # main_label can change size from layout changes other than the
+        # window resizing (e.g. the button row showing/hiding) — resizeEvent
+        # alone misses those, leaving the scene/overlays stale, so also
+        # watch main_label's own resize via an event filter.
+        self.main_label.installEventFilter(self)
         self._enemy_gif_movie = None
         self._main_gif_movie = None
         self._gif_native = {"enemy": None, "main": None}
         self._gif_scaled = {"enemy": None, "main": None}
         self._opaque_cache = {}
-        self._gif_origin = (0, 0)
+        self._gif_origin = (0, 0, 1.0, 1.0)
         self._gif_sprite_key = {"enemy": None, "main": None}
         self._gif_geom = {"enemy": None, "main": None}
         self._gif_path_exists = {}
@@ -462,7 +467,7 @@ class TestWindow(QWidget):
             # 20 flat looked cramped and undersized next to the rest of the
             # scene's text.
             size = 28
-            while size > 16:
+            while size >= 16:
                 battle_text_font = load_custom_font(size, lang)
                 bounds = QFontMetrics(battle_text_font).boundingRect(
                     text_rect, flags, self.last_message_text
@@ -623,11 +628,12 @@ class TestWindow(QWidget):
         # not downloaded — only treat a real .gif as animatable.
         if not path.lower().endswith(".gif"):
             return None
-        exists = self._gif_path_exists.get(path)
-        if exists is None:
-            exists = os.path.exists(path)
-            self._gif_path_exists[path] = exists
-        return path if exists else None
+        valid = self._gif_path_exists.get(path)
+        if not valid:
+            valid = os.path.exists(path) and QMovie(path).isValid()
+            if valid:
+                self._gif_path_exists[path] = True
+        return path if valid else None
 
     def _use_gif_for(self, pokemon, sprite_side, fainted):
         """Whether the composite should leave this battler's slot empty for
@@ -804,7 +810,7 @@ class TestWindow(QWidget):
             fw,
             fh,
             Qt.AspectRatioMode.IgnoreAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
         )
         try:
             label.setPixmap(QPixmap.fromImage(scaled))
@@ -855,21 +861,6 @@ class TestWindow(QWidget):
             # bogus one.
             ox, oy, sx, sy = getattr(self, "_gif_origin", (0, 0, 1.0, 1.0))
 
-        # TEMP diagnostic: log only the anomalies that could cause the reported
-        # "jitters down-and-right at random" — a non-zero origin or a
-        # not-yet-settled layout while a gif overlay is on screen.
-        if has_gif and (ox or oy or not settled):
-            try:
-                self.logger.log(
-                    "info",
-                    f"[gifjit] deferred={_deferred} settled={settled} "
-                    f"origin=({ox},{oy}) labelWH=({self.main_label.width()},{self.main_label.height()}) "
-                    f"pmWH=({pm.width() if pm else None},{pm.height() if pm else None}) "
-                    f"shake=e{self._enemy_shake_offset}/m{self._main_shake_offset} "
-                    f"view={self.current_view}",
-                )
-            except Exception:
-                pass
         for side in ("enemy", "main"):
             geom = self._gif_geom.get(side)
             movie_attr = "_enemy_gif_movie" if side == "enemy" else "_main_gif_movie"
@@ -885,7 +876,6 @@ class TestWindow(QWidget):
                 self._clear_gif_overlay(side)
                 movie = QMovie(path)
                 if not movie.isValid():
-                    self._gif_path_exists[path] = False
                     continue
                 movie.setCacheMode(QMovie.CacheMode.CacheAll)
                 movie.jumpToFrame(0)
@@ -960,20 +950,6 @@ class TestWindow(QWidget):
                 self._gif_scaled[side] = (sfw, sfh)
                 self._paint_gif_frame(side)
             gx, gy = int(ox + fx * sx), int(oy + fy * sy)
-            # TEMP diagnostic: flag a jump bigger than a shake step (±7,±3).
-            _prev = getattr(self, "_gifjit_pos", {}).get(side)
-            if _prev is not None and (abs(_prev[0] - gx) > 10 or abs(_prev[1] - gy) > 10):
-                try:
-                    self.logger.log(
-                        "info",
-                        f"[gifjit] {side} JUMP {_prev} -> ({gx},{gy}) "
-                        f"content=({x},{y},{w},{h}) fit=({fw},{fh}) origin=({ox},{oy}) "
-                        f"deferred={_deferred} settled={settled}",
-                    )
-                except Exception:
-                    pass
-            self._gifjit_pos = getattr(self, "_gifjit_pos", {})
-            self._gifjit_pos[side] = (gx, gy)
             label.setGeometry(gx, gy, sfw, sfh)
             label.raise_()
             label.show()
@@ -1915,6 +1891,18 @@ class TestWindow(QWidget):
             self._sync_gif_overlays()
         except RuntimeError:
             pass
+
+    def eventFilter(self, obj, event):
+        # main_label can be resized by layout changes that don't fire the
+        # window's own resizeEvent (e.g. the button row showing/hiding) —
+        # catch those here too, or the scene/overlays go stale.
+        if obj is self.main_label and event.type() == QEvent.Type.Resize:
+            try:
+                self._refresh_scene_pixmap()
+                self._sync_gif_overlays()
+            except RuntimeError:
+                pass
+        return super().eventFilter(obj, event)
 
     def closeEvent(self, event):
         # Nothing cancels the singleShot timers on close, so a shake mid-flight
